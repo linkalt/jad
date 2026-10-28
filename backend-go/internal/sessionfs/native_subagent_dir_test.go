@@ -98,7 +98,7 @@ func TestSubagentAgentsDirRelativePathsFollowTheFolderAndHomeIsExpanded(t *testi
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := subagentTree(t, map[string]string{
-		"agents/a/agent.json": `{"model":"../../shared/model.json","prompt_documents":["../../shared/rules.md","~/home-rules.md"]}`,
+		"agents/a/agent.json": `{"model":"model.json","prompt_documents":["../../shared/rules.md","~/home-rules.md"]}`,
 		"shared/rules.md":     "Shared rules.",
 	})
 	if err := os.WriteFile(filepath.Join(home, "home-rules.md"), []byte("Home rules."), 0o600); err != nil {
@@ -110,7 +110,7 @@ func TestSubagentAgentsDirRelativePathsFollowTheFolderAndHomeIsExpanded(t *testi
 		t.Fatal(err)
 	}
 	a, _ := got.Agent("a")
-	if a.ModelPath != filepath.Join(root, "shared", "model.json") {
+	if a.ModelPath != filepath.Join(root, "agents", "a", "model.json") {
 		t.Errorf("model = %q", a.ModelPath)
 	}
 	if a.PromptText != "Shared rules.\n\nHome rules." {
@@ -576,5 +576,54 @@ func TestSubagentNewFolderAppearsOnTheNextLoad(t *testing.T) {
 	second, err := loadWithDirs(t, root, setting)
 	if err != nil || len(second.Agents) != 1 || second.Agents[0].Name != "scout" {
 		t.Fatalf("second load: agents = %+v, error = %v", second.Agents, err)
+	}
+}
+
+func TestSubagentAgentFolderModelFileMustStayInsideTheFolder(t *testing.T) {
+	root := subagentTree(t, map[string]string{
+		"agents/a/agent.json": `{"model":"m.json"}`,
+		"agents/a/m.json":     `{}`,
+		"outside/m.json":      `{}`,
+	})
+	agentJSON := filepath.Join(root, "agents", "a", "agent.json")
+	setModel := func(model string) {
+		t.Helper()
+		text, _ := json.Marshal(map[string]string{"model": model})
+		if err := os.WriteFile(agentJSON, text, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	load := func() error {
+		_, err := loadWithDirs(t, root, `{"agents_dir":["agents"]}`)
+		return err
+	}
+	if err := load(); err != nil {
+		t.Fatalf("model inside the folder: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "agents", "a", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setModel("sub/new.json")
+	if err := load(); err != nil {
+		t.Fatalf("not yet existing file inside the folder: %v", err)
+	}
+	link := filepath.Join(root, "agents", "a", "link.json")
+	if err := os.Symlink(filepath.Join(root, "outside", "m.json"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "outside"), filepath.Join(root, "agents", "a", "dirlink")); err != nil {
+		t.Fatal(err)
+	}
+	for name, model := range map[string]string{
+		"dotdot":      "../../../outside/m.json",
+		"absolute":    filepath.Join(root, "outside", "m.json"),
+		"symlink":     "link.json",
+		"symlink dir": "dirlink/m.json",
+	} {
+		setModel(model)
+		err := load()
+		if err == nil || !strings.Contains(err.Error(), "must stay inside the agent folder") {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }

@@ -156,6 +156,9 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 	if err != nil {
 		return NativeSubagentAgent{}, err
 	}
+	if err := confineAgentModel(folder, settingsPath, agent.ModelPath); err != nil {
+		return NativeSubagentAgent{}, err
+	}
 	agent.Dir = folder
 	return agent, nil
 }
@@ -198,4 +201,34 @@ func withSubagentOverrides(agents, folder []NativeSubagentAgent, inline int) []N
 		}
 	}
 	return agents
+}
+
+// confineAgentModel refuses a model file that resolves outside the agent folder
+// (".." , an absolute path or a symlink): the file picks api_key_env and base_url,
+// so a folder the model can write must not be able to name a file it did not write.
+func confineAgentModel(folder, settingsPath, modelPath string) error {
+	if modelPath == "" {
+		return nil
+	}
+	refuse := func() error {
+		return configError("%s: agent.model %s must stay inside the agent folder %s", settingsPath, modelPath, folder)
+	}
+	root, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return configError("%s: could not resolve the agent folder: %v", folder, err)
+	}
+	resolved, err := filepath.EvalSymlinks(modelPath)
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Lstat(modelPath); statErr == nil {
+			return refuse()
+		}
+		resolved = modelPath
+		root = folder
+	} else if err != nil {
+		return refuse()
+	}
+	if !PathWithin(root, resolved) {
+		return refuse()
+	}
+	return nil
 }

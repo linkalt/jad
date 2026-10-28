@@ -19,7 +19,7 @@
     "model": {
       "type": "string",
       "minLength": 1,
-      "description": "Model for this agent. In a catalog-layout session a value that does not end in .json is a model ID '<category>/<name>' of the models catalog; the agent may name any model of it, not only those its caller's profile lists. A value ending in .json is a model file, relative to the agent's folder or absolute. A legacy session reads every value as a file path (relative to the session directory for an inline agent). Absent means the calling session's model."
+      "description": "Model for this agent. In a catalog-layout session a value that does not end in .json is a model ID '<category>/<name>' of the models catalog; the agent may name any model of it, not only those its caller's profile lists. A value ending in .json is a model file, relative to the agent's folder and must stay inside it (no .., absolute path or symlink leaving the folder). A legacy session reads every value as a file path (relative to the session directory for an inline agent). Absent means the calling session's model."
     },
     "instructions": {
       "type": "string",
