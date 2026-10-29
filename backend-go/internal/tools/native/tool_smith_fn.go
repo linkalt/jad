@@ -80,18 +80,7 @@ func copyToolSmithFunction(workDir, dir, realRoot, file, name string, maxBytes i
 	tooBig := func(size string) string {
 		return fmt.Sprintf("is %s bytes, over function_max_bytes %d", size, maxBytes)
 	}
-	real, resolveErr := filepath.EvalSymlinks(filepath.Join(dir, file))
-	if resolveErr != nil {
-		return "cannot be resolved: " + resolveErr.Error(), nil
-	}
-	if !toolSmithInside(dir, real) || !toolSmithInside(realRoot, real) {
-		return "symlink leaves the functions directory", nil
-	}
-	pathInfo, pathErr := os.Stat(real)
-	if pathErr != nil || !pathInfo.Mode().IsRegular() {
-		return "is not a regular file", nil
-	}
-	handle, info, openProblem := openToolSmithFile(real, pathInfo)
+	handle, info, openProblem := openLibraryFile(dir, realRoot, file)
 	if openProblem != "" {
 		return openProblem, nil
 	}

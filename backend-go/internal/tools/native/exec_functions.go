@@ -58,18 +58,7 @@ func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner session
 // openExecFunction resolves one library file inside the functions directory and opens it
 // without following a link; problem is non-empty when the file cannot be used.
 func openExecFunction(dir, realRoot, file string, maxBytes int64) (*os.File, string) {
-	real, err := filepath.EvalSymlinks(filepath.Join(dir, file))
-	if err != nil {
-		return nil, "cannot be resolved: " + err.Error()
-	}
-	if !toolSmithInside(dir, real) || !toolSmithInside(realRoot, real) {
-		return nil, "symlink leaves the functions directory"
-	}
-	info, err := os.Stat(real)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, "is not a regular file"
-	}
-	handle, opened, problem := openToolSmithFile(real, info)
+	handle, opened, problem := openLibraryFile(dir, realRoot, file)
 	if problem != "" {
 		return nil, problem
 	}
@@ -284,62 +273,32 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 	if int64(len(shown)) > settings.ListMaxResults {
 		shown = shown[:settings.ListMaxResults]
 	}
-	// The stray and malformed half is bounded by the library directory, not by list_max_files,
-	// so it is capped like the helpers are (P6BM-11).
-	shownProblems := problems
-	if int64(len(shownProblems)) > settings.ListMaxResults {
-		shownProblems = shownProblems[:settings.ListMaxResults]
-	}
-	lines := make([]string, 0, len(shown)+len(shownProblems)+2)
-	if len(shown) > 0 {
-		lines = append(lines, execListLegend...)
-	}
+	entries := make([]string, 0, len(shown)+len(settings.LangNames))
 	for index, entry := range shown {
 		if index == 0 || shown[index-1].runner != entry.runner {
-			lines = append(lines, entry.runner+":")
+			entries = append(entries, entry.runner+":")
 		}
 		line := "  " + execHelperCall(entry.name, settings.Langs[entry.runner]) + " — " + entry.description
 		if entry.input != "" {
 			line += " (input: " + entry.input + ")"
 		}
-		lines = append(lines, line)
-	}
-	if len(problems) > 0 {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, fmt.Sprintf("malformed entries (%d):", len(problems)))
-		for _, problem := range shownProblems {
-			lines = append(lines, "- "+problem)
-		}
-		if hidden := len(problems) - len(shownProblems); hidden > 0 {
-			lines = append(lines, fmt.Sprintf("- …and %d more", hidden))
-		}
+		entries = append(entries, line)
 	}
 	summary := fmt.Sprintf("%d helper%s", len(shown), pluralSuffix(len(shown)))
 	if len(problems) > 0 {
 		summary += fmt.Sprintf(", %d malformed", len(problems))
 	}
-	options := tools.ResultOptions{ID: callID, Status: tools.StatusOK, Summary: summary}
-	if len(shown) < len(matched) || len(scanned) < len(files) {
-		cut := fmt.Sprintf("%d of %d", len(shown), len(matched))
-		suggestion := "add filters (read*, *file*, or a plain substring of the name or description) to narrow the result"
-		if len(scanned) < len(files) {
-			cut += fmt.Sprintf("; scanned %d of %d files", len(scanned), len(files))
-			suggestion = "the library has more files than list_max_files; raise list_max_files or reduce the library (filters only apply to the scanned files)"
-		}
-		options.Information = append(options.Information,
-			tools.Information{Key: "truncated", Value: true},
-			tools.Information{Key: "shown", Value: cut},
-			tools.Information{Key: "suggestion", Value: suggestion})
-	}
-	if len(lines) > 0 {
-		options.Content = &tools.Content{Text: strings.Join(lines, "\n")}
-	}
-	result, err := tools.RenderToolResult(options)
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The result could not be rendered",
-			tools.Information{Key: "system_error", Value: err.Error()})
-	}
-	return result
+	return renderLibraryListing(libraryListing{
+		callID:         callID,
+		legend:         execListLegend,
+		entries:        entries,
+		problems:       problems,
+		problemsHeader: fmt.Sprintf("malformed entries (%d):", len(problems)),
+		summary:        summary,
+		shown:          len(shown),
+		matched:        len(matched),
+		scanned:        len(scanned),
+		files:          len(files),
+		maxResults:     settings.ListMaxResults,
+	})
 }

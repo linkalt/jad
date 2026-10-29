@@ -574,10 +574,17 @@ func TestToolSmithBridgeDoesNotCountACallThatNeverRan(t *testing.T) {
 		}
 	}
 	<-started
-	time.Sleep(100 * time.Millisecond)
+	// The counter the bridge keeps says both frames were read before Close, and the closed flag
+	// says Close has reached its wait: two sleeps here could pass for the wrong reason on a
+	// loaded machine (P6BM-22).
+	eventually(t, "the second frame to reach the bridge", func() bool { return bridge.started.Load() >= 2 })
 	statsDone := make(chan toolSmithBridgeStats, 1)
 	go func() { statsDone <- bridge.Close() }()
-	time.Sleep(100 * time.Millisecond)
+	eventually(t, "Close to wait for the running call", func() bool {
+		bridge.connMu.Lock()
+		defer bridge.connMu.Unlock()
+		return bridge.closed
+	})
 	close(release)
 	stats := <-statsDone
 	if stats.calls != 1 || stats.writes != 1 || stats.perTool["write"] != 1 {

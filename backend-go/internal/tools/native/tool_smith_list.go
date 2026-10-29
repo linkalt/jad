@@ -127,60 +127,104 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 	if int64(len(shown)) > settings.ListMaxResults {
 		shown = shown[:settings.ListMaxResults]
 	}
-	// A library directory can hold more malformed files than list_max_files lets us scan, so the
-	// problems are capped like the entries are (P6BM-11).
-	shownProblems := problems
-	if int64(len(shownProblems)) > settings.ListMaxResults {
-		shownProblems = shownProblems[:settings.ListMaxResults]
-	}
-	lines := make([]string, 0, len(shown)+len(shownProblems)+2)
-	if len(shown) > 0 {
-		lines = append(lines, toolSmithListLegend)
-	}
+	entries := make([]string, 0, len(shown))
 	for _, entry := range shown {
-		lines = append(lines, entry.line)
+		entries = append(entries, entry.line)
 	}
-	if len(problems) > 0 {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, fmt.Sprintf("malformed files (%d):", len(problems)))
-		for _, problem := range shownProblems {
-			lines = append(lines, "- "+problem)
-		}
-		if hidden := len(problems) - len(shownProblems); hidden > 0 {
-			lines = append(lines, fmt.Sprintf("- …and %d more", hidden))
-		}
-	}
-
 	summary := fmt.Sprintf("%d function%s", len(shown), pluralSuffix(len(shown)))
 	if len(problems) > 0 {
 		summary += fmt.Sprintf(", %d malformed file%s", len(problems), pluralSuffix(len(problems)))
 	}
-	options := tools.ResultOptions{ID: callID, Status: tools.StatusOK, Summary: summary}
-	if len(shown) < len(matched) || len(scanned) < len(files) {
-		cut := fmt.Sprintf("%d of %d", len(shown), len(matched))
-		if len(scanned) < len(files) {
-			cut += fmt.Sprintf("; scanned %d of %d files", len(scanned), len(files))
+	return renderLibraryListing(libraryListing{
+		callID:         callID,
+		legend:         []string{toolSmithListLegend},
+		entries:        entries,
+		problems:       problems,
+		problemsHeader: fmt.Sprintf("malformed files (%d):", len(problems)),
+		summary:        summary,
+		shown:          len(shown),
+		matched:        len(matched),
+		scanned:        len(scanned),
+		files:          len(files),
+		maxResults:     settings.ListMaxResults,
+	})
+}
+
+// libraryListing is one library listing ready to render: the matched entries already formatted,
+// the problems the scanner collected, and the counts its summary and truncation report. The two
+// listings (exec helpers and tool_smith functions) differ only in their words (P6BM-17).
+type libraryListing struct {
+	callID string
+	legend []string
+	// entries are the lines of the matched entries.
+	entries []string
+	// problems are the stray and malformed files; they are capped at maxResults.
+	problems       []string
+	problemsHeader string
+	summary        string
+	shown, matched int
+	scanned, files int
+	maxResults     int64
+}
+
+// renderLibraryListing is the shared shape of the two listings: the legend, the entries, the
+// problems block capped at list_max_results, the truncation information and the result envelope.
+func renderLibraryListing(listing libraryListing) string {
+	shownProblems := listing.problems
+	if int64(len(shownProblems)) > listing.maxResults {
+		shownProblems = shownProblems[:listing.maxResults]
+	}
+	lines := make([]string, 0, len(listing.entries)+len(shownProblems)+2)
+	if len(listing.entries) > 0 {
+		lines = append(lines, listing.legend...)
+	}
+	lines = append(lines, listing.entries...)
+	if len(listing.problems) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
 		}
-		suggestion := "add filters (read*, *file*, or a plain substring of the name or description) to narrow the result"
-		if len(scanned) < len(files) {
-			suggestion = "the library has more files than list_max_files; raise list_max_files or reduce the library (filters only apply to the scanned files)"
+		lines = append(lines, listing.problemsHeader)
+		for _, problem := range shownProblems {
+			lines = append(lines, "- "+problem)
 		}
+		if hidden := len(listing.problems) - len(shownProblems); hidden > 0 {
+			lines = append(lines, fmt.Sprintf("- …and %d more", hidden))
+		}
+	}
+	options := tools.ResultOptions{ID: listing.callID, Status: tools.StatusOK, Summary: listing.summary}
+	if listing.shown < listing.matched || listing.scanned < listing.files {
 		options.Information = append(options.Information,
 			tools.Information{Key: "truncated", Value: true},
-			tools.Information{Key: "shown", Value: cut},
-			tools.Information{Key: "suggestion", Value: suggestion})
+			tools.Information{Key: "shown", Value: libraryShownCut(listing.shown, listing.matched, listing.scanned, listing.files)},
+			tools.Information{Key: "suggestion", Value: librarySuggestion(listing.scanned, listing.files)})
 	}
 	if len(lines) > 0 {
 		options.Content = &tools.Content{Text: strings.Join(lines, "\n")}
 	}
 	result, err := tools.RenderToolResult(options)
 	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The result could not be rendered",
+		return tools.ExecutionError(listing.callID, tools.StatusError, "list_failed", "The result could not be rendered",
 			tools.Information{Key: "system_error", Value: err.Error()})
 	}
 	return result
+}
+
+// libraryShownCut is the "shown" information of a truncated listing: how many entries were shown
+// of the matched ones, and how many files were scanned of the library.
+func libraryShownCut(shown, matched, scanned, files int) string {
+	cut := fmt.Sprintf("%d of %d", shown, matched)
+	if scanned < files {
+		cut += fmt.Sprintf("; scanned %d of %d files", scanned, files)
+	}
+	return cut
+}
+
+// librarySuggestion names the limit that cut the listing.
+func librarySuggestion(scanned, files int) string {
+	if scanned < files {
+		return "the library has more files than list_max_files; raise list_max_files or reduce the library (filters only apply to the scanned files)"
+	}
+	return "add filters (read*, *file*, or a plain substring of the name or description) to narrow the result"
 }
 
 // toolSmithFilter is one lower-cased filter: a wildcard pattern when it has * or ?, else a substring.
@@ -243,19 +287,7 @@ func readToolSmithListEntry(dir, realRoot, file string, headerBytes int64) (tool
 	if !toolSmithFunctionName.MatchString(name) {
 		return toolSmithListEntry{}, "name must match ^[a-z][a-z0-9_]*$"
 	}
-	path := filepath.Join(dir, file)
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return toolSmithListEntry{}, "cannot be resolved: " + err.Error()
-	}
-	if !toolSmithInside(dir, real) || !toolSmithInside(realRoot, real) {
-		return toolSmithListEntry{}, "symlink leaves the functions directory"
-	}
-	info, err := os.Stat(real)
-	if err != nil || !info.Mode().IsRegular() {
-		return toolSmithListEntry{}, "is not a regular file"
-	}
-	handle, _, problem := openToolSmithFile(real, info)
+	handle, _, problem := openLibraryFile(dir, realRoot, file)
 	if problem != "" {
 		return toolSmithListEntry{}, problem
 	}

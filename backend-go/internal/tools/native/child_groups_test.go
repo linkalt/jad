@@ -46,6 +46,21 @@ func alive(pid int) bool {
 	return !strings.HasPrefix(text[strings.LastIndex(text, ")")+2:], "Z")
 }
 
+// expectAlive keeps checking that pid is still there for as long as a signal needs to take
+// effect: a sweep that signalled the group of a call kills it at once, so a fixed sleep before
+// one check could pass for the wrong reason, while this fails as soon as the child is gone
+// (P6BM-22).
+func expectAlive(t *testing.T, pid int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !alive(pid) {
+			t.Fatalf("%s (child %d is gone)", what, pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func waitDead(pid int) bool {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -75,10 +90,7 @@ func TestRunEndSweepOffLeavesTheChild(t *testing.T) {
 	ctx, sweep := WithChildGroups(context.Background())
 	pid := startLeftover(t, ctx, t.TempDir(), false)
 	sweep()
-	time.Sleep(300 * time.Millisecond)
-	if !alive(pid) {
-		t.Fatal("kill_children_on_run_end off still stopped the child")
-	}
+	expectAlive(t, pid, "kill_children_on_run_end off still stopped the child")
 }
 
 func TestRunEndSweepSkipsProcessToolProcesses(t *testing.T) {
@@ -92,10 +104,7 @@ func TestRunEndSweepSkipsProcessToolProcesses(t *testing.T) {
 	}
 	pid := snapshot.PID
 	sweep()
-	time.Sleep(300 * time.Millisecond)
-	if !alive(pid) {
-		t.Fatal("run end stopped a process-tool process")
-	}
+	expectAlive(t, pid, "run end stopped a process-tool process")
 }
 
 func TestRunEndSweepAfterCancelledRun(t *testing.T) {
@@ -159,10 +168,7 @@ func TestRunEndSweepCoversExecAndToolSmith(t *testing.T) {
 			ctx, sweep := WithChildGroups(context.Background())
 			pid := start(t, ctx, t.TempDir(), false)
 			sweep()
-			time.Sleep(300 * time.Millisecond)
-			if !alive(pid) {
-				t.Fatal("kill_children_on_run_end off still stopped the child")
-			}
+			expectAlive(t, pid, "kill_children_on_run_end off still stopped the child")
 		})
 	}
 }
@@ -201,19 +207,13 @@ func TestRunEndSweepCoversToolSmithBackgroundJob(t *testing.T) {
 		ctx, sweep := WithChildGroups(context.Background())
 		pid := start(t, ctx, false, false)
 		sweep()
-		time.Sleep(300 * time.Millisecond)
-		if !alive(pid) {
-			t.Fatal("kill_children_on_run_end off still stopped the job")
-		}
+		expectAlive(t, pid, "kill_children_on_run_end off still stopped the job")
 	})
 	t.Run("detached control escapes the sweep", func(t *testing.T) {
 		ctx, sweep := WithChildGroups(context.Background())
 		pid := start(t, ctx, true, true)
 		sweep()
-		time.Sleep(300 * time.Millisecond)
-		if !alive(pid) {
-			t.Fatal("detached job was swept; the control no longer shows why detached was removed")
-		}
+		expectAlive(t, pid, "detached job was swept; the control no longer shows why detached was removed")
 	})
 }
 
@@ -284,12 +284,15 @@ func TestRunEndSweepSkipsAGroupWhoseIdWasHandedOutAgain(t *testing.T) {
 	pgid := startGroup(t)
 	groups := &ChildGroups{groups: map[int]childGroup{}}
 	// The same id with another leader start time is what a recycled group looks like.
-	groups.groups[pgid] = childGroup{grace: 20 * time.Millisecond, start: processStartTime(pgid) + 1}
-	groups.sweep()
-	time.Sleep(300 * time.Millisecond)
-	if !alive(pgid) {
-		t.Fatal("the sweep signalled a group whose recorded start time says it is not the group of the call")
+	group := childGroup{grace: 20 * time.Millisecond, start: processStartTime(pgid) + 1}
+	groups.groups[pgid] = group
+	// The identity check is deterministic, and the sweep cannot signal a group it does not
+	// consider alive.
+	if group.alive(pgid) {
+		t.Fatal("a recycled group id counts as the group of the call")
 	}
+	groups.sweep()
+	expectAlive(t, pgid, "the sweep signalled a group whose recorded start time says it is not the group of the call")
 }
 
 // TestRunEndSweepStopsTheGroupItRegistered is the positive half: the same entry with the

@@ -209,9 +209,6 @@ func (manager *ManagedProcessManager) SetRetention(maxCompleted, retentionDays i
 	manager.maxCompleted, manager.retentionDays = maxCompleted, retentionDays
 }
 
-// Directory is the folder that holds one subfolder per process (manifest and logs).
-func (manager *ManagedProcessManager) Directory() string { return manager.directory }
-
 func NewProcessManager(directory string) *ManagedProcessManager {
 	return &ManagedProcessManager{
 		directory: filepath.Clean(directory),
@@ -345,11 +342,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	environment := buildNativeProcessEnvironment(request.Environment, request.Policy.Env, request.APIKeyEnv, request.Policy.EnvDeny)
 	resolvedShell, err := resolveBashExecutable(request.Policy.Shell, environment, request.CWD)
 	if err != nil {
-		_ = manager.finish(entry, ProcessFailed, ProcessManifest{
-			StopReason: err.Error(),
-			ExitCode:   json.RawMessage("null"),
-			Signal:     json.RawMessage("null"),
-		})
+		manager.failProcess(entry, err.Error())
 		return manager.snapshotEntry(entry), nil
 	}
 	arguments := []string{"-c", request.Command}
@@ -367,11 +360,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if request.Stdin != "" {
 		reader, writer, pipeErr := os.Pipe()
 		if pipeErr != nil {
-			_ = manager.finish(entry, ProcessFailed, ProcessManifest{
-				StopReason: pipeErr.Error(),
-				ExitCode:   json.RawMessage("null"),
-				Signal:     json.RawMessage("null"),
-			})
+			manager.failProcess(entry, pipeErr.Error())
 			return manager.snapshotEntry(entry), nil
 		}
 		command.Stdin = reader
@@ -386,11 +375,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 			_ = stdinReader.Close()
 			_ = stdinWriter.Close()
 		}
-		_ = manager.finish(entry, ProcessFailed, ProcessManifest{
-			StopReason: err.Error(),
-			ExitCode:   json.RawMessage("null"),
-			Signal:     json.RawMessage("null"),
-		})
+		manager.failProcess(entry, err.Error())
 		return manager.snapshotEntry(entry), nil
 	}
 	if stdinReader != nil {

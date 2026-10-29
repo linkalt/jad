@@ -85,6 +85,20 @@ func execField(result, key string) string {
 	return ""
 }
 
+// executeNativeExec runs the program to its end: the shape the tests use for the sync path,
+// which is the registered tool with no async host (P6BM-19: it lives here because only tests
+// call it).
+func executeNativeExec(
+	ctx context.Context,
+	arguments map[string]any,
+	settings sessionfs.NativeExecSettings,
+	apiKeyEnv string,
+	execution tools.ExecutionContext,
+) string {
+	text, _ := executeNativeExecAsync(ctx, arguments, settings, apiKeyEnv, execution, nil)
+	return text
+}
+
 func TestExecRunsTheSmallestCallInEachBuiltInInterpreter(t *testing.T) {
 	requireInterpreters(t, "python3", "node", "bash")
 	root := t.TempDir()

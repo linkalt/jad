@@ -179,18 +179,6 @@ func findExecLang(settings sessionfs.NativeExecSettings, requested string) (stri
 	return "", sessionfs.NativeExecLang{}, false
 }
 
-// executeNativeExec runs the program to its end.
-func executeNativeExec(
-	ctx context.Context,
-	arguments map[string]any,
-	settings sessionfs.NativeExecSettings,
-	apiKeyEnv string,
-	execution tools.ExecutionContext,
-) string {
-	text, _ := executeNativeExecAsync(ctx, arguments, settings, apiKeyEnv, execution, nil)
-	return text
-}
-
 // executeNativeExecAsync validates the call, then runs the program: to its end when host is
 // nil or the call has no owner for a handle, else as a handle that the call waits for up
 // to block_ms.
