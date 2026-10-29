@@ -5,6 +5,7 @@ package native
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -253,5 +254,76 @@ func TestAsyncRunKeepsTheChildGroupsOfItsRun(t *testing.T) {
 	sweep()
 	if !waitDead(pid) {
 		t.Fatal("the run end left the async run's child alive: the run lost the values of its call")
+	}
+}
+
+// startGroup starts a process in a group of its own and returns the group id. The leader is
+// killed at cleanup, so a test that never signals it cannot leave it behind.
+func startGroup(t *testing.T) int {
+	t.Helper()
+	command := exec.Command("sleep", "300")
+	configureProcessGroup(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pgid := command.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = command.Wait()
+	})
+	if !processGroupAlive(pgid) {
+		t.Fatalf("the group of the started process %d is not alive", pgid)
+	}
+	return pgid
+}
+
+// TestRunEndSweepSkipsAGroupWhoseIdWasHandedOutAgain is P6BM-06: the sweep runs at the end of
+// the run, so a group id recorded at the end of a call may belong to an unrelated group by
+// then. The recorded leader start time tells the two apart.
+func TestRunEndSweepSkipsAGroupWhoseIdWasHandedOutAgain(t *testing.T) {
+	pgid := startGroup(t)
+	groups := &ChildGroups{groups: map[int]childGroup{}}
+	// The same id with another leader start time is what a recycled group looks like.
+	groups.groups[pgid] = childGroup{grace: 20 * time.Millisecond, start: processStartTime(pgid) + 1}
+	groups.sweep()
+	time.Sleep(300 * time.Millisecond)
+	if !alive(pgid) {
+		t.Fatal("the sweep signalled a group whose recorded start time says it is not the group of the call")
+	}
+}
+
+// TestRunEndSweepStopsTheGroupItRegistered is the positive half: the same entry with the
+// leader's real start time is stopped.
+func TestRunEndSweepStopsTheGroupItRegistered(t *testing.T) {
+	pgid := startGroup(t)
+	groups := &ChildGroups{groups: map[int]childGroup{}}
+	groups.groups[pgid] = childGroup{grace: 20 * time.Millisecond, start: processStartTime(pgid)}
+	groups.sweep()
+	if !waitDead(pgid) {
+		t.Fatal("the sweep left the group of the call alive")
+	}
+}
+
+// TestChildGroupsAddRecordsTheLeaderStartTime pins what add stores: the identity the sweep
+// relies on, and only while the group is alive.
+func TestChildGroupsAddRecordsTheLeaderStartTime(t *testing.T) {
+	pgid := startGroup(t)
+	groups := &ChildGroups{groups: map[int]childGroup{}}
+	groups.add(pgid, 30*time.Millisecond)
+	group, ok := groups.groups[pgid]
+	if !ok {
+		t.Fatal("add did not register a live group")
+	}
+	if group.start != processStartTime(pgid) {
+		t.Fatalf("add recorded start %d, the leader reports %d", group.start, processStartTime(pgid))
+	}
+	if group.grace != 30*time.Millisecond {
+		t.Fatalf("add recorded the kill grace as %s", group.grace)
+	}
+	// A group that is gone is not registered.
+	dead := &ChildGroups{groups: map[int]childGroup{}}
+	dead.add(pgid+1_000_000, 30*time.Millisecond)
+	if _, ok := dead.groups[pgid+1_000_000]; ok {
+		t.Fatal("add registered a group with no live member")
 	}
 }
