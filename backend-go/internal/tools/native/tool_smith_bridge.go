@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -333,7 +334,10 @@ func (b *toolSmithBridge) serveConn(conn net.Conn) {
 		go func() {
 			defer b.wg.Done()
 			defer func() {
-				if recover() != nil {
+				// The model sees a generic failure, so without the log line a panicking
+				// helper call would leave no trace (C7).
+				if recovered := recover(); recovered != nil {
+					slog.Error("tool_smith bridge call failed inside the server", "panic", recovered)
 					reply(bridgeFailure(requestID(line), "internal error"))
 				}
 			}()

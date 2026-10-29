@@ -21,6 +21,10 @@ var toolSmithAsync = shellAsyncSpec{
 // blockMs for it.
 func startToolSmithAsync(ctx context.Context, host *AsyncHost, script toolSmithScript, blockMs *int64) (string, error) {
 	execution := script.execution
+	// The interaction hooks are dropped on purpose: the call has already returned, so a
+	// question raised by a nested tool now has no one to answer it and no call to render it
+	// into. The sync path keeps them because its call is still open (P6BM-25: required, not
+	// a divergence to fix).
 	execution.RequestInteraction = nil
 	execution.OnInteractionResolved = nil
 	script.execution = execution

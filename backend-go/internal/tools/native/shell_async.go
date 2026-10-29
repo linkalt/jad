@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -187,6 +188,21 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 	go func() {
 		defer close(handle.done)
 		defer cancel()
+		// A panic in the run (template, staging, the script itself) must fail this handle, not
+		// take the server down and leave the handle running: it is logged, completed as failed
+		// and dropped. Registered after close(handle.done), so it runs first and the text is
+		// set before done closes (P6BM-03).
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			slog.Error("async run failed inside the server", "run", id, "kind", string(spec.kind), "panic", recovered)
+			handle.text = tools.ExecutionError(callID, tools.StatusError, "internal_error", "The run failed inside the server",
+				tools.Information{Key: "system_error", Value: fmt.Sprint(recovered)})
+			_, _ = host.Manager().Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: "internal error", Summary: oneLine(handle.text)})
+			host.dropShellRun(id)
+		}()
 		result := run(runCtx)
 		handle.text = result.text
 		ref := host.shellResultPath(spec, id)

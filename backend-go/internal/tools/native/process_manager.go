@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -390,7 +391,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	manager.manifests[id] = manifest
 	manager.mu.Unlock()
 	manager.finishing.Add(1)
-	go manager.waitForProcess(command, entry)
+	go manager.waitForProcess(command, entry, id)
 	manager.writeOwnerRecord(id, manifest.PID)
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.signalProcess(entry, true)
@@ -604,8 +605,29 @@ func (manager *ManagedProcessManager) Snapshot(id string) (*ProcessSnapshot, boo
 	return &snapshot, true
 }
 
-func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *managedProcess) {
+// failProcess finishes entry as failed with cause as the stop reason: the process never ran,
+// or its wait did not come back, so there is no exit code or signal to report.
+func (manager *ManagedProcessManager) failProcess(entry *managedProcess, cause string) {
+	_ = manager.finish(entry, ProcessFailed, ProcessManifest{
+		StopReason: cause,
+		ExitCode:   json.RawMessage("null"),
+		Signal:     json.RawMessage("null"),
+	})
+}
+
+func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *managedProcess, id string) {
 	defer manager.finishing.Done()
+	// A panic in this detached goroutine (Wait, the collector, the manifest, prune) used to
+	// take the server down and leave the process in the manifest as running: it is logged and
+	// the process is finished as failed instead (P6BM-03).
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		slog.Error("process wait failed inside the server", "process", id, "panic", recovered)
+		manager.failProcess(entry, "internal error")
+	}()
 	waitErr := command.Wait()
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		// The command itself exited 0; only a descendant kept the pipes open.

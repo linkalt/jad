@@ -245,6 +245,35 @@ func TestToolSmithRunWithoutAHostRunsToItsEnd(t *testing.T) {
 	}
 }
 
+// TestToolSmithAsyncRunPanicFailsTheHandleNotTheServer is P6BM-03: the goroutine that runs and
+// finishes a handle had no recover, so a panic in it took the server down and left the handle
+// running for ever.
+func TestToolSmithAsyncRunPanicFailsTheHandleNotTheServer(t *testing.T) {
+	host := newTestAsyncHost(t)
+	host.attachShell(toolSmithAsync)
+	block := int64(5000)
+	out, err := startShellAsync(context.Background(), host, toolSmithAsync, time.Hour, tools.ExecutionContext{CallID: "call_panic", SessionKey: "s1"},
+		"script: panic", &block, func(context.Context) shellRunResult { panic("boom") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "internal_error") || !strings.Contains(out, "The run failed inside the server") {
+		t.Fatalf("the call that blocked on the run did not see the failure:\n%s", out)
+	}
+	listed, err := host.Manager().List(asyncmgr.ListQuery{Owner: "s1", State: "all"})
+	if err != nil || len(listed.Items) != 1 {
+		t.Fatalf("list = %+v, %v; want the one run", listed, err)
+	}
+	id := listed.Items[0].ID
+	waitForState(t, host, "s1", id, asyncmgr.StateFailed)
+	if entry, err := host.Manager().Status("s1", id); err != nil || entry.State != asyncmgr.StateFailed || entry.OK {
+		t.Fatalf("the panicking run did not end as failed: %+v %v", entry, err)
+	}
+	if run := host.shellRun(id); run != nil {
+		t.Fatalf("the panicking run is still registered with the host")
+	}
+}
+
 func TestToolSmithRunTimeoutAndFailureStates(t *testing.T) {
 	f := newToolSmithAsyncFixture(t, `echo oops >&2; exit 3`)
 	id := smithRunIDOf(t, f.run(t, "s1", `{"code":"return 1;","block_ms":0}`))

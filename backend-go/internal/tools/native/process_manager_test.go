@@ -195,6 +195,49 @@ func processTestRequest(workspace, command string, logCap int64) ProcessStartReq
 	}
 }
 
+// TestProcessWaitPanicFailsTheProcessNotTheServer is P6BM-03 at the second site: the goroutine
+// that waits for a started process and finishes it had no recover, so a panic in it took the
+// server down and left the manifest saying running for ever. A nil command is the shortest
+// panic: waitForProcess dereferences it.
+func TestProcessWaitPanicFailsTheProcessNotTheServer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	workspace := t.TempDir()
+	manager := NewProcessManager(filepath.Join(workspace, "processes"))
+	id := "proc_panic"
+	processDir := filepath.Join(manager.directory, id)
+	if err := os.MkdirAll(processDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	limits := bashStreamLimits{headBytes: 3, tailBytes: 3}
+	entry := &managedProcess{
+		manifest:     ProcessManifest{SchemaVersion: 1, ID: id, State: ProcessRunning, StartedAt: processNow()},
+		collector:    newBashOutputCollector(limits, limits, 100, false),
+		stdout:       &bashSpillWriter{path: filepath.Join(processDir, "stdout.log"), capBytes: 1024},
+		stderr:       &bashSpillWriter{path: filepath.Join(processDir, "stderr.log"), capBytes: 1024},
+		done:         make(chan struct{}),
+		killGrace:    250 * time.Millisecond,
+		maxCompleted: 10,
+	}
+	manager.mu.Lock()
+	manager.entries[id] = entry
+	manager.manifests[id] = entry.manifest
+	manager.mu.Unlock()
+	manager.finishing.Add(1)
+	manager.waitForProcess(nil, entry, id)
+	manager.finishing.Wait()
+	snapshot, ok := manager.Snapshot(id)
+	if !ok || snapshot.State != ProcessFailed || snapshot.StopReason != "internal error" {
+		t.Fatalf("snapshot = %+v, %v; want a process failed as internal error", snapshot, ok)
+	}
+	select {
+	case <-entry.done:
+	default:
+		t.Fatal("the process was not released: done is still open")
+	}
+}
+
 func TestBuildNativeProcessEnvironmentKeepsOnlyAllowlistedVariables(t *testing.T) {
 	base := []string{
 		"PATH=/usr/bin:/bin", "HOME=/tmp", "FIXTURE_SECRET=ambient-secret", "UNLISTED_SECRET=do-not-pass",
