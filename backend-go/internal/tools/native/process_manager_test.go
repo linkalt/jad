@@ -584,3 +584,39 @@ func TestCloseWaitsForThePruneOfAFinishedProcess(t *testing.T) {
 		t.Fatalf("the pruned folder still exists after Close: %v", err)
 	}
 }
+
+// TestCloseSignalsEveryRunningProcessAtOnce pins P6BM-16: a stop may wait kill_grace_ms for
+// SIGTERM and again for SIGKILL, so children that ignore SIGTERM must cost one grace together
+// and not one grace each. Serial stops would need children x grace here.
+func TestCloseSignalsEveryRunningProcessAtOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	const children, grace = 6, 500 * time.Millisecond
+	request := processTestRequest(directory, "trap '' TERM; sleep 30", 1024)
+	request.Policy.KillGraceMs = int64(grace / time.Millisecond)
+	request.Policy.MaxRunning = children
+	ids := make([]string, 0, children)
+	for range children {
+		snapshot, err := manager.Start(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, snapshot.ID)
+	}
+	started := time.Now()
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if took, limit := time.Since(started), 2*grace; took > limit {
+		t.Fatalf("Close took %v for %d children that ignore SIGTERM at a %v grace, want at most %v", took, children, grace, limit)
+	}
+	for _, id := range ids {
+		snapshot, found := manager.Snapshot(id)
+		if !found || snapshot == nil || snapshot.State != ProcessStopped {
+			t.Fatalf("process %s after Close = %#v, want stopped", id, snapshot)
+		}
+	}
+}

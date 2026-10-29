@@ -595,12 +595,23 @@ func (manager *ManagedProcessManager) Close() error {
 			ids = append(ids, id)
 		}
 	}
-	var failures []error
-	for _, id := range ids {
-		if _, found := manager.Stop(id, "session_closed"); !found {
-			failures = append(failures, fmt.Errorf("stop managed process %s: process not found", id))
-		}
+	// The stops run together: each one may wait kill_grace_ms for SIGTERM and again for
+	// SIGKILL, so one after another held a close for two graces per process — about 16 s for
+	// the 8 children max_running allows when they ignore SIGTERM, against one grace when they
+	// are signalled at the same time (PH3 measured 7.9x). Every Stop still owns its own entry,
+	// so nothing here is shared between them but this slice.
+	failures := make([]error, len(ids))
+	var stops sync.WaitGroup
+	for i, id := range ids {
+		stops.Add(1)
+		go func() {
+			defer stops.Done()
+			if _, found := manager.Stop(id, "session_closed"); !found {
+				failures[i] = fmt.Errorf("stop managed process %s: process not found", id)
+			}
+		}()
 	}
+	stops.Wait()
 	// A stop returns as soon as the process is gone, while its finisher still writes the
 	// last manifest and prunes older directories. Close waits for it, so a caller may
 	// remove the storage folder once Close returned. It waits without a bound: the goroutine
