@@ -514,11 +514,14 @@ func newHeaderHTTPClient(endpoint string, headers map[string]string, maxResponse
 	base := headerRoundTripper{base: http.DefaultTransport, origin: urlOrigin(parsed), headers: cloneStringMap(headers)}
 	client := &http.Client{
 		Transport: bodyLimitRoundTripper{base: base, limit: int64(maxResponseBytes)},
+		// A redirect is a boundary: the endpoint has no reason to send this request to
+		// another origin, and the body the server wrote would follow it to whatever the
+		// redirect names (loopback, a private address). The configured headers never did
+		// follow (headerRoundTripper attaches them to the configured origin only); the
+		// request itself must not either. Same-origin redirects are still followed.
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if !sameOrigin(request.URL, parsed) {
-				for name := range headers {
-					request.Header.Del(name)
-				}
+				return fmt.Errorf("refusing redirect to another origin: %s", request.URL.Redacted())
 			}
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
