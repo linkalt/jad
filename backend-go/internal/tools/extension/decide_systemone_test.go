@@ -775,3 +775,64 @@ func TestDecideSystemoneRequestKeepsTheJSONInputBytesItCounted(t *testing.T) {
 		t.Fatalf("request body = %s, want the raw U+2028 separator", raw)
 	}
 }
+
+// A confidence the provider did not send must stay missing instead of being shown as
+// a 0, and a probability outside 0-1 is a provider bug rather than an answer.
+func TestDecideSystemoneKeepsAMissingConfidenceMissingAndRefusesAnOutOfRangeOne(t *testing.T) {
+	const predicate = `{"input":"x","questions":[{"name":"q1","instructions":"?"}]}`
+	const choice = `{"input":"x","questions":[{"name":"q1","instructions":"?","choices":["a","b"]}]}`
+	const score = `{"input":"x","questions":[{"name":"q1","instructions":"?","levels":["lo","hi"]}]}`
+	for name, tc := range map[string]struct {
+		reply, arguments string
+		wantStatus       bool // true: no status key, the answer is shown
+		wantConfidence   any  // nil: the answer carries no confidence key
+		wantNumber       any  // probability or score, when the answer is shown
+	}{
+		"choice without confidence":            {`{"answers":{"q1":{"type":"choice","choice":"a"}}}`, choice, true, nil, nil},
+		"choice with confidence 0":             {`{"answers":{"q1":{"type":"choice","choice":"a","confidence":0}}}`, choice, true, 0.0, nil},
+		"choice with confidence 1":             {`{"answers":{"q1":{"type":"choice","choice":"a","confidence":1}}}`, choice, true, 1.0, nil},
+		"choice with confidence above one":     {`{"answers":{"q1":{"type":"choice","choice":"a","confidence":1.5}}}`, choice, false, nil, nil},
+		"choice with negative confidence":      {`{"answers":{"q1":{"type":"choice","choice":"a","confidence":-0.2}}}`, choice, false, nil, nil},
+		"score with confidence above one":      {`{"answers":{"q1":{"type":"score","score":0.5,"confidence":1.5}}}`, score, false, nil, nil},
+		"score with confidence 0":              {`{"answers":{"q1":{"type":"score","score":0.5,"confidence":0}}}`, score, true, 0.0, 0.5},
+		"predicate with probability 0":         {`{"answers":{"q1":{"type":"noul","noul":0}}}`, predicate, true, nil, 0.0},
+		"predicate with probability 1":         {`{"answers":{"q1":{"type":"noul","noul":1}}}`, predicate, true, nil, 1.0},
+		"predicate with probability above one": {`{"answers":{"q1":{"type":"noul","noul":1.5}}}`, predicate, false, nil, nil},
+		"predicate with negative probability":  {`{"answers":{"q1":{"type":"noul","noul":-0.2}}}`, predicate, false, nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newDecideSystemoneRig(t, 200, tc.reply, nil)
+			answer := decideSystemoneContent(t, rig.call(t, tc.arguments))["answers"].([]any)[0].(map[string]any)
+			if !tc.wantStatus {
+				if answer["status"] != "unusable" {
+					t.Fatalf("answer = %#v, want status unusable", answer)
+				}
+				for _, key := range []string{"probability", "choice", "score", "level", "confidence"} {
+					if _, has := answer[key]; has {
+						t.Fatalf("an unusable answer carries %s: %#v", key, answer)
+					}
+				}
+				return
+			}
+			if _, has := answer["status"]; has {
+				t.Fatalf("answer = %#v, want it shown", answer)
+			}
+			confidence, has := answer["confidence"]
+			if tc.wantConfidence == nil && has {
+				t.Fatalf("a missing confidence was invented: %#v", answer)
+			}
+			if tc.wantConfidence != nil && confidence != tc.wantConfidence {
+				t.Fatalf("confidence = %v, want %v (%#v)", confidence, tc.wantConfidence, answer)
+			}
+			if tc.wantNumber != nil {
+				number := answer["probability"]
+				if _, isScore := answer["score"]; isScore {
+					number = answer["score"]
+				}
+				if number != tc.wantNumber {
+					t.Fatalf("number = %v, want %v (%#v)", number, tc.wantNumber, answer)
+				}
+			}
+		})
+	}
+}

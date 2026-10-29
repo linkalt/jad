@@ -17,13 +17,14 @@ import (
 )
 
 // decideSystemoneAnswer is one answer in a form both providers map to. Score is the
-// probability-weighted 0-based level index, so it can fall between levels.
+// probability-weighted 0-based level index, so it can fall between levels. Confidence
+// is nil when the provider gave none, so a gap stays a gap.
 type decideSystemoneAnswer struct {
 	Type          string
 	Probability   float64
 	Choice        string
 	Score         float64
-	Confidence    float64
+	Confidence    *float64
 	Probabilities []decideSystemoneProbability
 	Refused       bool
 	// HasNumber is set when the provider gave the number its type needs (probability
@@ -305,7 +306,7 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (ma
 			Noul          *float64           `json:"noul"`
 			Choice        json.RawMessage    `json:"choice"`
 			Score         *float64           `json:"score"`
-			Confidence    float64            `json:"confidence"`
+			Confidence    *float64           `json:"confidence"`
 			Probabilities map[string]float64 `json:"probabilities"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
@@ -375,12 +376,17 @@ func renderDecideSystemoneAnswers(questions []decideSystemoneQuestion, answers m
 			case "predicate":
 				item["probability"] = roundDecideSystemone(answer.Probability)
 			case "choice":
-				item["choice"], item["confidence"] = answer.Choice, roundDecideSystemone(answer.Confidence)
+				item["choice"] = answer.Choice
 			case "score":
-				item["score"], item["confidence"] = roundDecideSystemone(answer.Score), roundDecideSystemone(answer.Confidence)
+				item["score"] = roundDecideSystemone(answer.Score)
 				if level := nearestDecideSystemoneLevel(question, answer.Score); level != "" {
 					item["level"] = level
 				}
+			}
+			// A confidence the provider left out stays out: a made-up 0 would read
+			// as "no confidence" instead of "not given".
+			if question.Type != "predicate" && answer.Confidence != nil {
+				item["confidence"] = roundDecideSystemone(*answer.Confidence)
 			}
 			if len(answer.Probabilities) > 0 && question.Type != "predicate" {
 				item["probabilities"] = orderedDecideSystemoneProbabilities(answer.Probabilities)
@@ -398,10 +404,18 @@ func renderDecideSystemoneAnswers(questions []decideSystemoneQuestion, answers m
 
 // decideSystemoneAnswerFits reports whether an answer is of its question's type and has the
 // value that type needs: the number for a predicate or a score, and for a choice one
-// of the options that were offered.
+// of the options that were offered. A probability is 0 to 1, so a provider number
+// outside that range is a bug and must not be reported as an answer; a score is a
+// level index and may fall between the levels (nearestDecideSystemoneLevel clamps it).
 func decideSystemoneAnswerFits(question decideSystemoneQuestion, answer decideSystemoneAnswer) bool {
 	if answer.Broken || answer.Type != question.Type {
 		return false
+	}
+	if answer.Confidence != nil && !decideSystemoneProbabilityFits(*answer.Confidence) {
+		return false
+	}
+	if question.Type == "predicate" {
+		return answer.HasNumber && decideSystemoneProbabilityFits(answer.Probability)
 	}
 	if question.Type != "choice" {
 		return answer.HasNumber
@@ -429,6 +443,9 @@ func nearestDecideSystemoneLevel(question decideSystemoneQuestion, score float64
 }
 
 func roundDecideSystemone(value float64) float64 { return math.Round(value*10000) / 10000 }
+
+// decideSystemoneProbabilityFits reports whether a number can be shown as a probability.
+func decideSystemoneProbabilityFits(value float64) bool { return value >= 0 && value <= 1 }
 
 // orderedDecideSystemoneProbabilities keeps the provider's order in a JSON object.
 type orderedDecideSystemoneProbabilities []decideSystemoneProbability
