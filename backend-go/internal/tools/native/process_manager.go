@@ -403,16 +403,19 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	}
 	manifest = cloneProcessManifest(entry.manifest)
 	entry.mu.Unlock()
-	manager.mu.Lock()
-	manager.manifests[id] = manifest
-	manager.mu.Unlock()
 	manager.finishing.Add(1)
 	go manager.waitForProcess(command, entry, id)
 	manager.writeOwnerRecord(id, manifest.PID)
-	if err := manager.persistManifest(manifest); err != nil {
+	// The running manifest goes through the guarded write: the finisher may already have written
+	// the terminal one, and a stale "running" clone landing on disk after it is exactly the
+	// phantom P6BM-08 is about (the map is guarded by finish, the file was not).
+	entry.mu.Lock()
+	persistErr := manager.recordLiveManifest(entry, manifest)
+	entry.mu.Unlock()
+	if persistErr != nil {
 		manager.signalProcess(entry, true)
 		_ = waitForManagedProcess(entry, 2*time.Second)
-		slog.Error("running process manifest could not be persisted", "process", id, "error", err)
+		slog.Error("running process manifest could not be persisted", "process", id, "error", persistErr)
 		return ProcessSnapshot{}, errProcessStorage
 	}
 	if stopped {
@@ -539,7 +542,8 @@ func (manager *ManagedProcessManager) Stop(id, reason string) (*ProcessSnapshot,
 	pid := entry.manifest.PID
 	command := entry.command
 	updated := cloneProcessManifest(entry.manifest)
-	manager.recordLiveManifest(entry, updated)
+	// A stop that loses the race to the exit writes nothing: the terminal manifest stands.
+	_ = manager.recordLiveManifest(entry, updated)
 	entry.mu.Unlock()
 	if pid <= 0 || command == nil {
 		manager.setLeftRunning(entry)
@@ -794,7 +798,7 @@ func (manager *ManagedProcessManager) setLeftRunning(entry *managedProcess) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	entry.manifest.LeftRunning = true
-	manager.recordLiveManifest(entry, cloneProcessManifest(entry.manifest))
+	_ = manager.recordLiveManifest(entry, cloneProcessManifest(entry.manifest))
 }
 
 // recordLiveManifest records manifest as the entry's manifest, in memory and on disk, but
@@ -803,9 +807,9 @@ func (manager *ManagedProcessManager) setLeftRunning(entry *managedProcess) {
 // manifest finish had already written, leaving a phantom process for the rest of the server's
 // life (and after a restart). finish takes entry.mu before it sets the terminal state, so
 // holding it here also orders the two writes.
-func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, manifest ProcessManifest) {
+func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, manifest ProcessManifest) error {
 	if processTerminal(entry.manifest.State) {
-		return
+		return nil
 	}
 	if hook := manager.liveHook; hook != nil {
 		hook(manifest.ID)
@@ -813,7 +817,7 @@ func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, 
 	manager.mu.Lock()
 	manager.manifests[manifest.ID] = manifest
 	manager.mu.Unlock()
-	_ = manager.persistManifest(manifest)
+	return manager.persistManifest(manifest)
 }
 
 func waitForManagedProcess(entry *managedProcess, timeout time.Duration) bool {
