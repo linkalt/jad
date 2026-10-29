@@ -40,7 +40,10 @@ type connection struct {
 	maxSchemaBytes           int
 	maxDescriptionBytes      int
 	structuredContentCapture *structuredContentCapture
-	closed                   bool
+	// stdioCommand is the server process of a stdio transport, retained so close can
+	// stop the rest of its process group after the SDK stopped the direct child.
+	stdioCommand *exec.Cmd
+	closed       bool
 }
 
 // listTools follows the tools/list cursors until the server reports the end of the list,
@@ -145,7 +148,11 @@ func (c *connection) close() error {
 		return nil
 	}
 	c.closed = true
-	return c.session.Close()
+	err := c.session.Close()
+	// The SDK ends the direct child only (stdin close, SIGTERM, SIGKILL); kill what a
+	// wrapper started so a grandchild cannot outlive the manager.
+	killStdioProcessGroup(c.stdioCommand)
+	return err
 }
 
 // maxConcurrentServerLoads bounds how many MCP servers one LoadTools call connects to and
@@ -393,6 +400,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	}
 
 	var transport mcpSDK.Transport
+	var stdioCommand *exec.Cmd
 	if config.transport.stdio != nil {
 		stdio := config.transport.stdio
 		command, err := commandWithEnvironmentPath(stdio.command, stdio.env)
@@ -402,6 +410,8 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		cmd := exec.Command(command, stdio.args...)
 		cmd.Dir = stdio.cwd
 		cmd.Env = environmentSlice(stdio.env)
+		configureStdioProcessGroup(cmd)
+		stdioCommand = cmd
 		transport = &mcpSDK.CommandTransport{Command: cmd}
 	} else {
 		httpConfig := config.transport.http
@@ -428,6 +438,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		if clientSession != nil {
 			_ = clientSession.Close()
 		}
+		killStdioProcessGroup(stdioCommand)
 		return nil, configError(server.ConfigPath, "failed to connect MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
 	connectionCtx, cancelConnection := context.WithCancel(context.Background())
@@ -442,6 +453,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		maxSchemaBytes:           config.maxSchemaBytes,
 		maxDescriptionBytes:      config.maxDescriptionBytes,
 		structuredContentCapture: structuredCapture,
+		stdioCommand:             stdioCommand,
 	}
 	m.mu.Lock()
 	if m.closed {
