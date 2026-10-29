@@ -170,6 +170,11 @@ func (c *callbackServer) handle(w http.ResponseWriter, r *http.Request) {
 		writePage(w, http.StatusConflict, "The sign-in already finished. You can close this window.")
 		return
 	}
+	if c.state == "" || subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(c.state)) != 1 {
+		// A request with a missing or wrong state does not end the sign-in: it may be a stray request.
+		writePage(w, http.StatusBadRequest, "This sign-in request is not valid.")
+		return
+	}
 	if provided := query.Get("error"); provided != "" {
 		c.finished = true
 		c.result <- callbackResult{err: fmt.Errorf("the sign-in was refused by the issuer: %s", truncate(provided, maxDescription))}
@@ -177,8 +182,7 @@ func (c *callbackServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := query.Get("code")
-	if code == "" || subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(c.state)) != 1 || c.state == "" {
-		// A request with a wrong state does not end the sign-in: it may be a stray request.
+	if code == "" {
 		writePage(w, http.StatusBadRequest, "This sign-in request is not valid.")
 		return
 	}

@@ -320,3 +320,22 @@ func TestLoginPortInUseAndBrowserFailure(t *testing.T) {
 		t.Fatalf("browser failure handling wrong: err=%v out=%q", err, out.String())
 	}
 }
+
+func TestLoginIgnoresAStrayErrorWithoutStateAndKeepsWaiting(t *testing.T) {
+	store := storeIn(t)
+	access := accessJWT(t, fixedNow, time.Hour, "a")
+	issuer := newFakeIssuer(t, reply{200, tokenBody(t, access, "", "r")})
+	person := newBrowser(t, func(redirect, state string) []string {
+		return []string{
+			redirect + "?error=access_denied",
+			redirect + "?error=access_denied&state=wrong",
+			redirect + "?code=good&state=" + url.QueryEscape(state),
+		}
+	})
+	if err := Login(context.Background(), store, loginClient(t, issuer, nil), LoginOptions{OpenBrowser: person.open}); err != nil {
+		t.Fatalf("a stray ?error= ended the sign-in: %v", err)
+	}
+	if answers := person.finished(); len(answers) != 3 || answers[0] != 400 || answers[1] != 400 || answers[2] != 200 {
+		t.Fatalf("callback answers %v, want [400 400 200]", answers)
+	}
+}

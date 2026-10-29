@@ -75,6 +75,9 @@ func Login(ctx context.Context, store *Store, client *Client, options LoginOptio
 	if err != nil {
 		return err
 	}
+	if callback != nil {
+		callback.expectState(request.State)
+	}
 	fmt.Fprintf(out, "Open this URL to sign in:\n%s\n", request.URL)
 	if options.OpenBrowser != nil {
 		if err := options.OpenBrowser(request.URL); err != nil {
@@ -89,7 +92,6 @@ func Login(ctx context.Context, store *Store, client *Client, options LoginOptio
 		fmt.Fprintln(out, "After you sign in, copy the code the page shows and paste it here:")
 		code, state, err = readPasted(waitContext, options.In)
 	} else {
-		callback.expectState(request.State)
 		fmt.Fprintf(out, "Waiting for the sign-in on %s ...\n", callback.redirectURI)
 		code, err = callback.wait(waitContext)
 		state = request.State
@@ -228,6 +230,11 @@ func (c *callbackServer) handle(w http.ResponseWriter, r *http.Request) {
 		writePage(w, http.StatusConflict, "The sign-in already finished. You can close this window.")
 		return
 	}
+	if c.state == "" || subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(c.state)) != 1 {
+		// A request with a missing or wrong state does not end the sign-in: it may be a stray request.
+		writePage(w, http.StatusBadRequest, "This sign-in request is not valid.")
+		return
+	}
 	if provided := query.Get("error"); provided != "" {
 		c.finished = true
 		c.result <- callbackResult{err: fmt.Errorf("the sign-in was refused by the issuer: %s", truncate(provided, maxDescription))}
@@ -235,8 +242,7 @@ func (c *callbackServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := query.Get("code")
-	if code == "" || subtle.ConstantTimeCompare([]byte(query.Get("state")), []byte(c.state)) != 1 || c.state == "" {
-		// A request with a wrong state does not end the sign-in: it may be a stray request.
+	if code == "" {
 		writePage(w, http.StatusBadRequest, "This sign-in request is not valid.")
 		return
 	}

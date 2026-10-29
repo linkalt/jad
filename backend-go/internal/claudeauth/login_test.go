@@ -109,7 +109,9 @@ func TestLoginIgnoresAWrongStateAndErrorRedirectEndsIt(t *testing.T) {
 
 	store2 := storeIn(t)
 	issuer2 := newFakeIssuer(t)
-	refuse := newBrowser(t, func(redirect, state string) []string { return []string{redirect + "?error=access_denied"} })
+	refuse := newBrowser(t, func(redirect, state string) []string {
+		return []string{redirect + "?error=access_denied&state=" + url.QueryEscape(state)}
+	})
 	err := Login(context.Background(), store2, clientFor(t, issuer2), options(refuse, nil))
 	if err == nil || !strings.Contains(err.Error(), "access_denied") || issuer2.callCount() != 0 {
 		t.Fatalf("err %v calls %d", err, issuer2.callCount())
@@ -259,5 +261,63 @@ func TestCopyCodeWithoutAnInputIsAnError(t *testing.T) {
 	err := Login(context.Background(), storeIn(t), clientFor(t, newFakeIssuer(t)), LoginOptions{CopyCode: true})
 	if err == nil || !strings.Contains(err.Error(), "no input") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestLoginIgnoresAStrayErrorWithoutStateAndKeepsWaiting(t *testing.T) {
+	store := storeIn(t)
+	issuer := newFakeIssuer(t, reply{200, tokenBody("acc", "ref", 60)})
+	person := newBrowser(t, func(redirect, state string) []string {
+		return []string{
+			redirect + "?error=access_denied",
+			redirect + "?error=access_denied&state=wrong",
+			redirect + "?code=good&state=" + url.QueryEscape(state),
+		}
+	})
+	if err := Login(context.Background(), store, clientFor(t, issuer), options(person, nil)); err != nil {
+		t.Fatalf("a stray ?error= ended the sign-in: %v", err)
+	}
+	if issuer.Calls[0].JSON["code"] != "good" {
+		t.Fatalf("exchange used %v", issuer.Calls[0].JSON["code"])
+	}
+}
+
+func TestLoginReportsTheIssuerErrorWhenTheStateIsRight(t *testing.T) {
+	store := storeIn(t)
+	issuer := newFakeIssuer(t)
+	person := newBrowser(t, func(redirect, state string) []string {
+		return []string{redirect + "?error=access_denied&state=" + url.QueryEscape(state)}
+	})
+	err := Login(context.Background(), store, clientFor(t, issuer), options(person, nil))
+	if err == nil || !strings.Contains(err.Error(), "access_denied") || issuer.callCount() != 0 {
+		t.Fatalf("err %v calls %d", err, issuer.callCount())
+	}
+}
+
+func TestLoginArmsTheStateBeforeTheBrowserOpens(t *testing.T) {
+	store := storeIn(t)
+	issuer := newFakeIssuer(t, reply{200, tokenBody("acc", "ref", 60)})
+	var status int
+	opts := LoginOptions{Now: func() time.Time { return fixedNow }}
+	opts.OpenBrowser = func(raw string) error {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		response, err := http.Get(parsed.Query().Get("redirect_uri") + "?code=c&state=" + url.QueryEscape(parsed.Query().Get("state")))
+		if err != nil {
+			return err
+		}
+		response.Body.Close()
+		status = response.StatusCode
+		return nil
+	}
+	client := clientFor(t, issuer)
+	client.Config.LoginTimeoutMS = 2000
+	if err := Login(context.Background(), store, client, opts); err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("a redirect arriving while the browser opens was answered %d, want 200", status)
 	}
 }
