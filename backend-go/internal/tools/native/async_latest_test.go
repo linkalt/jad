@@ -167,7 +167,8 @@ func TestLatestTotalIsCappedAcrossHandles(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(host.Close)
-	driver := &fakeLatestDriver{text: strings.Repeat("x", 100)}
+	// Oldest 60 bytes, then the newest 40: the ends are told apart, which all-x text cannot do.
+	driver := &fakeLatestDriver{text: strings.Repeat("x", 60) + strings.Repeat("Z", 40)}
 	_ = host.manager.AddDriver(driver)
 	for _, id := range []string{"h1", "h2", "h3"} {
 		if err := host.manager.Register(asyncmgr.Registration{ID: id, Owner: "s1", Kind: "fake"}); err != nil {
@@ -181,6 +182,11 @@ func TestLatestTotalIsCappedAcrossHandles(t *testing.T) {
 	}
 	if total > 150 || len(blocks) != 2 || len(blocks[1].Text) != 50 {
 		t.Fatalf("blocks = %d, total = %d, want 2 blocks within 150 bytes", len(blocks), total)
+	}
+	// The block that fits only in part keeps what is new (the Z tail) and says what it dropped,
+	// marker included in the budget (P6BM-05).
+	if second := blocks[1].Text; !strings.HasPrefix(second, "…+71 bytes earlier\n") || !strings.HasSuffix(second, strings.Repeat("Z", 29)) || strings.Contains(second, "x") {
+		t.Fatalf("the cut block must keep its newest bytes and mark the rest:\n%q", second)
 	}
 	if driver.calls["h3"] != 0 {
 		t.Fatalf("a handle past the cap must not move its cursor or be asked: %v", driver.calls)

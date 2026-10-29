@@ -36,7 +36,8 @@ type latestBlock struct {
 
 // latestBlocks returns one block per live handle of ids (owner's), newest news only, within
 // latest_total_bytes in all. A handle whose block no longer fits is left for the next call:
-// its cursor does not move. A block that fits only in part is cut and its cursor moves.
+// its cursor does not move. A block that fits only in part keeps its newest bytes, says how
+// many bytes it left out, and moves its cursor past all of them.
 func (h *AsyncHost) latestBlocks(owner string, ids []string) []latestBlock {
 	cfg := h.Config()
 	budget := int(cfg.LatestTotalBytes)
@@ -59,13 +60,43 @@ func (h *AsyncHost) latestBlocks(owner string, ids []string) []latestBlock {
 			continue
 		}
 		if len(text) > budget {
-			text, _ = cutUTF8(text, int64(budget))
+			text = cutBlockTail(text, budget)
 		}
 		h.manager.SetProgress(id, next)
 		budget -= len(text)
 		blocks = append(blocks, latestBlock{ID: id, Kind: kind, Text: text})
 	}
 	return blocks
+}
+
+// earlierBytesMarker says how many bytes were left out of a cut, for a block of latest news and
+// for a stream of the output block alike.
+func earlierBytesMarker(bytes int64) string {
+	return fmt.Sprintf("…+%d bytes earlier\n", bytes)
+}
+
+// cutBlockTail keeps the newest bytes of text within budget and marks how many bytes it left
+// out. The mark counts against the budget too, so one response never adds more than
+// latest_total_bytes; a budget too small for it keeps the newest bytes alone, which is still
+// what the model came for.
+func cutBlockTail(text string, budget int) string {
+	shown, cut := tailUTF8(text, budget)
+	if !cut {
+		return text
+	}
+	for range 4 {
+		marker := earlierBytesMarker(int64(len(text) - len(shown)))
+		keep := budget - len(marker)
+		if keep < 0 {
+			return shown
+		}
+		next, _ := tailUTF8(text, keep)
+		if len(next) == len(shown) {
+			return marker + next
+		}
+		shown = next
+	}
+	return shown
 }
 
 // latestText is the block of one handle, "" when it is not live or has nothing to say.
@@ -134,7 +165,7 @@ func outputLatest(collector *bashOutputCollector, info latestInfo, prev any, cfg
 		shown, cut := tailUTF8(text, int(cfg.LatestBytes))
 		section := "[" + stream.name + "]\n"
 		if earlier := int64(len(text)-len(shown)) + stream.lost; cut || stream.lost > 0 {
-			section += fmt.Sprintf("…+%d bytes earlier\n", earlier)
+			section += earlierBytesMarker(earlier)
 		}
 		sections = append(sections, section+shown)
 	}
