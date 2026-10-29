@@ -133,6 +133,10 @@ func TestNormalizeConfigRejectsMissingSecretsAndInvalidLimits(t *testing.T) {
 	}
 }
 
+// Each draft is compiled and validated through this repository's CompileSchema: how a
+// draft treats its own keywords is the dependency's business (jsonschema/v6 tests that
+// upstream, and a test here that bypassed CompileSchema only re-tested it), while what
+// this package must keep honest is that a server's declared draft reaches it.
 func TestMCPInputSchemaSupportsDraft04Through202012(t *testing.T) {
 	cases := []struct {
 		name   string

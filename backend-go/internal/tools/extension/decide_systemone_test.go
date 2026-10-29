@@ -879,3 +879,28 @@ func TestDecideSystemoneRefusesQuestionsPastTheByteBudget(t *testing.T) {
 		t.Fatalf("the fitting question did not reach the provider: %#v", rig.requests)
 	}
 }
+
+// A question name is data, not a Go literal: the item's keys are written from a fixed
+// list and every value, the name included, is encoded as JSON, so a control character in
+// a name round-trips instead of rendering a result that is not JSON (p6a C1 / P6AM-20).
+func TestDecideSystemoneQuestionNameWithAControlCharacterRoundTrips(t *testing.T) {
+	const name = "a\u0001b\u007f"
+	reply, _ := json.Marshal(map[string]any{"answers": map[string]any{name: map[string]any{"type": "noul", "noul": 0.5}}})
+	rig := newDecideSystemoneRig(t, 200, string(reply), nil)
+	arguments, _ := json.Marshal(map[string]any{"input": "x", "questions": []any{
+		map[string]any{"name": name, "instructions": "?"},
+	}})
+	output := rig.call(t, string(arguments))
+	answer := decideSystemoneContent(t, output)["answers"].([]any)[0].(map[string]any)
+	if got := answer["name"]; got != name {
+		t.Fatalf("name = %q, want %q\n%s", got, name, output)
+	}
+	if answer["probability"] != 0.5 {
+		t.Fatalf("probability = %v, want 0.5\n%s", answer["probability"], output)
+	}
+	// A raw U+0001 would make the result invalid JSON (decideSystemoneContent above
+	// already parses it); U+007F is legal unescaped, so only the former is asserted.
+	if strings.ContainsRune(output, '\u0001') {
+		t.Fatalf("a raw control character reached the result: %q", output)
+	}
+}
