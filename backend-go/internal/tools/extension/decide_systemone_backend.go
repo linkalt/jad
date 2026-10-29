@@ -247,6 +247,12 @@ func decideSystemoneScalarText(raw json.RawMessage) string {
 // ---- Request and answers ----
 
 func systemoneRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
+	return map[string]any{"model": model, "state": systemoneState(input), "questions": systemoneQuestionItems(questions)}
+}
+
+// systemoneQuestionItems renders the questions as the provider receives them, so the
+// byte budget and the request body measure the same text.
+func systemoneQuestionItems(questions []decideSystemoneQuestion) map[string]any {
 	items := make(map[string]any, len(questions))
 	for _, question := range questions {
 		item := map[string]any{"instructions": question.Instructions}
@@ -273,7 +279,7 @@ func systemoneRequest(model string, input []decideSystemoneInputPart, questions 
 		}
 		items[question.Name] = item
 	}
-	return map[string]any{"model": model, "state": systemoneState(input), "questions": items}
+	return items
 }
 
 func firstNonEmpty(values ...string) string {

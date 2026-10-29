@@ -207,15 +207,22 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 	for _, part := range input {
 		size += part.size()
 	}
-	if int64(size) > settings.MaxInputBytes {
-		return decideSystemoneError(callID, tools.StatusInvalidInput, "input_too_large", fmt.Sprintf("Input is %d bytes; the limit is %d", size, settings.MaxInputBytes))
-	}
 	questions, err := parseDecideSystemoneQuestions(arguments["questions"])
 	if err != nil {
 		return decideSystemoneError(callID, tools.StatusInvalidInput, "invalid_question", err.Error())
 	}
 	if int64(len(questions)) > settings.MaxQuestions {
 		return decideSystemoneError(callID, tools.StatusInvalidInput, "too_many_questions", fmt.Sprintf("%d questions; the limit is %d", len(questions), settings.MaxQuestions))
+	}
+	// One request goes out whole, so one counter covers it: every instruction, option
+	// label and description is in the questions, and max_input_bytes bounds the input
+	// parts and the questions together.
+	questionBytes, err := tools.MarshalJSON(systemoneQuestionItems(questions))
+	if err != nil {
+		return decideSystemoneError(callID, tools.StatusError, "bad_request", fmt.Sprintf("The questions cannot be encoded: %v", err))
+	}
+	if requestBytes := int64(size) + int64(len(questionBytes)); requestBytes > settings.MaxInputBytes {
+		return decideSystemoneError(callID, tools.StatusInvalidInput, "input_too_large", fmt.Sprintf("The request is %d bytes (%d input, %d questions); max_input_bytes is %d", requestBytes, size, len(questionBytes), settings.MaxInputBytes))
 	}
 	key := strings.TrimSpace(environment(settings.APIKeyEnv))
 	if key == "" {

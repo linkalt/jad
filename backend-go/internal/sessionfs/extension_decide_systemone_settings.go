@@ -38,7 +38,8 @@ type ExtensionDecideSystemoneSettings struct {
 	TimeoutMS int64
 	// MaxQuestions is the most questions one call may carry.
 	MaxQuestions int64
-	// MaxInputBytes is the most bytes of input text one call may carry.
+	// MaxInputBytes is the most bytes one call may send: the input parts plus the
+	// questions, as sent.
 	MaxInputBytes int64
 	// MaxResponseBytes is the most response bytes read from the provider.
 	MaxResponseBytes int64

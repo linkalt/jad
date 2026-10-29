@@ -2030,7 +2030,7 @@
                 "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions."},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
                 "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
-                "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes of input text one call may carry."},
+                "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes one call may send: the input parts plus the questions, as sent."},
                 "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Most response bytes read from the provider."}
               },
               "unevaluatedProperties": false

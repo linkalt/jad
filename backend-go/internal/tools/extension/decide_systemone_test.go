@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -199,7 +200,7 @@ func TestDecideSystemoneRefusesBadQuestionsBeforeAnyRequest(t *testing.T) {
 		"blank choice":            {`{"input":"x","questions":[{"name":"a","instructions":"?","choices":["x","  "]}]}`, `option without a value`},
 		"blank level label":       {`{"input":"x","questions":[{"name":"a","instructions":"?","levels":["x",{"label":" "}]}]}`, `option without a label`},
 		"too many questions":      {`{"input":"x","questions":[{"instructions":"1"},{"instructions":"2"},{"instructions":"3"},{"instructions":"4"},{"instructions":"5"}]}`, `5 questions; the limit is 4`},
-		"input too large":         {`{"input":"` + strings.Repeat("x", 1001) + `","questions":[{"instructions":"?"}]}`, `Input is 1001 bytes; the limit is 1000`},
+		"input too large":         {`{"input":"` + strings.Repeat("x", 1001) + `","questions":[{"instructions":"?"}]}`, `The request is 1042 bytes (1001 input, 41 questions); max_input_bytes is 1000`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The summary is JSON, so a quote in it is escaped.
@@ -664,14 +665,18 @@ func TestDecideSystemoneAcceptsEveryKindOfJSONValue(t *testing.T) {
 	}
 }
 
+// questionBytes is what predicateQuestion is sent as: {"q1":{"instructions":"?","type":"noul"}}.
+const questionBytes = 41
+
 func TestDecideSystemoneInputLimitCountsAllPartsAndTheJSONAsSent(t *testing.T) {
-	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxInputBytes = 20 })
+	// max_input_bytes covers the input parts and the questions together.
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.MaxInputBytes = 20 + questionBytes })
 	// 10 text bytes + 10 bytes of compact JSON ({"a":"xxxx"} is 12) stay near the limit.
 	if output := rig.call(t, `{"input":["0123456789",{"type":"json","value":{"a":"xx"}}],`+predicateQuestion+`}`); !strings.Contains(output, `"status":"ok"`) {
-		t.Fatalf("20 bytes refused:\n%s", output)
+		t.Fatalf("input at the limit refused:\n%s", output)
 	}
 	output := rig.call(t, `{"input":["0123456789",{"type":"json","value":{"a":"xxxx"}}],`+predicateQuestion+`}`)
-	if !strings.Contains(output, "error_code: input_too_large") || !strings.Contains(output, "Input is 22 bytes; the limit is 20") {
+	if !strings.Contains(output, "error_code: input_too_large") || !strings.Contains(output, "The request is 63 bytes (22 input, 41 questions); max_input_bytes is 61") {
 		t.Fatalf("got:\n%s", output)
 	}
 	if len(rig.requests) != 1 {
@@ -834,5 +839,43 @@ func TestDecideSystemoneKeepsAMissingConfidenceMissingAndRefusesAnOutOfRangeOne(
 				}
 			}
 		})
+	}
+}
+
+// The questions are sent as well: a long instruction or a long option used to be
+// measured by nothing and went out as one unbounded request. The input parts and the
+// questions share max_input_bytes, so an oversized question costs no request and the
+// error names the setting.
+func TestDecideSystemoneRefusesQuestionsPastTheByteBudget(t *testing.T) {
+	rig := newDecideSystemoneRig(t, 200, decideSystemoneOKReply(), nil)
+	// The rig's limit is 1000 bytes.
+	longInstruction := `{"input":"x","questions":[{"name":"q1","instructions":"` + strings.Repeat("i", 2000) + `"}]}`
+	output := rig.call(t, longInstruction)
+	if !strings.Contains(output, `"status":"invalid_input"`) || !strings.Contains(output, "error_code: input_too_large") {
+		t.Fatalf("a long instruction was not refused:\n%s", output)
+	}
+	if !strings.Contains(output, "max_input_bytes is 1000") {
+		t.Fatalf("the error does not name the setting:\n%s", output)
+	}
+	// The option count is bounded by the same budget, which is why there is no
+	// max_options: 40 long options cannot fit either.
+	options := make([]string, 0, 40)
+	for index := range 40 {
+		options = append(options, `"option `+strconv.Itoa(index)+` `+strings.Repeat("o", 40)+`"`)
+	}
+	longOptions := `{"input":"x","questions":[{"name":"q1","instructions":"?","choices":[` + strings.Join(options, ",") + `]}]}`
+	if output := rig.call(t, longOptions); !strings.Contains(output, "error_code: input_too_large") {
+		t.Fatalf("40 long options were not refused:\n%s", output)
+	}
+	if len(rig.requests) != 0 {
+		t.Fatalf("%d requests; an oversized question must send none", len(rig.requests))
+	}
+	// A question that fits still goes out, and the budget counts what is sent.
+	output = rig.call(t, `{"input":"x","questions":[{"name":"q1","instructions":"`+strings.Repeat("i", 400)+`"}]}`)
+	if !strings.Contains(output, `"status":"ok"`) {
+		t.Fatalf("a question that fits was refused:\n%s", output)
+	}
+	if len(rig.requests) != 1 || !strings.Contains(string(rig.requests[0].Raw), strings.Repeat("i", 400)) {
+		t.Fatalf("the fitting question did not reach the provider: %#v", rig.requests)
 	}
 }
