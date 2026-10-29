@@ -3,6 +3,7 @@ package anthropicadapter
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -584,4 +585,61 @@ func scriptedUpstreamWithHeader(t *testing.T, extra http.Header, body string) (*
 	}))
 	t.Cleanup(server.Close)
 	return server, &count
+}
+
+// trailerUpstream answers each request with a complete stream followed by a
+// trailer after message_stop. With stall set it then holds the response open.
+func trailerUpstream(t *testing.T, stall <-chan struct{}) (*httptest.Server, *int32) {
+	t.Helper()
+	var connections int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, okStream())
+		w.(http.Flusher).Flush()
+		time.Sleep(10 * time.Millisecond)
+		_, _ = io.WriteString(w, ": trailer\n\n")
+		if stall != nil {
+			w.(http.Flusher).Flush()
+			<-stall
+		}
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			atomic.AddInt32(&connections, 1)
+		}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+	return server, &connections
+}
+
+func TestStreamDrainsTheTailSoTheUpstreamConnectionIsReused(t *testing.T) {
+	upstream, connections := trailerUpstream(t, nil)
+	adapter := adapterFor(t, upstream.URL, "")
+	for round := 0; round < 3; round++ {
+		status, _, done := postStream(t, adapter.URL, `{"model":"m","input":"x","stream":true}`)
+		if status != 200 || !done {
+			t.Fatalf("round %d: status %d done %v", round, status, done)
+		}
+	}
+	if got := atomic.LoadInt32(connections); got != 1 {
+		t.Errorf("upstream connections = %d, want 1", got)
+	}
+}
+
+func TestStreamDrainIsBoundedWhenTheUpstreamStallsInTheTail(t *testing.T) {
+	stall := make(chan struct{})
+	upstream, _ := trailerUpstream(t, stall)
+	t.Cleanup(func() { close(stall) })
+	adapter := adapterFor(t, upstream.URL, "")
+	start := time.Now()
+	status, _, done := postStream(t, adapter.URL, `{"model":"m","input":"x","stream":true}`)
+	if status != 200 || !done {
+		t.Fatalf("status %d done %v", status, done)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("handler held for %v by a stalled tail", elapsed)
+	}
 }

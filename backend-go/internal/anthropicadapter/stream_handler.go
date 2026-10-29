@@ -61,6 +61,9 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 		translator := newStreamTranslator(sink, h.config, translated.Request.Model, h.now)
 		translator.allowRetry = attempt < retry.MaxRetries
 		outcome := translator.run(upstream.Body)
+		if translator.sink.err == nil {
+			drainUpstream(ctx, upstream.Body)
+		}
 		_ = stream.Close()
 		if outcome.ErrorType != "" {
 			h.logUpstreamFailure(upstreamFailure{Kind: "stream_error_event", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
@@ -78,6 +81,30 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 
 // errorBodyLimit bounds how much of an upstream error body is read.
 const errorBodyLimit = 1 << 20
+
+// The translator stops at message_stop. Reading the rest of a small tail lets
+// the HTTP/1.1 connection go back to the pool instead of being dropped. The
+// drain runs after the last event was flushed to the client, but the response
+// only ends when the handler returns, so both bounds are kept small.
+const (
+	drainByteLimit = 64 << 10
+	drainTimeout   = 25 * time.Millisecond
+)
+
+func drainUpstream(ctx context.Context, body io.Reader) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.Discard, io.LimitReader(body, drainByteLimit))
+	}()
+	timer := time.NewTimer(drainTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
 
 func sleepContext(ctx context.Context, delay time.Duration) bool {
 	if delay <= 0 {
