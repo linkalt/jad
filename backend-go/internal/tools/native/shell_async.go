@@ -159,7 +159,10 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 	}
 	host.sweepShellResults(spec)
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	// The run keeps the values of the call that started it and drops only its cancellation:
+	// the child must outlive the call, but a group it leaves behind is still the run's to
+	// sweep when the run ends (kill_children_on_run_end), so ChildGroups must reach it.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	watch := newOutputWatch()
 	runCtx = withOutputWatch(runCtx, watch)
 	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch}

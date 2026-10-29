@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -213,4 +214,44 @@ func TestRunEndSweepCoversToolSmithBackgroundJob(t *testing.T) {
 			t.Fatal("detached job was swept; the control no longer shows why detached was removed")
 		}
 	})
+}
+
+// TestAsyncRunKeepsTheChildGroupsOfItsRun is P6BM-04: a run that outlives its call keeps the
+// values of that call, so a group it leaves behind still belongs to the run and the run-end
+// sweep stops it. Detaching from context.Background() lost ChildGroups and made
+// kill_children_on_run_end silently stop applying to exec and tool_smith runs.
+func TestAsyncRunKeepsTheChildGroupsOfItsRun(t *testing.T) {
+	requireInterpreters(t, "bash")
+	root := t.TempDir()
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, root)
+	settings.Child.KillProcessGroup = "timeout_only"
+	settings.Child.KillChildrenOnRunEnd = true
+	host := newTestAsyncHost(t)
+	execTool, err := NewExecTool(settings, "", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, sweep := WithChildGroups(context.Background())
+	pidPath := filepath.Join(root, "leftover.pid")
+	arguments := `{"code":"sleep 300 >/dev/null 2>&1 & echo $! > ` + pidPath + `","block_ms":0}`
+	out := execAsyncFixture{host: host, exec: execTool, root: root}.runCtx(ctx, t, "s1", arguments)
+	id := execRunIDOf(t, out)
+	execAsyncFixture{host: host, exec: execTool, root: root}.waitState(t, "s1", id, asyncmgr.StateDone)
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("the run wrote no pid: %v", err)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+	if convErr != nil {
+		t.Fatalf("no pid in %q", string(data))
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if !alive(pid) {
+		t.Fatal("the async child's leftover is gone before the run ended")
+	}
+	sweep()
+	if !waitDead(pid) {
+		t.Fatal("the run end left the async run's child alive: the run lost the values of its call")
+	}
 }
