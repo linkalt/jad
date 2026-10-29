@@ -389,3 +389,153 @@ func TestLatestForARunningToolSmithShowsNewOutputOnlyThenNothingNew(t *testing.T
 	}
 	callAsync(t, f.async, "s1", map[string]any{"action": "stop", "id": id})
 }
+
+func TestIndexTranscriptTurnsFromResumesAtATurnStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeActivity(t, path,
+		userLine("one"), answerLine(1, 1, textItem("a")),
+		userLine("two"), answerLine(2, 1, textItem("b")),
+		userLine("three"), answerLine(3, 1, textItem("c")),
+	)
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, maxLine := context.Background(), asyncmgr.DefaultConfig().LatestScanMaxBytes
+	all, complete, err := indexTranscriptTurns(ctx, file, stat.Size(), maxLine)
+	if err != nil || len(all) != 3 || all[2].number != 3 {
+		t.Fatalf("whole index = %+v, complete %d, err %v", all, complete, err)
+	}
+	part, partComplete, err := indexTranscriptTurnsFrom(ctx, file, all[2].off, stat.Size(), maxLine, all[2].number)
+	if err != nil || partComplete != complete {
+		t.Fatalf("resumed index: complete %d, err %v, want complete %d", partComplete, err, complete)
+	}
+	if len(part) != 1 || part[0] != all[2] {
+		t.Fatalf("resumed turns = %+v, want the tail of %+v", part, all)
+	}
+	// Nothing appended since: the resumed table is the turn it starts at, and the offset a
+	// cursor already holds comes back unchanged rather than falling to 0.
+	empty, emptyComplete, err := indexTranscriptTurnsFrom(ctx, file, stat.Size(), stat.Size(), maxLine, all[2].number)
+	if err != nil || len(empty) != 1 || empty[0].off != stat.Size() || emptyComplete != stat.Size() {
+		t.Fatalf("resume at the end = %+v, complete %d, err %v", empty, emptyComplete, err)
+	}
+	// A line the run is still writing is neither indexed nor reported as complete.
+	half, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := half.WriteString(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"c`); err != nil {
+		t.Fatal(err)
+	}
+	if err := half.Close(); err != nil {
+		t.Fatal(err)
+	}
+	unfinished, unfinishedComplete, err := indexTranscriptTurnsFrom(ctx, file, all[2].off, stat.Size(), maxLine, all[2].number)
+	if err != nil || unfinishedComplete != complete {
+		t.Fatalf("half-written line: complete %d, err %v, want %d", unfinishedComplete, err, complete)
+	}
+	if len(unfinished) != 1 || unfinished[0] != all[2] {
+		t.Fatalf("turns over a half-written line = %+v, want just %+v", unfinished, all[2])
+	}
+}
+
+func TestResumeTranscriptTurnsFallsBackFromAStaleCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeActivity(t, path, userLine("one"), answerLine(1, 1, textItem("a")))
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := int64(len(userLine("one")) + 1)
+	if start, number := resumeTranscriptTurns(file, activityProgress{turnOff: turn, turn: 2}, stat.Size()); start != turn || number != 2 {
+		t.Fatalf("resume = %d/%d, want %d/2", start, number, turn)
+	}
+	// A cursor whose turn start is not a line start any more, one that points past the end, and
+	// one that never carried a turn all index the transcript from its beginning.
+	for _, cursor := range []activityProgress{
+		{turnOff: turn - 1, turn: 2},
+		{turnOff: stat.Size() + 1, turn: 2},
+		{turnOff: turn, turn: 0},
+		{turnOff: 0, turn: 2},
+	} {
+		if start, number := resumeTranscriptTurns(file, cursor, stat.Size()); start != 0 || number != 0 {
+			t.Fatalf("resume from %+v = %d/%d, want a whole index", cursor, start, number)
+		}
+	}
+}
+
+func TestLatestActivityIndexesOnlyTheTailAppendedSinceItsCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	head := []string{
+		userLine("do the task"),
+		answerLine(1, 1, callItem("c1", "read", `{"path":"one.go"}`)),
+		resultLine("c1", "ok"),
+	}
+	// The first poll of a handle indexes the whole file, so turn 2 has to exist before it for
+	// there to be a turn start to resume at; that is what a run's second turn looks like.
+	writeActivity(t, path, append(head, userLine("and more"))...)
+	appendActivity(t, path, messageLine("FIRST-NEWS"))
+	cfg := asyncmgr.DefaultConfig()
+	now := time.Now()
+	info := latestInfo{state: asyncmgr.StateRunning, started: now.Add(-time.Minute)}
+	text, next := activityLatest(path, info, nil, cfg, now)
+	if !strings.Contains(text, "FIRST-NEWS") {
+		t.Fatalf("first block:\n%s", text)
+	}
+	cursor, ok := next.(*activityProgress)
+	if !ok || cursor.turnOff != int64(len(strings.Join(head, "\n")+"\n")) || cursor.turn != 2 {
+		t.Fatalf("cursor = %+v, want a resume at the start of turn 2", cursor)
+	}
+	// Turn 1 now says its response was turn 8, which a poll that indexed from the beginning
+	// would carry into turn 2 (9) while a poll that resumes at the cursor keeps the number it
+	// already had (2). The head is rewritten in place, same length, so nothing else moves.
+	before := strings.Join(head, "\n") + "\n"
+	mangled := strings.Replace(before, `"session_turn":1`, `"session_turn":8`, 1)
+	if len(mangled) != len(before) || mangled == before {
+		t.Fatalf("the fixture did not rewrite the head: %q", mangled)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte(mangled), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendActivity(t, path, messageLine("SECOND-NEWS"))
+	text, next = activityLatest(path, info, cursor, cfg, now)
+	if !strings.Contains(text, "SECOND-NEWS") || strings.Contains(text, "FIRST-NEWS") {
+		t.Fatalf("second block:\n%s", text)
+	}
+	var step string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "SECOND-NEWS") {
+			step = line
+		}
+	}
+	if !strings.HasPrefix(step, "2.") {
+		t.Fatalf("the resumed index lost the turn numbers its cursor held (a re-index from 0 numbers it 9):\n%s", text)
+	}
+	if again, _ := next.(*activityProgress); again == nil || again.turn != 2 || again.turnOff != cursor.turnOff {
+		t.Fatalf("cursor after the second poll = %+v", next)
+	}
+}
+
+// messageLine is an assistant reply as a plain message record: unlike answerLine it carries no
+// session_turn, so it takes the turn number of the index around it.
+func messageLine(text string) string {
+	raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text}}})
+	return string(raw)
+}

@@ -93,15 +93,27 @@ func scanTranscript(ctx context.Context, file *os.File, start, end, maxLine int6
 // starts a turn; the session_turn of a completed response names it, which wins over the count,
 // so a compacted transcript starts above 1.
 func indexTranscriptTurns(ctx context.Context, file *os.File, size, maxLine int64) ([]transcriptTurn, int64, error) {
+	return indexTranscriptTurnsFrom(ctx, file, 0, size, maxLine, 0)
+}
+
+// indexTranscriptTurnsFrom is indexTranscriptTurns for file[start:size), where start is the
+// offset of a turn start and number is the number that turn carries: a caller that kept the
+// index of an earlier call then parses only what was appended since, and gets the turn numbers
+// the whole file would have given it. The table begins with that turn and end begins at start,
+// so a poll with no new complete line reports back the offset its cursor already holds.
+func indexTranscriptTurnsFrom(ctx context.Context, file *os.File, start, size, maxLine, number int64) ([]transcriptTurn, int64, error) {
 	var turns []transcriptTurn
-	var count, end int64
-	err := scanTranscript(ctx, file, 0, size, maxLine, func(line transcriptLine) (bool, error) {
+	count, end := number, start
+	if start > 0 {
+		turns = append(turns, transcriptTurn{off: start, number: number})
+	}
+	err := scanTranscript(ctx, file, start, size, maxLine, func(line transcriptLine) (bool, error) {
 		end = line.off + line.length
 		var head transcriptHead
 		if !line.tooLong {
 			_ = json.Unmarshal(line.data, &head)
 		}
-		if len(turns) == 0 || head.startsUserTurn() {
+		if len(turns) == 0 || (head.startsUserTurn() && line.off != start) {
 			count++
 			turns = append(turns, transcriptTurn{off: line.off, number: count})
 		}

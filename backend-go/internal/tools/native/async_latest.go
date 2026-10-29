@@ -182,11 +182,41 @@ func outputWatchFrom(ctx context.Context) *outputWatch {
 }
 
 // activityProgress is the cursor of an agent handle: the transcript offset up to which its
-// steps were shown.
+// steps were shown, and the turn that offset falls in, which is where the next poll resumes the
+// turn index instead of parsing the whole transcript again.
 type activityProgress struct {
 	path    string
 	off     int64
 	shownAt time.Time
+	// turnOff and turn are the offset and the number of the turn start at or before off. Both
+	// stay zero in a cursor that was only seeded (see seedActivity) or that a call has not
+	// written back yet, which makes the call index the transcript from its beginning.
+	turnOff int64
+	turn    int64
+}
+
+// resumeTranscriptTurns is where the turn index of this call starts: the turn the cursor ended
+// in, so a poll parses the appended tail and not the whole transcript (P6BM-15). A first call,
+// a seeded cursor, or a transcript that was compacted or reset since starts at 0, which also
+// keeps a stale cursor from indexing from the middle of a line.
+func resumeTranscriptTurns(file *os.File, cursor activityProgress, size int64) (start, number int64) {
+	if cursor.turnOff <= 0 || cursor.turn <= 0 || cursor.turnOff > size {
+		return 0, 0
+	}
+	if cursor.turnOff < size {
+		var before [1]byte
+		if n, err := file.ReadAt(before[:], cursor.turnOff-1); n != 1 || err != nil || before[0] != '\n' {
+			return 0, 0
+		}
+	}
+	return cursor.turnOff, cursor.turn
+}
+
+// turnAt is the turn that off falls in, for the cursor a call writes back: the last turn that
+// starts at or before it. turns holds at least one turn.
+func turnAt(turns []transcriptTurn, off int64) (turnOff, number int64) {
+	turn := turns[max(sort.Search(len(turns), func(i int) bool { return turns[i].off > off })-1, 0)]
+	return turn.off, turn.number
 }
 
 // seedActivity starts the cursor of a handle at the end of its transcript as it is now, so
@@ -225,7 +255,8 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 	if err != nil {
 		return head + "; transcript unreadable", prev
 	}
-	if stat.Size() > cfg.LatestScanMaxBytes {
+	size := stat.Size()
+	if size > cfg.LatestScanMaxBytes {
 		return head + "\ntranscript too large to summarize (latest_scan_max_bytes); transcript: " + transcript, prev
 	}
 	var cursor activityProgress
@@ -235,7 +266,8 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 		cursor.path, cursor.shownAt = transcript, info.started
 	}
 	ctx := context.Background()
-	turns, complete, err := indexTranscriptTurns(ctx, file, stat.Size(), cfg.LatestScanMaxBytes)
+	start, turn := resumeTranscriptTurns(file, cursor, size)
+	turns, complete, err := indexTranscriptTurnsFrom(ctx, file, start, size, cfg.LatestScanMaxBytes, turn)
 	if err != nil || len(turns) == 0 {
 		return head + "; no steps yet\ntranscript: " + transcript, prev
 	}
@@ -258,6 +290,7 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 		reference += " (last step " + walk.steps[len(walk.steps)-1].id.String() + ")"
 	}
 	next := &activityProgress{path: cursor.path, off: complete, shownAt: now}
+	next.turnOff, next.turn = turnAt(turns, complete)
 	lastEvent := "last event " + latestAge(now.Sub(stat.ModTime())) + " ago"
 	if len(news) == 0 {
 		return head + ", " + lastEvent + "\nno new activity since " + cursor.shownAt.UTC().Format(time.RFC3339) + "\n" + reference, next
