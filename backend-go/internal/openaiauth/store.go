@@ -172,6 +172,10 @@ func (s *Store) Read() (*File, error) {
 // returns the file to store. The result is checked and written atomically, and the previous file
 // is kept as a backup when KeepBackup is set. When change returns an error nothing is written.
 func (s *Store) Update(ctx context.Context, change func(current *File) (*File, error)) error {
+	// The lock helper would create a missing directory with mode 0755; make it private first.
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(s.Path), errors.Unwrap(err))
+	}
 	lockPath, err := sessionlock.PathFor(s.Path)
 	if err != nil {
 		return err

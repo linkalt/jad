@@ -324,3 +324,19 @@ func TestFileNeverPrints(t *testing.T) {
 		t.Fatalf("a token printed: %s", text)
 	}
 }
+
+func TestUpdateCreatesAMissingCredentialDirectoryPrivate(t *testing.T) {
+	store := &Store{Path: filepath.Join(t.TempDir(), "fresh", "auth", "openai-codex.json")}
+	err := store.Update(context.Background(), func(current *File) (*File, error) {
+		return current.Apply(&Tokens{AccessToken: "a", RefreshToken: "r", AccountID: "acct", ExpiresIn: 60}, fixedNow)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Dir(store.Path), filepath.Dir(filepath.Dir(store.Path))} {
+		info, err := os.Stat(dir)
+		if err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s: mode %v err %v, want 0700", dir, info.Mode().Perm(), err)
+		}
+	}
+}
