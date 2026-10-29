@@ -274,12 +274,5 @@ func TestLoadToolsLeavesNoGoroutinesBehind(t *testing.T) {
 		}
 		_ = manager.Close()
 	}
-	var after int
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		http.DefaultTransport.(*http.Transport).CloseIdleConnections()
-		if after = runtime.NumGoroutine(); after <= before+2 {
-			return
-		}
-	}
-	t.Fatalf("goroutines before=%d after=%d", before, after)
+	waitForGoroutines(t, before, 2)
 }

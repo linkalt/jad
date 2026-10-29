@@ -25,8 +25,12 @@ import (
 )
 
 type connection struct {
-	mu                       sync.RWMutex
-	callMu                   sync.Mutex
+	mu     sync.RWMutex
+	callMu sync.Mutex
+	// ctx is cancelled by close before it takes mu, so an in-flight call stops
+	// waiting on the server instead of delaying shutdown for its own timeout.
+	ctx                      context.Context
+	cancel                   context.CancelFunc
 	fingerprint              string
 	session                  *mcpSDK.ClientSession
 	timeout                  time.Duration
@@ -53,13 +57,20 @@ func (c *connection) callTool(ctx context.Context, params *mcpSDK.CallToolParams
 	if c.closed {
 		return nil, nil, errors.New("MCP connection is closed")
 	}
+	callCtx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
 	pending := c.structuredContentCapture.begin()
-	result, err := c.session.CallTool(ctx, params)
+	result, err := c.session.CallTool(callCtx, params)
 	structuredContent := c.structuredContentCapture.finish(pending)
 	return result, structuredContent, err
 }
 
 func (c *connection) close() error {
+	// Cancel first: a call holding the read lock must stop waiting on the server
+	// before the write lock below can be taken.
+	c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -83,16 +94,24 @@ type Manager struct {
 	serverLocks map[string]*sync.Mutex
 	schemas     *schemaCache
 	closed      bool
+	// connectCtx is cancelled by Close and bounds every connect, so a connect
+	// cannot outlive the manager; connects counts them so Close can wait.
+	connectCtx     context.Context
+	cancelConnects context.CancelFunc
+	connects       sync.WaitGroup
 }
 
 // NewManager creates a session-scoped MCP manager using the provided process
 // environment for env_from and headers_from references.
 func NewManager(environment map[string]string) *Manager {
+	connectCtx, cancelConnects := context.WithCancel(context.Background())
 	return &Manager{
-		environment: cloneStringMap(environment),
-		connections: make(map[string]*connection),
-		serverLocks: make(map[string]*sync.Mutex),
-		schemas:     newSchemaCache(defaultSchemaCacheEntries),
+		environment:    cloneStringMap(environment),
+		connections:    make(map[string]*connection),
+		serverLocks:    make(map[string]*sync.Mutex),
+		schemas:        newSchemaCache(defaultSchemaCacheEntries),
+		connectCtx:     connectCtx,
+		cancelConnects: cancelConnects,
 	}
 }
 
@@ -283,6 +302,8 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		m.mu.Unlock()
 		return nil, errors.New("MCP manager is closed")
 	}
+	m.connects.Add(1)
+	defer m.connects.Done()
 	existing := m.connections[server.ID]
 	if existing != nil && existing.fingerprint == config.fingerprint {
 		m.mu.Unlock()
@@ -319,7 +340,9 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	transport = &structuredContentTransport{inner: transport, capture: structuredCapture}
 	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, nil)
 	connectCtx, cancel := context.WithTimeout(ctx, config.timeout)
+	stopConnect := context.AfterFunc(m.connectCtx, cancel)
 	clientSession, err := client.Connect(connectCtx, transport, nil)
+	stopConnect()
 	cancel()
 	if err != nil {
 		if clientSession != nil {
@@ -327,7 +350,10 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		}
 		return nil, configError(server.ConfigPath, "failed to connect MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
+	connectionCtx, cancelConnection := context.WithCancel(context.Background())
 	current := &connection{
+		ctx:                      connectionCtx,
+		cancel:                   cancelConnection,
 		fingerprint:              config.fingerprint,
 		session:                  clientSession,
 		timeout:                  config.timeout,
@@ -367,15 +393,25 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
+	m.cancelConnects()
 	connections := make([]*connection, 0, len(m.connections))
 	for _, current := range m.connections {
 		connections = append(connections, current)
 	}
 	m.connections = make(map[string]*connection)
 	m.mu.Unlock()
+	// A connect in flight is cancelled above; wait for it to settle so no session
+	// can be created after Close returns.
+	m.connects.Wait()
+	var closing sync.WaitGroup
 	for _, current := range connections {
-		_ = current.close()
+		closing.Add(1)
+		go func() {
+			defer closing.Done()
+			_ = current.close()
+		}()
 	}
+	closing.Wait()
 	return nil
 }
 
