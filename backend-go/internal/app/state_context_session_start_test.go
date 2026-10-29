@@ -82,9 +82,10 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 		t.Fatal(err)
 	}
 	if seedProcess {
+		startedAt, endedAt := recentProcessTimes()
 		writeProcessManifest(t, processStorage, native.ProcessManifest{
 			SchemaVersion: 1, ID: "proc_saved", State: native.ProcessExited, CWD: "/workspace/project",
-			StartedAt: "2026-10-02T10:00:00.000Z", EndedAt: "2026-10-02T10:00:01.000Z",
+			StartedAt: startedAt, EndedAt: endedAt,
 			ExitCode: json.RawMessage("0"), Signal: json.RawMessage("null"),
 		})
 	}

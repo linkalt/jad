@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
@@ -55,13 +56,14 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	if err := os.WriteFile(filepath.Join(workspace, "process.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	startedAt, endedAt := recentProcessTimes()
 	writeProcessManifest(t, processStorage, native.ProcessManifest{
 		SchemaVersion: 1,
 		ID:            "proc_saved",
 		State:         native.ProcessExited,
 		CWD:           "/workspace/project",
-		StartedAt:     "2026-10-02T10:00:00.000Z",
-		EndedAt:       "2026-10-02T10:00:01.000Z",
+		StartedAt:     startedAt,
+		EndedAt:       endedAt,
 		ExitCode:      json.RawMessage("0"),
 		Signal:        json.RawMessage("null"),
 	})
@@ -233,6 +235,14 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	if len(lines) != 2 {
 		t.Fatalf("messages.jsonl after compact and run has %d lines, want only new user and response records", len(lines))
 	}
+}
+
+// recentProcessTimes is a start and end inside retention_days. A recovered manifest older than
+// tools.native.process.retention_days is pruned while it is read back (P6BM-24), so a fixture
+// that wants to see its process in the state context has to date it as recent.
+func recentProcessTimes() (startedAt, endedAt string) {
+	now := time.Now().UTC()
+	return now.Add(-time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)
 }
 
 func writeProcessManifest(t *testing.T, storageDir string, manifest native.ProcessManifest) {
