@@ -154,6 +154,10 @@ type ManagedProcessManager struct {
 	// removeAll deletes the folder of a pruned process; it is a field so a test can hold
 	// the finisher inside the prune that follows the close of its done channel.
 	removeAll func(string) error
+	// liveHook, when set, is called by recordLiveManifest with entry.mu held and manager.mu not
+	// yet taken, so a test can park a stop at exactly the point where the two locks are taken.
+	// It is nil in production.
+	liveHook  func(id string)
 	recoverMu sync.Mutex
 	recovered bool
 	// stopOrphans and orphanGrace are the policy Recover applies to a process a crashed
@@ -802,6 +806,9 @@ func (manager *ManagedProcessManager) setLeftRunning(entry *managedProcess) {
 func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, manifest ProcessManifest) {
 	if processTerminal(entry.manifest.State) {
 		return
+	}
+	if hook := manager.liveHook; hook != nil {
+		hook(manifest.ID)
 	}
 	manager.mu.Lock()
 	manager.manifests[manifest.ID] = manifest

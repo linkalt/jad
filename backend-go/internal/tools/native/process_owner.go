@@ -45,21 +45,29 @@ func (manager *ManagedProcessManager) stopOwned(owner, reason string) int {
 		return 0
 	}
 	manager.mu.Lock()
-	var ids []string
+	entries := make([]*managedProcess, 0, len(manager.entries))
+	ids := make([]string, 0, len(manager.entries))
 	for id, entry := range manager.entries {
-		if entry.owner != owner {
-			continue
-		}
-		entry.mu.Lock()
-		running := entry.manifest.State == ProcessRunning
-		entry.mu.Unlock()
-		if running {
+		if entry.owner == owner {
+			entries = append(entries, entry)
 			ids = append(ids, id)
 		}
 	}
 	manager.mu.Unlock()
+	// The entries are inspected outside manager.mu: a manifest write takes entry.mu first and
+	// manager.mu second (recordLiveManifest), so holding manager.mu while taking entry.mu here
+	// deadlocks with a Stop that is recording its own manifest. Close is written the same way.
+	var running []string
+	for index, entry := range entries {
+		entry.mu.Lock()
+		state := entry.manifest.State
+		entry.mu.Unlock()
+		if state == ProcessRunning {
+			running = append(running, ids[index])
+		}
+	}
 	stopped := 0
-	for _, id := range ids {
+	for _, id := range running {
 		if _, found := manager.Stop(id, reason); found {
 			stopped++
 		}

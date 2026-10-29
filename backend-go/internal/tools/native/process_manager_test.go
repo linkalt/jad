@@ -196,6 +196,56 @@ func processTestRequest(workspace, command string, logCap int64) ProcessStartReq
 	}
 }
 
+// TestStopAndStopOwnedKeepOneLockOrder is the order P6BM-08 established and the deadlock that
+// broke the -race gate: recording a live manifest takes entry.mu and then manager.mu, so nothing
+// may hold manager.mu while it takes entry.mu. stopOwned did exactly that while it inspected the
+// state of each owned entry, so a Stop recording its manifest in between wedged both of them.
+func TestStopAndStopOwnedKeepOneLockOrder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	workspace := t.TempDir()
+	manager := NewProcessManager(filepath.Join(workspace, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
+	request := processTestRequest(workspace, "sleep 30", 1024)
+	request.Owner = "sub"
+	snapshot, err := manager.Start(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Park the stop inside recordLiveManifest: from here on it holds entry.mu and has not taken
+	// manager.mu yet. stopOwned then has to inspect the same entry, which is the interleaving.
+	parked, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	manager.liveHook = func(string) {
+		once.Do(func() { close(parked) })
+		<-release
+	}
+	stopping := make(chan struct{})
+	go func() {
+		defer close(stopping)
+		if _, found := manager.Stop(snapshot.ID, "test"); !found {
+			t.Error("Stop did not find the process")
+		}
+	}()
+	<-parked
+	ownerDone := make(chan int, 1)
+	go func() { ownerDone <- manager.stopOwned("sub", "test") }()
+	// The pause only gives stopOwned time to reach the entry; the outcome does not depend on it.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	select {
+	case <-stopping:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop and stopOwned deadlocked: entry.mu and manager.mu were taken in both orders")
+	}
+	select {
+	case <-ownerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopOwned never returned")
+	}
+}
+
 // TestStartFailuresDoNotCarryTheStoragePath is P6BM-21: the model reads the start error, so it
 // carries neither the tool storage directory nor the os cause; the log has both.
 func TestStartFailuresDoNotCarryTheStoragePath(t *testing.T) {
