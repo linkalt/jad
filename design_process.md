@@ -160,7 +160,7 @@ interface NativeProcessToolSettings extends NativePathPolicy {
   max_wait_timeout_ms: number;      // default: 120_000
   stdout: NativeBashStreamBudget;   // default: bash stdout head/tail budget
   stderr: NativeBashStreamBudget;   // default: bash stderr head/tail budget
-  log_cap_bytes: number;            // default: 64 MiB per stream
+  log_cap_bytes: number;            // default: 8 MiB per stream
   max_line_chars: number;           // default: bash setting
   strip_ansi: boolean;              // default: bash setting
   env_file?: string;                // optional strict dotenv; session-relative or absolute; own setting, not inherited from bash

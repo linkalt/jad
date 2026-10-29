@@ -39,6 +39,9 @@ func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
 	if settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("process output defaults = max_line_chars %d, strip_ansi %v", settings.MaxLineChars, settings.StripANSI)
 	}
+	if settings.LogCapBytes != 8*1024*1024 {
+		t.Fatalf("default process log_cap_bytes = %d, want 8 MiB (64 MiB reached 12.5 GiB per storage directory, P6BM-13)", settings.LogCapBytes)
+	}
 	if settings.StdinMaxBytes != 256*1024 {
 		t.Fatalf("default process stdin_max_bytes = %d, want %d", settings.StdinMaxBytes, 256*1024)
 	}

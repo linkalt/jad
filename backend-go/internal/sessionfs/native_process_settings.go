@@ -8,9 +8,13 @@ import (
 )
 
 const (
-	defaultNativeProcessStorageDir         = ".processes"
-	defaultNativeProcessMaxRunning   int64 = 8
-	defaultNativeProcessLogCap       int64 = 64 * 1024 * 1024
+	defaultNativeProcessStorageDir       = ".processes"
+	defaultNativeProcessMaxRunning int64 = 8
+	// A process spills at most defaultNativeProcessLogCap per stream, so one process can hold
+	// 2 x this and a storage directory keeps max_completed of them: 8 MiB x 2 x 100 = 1.6 GiB
+	// at the defaults, where 64 MiB reached 12.5 GiB (P6BM-13). A session that needs more log
+	// per process raises log_cap_bytes; a model cannot raise it.
+	defaultNativeProcessLogCap       int64 = 8 * 1024 * 1024
 	defaultNativeProcessStdinMax     int64 = 256 * 1024
 	defaultNativeProcessMaxCompleted int64 = 100
 	maxNativeProcessMaxRunning       int64 = 1024

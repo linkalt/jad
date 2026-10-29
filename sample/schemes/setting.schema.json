@@ -1565,7 +1565,8 @@
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 1073741824,
-                  "default": 67108864
+                  "default": 8388608,
+                  "description": "Bytes each stream of a process writes to its log file before the file is left incomplete. A process has two streams, so it can reach twice this, and a storage directory keeps max_completed finished processes: 8 MiB x 2 x 100 is 1.6 GiB at the defaults. A stream budget (stdout, stderr) cannot exceed this value."
                 },
                 "stop_orphans": {
                   "type": "boolean",
