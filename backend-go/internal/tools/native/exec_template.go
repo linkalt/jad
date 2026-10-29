@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"jad/backend-go/internal/sessionfs"
 )
@@ -23,18 +22,29 @@ var execTemplateSources = map[string]string{
 	sessionfs.NativeExecTemplateRuby:   "exec_templates/ruby.rb",
 }
 
-// execTemplateAttachment is how one call attaches its runner's template: argv with {template}
-// replaced, and the directory to put in front of PYTHONPATH (python only).
+// execTemplateAttachment is how one call attaches its runner's template: the directory to put
+// in front of PYTHONPATH (python only). The argv is substituted by the plan of the call, which
+// knows execTemplatePath before the code goes in, so the code is never rewritten (P6BM-02).
 type execTemplateAttachment struct {
-	argv       []string
 	pythonPath string
+}
+
+// execTemplatePath is where attachExecTemplate writes the template of the runner, and so what a
+// {template} in the configured argv becomes. Python takes a directory instead (PYTHONPATH), and
+// its argv must not carry {template}.
+func execTemplatePath(lang sessionfs.NativeExecLang, dir string) string {
+	ext := lang.Ext
+	if ext == "" {
+		ext = map[string]string{sessionfs.NativeExecTemplateJS: ".js", sessionfs.NativeExecTemplateRuby: ".rb"}[lang.Template]
+	}
+	return filepath.Join(dir, "template"+ext)
 }
 
 // attachExecTemplate writes the runner's template into dir, which is removed with the call, and
 // returns the attachment. The text is the file functions_dir/<runner>/_template<ext> when the
 // library has one (a regular file inside the library), else the built-in.
-func attachExecTemplate(settings sessionfs.NativeExecSettings, lang sessionfs.NativeExecLang, runner, workspaceRoot, dir string, argv []string) (execTemplateAttachment, error) {
-	attachment := execTemplateAttachment{argv: argv}
+func attachExecTemplate(settings sessionfs.NativeExecSettings, lang sessionfs.NativeExecLang, runner, workspaceRoot, dir string) (execTemplateAttachment, error) {
+	var attachment execTemplateAttachment
 	if lang.Template == "" {
 		return attachment, nil
 	}
@@ -50,17 +60,9 @@ func attachExecTemplate(settings sessionfs.NativeExecSettings, lang sessionfs.Na
 		attachment.pythonPath = tplDir
 		return attachment, os.WriteFile(filepath.Join(tplDir, "sitecustomize.py"), text, 0o600)
 	}
-	ext := lang.Ext
-	if ext == "" {
-		ext = map[string]string{sessionfs.NativeExecTemplateJS: ".js", sessionfs.NativeExecTemplateRuby: ".rb"}[lang.Template]
-	}
-	path := filepath.Join(dir, "template"+ext)
+	path := execTemplatePath(lang, dir)
 	if err := os.WriteFile(path, text, 0o600); err != nil {
 		return attachment, err
-	}
-	attachment.argv = make([]string, len(argv))
-	for index, item := range argv {
-		attachment.argv[index] = strings.ReplaceAll(item, "{template}", path)
 	}
 	return attachment, nil
 }

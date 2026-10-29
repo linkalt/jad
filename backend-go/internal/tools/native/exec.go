@@ -228,13 +228,12 @@ func executeNativeExecAsync(
 		if problem != "" {
 			return shellRunResult{text: problem}
 		}
-		attachment, err := attachExecTemplate(settings, plan.lang, plan.langName, execution.WorkspaceRoot, workDir, argv)
+		attachment, err := attachExecTemplate(settings, plan.lang, plan.langName, execution.WorkspaceRoot, workDir)
 		if err != nil {
 			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "template_failed", "The template for "+plan.langName+" could not be prepared",
 				tools.Information{Key: "system_error", Value: err.Error()},
 				tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})}
 		}
-		argv = attachment.argv
 		prepend, libraryEnv := execHelperEnvironment(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
 		if attachment.pythonPath != "" {
 			if prepend == nil {
@@ -368,9 +367,19 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 						tools.Information{Key: "system_error", Value: err.Error()})
 				}
 			}
+			// The template is attached before the code is inserted: the model's program is
+			// not a template, so a literal {template} inside it must reach the runner as
+			// written (P6BM-02).
+			templatePath := ""
+			if lang.Template != "" {
+				templatePath = execTemplatePath(lang, workDir)
+			}
 			argv := make([]string, 0, len(lang.Argv)-1)
 			for _, flag := range lang.Argv[1:] {
 				flag = strings.ReplaceAll(flag, "{file}", codePath)
+				if templatePath != "" {
+					flag = strings.ReplaceAll(flag, "{template}", templatePath)
+				}
 				argv = append(argv, strings.ReplaceAll(flag, "{code}", code))
 			}
 			runStdin := stdin

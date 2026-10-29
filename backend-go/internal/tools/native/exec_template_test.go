@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // realRuby is the ruby binary behind a version-manager shim, which cannot start in the exec child's
@@ -438,6 +439,31 @@ func TestExecTemplateScratchIsRemovedWithTheCall(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
 		t.Fatalf("scratch left behind: %v", entries)
+	}
+}
+
+// TestExecTemplateLeavesTheProgramAlone pins the substitution order: the template is attached
+// before the code goes into argv, so a literal {template} (or {file}, or {code}) inside the
+// program reaches the runner as written (P6BM-02).
+func TestExecTemplateLeavesTheProgramAlone(t *testing.T) {
+	root, settings := execTemplateSettings(nil)
+	defer os.RemoveAll(root)
+	code := `console.log("{template}", "{file}", "{code}")`
+	plan, problem := planExec(map[string]any{"lang": "node", "code": code}, settings, tools.ExecutionContext{WorkspaceRoot: root})
+	if problem != "" {
+		t.Fatalf("planExec: %s", problem)
+	}
+	workDir := t.TempDir()
+	_, argv, _, problem := plan.prepare(workDir)
+	if problem != "" {
+		t.Fatalf("prepare: %s", problem)
+	}
+	if _, err := attachExecTemplate(settings, plan.lang, plan.langName, root, workDir); err != nil {
+		t.Fatalf("attachExecTemplate: %v", err)
+	}
+	want := []string{"-r", filepath.Join(workDir, "template.js"), "-e", code}
+	if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("argv = %q, want %q", argv, want)
 	}
 }
 
