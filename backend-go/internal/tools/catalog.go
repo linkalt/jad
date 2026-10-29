@@ -70,6 +70,27 @@ type ExecutionContext struct {
 	RemoteHops int
 }
 
+// executionContextPerCall names the fields of ExecutionContext that describe one call
+// rather than the run it belongs to. The catalog fills them for every call it dispatches,
+// so ForNested clears them; every other field carries over to the nested call.
+// TestForNestedKeepsEveryRunScopedField walks all the fields and fails when one is
+// neither copied nor listed here.
+var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments"}
+
+// ForNested returns the context of a call made inside this one: a nested call of a
+// tool_smith script, or the tools of a sub-agent. The whole run scope carries over — above
+// all AgentDepth, RootRun and RemoteHops, which the guards of transcript, transcripts,
+// profile_message and the remote calls read — so a nested call is not silently treated as
+// the session's own run. Only the per-call identity is cleared, because the catalog sets
+// it for each call it dispatches. A caller that must not pass a hook on clears it itself.
+func (e ExecutionContext) ForNested() ExecutionContext {
+	nested := e
+	nested.CallID = ""
+	nested.ToolName = ""
+	nested.RawArguments = nil
+	return nested
+}
+
 // PathScope is a per-call narrowing of a tool's path policy. Allow, when not empty,
 // limits the call to paths inside one of its entries; Deny refuses paths inside one.
 // A relative entry is taken from the call's workspace root.

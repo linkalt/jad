@@ -10,6 +10,7 @@ import (
 
 	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/remote"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -32,6 +33,26 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 	return s.startRun(ctx, execution.CallID, task, arguments, execution)
 }
 
+// childExecutionContext is the context of a sub-agent's tools. It is this call's context
+// with its run scope carried over (ForNested), minus what belongs to the calling call and
+// not to the run: the child asks its own questions and reports its own changes, and the
+// manager fills ProcessOwner, ProcessOwnerLimit, ProcessAsync, AgentDepth, RootRun and
+// OnFileChange when it starts the run. The path scope is narrowed to what both the caller
+// and the agent allow.
+func childExecutionContext(execution tools.ExecutionContext, agent sessionfs.NativeSubagentAgent) tools.ExecutionContext {
+	child := execution.ForNested()
+	child.RequestInteraction = nil
+	child.OnInteractionResolved = nil
+	child.OnFileChange = nil
+	child.AgentName = agent.Name
+	var ownScope *tools.PathScope
+	if agent.Paths.Set() {
+		ownScope = &tools.PathScope{Allow: agent.Paths.Allow, Deny: agent.Paths.Deny}
+	}
+	child.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, ownScope)
+	return child
+}
+
 func (s *subagentTool) startRun(ctx context.Context, callID, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 	agent, problem := s.selectAgent(arguments)
 	if problem != "" {
@@ -51,18 +72,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_depth_exceeded",
 			"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)"), nil
 	}
-	childExecution := tools.ExecutionContext{
-		WorkspaceRoot: execution.WorkspaceRoot,
-		SessionDir:    execution.SessionDir,
-		SessionKey:    execution.SessionKey,
-		AgentName:     agent.config.Name,
-		RemoteHops:    execution.RemoteHops,
-	}
-	var ownScope *tools.PathScope
-	if agent.config.Paths.Set() {
-		ownScope = &tools.PathScope{Allow: agent.config.Paths.Allow, Deny: agent.config.Paths.Deny}
-	}
-	childExecution.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, ownScope)
+	childExecution := childExecutionContext(execution, agent.config)
 	// A writer becomes a handle only when it is allowed to (background_writers) and its
 	// session has a place left; otherwise it runs to its end inside this call, where the
 	// checkpoint belongs.

@@ -221,20 +221,11 @@ func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.Na
 		settings: settings,
 		catalog:  catalog,
 		byName:   make(map[string]tools.Tool, len(nested)),
-		execution: tools.ExecutionContext{
-			WorkspaceRoot: execution.WorkspaceRoot,
-			SessionDir:    execution.SessionDir,
-			SessionKey:    execution.SessionKey,
-			AgentName:     execution.AgentName,
-			PathScope:     execution.PathScope,
-
-			RequestInteraction:    execution.RequestInteraction,
-			OnInteractionResolved: execution.OnInteractionResolved,
-			OnFileChange:          execution.OnFileChange,
-			ProcessOwner:          execution.ProcessOwner,
-			ProcessOwnerLimit:     execution.ProcessOwnerLimit,
-			ProcessAsync:          execution.ProcessAsync,
-		},
+		// The nested tools run in the same run as this call: ForNested carries the whole run
+		// scope over, so their transcript, profile_message and remote guards see the depth,
+		// the root run and the hop count of this call. Only the per-call fields are cleared,
+		// and the catalog sets them for each nested call.
+		execution:  execution.ForNested(),
 		baseCallID: baseCallID,
 		listener:   listener,
 		socketPath: socketPath,
