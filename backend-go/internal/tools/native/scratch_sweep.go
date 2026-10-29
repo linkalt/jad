@@ -18,9 +18,26 @@ var staleScratchPrefixes = []string{"exec-", "tool-smith-"}
 var sweepScratchOnce sync.Once
 
 // sweepStaleScratchOnce removes the scratch directories a crashed server left in the
-// temporary directory, once per process, the first time exec or tool_smith is built.
+// temporary directories, once per process, the first time exec or tool_smith is built.
 func sweepStaleScratchOnce() {
-	sweepScratchOnce.Do(func() { sweepStaleScratch(os.TempDir(), time.Now(), staleScratchAge) })
+	sweepScratchOnce.Do(func() {
+		now := time.Now()
+		for _, dir := range staleScratchDirs() {
+			sweepStaleScratch(dir, now, staleScratchAge)
+		}
+	})
+}
+
+// staleScratchDirs is every directory the tools put scratch in: the temporary directory, and
+// the short fallback tool_smith uses when the bridge socket path there would be too long
+// (makeToolSmithWorkDir). Without the fallback, a crashed server with TMPDIR set elsewhere
+// leaves its tool-smith directories in /tmp for ever (P6BM-12).
+func staleScratchDirs() []string {
+	dirs := []string{os.TempDir()}
+	if fallback := filepath.Clean(toolSmithShortTempDir); fallback != filepath.Clean(dirs[0]) {
+		dirs = append(dirs, fallback)
+	}
+	return dirs
 }
 
 // sweepStaleScratch removes the private (mode 0700) directories in dir whose name starts

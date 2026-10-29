@@ -160,6 +160,10 @@ type ManagedProcessManager struct {
 	// server left running; see SetOrphanPolicy. Guarded by mu.
 	stopOrphans bool
 	orphanGrace time.Duration
+	// maxCompleted and retentionDays are the retention Recover applies to the manifests it
+	// reads back; see SetRetention. Guarded by mu.
+	maxCompleted  int64
+	retentionDays int64
 }
 
 type managedProcess struct {
@@ -188,11 +192,21 @@ type processStreamWriter struct {
 	stream bashStream
 }
 
-// NewConfiguredProcessManager is NewProcessManager with the orphan policy of settings.
+// NewConfiguredProcessManager is NewProcessManager with the orphan policy and the retention of
+// settings.
 func NewConfiguredProcessManager(settings sessionfs.NativeProcessSettings) *ManagedProcessManager {
 	manager := NewProcessManager(settings.StorageDir)
 	manager.SetOrphanPolicy(settings.StopOrphans, time.Duration(settings.KillGraceMs)*time.Millisecond)
+	manager.SetRetention(settings.MaxCompleted, settings.RetentionDays)
 	return manager
+}
+
+// SetRetention records the retention of the process tool, so Recover can apply it to the
+// manifests it reads back instead of waiting for another process to finish (P6BM-24).
+func (manager *ManagedProcessManager) SetRetention(maxCompleted, retentionDays int64) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.maxCompleted, manager.retentionDays = maxCompleted, retentionDays
 }
 
 // Directory is the folder that holds one subfolder per process (manifest and logs).
@@ -224,6 +238,14 @@ func (writer processStreamWriter) Write(chunk []byte) (int, error) {
 	return len(chunk), nil
 }
 
+// errProcessManagerClosed says the manager was closed, so a caller can tell a shutdown from an
+// unusable storage directory.
+var errProcessManagerClosed = errors.New("process manager is closed")
+
+// errProcessStorage is what a failed start reports to the model. The os error names the tool
+// storage directory, which is server detail: it is logged, never rendered (P6BM-21).
+var errProcessStorage = errors.New("the process storage is not usable; the server log names the path and the cause")
+
 func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (ProcessSnapshot, error) {
 	if runtime.GOOS == "windows" {
 		return ProcessSnapshot{}, errors.New("managed process groups require a POSIX platform")
@@ -232,12 +254,16 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		return ProcessSnapshot{}, errors.New("process command is empty")
 	}
 	if err := manager.Recover(); err != nil {
-		return ProcessSnapshot{}, err
+		if errors.Is(err, errProcessManagerClosed) {
+			return ProcessSnapshot{}, err
+		}
+		slog.Error("process recovery failed", "error", err)
+		return ProcessSnapshot{}, errProcessStorage
 	}
 	manager.mu.Lock()
 	if manager.closed {
 		manager.mu.Unlock()
-		return ProcessSnapshot{}, errors.New("process manager is closed")
+		return ProcessSnapshot{}, errProcessManagerClosed
 	}
 	running := 0
 	for _, manifest := range manager.manifests {
@@ -268,7 +294,8 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	processDir := filepath.Join(manager.directory, id)
 	if err := os.MkdirAll(processDir, 0o755); err != nil {
 		manager.mu.Unlock()
-		return ProcessSnapshot{}, fmt.Errorf("create process storage: %w", err)
+		slog.Error("process storage could not be created", "process", id, "error", err)
+		return ProcessSnapshot{}, errProcessStorage
 	}
 	collector := newBashOutputCollector(
 		bashStreamLimits{headBytes: int(request.Policy.Stdout.HeadBytes), tailBytes: int(request.Policy.Stdout.TailBytes)},
@@ -309,11 +336,11 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.removeEntry(id)
 		_ = os.RemoveAll(processDir)
-		cause := fmt.Errorf("persist process manifest: %w", err)
+		slog.Error("process manifest could not be persisted", "process", id, "error", err)
 		if request.Async != nil {
-			request.Async.Abort(id, cause)
+			request.Async.Abort(id, errProcessStorage)
 		}
-		return ProcessSnapshot{}, cause
+		return ProcessSnapshot{}, errProcessStorage
 	}
 	environment := buildNativeProcessEnvironment(request.Environment, request.Policy.Env, request.APIKeyEnv, request.Policy.EnvDeny)
 	resolvedShell, err := resolveBashExecutable(request.Policy.Shell, environment, request.CWD)
@@ -396,7 +423,8 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if err := manager.persistManifest(manifest); err != nil {
 		manager.signalProcess(entry, true)
 		_ = waitForManagedProcess(entry, 2*time.Second)
-		return ProcessSnapshot{}, fmt.Errorf("persist running process manifest: %w", err)
+		slog.Error("running process manifest could not be persisted", "process", id, "error", err)
+		return ProcessSnapshot{}, errProcessStorage
 	}
 	if stopped {
 		// The stop that arrived before this process existed is carried out now, so the window
@@ -947,7 +975,7 @@ func (manager *ManagedProcessManager) Recover() error {
 	}
 	if manager.closed {
 		manager.mu.Unlock()
-		return errors.New("process manager is closed")
+		return errProcessManagerClosed
 	}
 	manager.mu.Unlock()
 
@@ -1002,6 +1030,17 @@ func (manager *ManagedProcessManager) Recover() error {
 		manager.mu.Lock()
 		manager.manifests[manifest.ID] = cloneProcessManifest(manifest)
 		manager.mu.Unlock()
+	}
+	// Retention used to run only on a finish, so a profile that stopped starting processes kept
+	// every manifest and log it had (P6BM-24). max_completed is validated to at least 1, so a
+	// manager built without settings prunes nothing here.
+	manager.mu.Lock()
+	maxCompleted, retentionDays := manager.maxCompleted, manager.retentionDays
+	manager.mu.Unlock()
+	if maxCompleted > 0 {
+		if err := manager.prune(maxCompleted, retentionDays); err != nil {
+			return fmt.Errorf("prune recovered processes: %w", err)
+		}
 	}
 	manager.mu.Lock()
 	manager.recovered = true

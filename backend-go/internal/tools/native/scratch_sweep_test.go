@@ -60,6 +60,21 @@ func TestSweepStaleScratchRemovesOnlyOldPrivateScratchDirectories(t *testing.T) 
 	}
 }
 
+// TestSweepCoversTheShortTempFallback is P6BM-12: tool_smith creates its work directory in /tmp
+// when the bridge socket path under TMPDIR would be too long, so the startup sweep must cover
+// both directories, once each.
+func TestSweepCoversTheShortTempFallback(t *testing.T) {
+	tmp := useOwnTempDir(t)
+	fallback := filepath.Clean(toolSmithShortTempDir)
+	if dirs := staleScratchDirs(); len(dirs) != 2 || dirs[0] != tmp || dirs[1] != fallback {
+		t.Fatalf("dirs = %v, want %s and %s", dirs, tmp, fallback)
+	}
+	t.Setenv("TMPDIR", fallback)
+	if dirs := staleScratchDirs(); len(dirs) != 1 || dirs[0] != fallback {
+		t.Fatalf("dirs = %v, want the fallback alone when TMPDIR is it", dirs)
+	}
+}
+
 func TestBuildingExecSweepsStaleScratchOnceAtStartup(t *testing.T) {
 	tmp := useOwnTempDir(t)
 	stale := filepath.Join(tmp, "exec-crashed")

@@ -2,6 +2,7 @@ package native
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -192,6 +193,67 @@ func processTestRequest(workspace, command string, logCap int64) ProcessStartReq
 			Env:           map[string]string{"NO_COLOR": "1"},
 			EnvDeny:       []string{},
 		},
+	}
+}
+
+// TestStartFailuresDoNotCarryTheStoragePath is P6BM-21: the model reads the start error, so it
+// carries neither the tool storage directory nor the os cause; the log has both.
+func TestStartFailuresDoNotCarryTheStoragePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	workspace := t.TempDir()
+	blocked := filepath.Join(workspace, "blocked")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(filepath.Join(blocked, "processes"))
+	_, err := manager.Start(processTestRequest(workspace, "true", 1024))
+	if err == nil {
+		t.Fatal("a start under a regular file must fail")
+	}
+	if !errors.Is(err, errProcessStorage) {
+		t.Fatalf("err = %v, want errProcessStorage", err)
+	}
+	if strings.Contains(err.Error(), workspace) || strings.Contains(err.Error(), "processes") {
+		t.Fatalf("the model-facing start error names the storage: %v", err)
+	}
+}
+
+// TestRecoverAppliesRetentionWithoutAFinish is P6BM-24: retention used to run only when another
+// process finished, so a profile that stopped starting processes kept every manifest and log.
+func TestRecoverAppliesRetentionWithoutAFinish(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	workspace := t.TempDir()
+	storage := filepath.Join(workspace, "processes")
+	first := NewProcessManager(storage)
+	request := processTestRequest(workspace, "true", 1024)
+	var ids []string
+	for index := 0; index < 3; index++ {
+		snapshot, err := first.Start(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waited := first.Wait(snapshot.ID, 5000); !waited.Waited {
+			t.Fatalf("process %d did not finish: %+v", index, waited)
+		}
+		ids = append(ids, snapshot.ID)
+	}
+	second := NewConfiguredProcessManager(sessionfs.NativeProcessSettings{StorageDir: storage, MaxCompleted: 1})
+	if err := second.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	kept := 0
+	for _, id := range ids {
+		if _, ok := second.Snapshot(id); ok {
+			kept++
+		}
+	}
+	if kept != 1 {
+		t.Fatalf("recovery kept %d of %d manifests, want max_completed 1", kept, len(ids))
 	}
 }
 

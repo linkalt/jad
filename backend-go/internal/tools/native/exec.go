@@ -311,10 +311,10 @@ func planExec(arguments map[string]any, settings sessionfs.NativeExecSettings, e
 		}
 		stdin = string(encoded) + "\n"
 	}
-	return planExecCode(arguments, settings, stdin, invalid)
+	return planExecCode(arguments, settings, stdin, callID, invalid)
 }
 
-func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSettings, stdin string, invalid func(code, summary string, more ...tools.Information) (execPlan, string)) (execPlan, string) {
+func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSettings, stdin, callID string, invalid func(code, summary string, more ...tools.Information) (execPlan, string)) (execPlan, string) {
 	rawLang, _ := arguments["lang"].(string)
 	if rawLang == "" {
 		return invalid("invalid_lang", "The language is empty")
@@ -363,7 +363,7 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 			codePath := filepath.Join(workDir, "code"+lang.Ext)
 			if lang.Mode == sessionfs.NativeExecModeFile {
 				if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
-					return "", nil, "", tools.ExecutionError("", tools.StatusError, "spawn_failed", "The code file could not be written",
+					return "", nil, "", tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
 						tools.Information{Key: "system_error", Value: err.Error()})
 				}
 			}

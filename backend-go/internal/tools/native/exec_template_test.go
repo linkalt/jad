@@ -442,6 +442,49 @@ func TestExecTemplateScratchIsRemovedWithTheCall(t *testing.T) {
 	}
 }
 
+// TestExecCodeFileWriteErrorCarriesTheCall is P6BM-20: prepare has no call id of its own, so its
+// failure used to render "id":"" while every other error of the tool names the call.
+func TestExecCodeFileWriteErrorCarriesTheCall(t *testing.T) {
+	settings := sessionfs.NativeExecSettings{
+		LangNames: []string{"filemode"},
+		Langs: map[string]sessionfs.NativeExecLang{
+			"filemode": {Argv: []string{"node", "{file}"}, Mode: sessionfs.NativeExecModeFile, Ext: ".js", Aliases: []string{}},
+		},
+		DefaultLang: "filemode", CodeMaxBytes: 4096, InputMaxBytes: 512, ArgMaxBytes: 4096, ResultMaxBytes: 512,
+	}
+	plan, problem := planExec(map[string]any{"lang": "filemode", "code": "1"}, settings, tools.ExecutionContext{CallID: "call_file"})
+	if problem != "" {
+		t.Fatalf("planExec: %s", problem)
+	}
+	_, _, _, problem = plan.prepare(filepath.Join(t.TempDir(), "missing"))
+	if problem == "" {
+		t.Fatal("a prepare into a missing directory must fail")
+	}
+	if !strings.Contains(problem, `"id":"call_file"`) || !strings.Contains(problem, "The code file could not be written") {
+		t.Fatalf("the failure does not name the call:\n%s", problem)
+	}
+}
+
+// TestExecListCapsTheProblemsItShows is P6BM-11: one stray line is added per top-level entry of
+// the library that is not a runner, so the count is bounded by the directory and must be capped.
+func TestExecListCapsTheProblemsItShows(t *testing.T) {
+	root, settings := execHelpersFixtureFor(map[string]string{"node/a.js": "// A\nexports.a = 1;\n"})
+	defer os.RemoveAll(root)
+	for _, name := range []string{"stray_a", "stray_b", "stray_c", "stray_d", "stray_e"} {
+		if err := os.MkdirAll(filepath.Join(root, ".jad", "exec", name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings.ListMaxResults = 2
+	content := execContent(executeExecList(map[string]any{}, settings, tools.ExecutionContext{CallID: "list", WorkspaceRoot: root}))
+	if got := strings.Count(content, "- stray_"); got != 2 {
+		t.Fatalf("listed %d stray entries, want 2:\n%s", got, content)
+	}
+	if !strings.Contains(content, "malformed entries (5):") || !strings.Contains(content, "- …and 3 more") {
+		t.Fatalf("the listing does not say how many entries are hidden:\n%s", content)
+	}
+}
+
 // TestExecTemplateLeavesTheProgramAlone pins the substitution order: the template is attached
 // before the code goes into argv, so a literal {template} (or {file}, or {code}) inside the
 // program reaches the runner as written (P6BM-02).

@@ -284,7 +284,13 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 	if int64(len(shown)) > settings.ListMaxResults {
 		shown = shown[:settings.ListMaxResults]
 	}
-	lines := make([]string, 0, len(shown)+len(problems)+2)
+	// The stray and malformed half is bounded by the library directory, not by list_max_files,
+	// so it is capped like the helpers are (P6BM-11).
+	shownProblems := problems
+	if int64(len(shownProblems)) > settings.ListMaxResults {
+		shownProblems = shownProblems[:settings.ListMaxResults]
+	}
+	lines := make([]string, 0, len(shown)+len(shownProblems)+2)
 	if len(shown) > 0 {
 		lines = append(lines, execListLegend...)
 	}
@@ -303,8 +309,11 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 			lines = append(lines, "")
 		}
 		lines = append(lines, fmt.Sprintf("malformed entries (%d):", len(problems)))
-		for _, problem := range problems {
+		for _, problem := range shownProblems {
 			lines = append(lines, "- "+problem)
+		}
+		if hidden := len(problems) - len(shownProblems); hidden > 0 {
+			lines = append(lines, fmt.Sprintf("- …and %d more", hidden))
 		}
 	}
 	summary := fmt.Sprintf("%d helper%s", len(shown), pluralSuffix(len(shown)))

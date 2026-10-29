@@ -127,7 +127,13 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 	if int64(len(shown)) > settings.ListMaxResults {
 		shown = shown[:settings.ListMaxResults]
 	}
-	lines := make([]string, 0, len(shown)+len(problems)+2)
+	// A library directory can hold more malformed files than list_max_files lets us scan, so the
+	// problems are capped like the entries are (P6BM-11).
+	shownProblems := problems
+	if int64(len(shownProblems)) > settings.ListMaxResults {
+		shownProblems = shownProblems[:settings.ListMaxResults]
+	}
+	lines := make([]string, 0, len(shown)+len(shownProblems)+2)
 	if len(shown) > 0 {
 		lines = append(lines, toolSmithListLegend)
 	}
@@ -139,8 +145,11 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 			lines = append(lines, "")
 		}
 		lines = append(lines, fmt.Sprintf("malformed files (%d):", len(problems)))
-		for _, problem := range problems {
+		for _, problem := range shownProblems {
 			lines = append(lines, "- "+problem)
+		}
+		if hidden := len(problems) - len(shownProblems); hidden > 0 {
+			lines = append(lines, fmt.Sprintf("- …and %d more", hidden))
 		}
 	}
 

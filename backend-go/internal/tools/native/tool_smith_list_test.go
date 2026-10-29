@@ -51,6 +51,24 @@ func TestToolSmithListParsesHeaderAndSignature(t *testing.T) {
 	}
 }
 
+// TestToolSmithListCapsTheMalformedFilesItShows is P6BM-11: the problems half is bounded by the
+// library directory, not by list_max_files, so it is capped like the entries are.
+func TestToolSmithListCapsTheMalformedFilesItShows(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"bad_a", "bad_b", "bad_c", "bad_d", "bad_e"} {
+		listTestWrite(t, root, "fn/"+name+".ts", "export function x() {}\n")
+	}
+	settings := listTestSettings("fn")
+	settings.ListMaxResults = 2
+	content := execContent(runToolSmithList(root, settings))
+	if got := strings.Count(content, "- bad_"); got != 2 {
+		t.Fatalf("listed %d malformed files, want 2:\n%s", got, content)
+	}
+	if !strings.Contains(content, "malformed files (5):") || !strings.Contains(content, "- …and 3 more") {
+		t.Fatalf("the listing does not say how many files are hidden:\n%s", content)
+	}
+}
+
 func TestToolSmithListFiltersMustAllMatchNameOrDescription(t *testing.T) {
 	root := t.TempDir()
 	listTestWrite(t, root, "fn/alpha_one.ts", listTestFunction("alpha_one", "Search the Web"))
