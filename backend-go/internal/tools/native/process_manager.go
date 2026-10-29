@@ -370,6 +370,12 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	entry.stdinWriter = stdinWriter
 	entry.command = command
 	entry.manifest.PID = command.Process.Pid
+	// A stop that arrived before the process existed could not signal it: it only set the
+	// reason and reported the process left running. The process exists from here on.
+	stopped := entry.manifest.StopReason != ""
+	if stopped {
+		entry.manifest.LeftRunning = false
+	}
 	manifest = cloneProcessManifest(entry.manifest)
 	entry.mu.Unlock()
 	manager.mu.Lock()
@@ -381,6 +387,11 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 		manager.signalProcess(entry, true)
 		_ = waitForManagedProcess(entry, 2*time.Second)
 		return ProcessSnapshot{}, fmt.Errorf("persist running process manifest: %w", err)
+	}
+	if stopped {
+		// The stop that arrived before this process existed is carried out now, so the window
+		// between Begin and Start cannot lose it.
+		manager.stopSignalled(entry)
 	}
 	return manager.snapshotEntry(entry), nil
 }
@@ -508,6 +519,15 @@ func (manager *ManagedProcessManager) Stop(id, reason string) (*ProcessSnapshot,
 		snapshot := manager.snapshotEntry(entry)
 		return &snapshot, true
 	}
+	manager.stopSignalled(entry)
+	snapshot := manager.snapshotEntry(entry)
+	return &snapshot, true
+}
+
+// stopSignalled sends SIGTERM to the process group, SIGKILL after the grace, and records the
+// process as left running when even that did not end it. Stop uses it, and so does a start
+// that finds a stop waiting for the process it just created.
+func (manager *ManagedProcessManager) stopSignalled(entry *managedProcess) {
 	manager.signalProcess(entry, false)
 	if !waitForManagedProcess(entry, entry.killGrace) {
 		manager.signalProcess(entry, true)
@@ -515,8 +535,6 @@ func (manager *ManagedProcessManager) Stop(id, reason string) (*ProcessSnapshot,
 			manager.setLeftRunning(entry)
 		}
 	}
-	snapshot := manager.snapshotEntry(entry)
-	return &snapshot, true
 }
 
 func (manager *ManagedProcessManager) Close() error {

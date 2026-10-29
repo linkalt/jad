@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 )
@@ -311,4 +312,69 @@ func TestStopKeepsTheTerminalManifestOfAProcessThatExitsFirst(t *testing.T) {
 		stopped.Wait()
 		assertTerminal("after a stop racing the exit", started.ID)
 	}
+}
+
+// stopOnBeginAsync runs a Stop from inside Begin: the window P6BM-10 names, in which the
+// handle is registered and the process does not exist yet, so the stop finds no pid and no
+// command to signal.
+type stopOnBeginAsync struct {
+	manager *ManagedProcessManager
+	called  bool
+}
+
+func (s *stopOnBeginAsync) Begin(id string) error {
+	s.called = true
+	_, _ = s.manager.Stop(id, "stopped_by_agent")
+	return nil
+}
+
+func (s *stopOnBeginAsync) Abort(string, error) {}
+
+func (s *stopOnBeginAsync) End(ProcessSnapshot) {}
+
+func TestStopBeforeTheProcessStartsStillStopsIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
+	stop := &stopOnBeginAsync{manager: manager}
+	request := processTestRequest(directory, "sleep 300", 1024)
+	request.Policy.KillGraceMs = 200
+	request.Async = stop
+	snapshot, err := manager.Start(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stop.called {
+		t.Fatal("the test never reached the window between Begin and command.Start")
+	}
+	if snapshot.State != ProcessStopped && snapshot.State != ProcessExited {
+		t.Fatalf("a stop that arrived before the process started was lost: state=%q left_running=%t", snapshot.State, snapshot.LeftRunning)
+	}
+	if snapshot.LeftRunning {
+		t.Fatal("the process is recorded as left running, but the stop only arrived early")
+	}
+	manager.mu.Lock()
+	recorded := manager.manifests[snapshot.ID]
+	manager.mu.Unlock()
+	if recorded.State == ProcessRunning || recorded.LeftRunning {
+		t.Fatalf("the recorded manifest says state=%q left_running=%t", recorded.State, recorded.LeftRunning)
+	}
+	// The process itself is gone: the group the shell led has no member left.
+	if snapshot.PID > 0 && processGroupAlive(snapshot.PID) && !waitGroupGone(snapshot.PID) {
+		t.Fatalf("process group %d of the stopped process is still alive", snapshot.PID)
+	}
+}
+
+func waitGroupGone(pgid int) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processGroupAlive(pgid) {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
