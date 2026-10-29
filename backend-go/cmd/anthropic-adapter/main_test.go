@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"jad/backend-go/internal/anthropicadapter"
 )
 
 func TestWarnIfExposed(t *testing.T) {
@@ -28,6 +32,47 @@ func TestWarnIfExposed(t *testing.T) {
 		warnIfExposed(slog.New(slog.NewTextHandler(&out, nil)), addr)
 		if got := strings.Contains(out.String(), "non-loopback"); got != tc.warn {
 			t.Errorf("%s: warned=%v, want %v (%q)", tc.addr, got, tc.warn, out.String())
+		}
+	}
+}
+
+func TestRequireCallerToken(t *testing.T) {
+	t.Setenv("ADAPTER_TEST_TOKEN", strings.Repeat("t", 32))
+	credential := filepath.Join(t.TempDir(), "claude-oauth.json")
+	load := func(extra string) *anthropicadapter.Config {
+		path := filepath.Join(t.TempDir(), "adapter.json")
+		text := `{"upstream":{"credential_file":"` + credential + `"}` + extra + `}`
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := anthropicadapter.LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return config
+	}
+	noCredential, err := anthropicadapter.LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		config *anthropicadapter.Config
+		addr   string
+		refuse bool
+	}{
+		{"loopback without token", load(""), "127.0.0.1:8788", false},
+		{"non-loopback without token", load(""), "0.0.0.0:8788", true},
+		{"non-loopback with token", load(`,"caller_token_env":"ADAPTER_TEST_TOKEN"`), "0.0.0.0:8788", false},
+		{"non-loopback forwarding the caller credential", noCredential, "0.0.0.0:8788", false},
+	}
+	for _, tc := range cases {
+		addr, err := net.ResolveTCPAddr("tcp", tc.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := requireCallerToken(tc.config, addr) != nil; got != tc.refuse {
+			t.Errorf("%s: refused=%v, want %v", tc.name, got, tc.refuse)
 		}
 	}
 }

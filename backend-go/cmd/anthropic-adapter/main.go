@@ -38,6 +38,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", config.Listen, err)
 	}
+	if err := requireCallerToken(config, listener.Addr()); err != nil {
+		_ = listener.Close()
+		return err
+	}
 	handler := anthropicadapter.NewHandler(config, nil)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	handler.SetLogger(logger)
@@ -63,6 +67,16 @@ func run() error {
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	return server.Shutdown(shutdownContext)
+}
+
+// requireCallerToken refuses to serve a credential_file token to anyone who can reach a
+// non-loopback address without caller authentication.
+func requireCallerToken(config *anthropicadapter.Config, addr net.Addr) error {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok || tcp.IP.IsLoopback() || !config.HoldsCredential() || config.HasCallerToken() {
+		return nil
+	}
+	return fmt.Errorf("listening on non-loopback %s with upstream.credential_file requires caller_token_env", addr)
 }
 
 // warnIfExposed logs when the adapter, which holds the upstream credential and

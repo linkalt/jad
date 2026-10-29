@@ -2,6 +2,7 @@ package anthropicadapter
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +16,13 @@ import (
 // Config is the adapter's JSON configuration. Unknown keys are rejected so a
 // misspelled key cannot silently fall back to a default.
 type Config struct {
-	SchemaVersion                int            `json:"schema_version"`
-	Listen                       string         `json:"listen"`
+	SchemaVersion int    `json:"schema_version"`
+	Listen        string `json:"listen"`
+	// CallerTokenEnv names the environment variable holding the token every caller must send
+	// (Authorization: Bearer or x-api-key). Only meaningful with upstream.credential_file, where
+	// the caller sends no upstream credential of its own. Mandatory for that setup on a
+	// non-loopback listen address (checked at startup by the command).
+	CallerTokenEnv               string         `json:"caller_token_env"`
 	Upstream                     UpstreamConfig `json:"upstream"`
 	DefaultMaxTokens             int            `json:"default_max_tokens"`
 	MaxRequestBytes              int64          `json:"max_request_bytes"`
@@ -31,6 +37,10 @@ type Config struct {
 	Cache               CacheConfig    `json:"cache"`
 	DefaultProfile      ModelProfile   `json:"default_profile"`
 	Models              []ModelProfile `json:"models"`
+
+	// callerTokenHash is the SHA-256 of the caller token; hasCallerToken says it is set.
+	callerTokenHash [sha256.Size]byte
+	hasCallerToken  bool
 }
 
 // LogConfig controls what the adapter writes to stderr when an upstream call fails. Without it a
@@ -136,8 +146,9 @@ type ModelProfile struct {
 // DefaultConfig returns the configuration used when no file is given.
 func DefaultConfig() Config {
 	return Config{
-		SchemaVersion: 1,
-		Listen:        DefaultListen,
+		SchemaVersion:  1,
+		Listen:         DefaultListen,
+		CallerTokenEnv: DefaultCallerTokenEnv,
 		Upstream: UpstreamConfig{
 			BaseURL:          DefaultUpstreamBaseURL,
 			AnthropicVersion: DefaultAnthropicVersion,
@@ -222,6 +233,9 @@ func (c *Config) finish() error {
 		return errors.New("config: listen must be a non-empty host:port")
 	}
 	if err := c.Upstream.validate(); err != nil {
+		return err
+	}
+	if err := c.resolveCallerToken(); err != nil {
 		return err
 	}
 	if c.DefaultMaxTokens < 1 {
@@ -402,3 +416,30 @@ func (c *Config) ProfileFor(model string) *ModelProfile {
 	}
 	return &c.DefaultProfile
 }
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func (c *Config) resolveCallerToken() error {
+	if c.CallerTokenEnv == "" {
+		return nil
+	}
+	if !envNamePattern.MatchString(c.CallerTokenEnv) {
+		return fmt.Errorf("config: caller_token_env must be an environment variable name, got %q", c.CallerTokenEnv)
+	}
+	if c.Upstream.credentialPath == "" {
+		return errors.New("config: caller_token_env needs upstream.credential_file: without it the caller's own Anthropic credential is forwarded and the adapter holds nothing to protect")
+	}
+	token := os.Getenv(c.CallerTokenEnv)
+	if len(token) < MinCallerTokenLength {
+		return fmt.Errorf("config: environment variable %s (caller_token_env) must hold a token of at least %d characters", c.CallerTokenEnv, MinCallerTokenLength)
+	}
+	c.callerTokenHash = sha256.Sum256([]byte(token))
+	c.hasCallerToken = true
+	return nil
+}
+
+// HoldsCredential reports whether the adapter spends a credential of its own on callers' behalf.
+func (c *Config) HoldsCredential() bool { return c.Upstream.credentialPath != "" }
+
+// HasCallerToken reports whether callers must present a token.
+func (c *Config) HasCallerToken() bool { return c.hasCallerToken }

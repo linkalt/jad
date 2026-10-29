@@ -51,6 +51,7 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `listen` | `127.0.0.1:8788` | Address to listen on. |
+| `caller_token_env` | `""` | Name of an environment variable holding a caller token (32+ characters). Every request must send it as `Authorization: Bearer` or `x-api-key`; it is compared in constant time and not forwarded. Needs `upstream.credential_file`. **Required** when `credential_file` is set and `listen` is not loopback (the adapter refuses to start without it); optional on loopback, but without it any local process or browser page can spend the credential. With `credential_file`, requests with an `Origin` header (browsers) get 403. |
 | `upstream.base_url` | `https://api.anthropic.com` | `/v1/messages` is appended. |
 | `upstream.anthropic_version` | `2023-06-01` | `anthropic-version` header. |
 | `upstream.auth_header` | `bearer` | `bearer` sends `Authorization: Bearer <token>`; `x-api-key` sends the legacy header. |

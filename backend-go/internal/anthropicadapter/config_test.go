@@ -60,6 +60,7 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	config := DefaultConfig()
 	checks := map[string]any{
 		"listen":                          config.Listen,
+		"caller_token_env":                config.CallerTokenEnv,
 		"default_max_tokens":              float64(config.DefaultMaxTokens),
 		"max_request_bytes":               float64(config.MaxRequestBytes),
 		"unsupported_fields":              config.UnsupportedFields,

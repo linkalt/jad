@@ -7,6 +7,8 @@ package anthropicadapter
 // values; config_test.go keeps the two in step.
 const (
 	DefaultListen                    = "127.0.0.1:8788"
+	DefaultCallerTokenEnv            = ""
+	MinCallerTokenLength             = 32
 	DefaultUpstreamBaseURL           = "https://api.anthropic.com"
 	DefaultAnthropicVersion          = "2023-06-01"
 	DefaultAuthHeader                = AuthHeaderBearer
