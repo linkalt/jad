@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -332,7 +333,12 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		httpConfig := config.transport.http
 		transport = &mcpSDK.StreamableClientTransport{
 			Endpoint:   httpConfig.endpoint,
-			HTTPClient: newHeaderHTTPClient(httpConfig.endpoint, httpConfig.headers),
+			HTTPClient: newHeaderHTTPClient(httpConfig.endpoint, httpConfig.headers, config.maxResultBytes),
+			// The SDK copies this verbatim (it does not resolve 0 to a default) and
+			// treats a non-positive value as no cap, so a missing value would leave
+			// one streamable_http event unbounded. A result has to fit
+			// max_result_bytes anyway, so that limit bounds an event as well.
+			MaxEventSize: config.maxResultBytes,
 		}
 	}
 
@@ -503,11 +509,11 @@ func commandWithEnvironmentPath(command string, environment map[string]string) (
 	return "", fmt.Errorf("executable not found in configured PATH")
 }
 
-func newHeaderHTTPClient(endpoint string, headers map[string]string) *http.Client {
+func newHeaderHTTPClient(endpoint string, headers map[string]string, maxResponseBytes int) *http.Client {
 	parsed, _ := url.Parse(endpoint)
-	base := http.DefaultTransport
+	base := headerRoundTripper{base: http.DefaultTransport, origin: urlOrigin(parsed), headers: cloneStringMap(headers)}
 	client := &http.Client{
-		Transport: headerRoundTripper{base: base, origin: urlOrigin(parsed), headers: cloneStringMap(headers)},
+		Transport: bodyLimitRoundTripper{base: base, limit: int64(maxResponseBytes)},
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if !sameOrigin(request.URL, parsed) {
 				for name := range headers {
@@ -521,6 +527,55 @@ func newHeaderHTTPClient(endpoint string, headers map[string]string) *http.Clien
 		},
 	}
 	return client
+}
+
+// bodyLimitRoundTripper bounds a response body the HTTP transport would otherwise
+// buffer whole: the SDK reads a streamable_http JSON answer with io.ReadAll. An event
+// stream is exempt, because its body is long lived and only the size of one event is
+// bounded, by StreamableClientTransport.MaxEventSize.
+type bodyLimitRoundTripper struct {
+	base  http.RoundTripper
+	limit int64
+}
+
+func (r bodyLimitRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := r.base.RoundTrip(request)
+	if err != nil || response == nil || response.Body == nil {
+		return response, err
+	}
+	if isEventStreamMediaType(response.Header.Get("Content-Type")) {
+		return response, nil
+	}
+	response.Body = &limitedResponseBody{inner: response.Body, limit: r.limit}
+	return response, nil
+}
+
+// limitedResponseBody fails the read once the body is larger than its limit. The excess
+// is never buffered, so a server cannot choose the size of an allocation.
+type limitedResponseBody struct {
+	inner io.ReadCloser
+	limit int64
+	read  int64
+}
+
+func (b *limitedResponseBody) Read(buffer []byte) (int, error) {
+	count, err := b.inner.Read(buffer)
+	b.read += int64(count)
+	if b.read > b.limit {
+		return 0, fmt.Errorf("MCP HTTP response body exceeds the max_result_bytes limit of %d bytes", b.limit)
+	}
+	return count, err
+}
+
+func (b *limitedResponseBody) Close() error {
+	return b.inner.Close()
+}
+
+func isEventStreamMediaType(contentType string) bool {
+	if index := strings.IndexByte(contentType, ';'); index >= 0 {
+		contentType = contentType[:index]
+	}
+	return strings.EqualFold(strings.TrimSpace(contentType), "text/event-stream")
 }
 
 type headerRoundTripper struct {
