@@ -98,6 +98,8 @@ type UpstreamConfig struct {
 	// wants more than the headers the adapter sets itself.
 	ExtraHeaders     map[string]string `json:"extra_headers"`
 	RequestTimeoutMS int               `json:"request_timeout_ms"`
+	// MaxEventBytes bounds one upstream SSE event; a larger one ends the stream with an error.
+	MaxEventBytes int64 `json:"max_event_bytes"`
 	// StreamRetry retries a streaming request whose upstream answered with an
 	// error event before any output was written.
 	StreamRetry StreamRetryConfig `json:"stream_retry"`
@@ -159,6 +161,7 @@ func DefaultConfig() Config {
 			ExpiryMarginMS:   DefaultExpiryMarginMS,
 			ExtraHeaders:     map[string]string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,
+			MaxEventBytes:    DefaultMaxEventBytes,
 			StreamRetry: StreamRetryConfig{
 				MaxRetries: DefaultStreamRetryMax,
 				DelayMS:    DefaultStreamRetryDelayMS,
@@ -317,6 +320,9 @@ func (u *UpstreamConfig) validate() error {
 		if strings.ContainsAny(value, "\r\n") {
 			return fmt.Errorf("config: upstream.extra_headers.%s must not contain a line break", name)
 		}
+	}
+	if u.MaxEventBytes < 1 {
+		return fmt.Errorf("config: upstream.max_event_bytes must be at least 1, got %d", u.MaxEventBytes)
 	}
 	if u.RequestTimeoutMS < 1 || u.RequestTimeoutMS > MaxRequestTimeoutMS {
 		return fmt.Errorf("config: upstream.request_timeout_ms must be 1..%d, got %d",

@@ -76,6 +76,12 @@
           "default": 600000,
           "description": "Deadline for one upstream request, including the whole stream."
         },
+        "max_event_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 16777216,
+          "description": "Largest single upstream SSE event, all its lines included. A larger event ends the stream with an error instead of being buffered without limit."
+        },
         "stream_retry": {
           "type": "object",
           "additionalProperties": false,

@@ -20,6 +20,7 @@ const (
 	DefaultRequestTimeoutMS          = 600_000
 	DefaultMaxTokens                 = 8192
 	DefaultMaxRequestBytes           = 64 * 1024 * 1024
+	DefaultMaxEventBytes             = 16 * 1024 * 1024
 	DefaultUnsupportedFields         = UnsupportedIgnore
 	DefaultSynthesizeToolResults     = true
 	DefaultInvalidArgumentsKey       = "_invalid_arguments"

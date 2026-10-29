@@ -61,6 +61,7 @@ Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `samp
 | `upstream.expiry_margin_ms` | `300000` | With `credential_file`: a token whose stored expiry is this close is refused with 401 before the request. |
 | `upstream.extra_headers` | `{}` | Headers added to every upstream request. `authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `content-type`, `content-length` and `host` are refused here: they come from other keys. |
 | `upstream.request_timeout_ms` | `600000` | Deadline of one upstream request, the whole stream included. |
+| `upstream.max_event_bytes` | `16777216` | Largest single upstream stream event. A larger one ends the stream with an error. |
 | `upstream.stream_retry.max_retries` | `0` | Retries of a stream whose first event is an error. `0` is off. |
 | `upstream.stream_retry.delay_ms` | `1000` | Wait before each retry. |
 | `upstream.stream_retry.error_types` | `overloaded_error`, `api_error` | Error types that are retried. |

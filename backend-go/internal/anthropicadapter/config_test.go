@@ -146,6 +146,7 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 		upstream.Properties["credential_file"].Default != config.Upstream.CredentialFile ||
 		upstream.Properties["system_prefix"].Default != config.Upstream.SystemPrefix ||
 		upstream.Properties["expiry_margin_ms"].Default != float64(config.Upstream.ExpiryMarginMS) ||
+		upstream.Properties["max_event_bytes"].Default != float64(config.Upstream.MaxEventBytes) ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
 		t.Errorf("upstream schema defaults differ from Go: %+v", upstream.Properties)
 	}
@@ -212,6 +213,9 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		`{"listen":""}`:                                         "listen",
 		`{"upstream":{"base_url":"ftp://x"}}`:                   "base_url",
 		`{"upstream":{"request_timeout_ms":0}}`:                 "request_timeout_ms",
+		`{"upstream":{"max_event_bytes":0}}`:                    "max_event_bytes",
+		`{"upstream":{"max_event_bytes":-5}}`:                   "max_event_bytes",
+		`{"upstream":{"max_event_bytes":1.5}}`:                  "max_event_bytes",
 		`{"upstream":{"beta":["a,b"]}}`:                         "beta",
 		`{"upstream":{"auth_header":"basic"}}`:                  "auth_header",
 		`{"upstream":{"credential_file":"relative.json"}}`:      "credential_file",

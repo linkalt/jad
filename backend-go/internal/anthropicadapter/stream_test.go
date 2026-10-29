@@ -2,6 +2,7 @@ package anthropicadapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -73,7 +74,7 @@ func postStream(t *testing.T, adapterURL, body string) (int, []streamedEvent, bo
 	if response.StatusCode != 200 {
 		return response.StatusCode, nil, false
 	}
-	err = readSSE(response.Body, func(raw sseEvent) bool {
+	err = readSSE(response.Body, DefaultMaxEventBytes, func(raw sseEvent) bool {
 		if raw.Data == "[DONE]" {
 			sawDone = true
 			return true
@@ -434,7 +435,7 @@ func TestStreamNonSSEUpstreamBodyIsAnError(t *testing.T) {
 
 func TestReadSSEHandlesCRLFAndFinalEventWithoutBlankLine(t *testing.T) {
 	var got []sseEvent
-	err := readSSE(strings.NewReader("event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2"), func(e sseEvent) bool {
+	err := readSSE(strings.NewReader("event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2"), DefaultMaxEventBytes, func(e sseEvent) bool {
 		got = append(got, e)
 		return true
 	})
@@ -641,5 +642,43 @@ func TestStreamDrainIsBoundedWhenTheUpstreamStallsInTheTail(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("handler held for %v by a stalled tail", elapsed)
+	}
+}
+
+func TestReadSSERefusesAnEventOverTheCap(t *testing.T) {
+	long := "data: " + strings.Repeat("x", 5000) + "\n\n"
+	err := readSSE(strings.NewReader(long), 1000, func(sseEvent) bool { t.Fatal("handled an oversize event"); return false })
+	if err == nil || !strings.Contains(err.Error(), "max_event_bytes") {
+		t.Fatalf("error = %v, want one naming upstream.max_event_bytes", err)
+	}
+	many := strings.Repeat("data: xxxxxxxxxx\n", 100) + "\n"
+	if err := readSSE(strings.NewReader(many), 1000, func(sseEvent) bool { return true }); err == nil {
+		t.Fatal("an event made of many small lines over the cap was accepted")
+	}
+}
+
+func TestReadSSEAcceptsEventsJustUnderTheCapAndResetsPerEvent(t *testing.T) {
+	event := "data: " + strings.Repeat("x", 90) + "\n\n"
+	var got int
+	err := readSSE(strings.NewReader(strings.Repeat(event, 50)), int64(len(event))+1, func(e sseEvent) bool {
+		got++
+		return len(e.Data) == 90
+	})
+	if err != nil || got != 50 {
+		t.Fatalf("events = %d, err = %v; want 50 events and no error", got, err)
+	}
+}
+
+func TestStreamEndsWithAClearErrorOnAnOversizeEvent(t *testing.T) {
+	big := `content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + strings.Repeat("x", 4000) + `"}}`
+	upstream, _ := scriptedUpstream(t, sse(startEvent, big))
+	config := mustConfig(t, `{"upstream":{"base_url":"`+upstream.URL+`","max_event_bytes":2000}}`)
+	adapter := httptest.NewServer(NewHandler(config, nil))
+	t.Cleanup(adapter.Close)
+	_, events, done := postStream(t, adapter.URL, `{"model":"claude-x","input":"hi","stream":true}`)
+	last := events[len(events)-1]
+	if !done || last.Body["type"] != "response.failed" || last.get("response", "error", "code") != "upstream_read_failed" ||
+		!strings.Contains(fmt.Sprint(last.get("response", "error", "message")), "max_event_bytes") {
+		t.Fatalf("an oversize event must end in response.failed naming max_event_bytes: %v", last.Body)
 	}
 }

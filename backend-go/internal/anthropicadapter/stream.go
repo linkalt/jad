@@ -86,7 +86,7 @@ type anthropicStreamEvent struct {
 // run reads the upstream stream until it ends or a terminal event is written.
 func (t *streamTranslator) run(body io.Reader) streamOutcome {
 	var outcome streamOutcome
-	err := readSSE(body, func(raw sseEvent) bool {
+	err := readSSE(body, t.config.Upstream.MaxEventBytes, func(raw sseEvent) bool {
 		if t.sink.err != nil {
 			return false
 		}

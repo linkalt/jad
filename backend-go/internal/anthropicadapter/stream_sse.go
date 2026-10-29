@@ -3,6 +3,8 @@ package anthropicadapter
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -16,20 +18,26 @@ type sseEvent struct {
 
 // readSSE parses a server-sent event stream and calls handle for each event
 // that carries data. It stops when handle returns false or the stream ends.
-// Lines are read without a length limit: a tool input can be large.
-func readSSE(reader io.Reader, handle func(sseEvent) bool) error {
+// One event may span at most maxEvent bytes (all its lines, terminators included);
+// a larger one ends the read with an error instead of growing the buffer.
+func readSSE(reader io.Reader, maxEvent int64, handle func(sseEvent) bool) error {
 	buffered := bufio.NewReader(reader)
 	var name string
 	var data []string
+	var eventBytes int64
 	dispatch := func() bool {
-		defer func() { name, data = "", nil }()
+		defer func() { name, data, eventBytes = "", nil, 0 }()
 		if len(data) == 0 {
 			return true
 		}
 		return handle(sseEvent{Name: name, Data: strings.Join(data, "\n")})
 	}
 	for {
-		line, err := buffered.ReadString('\n')
+		line, err := readBoundedLine(buffered, maxEvent-eventBytes)
+		eventBytes += int64(len(line))
+		if err == errEventTooLarge {
+			return fmt.Errorf("an upstream event is larger than upstream.max_event_bytes (%d)", maxEvent)
+		}
 		if line != "" {
 			line = strings.TrimRight(line, "\r\n")
 			switch {
@@ -56,6 +64,25 @@ func readSSE(reader io.Reader, handle func(sseEvent) bool) error {
 				return nil
 			}
 			return err
+		}
+	}
+}
+
+// errEventTooLarge reports that a line did not fit in the remaining event budget.
+var errEventTooLarge = errors.New("sse event too large")
+
+// readBoundedLine reads up to and including the next newline, or fails with
+// errEventTooLarge once the line would exceed limit bytes.
+func readBoundedLine(reader *bufio.Reader, limit int64) (string, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if int64(len(line)+len(chunk)) > limit {
+			return "", errEventTooLarge
+		}
+		line = append(line, chunk...)
+		if err != bufio.ErrBufferFull {
+			return string(line), err
 		}
 	}
 }

@@ -69,7 +69,7 @@ func BenchmarkStreamThroughAdapter(b *testing.B) {
 					b.Fatal(err)
 				}
 				count := 0
-				err = readSSE(response.Body, func(sseEvent) bool { count++; return true })
+				err = readSSE(response.Body, DefaultMaxEventBytes, func(sseEvent) bool { count++; return true })
 				response.Body.Close()
 				if err != nil || count < deltas {
 					b.Fatalf("events=%d err=%v", count, err)
