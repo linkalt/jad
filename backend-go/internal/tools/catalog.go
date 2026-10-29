@@ -355,6 +355,9 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 		return nil, fmt.Errorf("validate arguments for tool %s: %w", name, err)
 	}
 	if len(issues) > 0 {
+		// The report is persisted and re-sent on every round, so it must not
+		// grow with the arguments: keep a sample and count the rest.
+		issues = boundValidationIssues(issues)
 		for index, issue := range issues {
 			if property, _ := issue.Params["additionalProperty"].(string); property != "" {
 				if hint, ok := tool.RejectedProperties[property]; ok {

@@ -274,6 +274,38 @@ func TestDecideSystemoneErrorTextIsOneBoundedLineAndNeverHoldsTheKey(t *testing.
 	}
 }
 
+// A provider that echoes the key into a long message puts it across the
+// 400-byte cut. Redacting after the cut left a prefix of the key in the
+// reported text, so the redaction has to run first.
+func TestDecideSystemoneErrorTextRedactsAKeyAcrossTheCut(t *testing.T) {
+	const key = "secret-key"
+	// Put the key across byte 400: the text before "key=" fills 396 bytes, so a
+	// cut made before the redaction keeps the first four characters of the key.
+	straddle := func(before int) string {
+		return strings.Repeat("x", 400-before-len("key=")-4)
+	}
+	for name, reply := range map[string]string{
+		"message": `{"error":{"message":"` + straddle(0) + `key=` + key + `"}}`,
+		"detail":  `{"detail":[{"loc":["body"],"msg":"` + straddle(len("body: ")) + `key=` + key + `"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newDecideSystemoneRig(t, 400, reply, nil)
+			output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
+			if !strings.Contains(output, "error_code: request_rejected") {
+				t.Fatalf("want a rejected request, got:\n%s", output)
+			}
+			for prefix := 4; prefix <= len(key); prefix++ {
+				if strings.Contains(output, key[:prefix]) {
+					t.Fatalf("%d of %d key characters survived the cut:\n%s", prefix, len(key), output)
+				}
+			}
+			if !strings.Contains(output, strings.Repeat("x", 300)) {
+				t.Fatalf("the provider text is gone:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestDecideSystemoneRefusesAnOversizedResponse(t *testing.T) {
 	rig := newDecideSystemoneRig(t, 200, `{"answers":{},"pad":"`+strings.Repeat("x", 5000)+`"}`, nil)
 	output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)

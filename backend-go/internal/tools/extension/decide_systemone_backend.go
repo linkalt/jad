@@ -101,7 +101,7 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 		return nil, &decideSystemoneResponseError{fmt.Sprintf("response is larger than %d bytes", settings.MaxResponseBytes)}
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, &decideSystemoneHTTPError{Status: response.StatusCode, Message: decideSystemoneRedact(decideSystemoneErrorMessage(data), key)}
+		return nil, &decideSystemoneHTTPError{Status: response.StatusCode, Message: decideSystemoneErrorMessage(data, key)}
 	}
 	answers, err := parseSystemoneAnswers(data, questions)
 	if err != nil {
@@ -112,8 +112,10 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 
 // decideSystemoneErrorMessage takes the provider's error text from the error shapes it
 // knows ({"error":{"message"}}, {"error":"text"}, and the 422 {"detail":[{"loc","msg"}]}
-// of the System One API) and cuts it, so a long validation report stays small.
-func decideSystemoneErrorMessage(data []byte) string {
+// of the System One API), redacts the key and cuts it, so a long validation
+// report stays small. Redacting before the cut keeps a key that straddles the
+// cut from leaving a prefix of itself in the reported text.
+func decideSystemoneErrorMessage(data []byte, key string) string {
 	var envelope struct {
 		Error  json.RawMessage `json:"error"`
 		Detail json.RawMessage `json:"detail"`
@@ -135,7 +137,7 @@ func decideSystemoneErrorMessage(data []byte) string {
 			text = detail
 		}
 	}
-	text = oneLine(text)
+	text = decideSystemoneRedact(oneLine(text), key)
 	if cut, ok := cutUTF8(text, 400); ok {
 		text = cut + "..."
 	}

@@ -38,6 +38,90 @@ type ValidationIssue struct {
 	Message      string         `json:"message"`
 }
 
+// A failed validation reports at most this many issues and cuts every text in
+// one issue to this many bytes. Validate still returns the full list, because
+// the AJV-shaped output and its tests depend on it; only the model-facing
+// report is bounded, so malformed arguments cannot be amplified into a large
+// tool result that is persisted and re-sent on every round.
+const (
+	maxReportedValidationIssues   = 20
+	maxReportedValidationTextSize = 200
+)
+
+// boundValidationIssues keeps the first maxReportedValidationIssues issues with
+// their text cut, then says how many it left out, so the model still sees the
+// shape of its mistake without the report growing with the argument list.
+func boundValidationIssues(issues []ValidationIssue) []ValidationIssue {
+	kept, omitted := issues, 0
+	if len(kept) > maxReportedValidationIssues {
+		kept = kept[:maxReportedValidationIssues]
+		omitted = len(issues) - maxReportedValidationIssues
+	}
+	bounded := make([]ValidationIssue, 0, len(kept)+1)
+	for _, issue := range kept {
+		bounded = append(bounded, boundValidationIssue(issue))
+	}
+	if omitted > 0 {
+		bounded = append(bounded, ValidationIssue{
+			Params:  map[string]any{},
+			Message: fmt.Sprintf("%d more issues omitted", omitted),
+		})
+	}
+	return bounded
+}
+
+// boundValidationIssue copies an issue with its strings cut. The paths carry
+// property names from the arguments, and an enum/const keyword carries values
+// from the schema, so any of them can be long.
+func boundValidationIssue(issue ValidationIssue) ValidationIssue {
+	issue.InstancePath = boundValidationText(issue.InstancePath)
+	issue.SchemaPath = boundValidationText(issue.SchemaPath)
+	issue.Message = boundValidationText(issue.Message)
+	if len(issue.Params) == 0 {
+		return issue
+	}
+	params := make(map[string]any, len(issue.Params))
+	for key, value := range issue.Params {
+		params[key] = boundValidationParam(value)
+	}
+	issue.Params = params
+	return issue
+}
+
+func boundValidationParam(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return boundValidationText(typed)
+	case []string:
+		bounded := make([]string, len(typed))
+		for index, item := range typed {
+			bounded[index] = boundValidationText(item)
+		}
+		return bounded
+	case []any:
+		bounded := make([]any, len(typed))
+		for index, item := range typed {
+			bounded[index] = boundValidationParam(item)
+		}
+		return bounded
+	case map[string]any:
+		bounded := make(map[string]any, len(typed))
+		for key, item := range typed {
+			bounded[key] = boundValidationParam(item)
+		}
+		return bounded
+	default:
+		return value
+	}
+}
+
+func boundValidationText(text string) string {
+	if cut, ok := CutText(text, maxReportedValidationTextSize); ok {
+		return cut + "..."
+	}
+	return text
+}
+
 // CompileSchema validates and compiles a schema. External references are
 // rejected; callers should provide self-contained tool schemas rather than
 // allowing a schema to load arbitrary filesystem or network resources.
