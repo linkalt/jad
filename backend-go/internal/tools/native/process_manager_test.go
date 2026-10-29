@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"jad/backend-go/internal/sessionfs"
@@ -242,5 +243,72 @@ func TestProcessChildDoesNotInheritServerSecrets(t *testing.T) {
 	}
 	if strings.Contains(string(output), "path=[]") {
 		t.Fatalf("child output = %q, want PATH kept", output)
+	}
+}
+
+// TestStopKeepsTheTerminalManifestOfAProcessThatExitsFirst is P6BM-08: a stop that passed
+// its state check before the process exited must not write "running" over the terminal
+// manifest finish already recorded, in memory or on disk.
+func TestStopKeepsTheTerminalManifestOfAProcessThatExitsFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
+	assertTerminal := func(when, id string) {
+		t.Helper()
+		manager.mu.Lock()
+		recorded := manager.manifests[id]
+		manager.mu.Unlock()
+		if recorded.State == ProcessRunning || recorded.LeftRunning {
+			t.Fatalf("%s: the recorded manifest says state=%q left_running=%t", when, recorded.State, recorded.LeftRunning)
+		}
+		fromDisk, _ := manager.readManifest(id)
+		if fromDisk.State == ProcessRunning {
+			t.Fatalf("%s: the manifest on disk says running", when)
+		}
+	}
+
+	// The guarded write itself: a stale "running" clone of a finished entry is dropped.
+	snapshot, err := manager.Start(processTestRequest(directory, "true", 1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waited := manager.Wait(snapshot.ID, 5000); !waited.Waited || waited.Snapshot.State != ProcessExited {
+		t.Fatalf("process = %#v, want it exited", waited.Snapshot)
+	}
+	manager.mu.Lock()
+	entry := manager.entries[snapshot.ID]
+	manager.mu.Unlock()
+	if entry == nil {
+		t.Fatalf("no entry for %s", snapshot.ID)
+	}
+	entry.mu.Lock()
+	stale := cloneProcessManifest(entry.manifest)
+	entry.mu.Unlock()
+	stale.State = ProcessRunning
+	stale.LeftRunning = true
+	stale.StopReason = "stopped_by_agent"
+	entry.mu.Lock()
+	manager.recordLiveManifest(entry, stale)
+	entry.mu.Unlock()
+	assertTerminal("after a stale write", snapshot.ID)
+
+	// The same through the public path: a stop racing a process that exits at once.
+	for round := 0; round < 20; round++ {
+		started, startErr := manager.Start(processTestRequest(directory, "true", 1024))
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		var stopped sync.WaitGroup
+		stopped.Add(1)
+		go func(id string) {
+			defer stopped.Done()
+			_, _ = manager.Stop(id, "stopped_by_agent")
+		}(started.ID)
+		manager.Wait(started.ID, 5000)
+		stopped.Wait()
+		assertTerminal("after a stop racing the exit", started.ID)
 	}
 }

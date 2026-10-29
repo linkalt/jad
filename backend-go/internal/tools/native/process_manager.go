@@ -501,11 +501,8 @@ func (manager *ManagedProcessManager) Stop(id, reason string) (*ProcessSnapshot,
 	pid := entry.manifest.PID
 	command := entry.command
 	updated := cloneProcessManifest(entry.manifest)
+	manager.recordLiveManifest(entry, updated)
 	entry.mu.Unlock()
-	manager.mu.Lock()
-	manager.manifests[id] = updated
-	manager.mu.Unlock()
-	_ = manager.persistManifest(updated)
 	if pid <= 0 || command == nil {
 		manager.setLeftRunning(entry)
 		snapshot := manager.snapshotEntry(entry)
@@ -532,16 +529,23 @@ func (manager *ManagedProcessManager) Close() error {
 	manager.mu.Unlock()
 	manager.starting.Wait()
 	manager.mu.Lock()
-	ids := make([]string, 0, len(manager.entries))
-	for id, entry := range manager.entries {
+	entries := make([]*managedProcess, 0, len(manager.entries))
+	for _, entry := range manager.entries {
+		entries = append(entries, entry)
+	}
+	manager.mu.Unlock()
+	// The entries are inspected outside manager.mu: a manifest write takes entry.mu first and
+	// manager.mu second, so holding manager.mu while taking entry.mu here would deadlock.
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		entry.mu.Lock()
 		running := entry.manifest.State == ProcessRunning
+		id := entry.manifest.ID
 		entry.mu.Unlock()
 		if running {
 			ids = append(ids, id)
 		}
 	}
-	manager.mu.Unlock()
 	var failures []error
 	for _, id := range ids {
 		if _, found := manager.Stop(id, "session_closed"); !found {
@@ -715,9 +719,21 @@ func (manager *ManagedProcessManager) signalProcess(entry *managedProcess, force
 
 func (manager *ManagedProcessManager) setLeftRunning(entry *managedProcess) {
 	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	entry.manifest.LeftRunning = true
-	manifest := cloneProcessManifest(entry.manifest)
-	entry.mu.Unlock()
+	manager.recordLiveManifest(entry, cloneProcessManifest(entry.manifest))
+}
+
+// recordLiveManifest records manifest as the entry's manifest, in memory and on disk, but
+// only while the entry is live. It must be called with entry.mu held: a stop that passed its
+// own state check before the process exited would otherwise write "running" over the terminal
+// manifest finish had already written, leaving a phantom process for the rest of the server's
+// life (and after a restart). finish takes entry.mu before it sets the terminal state, so
+// holding it here also orders the two writes.
+func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, manifest ProcessManifest) {
+	if processTerminal(entry.manifest.State) {
+		return
+	}
 	manager.mu.Lock()
 	manager.manifests[manifest.ID] = manifest
 	manager.mu.Unlock()
