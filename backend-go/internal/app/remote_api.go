@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,14 +218,17 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	observed := make(chan *native.ExternalRun, 1)
 	finished := make(chan json.RawMessage, 1)
 	runCtx = native.WithExternalRun(runCtx, func(run *native.ExternalRun) { observed <- run })
+	execution := tools.ExecutionContext{
+		WorkspaceRoot: config.WorkingDir,
+		SessionDir:    config.StateDir,
+		SessionKey:    sessionKey(resolved.Reference, resolved.Profile),
+		RemoteHops:    request.Hops,
+	}
 	go func() {
-		output, _ := catalog.ExecuteFunctionCall(runCtx, call, tools.ExecutionContext{
-			WorkspaceRoot: config.WorkingDir,
-			SessionDir:    config.StateDir,
-			SessionKey:    sessionKey(resolved.Reference, resolved.Profile),
-			RemoteHops:    request.Hops,
+		finished <- callSubagentTool(func() json.RawMessage {
+			output, _ := catalog.ExecuteFunctionCall(runCtx, call, execution)
+			return output
 		})
-		finished <- output
 	}()
 	select {
 	case run := <-observed:
@@ -237,6 +241,20 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 		cancel()
 		return nil, ctx.Err()
 	}
+}
+
+// callSubagentTool runs the tool call on the goroutine that observes the run it starts.
+// Nothing above that goroutine recovers, so the boundary is here: a panic must fail the
+// call, as it does on the batch path (session/tool_batch.go), not end the process. On a
+// panic the call returns no output, which subagentStartFailure reports as "did not start
+// a run" instead of the remote API goroutine taking the whole process down.
+func callSubagentTool(call func() json.RawMessage) (output json.RawMessage) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("remote sub-agent tool call panicked", "error", recovered)
+		}
+	}()
+	return call()
 }
 
 // subagentStartFailure turns the error result of a subagent call that never started a run
