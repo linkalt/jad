@@ -20,8 +20,9 @@ type credentialFile struct {
 	ExpiresAt   string `json:"expires_at"`
 }
 
-// credentialError is a credential that cannot be used. The message names the file and the
-// reason and never contains token text.
+// credentialError is a credential that cannot be used. Error names the file and the reason
+// and never contains token text; it is for the server log. Message omits the path and is the
+// only text a caller may see.
 type credentialError struct {
 	Path   string
 	Reason string
@@ -29,6 +30,10 @@ type credentialError struct {
 
 func (e *credentialError) Error() string {
 	return fmt.Sprintf("Claude OAuth credential %s: %s", e.Path, e.Reason)
+}
+
+func (e *credentialError) Message() string {
+	return "Claude OAuth credential " + e.Reason
 }
 
 // loadCredential reads the credential file. It reads the file on every call, so a token that
@@ -120,7 +125,8 @@ func (h *Handler) upstreamToken(r *http.Request) (string, *apiError) {
 	}
 	token, err := loadCredential(upstream.credentialPath, time.Duration(upstream.ExpiryMarginMS)*time.Millisecond, h.now())
 	if err != nil {
-		return "", &apiError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "credential_unusable", Message: err.Error()}
+		h.logger.Warn("credential unusable", "error", err.Error())
+		return "", &apiError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "credential_unusable", Message: err.Message()}
 	}
 	return token, nil
 }

@@ -64,7 +64,7 @@ Nothing runs in the background. The lifetime the issuer reports (`expires_in`) i
 /tmp/claude-auth refresh --if-expires-within 30m
 ```
 
-from a timer (systemd or cron, for example every 15 minutes). The adapter refuses a token whose stored expiry is within `upstream.expiry_margin_ms` and answers 401 with a message that names the file, so a missed refresh is visible. Combine with `--if-older-than` if the server turns out to end tokens earlier than the stored expiry.
+from a timer (systemd or cron, for example every 15 minutes). The adapter refuses a token whose stored expiry is within `upstream.expiry_margin_ms` and answers 401 with the reason (the file path is only in the adapter log), so a missed refresh is visible. Combine with `--if-older-than` if the server turns out to end tokens earlier than the stored expiry.
 
 ## Config
 

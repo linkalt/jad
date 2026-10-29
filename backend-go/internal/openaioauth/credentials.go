@@ -28,7 +28,8 @@ func (Credential) GoString() string { return "openaioauth.Credential{redacted}" 
 
 // CredentialError is a credential that cannot be used. It is permanent: repeating the
 // request cannot help, so the retry loop must not wait and try again. The message names
-// the file and the reason and never contains token text.
+// the file and the reason and never contains token text; it is for the server log. Message
+// omits the path and is the only text a client may see.
 type CredentialError struct {
 	Path   string
 	Reason string
@@ -36,6 +37,11 @@ type CredentialError struct {
 
 func (e *CredentialError) Error() string {
 	return fmt.Sprintf("OpenAI OAuth credential %s: %s", e.Path, e.Reason)
+}
+
+// Message is the client-facing text: the reason without the credential file path.
+func (e *CredentialError) Message() string {
+	return "OpenAI OAuth credential " + e.Reason
 }
 
 // Permanent marks the error as one a retry cannot fix.

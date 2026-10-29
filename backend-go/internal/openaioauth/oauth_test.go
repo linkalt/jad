@@ -318,3 +318,17 @@ func TestTransportSendsTheCredentialToTheConfiguredOrigin(t *testing.T) {
 		t.Errorf("credential headers missing on the configured origin: %q %q", auth, account)
 	}
 }
+
+func TestCredentialErrorMessageOmitsThePathButErrorKeepsIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "auth.json")
+	credentialError := loadError(t, path)
+	if strings.Contains(credentialError.Message(), "/") || strings.Contains(credentialError.Message(), path) {
+		t.Fatalf("Message() shows the path: %q", credentialError.Message())
+	}
+	if credentialError.Message() != "OpenAI OAuth credential file not found; sign in with the auth tool" {
+		t.Fatalf("Message() = %q", credentialError.Message())
+	}
+	if !strings.Contains(credentialError.Error(), path) {
+		t.Fatalf("Error() should keep the path for the log: %q", credentialError.Error())
+	}
+}

@@ -468,7 +468,7 @@ func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error
 	if config.Model.AuthMode == "openai_oauth" {
 		// The token itself is read from the file on every request, so it is not part of
 		// the runner's identity; the file path and the OAuth settings are.
-		if err := checkOAuthCredential(config); err != nil {
+		if err := checkOAuthCredential(config, r.logger); err != nil {
 			return "", err
 		}
 		return oauthPlaceholderKey, nil

@@ -3,10 +3,12 @@ package app
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/openaioauth"
 	"jad/backend-go/internal/sessionfs"
 )
@@ -27,11 +29,12 @@ func oauthSource(config sessionfs.SessionConfig) *openaioauth.Source {
 // checkOAuthCredential fails a run before it starts when the credential file cannot be
 // used, the way an unset API key environment variable does. The request path checks
 // again on every request, so a token that expires mid-run still produces a clear error.
-func checkOAuthCredential(config sessionfs.SessionConfig) error {
+func checkOAuthCredential(config sessionfs.SessionConfig, logger *slog.Logger) error {
 	if _, err := oauthSource(config).Load(); err != nil {
 		var credentialError *openaioauth.CredentialError
 		if errors.As(err, &credentialError) {
-			return &httpapi.StatusError{Code: http.StatusUnprocessableEntity, Message: credentialError.Error()}
+			logging.Or(logger).Warn("openai oauth credential unusable", "error", credentialError.Error())
+			return &httpapi.StatusError{Code: http.StatusUnprocessableEntity, Message: credentialError.Message()}
 		}
 		return err
 	}

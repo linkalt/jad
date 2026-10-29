@@ -1,7 +1,9 @@
 package anthropicadapter
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -327,5 +329,25 @@ func TestCallerTokenConfigValidation(t *testing.T) {
 		if _, err := LoadConfig(file); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestCredentialErrorBodyOmitsThePathAndTheLogKeepsIt(t *testing.T) {
+	upstream, _ := fakeAnthropic(t, 200, messageBody, nil)
+	path := filepath.Join(t.TempDir(), "missing", "claude-oauth.json")
+	handler := NewHandler(mustConfig(t, `{"upstream":{"base_url":"`+upstream.URL+`","credential_file":"`+path+`"}}`), nil)
+	var logs bytes.Buffer
+	handler.SetLogger(slog.New(slog.NewTextHandler(&logs, nil)))
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	status, _, raw := post(t, server.URL+"/v1/responses", simpleRequest, nil)
+	if status != 401 || strings.Contains(raw, path) || strings.Contains(raw, filepath.Dir(path)) {
+		t.Fatalf("status %d, body shows the path: %s", status, raw)
+	}
+	if !strings.Contains(raw, "file not found; sign in with claude-auth") || !strings.Contains(raw, `"code":"credential_unusable"`) {
+		t.Fatalf("message is not the stable one: %s", raw)
+	}
+	if !strings.Contains(logs.String(), path) {
+		t.Fatalf("the log should name the file:\n%s", logs.String())
 	}
 }
