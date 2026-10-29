@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -315,5 +317,71 @@ func TestCatalogChangesStateFollowsAPerCallHookOfAReadOnlyTool(t *testing.T) {
 	var none *Catalog
 	if none.CallMayChangeFiles(json.RawMessage(`{"name":"hooked"}`)) {
 		t.Error("a nil catalog reported a change")
+	}
+}
+
+// captureToolLog points the package logger at a buffer for one test.
+func captureToolLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &logged
+}
+
+// The model only ever reads the canned result, so the cause of a failed call has
+// to reach the server log; before this line a recovered panic left no trace.
+func TestCatalogLogsTheRecoveredFailure(t *testing.T) {
+	logged := captureToolLog(t)
+	panickingOutput := testTool(t)
+	panickingOutput.Definition.ID = "native.echo_output"
+	panickingOutput.Definition.Name = "echo_output"
+	panickingOutput.Execute = nil
+	panickingOutput.ExecuteOutput = func(context.Context, map[string]any, ExecutionContext) (json.RawMessage, error) {
+		var values map[string]int
+		values["boom"] = 1
+		return nil, nil
+	}
+	catalog := newTestCatalog(t, testTool(t), panickingOutput)
+	for _, tc := range []struct{ name, callID, want string }{
+		{name: "echo", callID: "execution-error", want: "private error details"},
+		{name: "echo_output", callID: "call-panic", want: "nil map"},
+	} {
+		logged.Reset()
+		output, err := catalog.ExecuteFunctionCall(context.Background(), callJSON(t, tc.callID, tc.name, `{"command":"x"}`), ExecutionContext{})
+		if err != nil {
+			t.Fatalf("%s: ExecuteFunctionCall() error = %v", tc.name, err)
+		}
+		if _, text := decodeOutput(t, output); strings.Contains(text, tc.want) {
+			t.Fatalf("%s: the cause leaked to the model: %s", tc.name, text)
+		}
+		line := logged.String()
+		if !strings.Contains(line, tc.want) || !strings.Contains(line, "tool="+tc.name) || !strings.Contains(line, "call_id="+tc.callID) {
+			t.Fatalf("%s: the server log does not record the failure:\n%s", tc.name, line)
+		}
+	}
+}
+
+// D-1 asked for this case: a tool whose normalizer panics must come back as a
+// function_call_output, not crash the caller that has no recover of its own.
+func TestCatalogContainsAPanickingNormalizer(t *testing.T) {
+	logged := captureToolLog(t)
+	panicking := testTool(t)
+	panicking.NormalizeArguments = func(map[string]any) map[string]any { panic("normalizer panic details") }
+	catalog := newTestCatalog(t, panicking)
+	output, err := catalog.ExecuteFunctionCall(context.Background(), callJSON(t, "call-normalize", "echo", `{"command":"x"}`), ExecutionContext{})
+	if err != nil {
+		t.Fatalf("ExecuteFunctionCall() error = %v", err)
+	}
+	callID, text := decodeOutput(t, output)
+	if callID != "call-normalize" || !strings.Contains(text, "tool_execution_failed") {
+		t.Fatalf("tool output = (%q, %s)", callID, text)
+	}
+	if strings.Contains(text, "normalizer panic details") {
+		t.Fatalf("panic value leaked: %s", text)
+	}
+	if line := logged.String(); !strings.Contains(line, "normalizer panic details") || !strings.Contains(line, "tool=echo") {
+		t.Fatalf("the server log does not record the panic:\n%s", line)
 	}
 }

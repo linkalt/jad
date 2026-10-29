@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -344,13 +345,19 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 	}
 	object, isObject := decoded.(map[string]any)
 	if isObject && tool.NormalizeArguments != nil {
-		object = tool.NormalizeArguments(object)
+		object, err = normalizeRecovered(tool, object)
+		if err != nil {
+			// The model sees the generic result below, so this line is the only
+			// trace a panicking normalizer leaves.
+			logToolFailure(name, callID, err)
+			return encodeFunctionCallOutput(callID, ExecutionError(callID, StatusError, "tool_execution_failed", "Tool "+name+" failed during execution"))
+		}
 		arguments, err = json.Marshal(object)
 		if err != nil {
 			return nil, fmt.Errorf("encode normalized arguments for tool %s: %w", name, err)
 		}
 	}
-	issues, err := tool.Validator.Validate(arguments)
+	issues, err := validateRecovered(tool.Validator, arguments)
 	if err != nil {
 		return nil, fmt.Errorf("validate arguments for tool %s: %w", name, err)
 	}
@@ -378,11 +385,13 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 	if tool.ExecuteOutput != nil {
 		output, err = executeOutputRecovered(tool, ctx, object, execution)
 		if err != nil || !json.Valid(output) {
+			logToolFailure(name, callID, err)
 			output, _ = json.Marshal(ExecutionError(callID, StatusError, "tool_execution_failed", "Tool "+name+" failed during execution"))
 		}
 	} else {
 		result, executeErr := executeRecovered(tool, ctx, object, execution)
 		if executeErr != nil {
+			logToolFailure(name, callID, executeErr)
 			result = ExecutionError(callID, StatusError, "tool_execution_failed", "Tool "+name+" failed during execution")
 		}
 		output, err = json.Marshal(result)
@@ -405,10 +414,36 @@ func executeOutputRecovered(tool Tool, ctx context.Context, arguments map[string
 	return tool.ExecuteOutput(ctx, arguments, execution)
 }
 
+// normalizeRecovered runs the tool's own normalizer inside the panic boundary,
+// for the same reason as executeRecovered: it is arbitrary tool code, and one
+// caller (the remote API goroutine) has no recover of its own.
+func normalizeRecovered(tool Tool, object map[string]any) (normalized map[string]any, err error) {
+	defer recoverToolPanic(&err)
+	return tool.NormalizeArguments(object), nil
+}
+
+// validateRecovered validates inside the same boundary, so a panicking schema
+// library becomes an error instead of ending the process.
+func validateRecovered(validator *SchemaValidator, arguments []byte) (issues []ValidationIssue, err error) {
+	defer recoverToolPanic(&err)
+	return validator.Validate(arguments)
+}
+
 func recoverToolPanic(err *error) {
 	if recovered := recover(); recovered != nil {
 		*err = fmt.Errorf("tool panicked: %v", recovered)
 	}
+}
+
+// logToolFailure records why a call failed. ExecuteFunctionCall replaces the
+// error with a generic model-facing result, so without this line a panicking
+// tool would leave no trace anywhere.
+func logToolFailure(name, callID string, err error) {
+	attributes := []any{"tool", name, "call_id", callID}
+	if err != nil {
+		attributes = append(attributes, "error", err)
+	}
+	slog.Error("tool call failed during execution", attributes...)
 }
 
 func encodeFunctionCallOutput(callID, output string) (json.RawMessage, error) {
