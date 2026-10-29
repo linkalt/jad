@@ -2,6 +2,8 @@ package openaiapi
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"math"
@@ -79,6 +81,9 @@ func isRetryableError(err error) bool {
 	if errors.As(err, &permanent) && permanent.Permanent() {
 		return false
 	}
+	if isPermanentTransportError(err) {
+		return false
+	}
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return true
 	}
@@ -91,12 +96,36 @@ func isRetryableError(err error) bool {
 	return errors.As(err, &netError)
 }
 
+// isPermanentTransportError reports a failure no retry can fix: a certificate the client
+// rejects, or a URL scheme the transport does not speak. Both arrive wrapped in a *url.Error,
+// which would otherwise pass the generic net.Error test.
+func isPermanentTransportError(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var verification *tls.CertificateVerificationError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &invalid) || errors.As(err, &hostname) || errors.As(err, &verification) {
+		return true
+	}
+	var urlError *url.Error
+	return errors.As(err, &urlError) && strings.Contains(urlError.Err.Error(), "unsupported protocol scheme")
+}
+
+// scaledDuration converts value units to a Duration, clamping in the unit before the
+// conversion so a huge value saturates instead of overflowing to a negative duration.
+func scaledDuration(value float64, unit time.Duration) time.Duration {
+	if value >= float64(math.MaxInt64/int64(unit)) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(value * float64(unit))
+}
+
 // retryAfter reads the wait the provider asked for: Retry-After-Ms, else Retry-After as
 // seconds or an HTTP date. A negative or unreadable value counts as absent.
 func retryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 	if value := strings.TrimSpace(header.Get("Retry-After-Ms")); value != "" {
 		if millis, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(millis) && !math.IsInf(millis, 0) && millis >= 0 {
-			return time.Duration(millis * float64(time.Millisecond)), true
+			return scaledDuration(millis, time.Millisecond), true
 		}
 	}
 	value := strings.TrimSpace(header.Get("Retry-After"))
@@ -107,7 +136,7 @@ func retryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 		if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
 			return 0, false
 		}
-		return time.Duration(seconds * float64(time.Second)), true
+		return scaledDuration(seconds, time.Second), true
 	}
 	if date, err := http.ParseTime(value); err == nil {
 		return max(0, date.Sub(now)), true
@@ -156,7 +185,7 @@ func rateLimitReset(header http.Header, status int, now time.Time) (time.Duratio
 	if wait <= 0 || math.IsInf(wait, 0) {
 		return 0, false
 	}
-	return time.Duration(wait * float64(time.Millisecond)), true
+	return scaledDuration(wait, time.Millisecond), true
 }
 
 // isPlainDecimal reports whether s is digits with at most one fractional part, the same
