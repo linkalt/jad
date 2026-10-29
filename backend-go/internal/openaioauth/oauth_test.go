@@ -190,7 +190,7 @@ func TestTransportSetsOnlyTheCredentialHeadersAndKeepsTheRequest(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	transport := &Transport{Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "acct-9"}))}
+	transport := &Transport{BaseURL: server.URL, Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "acct-9"}))}
 
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/codex/responses?x=1", strings.NewReader(`{"model":"m","stream":true}`))
 	request.Header.Set("Authorization", "Bearer placeholder-key")
@@ -227,7 +227,7 @@ func TestTransportSendsFedRAMPOnlyForAFedRAMPAccount(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = r.Header.Get("X-OpenAI-Fedramp") }))
 	defer server.Close()
 	access := jwt(map[string]any{"exp": exp, authClaim: map[string]any{"chatgpt_account_is_fedramp": true}})
-	transport := &Transport{Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "a"}))}
+	transport := &Transport{BaseURL: server.URL, Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "a"}))}
 	request, _ := http.NewRequest(http.MethodPost, server.URL, nil)
 	response, err := transport.RoundTrip(request)
 	if err != nil {
@@ -250,7 +250,7 @@ func TestTransportSendsNothingAndClosesTheBodyWhenTheCredentialIsUnusable(t *tes
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
 	defer server.Close()
-	transport := &Transport{Source: source(filepath.Join(t.TempDir(), "missing.json"))}
+	transport := &Transport{BaseURL: server.URL, Source: source(filepath.Join(t.TempDir(), "missing.json"))}
 	body := &closeTracker{Reader: strings.NewReader("{}")}
 	request, _ := http.NewRequest(http.MethodPost, server.URL, body)
 	_, err := transport.RoundTrip(request)
@@ -266,5 +266,55 @@ func TestTransportSendsNothingAndClosesTheBodyWhenTheCredentialIsUnusable(t *tes
 	}
 	if _, err := (&Transport{}).RoundTrip(request); err == nil {
 		t.Error("a transport without a source must fail")
+	}
+}
+
+func redirectFixture(t *testing.T, access string) (first *httptest.Server, hits *[]http.Header) {
+	t.Helper()
+	var seen []http.Header
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Clone())
+	}))
+	t.Cleanup(second.Close)
+	first = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL+"/landing", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(first.Close)
+	return first, &seen
+}
+
+func TestTransportDoesNotSendTheCredentialToAnotherOriginAfterARedirect(t *testing.T) {
+	access := jwt(map[string]any{"exp": testNow.Add(time.Hour).Unix()})
+	first, seen := redirectFixture(t, access)
+	transport := &Transport{BaseURL: first.URL, Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "acct-1"}))}
+	client := &http.Client{Transport: transport}
+	response, err := client.Post(first.URL+"/responses", "application/json", strings.NewReader("{}"))
+	if err == nil {
+		_ = response.Body.Close()
+		t.Fatal("the redirect to another origin succeeded")
+	}
+	for _, header := range *seen {
+		t.Errorf("second origin received Authorization %q account %q", header.Get("Authorization"), header.Get("Chatgpt-Account-Id"))
+	}
+	if len(*seen) != 0 {
+		t.Errorf("second origin was reached %d times", len(*seen))
+	}
+}
+
+func TestTransportSendsTheCredentialToTheConfiguredOrigin(t *testing.T) {
+	access := jwt(map[string]any{"exp": testNow.Add(time.Hour).Unix()})
+	var auth, account string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, account = r.Header.Get("Authorization"), r.Header.Get("Chatgpt-Account-Id")
+	}))
+	defer server.Close()
+	transport := &Transport{BaseURL: server.URL + "/codex", Source: source(writeAuth(t, map[string]any{"access_token": access, "account_id": "acct-1"}))}
+	response, err := (&http.Client{Transport: transport}).Post(server.URL+"/codex/responses", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if auth != "Bearer "+access || account != "acct-1" {
+		t.Errorf("credential headers missing on the configured origin: %q %q", auth, account)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -98,4 +99,37 @@ func TestOAuthTransportUsesTheNetworkTransportAsBase(t *testing.T) {
 	if !ok || base == http.DefaultTransport {
 		t.Fatalf("oauth base = %T, want the forced-family transport", oauth.Base)
 	}
+}
+
+func TestOAuthProviderClientRefusesACrossOriginRedirectButFollowsASameOriginOne(t *testing.T) {
+	var reached bool
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	defer other.Close()
+	var origin *httptest.Server
+	origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
+		case "/within":
+			http.Redirect(w, r, origin.URL+"/done", http.StatusTemporaryRedirect)
+		}
+	}))
+	defer origin.Close()
+	config := sessionfs.SessionConfig{}
+	config.Model.AuthMode = "openai_oauth"
+	client := providerHTTPClient(config, nil)
+	client.Transport = http.DefaultTransport
+
+	if response, err := client.Get(origin.URL + "/away"); err == nil {
+		_ = response.Body.Close()
+		t.Error("a redirect to another origin was followed")
+	}
+	if reached {
+		t.Error("the other origin was contacted")
+	}
+	response, err := client.Get(origin.URL + "/within")
+	if err != nil {
+		t.Fatalf("same-origin redirect failed: %v", err)
+	}
+	_ = response.Body.Close()
 }

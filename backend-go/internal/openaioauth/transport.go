@@ -2,7 +2,10 @@ package openaioauth
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // Transport adds the OAuth credential headers to each request and passes the request
@@ -13,6 +16,9 @@ type Transport struct {
 	Base http.RoundTripper
 	// Source supplies the credential for each request.
 	Source *Source
+	// BaseURL is the upstream the credential is bound to: a request whose scheme and
+	// host differ (a redirect hop, for one) is refused rather than sent with it.
+	BaseURL string
 }
 
 // headers this transport owns. Anything the caller set under these names is replaced,
@@ -24,6 +30,10 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if t.Source == nil {
 		closeBody(request)
 		return nil, errors.New("openaioauth: transport has no credential source")
+	}
+	if err := t.checkOrigin(request); err != nil {
+		closeBody(request)
+		return nil, err
 	}
 	credential, err := t.Source.Load()
 	if err != nil {
@@ -46,6 +56,20 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 	return base.RoundTrip(clone)
+}
+
+// checkOrigin fails closed: an unparsable or empty BaseURL matches nothing.
+func (t *Transport) checkOrigin(request *http.Request) error {
+	base, err := url.Parse(t.BaseURL)
+	if err != nil || base.Host == "" || !SameOrigin(base, request.URL) {
+		return fmt.Errorf("openaioauth: refusing to send the credential to %s: not the configured upstream origin", request.URL.Redacted())
+	}
+	return nil
+}
+
+// SameOrigin reports whether two URLs have the same scheme and host (port included).
+func SameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
 func closeBody(request *http.Request) {

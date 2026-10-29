@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -41,5 +42,17 @@ func checkOAuthCredential(config sessionfs.SessionConfig) error {
 // transport: the HTTP debug logger wraps it and so only sees the SDK's placeholder
 // Authorization header, never the access token or the account id.
 func oauthTransport(config sessionfs.SessionConfig, base http.RoundTripper) http.RoundTripper {
-	return &openaioauth.Transport{Base: base, Source: oauthSource(config)}
+	return &openaioauth.Transport{Base: base, Source: oauthSource(config), BaseURL: config.Model.BaseURL}
+}
+
+// refuseCrossOriginRedirect stops the provider client following a redirect to another
+// origin; the OAuth credential belongs to the configured upstream only.
+func refuseCrossOriginRedirect(request *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if !openaioauth.SameOrigin(via[0].URL, request.URL) {
+		return fmt.Errorf("refusing redirect to another origin: %s", request.URL.Redacted())
+	}
+	return nil
 }

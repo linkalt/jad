@@ -518,6 +518,9 @@ func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *ht
 		}, network)
 		httpClient = &http.Client{Transport: transport}
 	}
+	if config.Model.AuthMode == "openai_oauth" {
+		httpClient.CheckRedirect = refuseCrossOriginRedirect
+	}
 	return httpClient
 }
 
