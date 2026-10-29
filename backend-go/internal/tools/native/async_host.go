@@ -20,8 +20,13 @@ type AsyncHost struct {
 	manager *asyncmgr.Manager
 	dir     string
 
-	mu           sync.Mutex
+	mu sync.Mutex
+	// closed is set by Close before it stops the handles: a run that would start after it
+	// is refused, so nothing is added to shellRuns once Close takes its list.
+	closed       bool
 	shellDrivers map[asyncmgr.Kind]bool
+	// shellRuns holds every run whose goroutine has not completed yet; Close waits for
+	// those it stopped, so a finisher cannot outlive the host.
 	shellRuns    map[string]*shellRun
 	shellSwept   map[string]time.Time
 	processes    []processStopper
@@ -78,8 +83,44 @@ func (h *AsyncHost) Manager() *asyncmgr.Manager { return h.manager }
 // Config is the validated configuration of the manager.
 func (h *AsyncHost) Config() asyncmgr.Config { return h.manager.Config() }
 
-// Close stops every live handle (reason server_shutdown) and closes the manager.
-func (h *AsyncHost) Close() { h.manager.Close() }
+// Close stops every live handle (reason server_shutdown), waits for the runs it stopped to
+// finish, and closes the manager.
+func (h *AsyncHost) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	h.mu.Unlock()
+	h.manager.Close()
+	h.waitShellRuns()
+}
+
+// waitShellRuns waits for the shell-run goroutines the stop above just released the
+// children of. Each run is bounded by its own kill grace: the stop sends SIGTERM and kills
+// the group when the grace ends, so the goroutine writes its result and completes the
+// handle within that grace, and a shutdown that waited past it would hang on a child that
+// cannot be killed.
+func (h *AsyncHost) waitShellRuns() {
+	h.mu.Lock()
+	runs := make([]*shellRun, 0, len(h.shellRuns))
+	for _, run := range h.shellRuns {
+		runs = append(runs, run)
+	}
+	h.mu.Unlock()
+	for _, run := range runs {
+		if run.grace <= 0 {
+			continue
+		}
+		timer := time.NewTimer(run.grace)
+		select {
+		case <-run.done:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+}
 
 // asyncHostFor finds the shared host of the session's tool storage, or opens a private one.
 func asyncHostFor(config asyncHostSource, resources AsyncResources) (*AsyncHost, error) {

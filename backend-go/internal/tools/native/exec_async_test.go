@@ -247,3 +247,70 @@ func TestExecSchemaAndDescriptionOfferBlockMs(t *testing.T) {
 		t.Fatalf("block_ms = %v, want 0", normalized["block_ms"])
 	}
 }
+
+// TestAsyncHostCloseWaitsForAStubbornRun is P6BM-07: Close must not return while a run it
+// stopped is still finishing. The child ignores SIGTERM, so it outlives the stop wait and
+// only ends when the kill grace is over; the result file and the completion of the handle
+// are written after that.
+func TestAsyncHostCloseWaitsForAStubbornRun(t *testing.T) {
+	root := t.TempDir()
+	cfg := asyncmgr.DefaultConfig()
+	cfg.StopWaitMs = 200
+	host, err := NewAsyncHost(filepath.Join(root, ".async"), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, root)
+	settings.Child.KillGraceMs = 1_000
+	settings.Child.TimeoutMs = 10_000
+	settings.Child.MaxTimeoutMs = 10_000
+	execTool, err := NewExecTool(settings, "", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The flag makes the test wait for the child to be inside the sleep: a stop that
+	// arrives before the child exists ends the run without a stubborn child at all.
+	flag := filepath.Join(root, "stubborn-child-started")
+	var decoded map[string]any
+	decoder := json.NewDecoder(strings.NewReader(`{"code":"trap '' TERM; : > stubborn-child-started; exec sleep 30","block_ms":0}`))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	out, err := execTool.Execute(context.Background(), execTool.NormalizeArguments(decoded), tools.ExecutionContext{CallID: "exec", WorkspaceRoot: root, SessionDir: root, SessionKey: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := execRunIDOf(t, out)
+	if execField(out, "state") != "running" {
+		t.Fatalf("expected a running handle:\n%s", out)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(flag); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	began := time.Now()
+	host.Close()
+	if _, err := os.Stat(host.shellResultPath(execAsync, id)); err != nil {
+		t.Fatalf("Close returned after %s without the result of the run it stopped: %v", time.Since(began), err)
+	}
+	if entry, err := host.Manager().Status("s1", id); err == nil && entry.State == asyncmgr.StateRunning {
+		t.Fatalf("the run is still live after Close: %+v", entry)
+	}
+	// A run that would start after Close is refused: it would be registered without anyone
+	// to complete it.
+	late, err := execTool.Execute(context.Background(), execTool.NormalizeArguments(decoded), tools.ExecutionContext{CallID: "exec", WorkspaceRoot: root, SessionDir: root, SessionKey: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(late, "spawn_failed") || !strings.Contains(late, "shutting down") {
+		t.Fatalf("a run started after Close was not refused:\n%s", late)
+	}
+}

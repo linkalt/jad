@@ -378,3 +378,54 @@ func waitGroupGone(pgid int) bool {
 	}
 	return false
 }
+
+// TestCloseWaitsForThePruneOfAFinishedProcess is P6BM-09: a finisher closes done before it
+// prunes, so Close must wait for the finisher too, else a caller that removes the storage
+// folder right after Close races the removal still in flight.
+func TestCloseWaitsForThePruneOfAFinishedProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed process groups require a POSIX platform")
+	}
+	directory := t.TempDir()
+	manager := NewProcessManager(filepath.Join(directory, "processes"))
+	removing := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	manager.removeAll = func(path string) error {
+		once.Do(func() { close(removing) })
+		<-release
+		return os.RemoveAll(path)
+	}
+	request := processTestRequest(directory, "exit 0", 1024)
+	// Every completed process is pruned at once, so the finisher of this one removes its
+	// own folder and can be held there.
+	request.Policy.MaxCompleted = 0
+	snapshot, err := manager.Start(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-removing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the finished process was never pruned")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- manager.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while the finisher was still removing a folder", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after the removal finished")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "processes", snapshot.ID)); !os.IsNotExist(err) {
+		t.Fatalf("the pruned folder still exists after Close: %v", err)
+	}
+}

@@ -145,7 +145,14 @@ type ManagedProcessManager struct {
 	manifests map[string]ProcessManifest
 	closed    bool
 	starting  sync.WaitGroup
+	// finishing counts the goroutines that finish a started process (waitForProcess and
+	// the prune it ends with): Close waits for them so it does not return while one is
+	// still writing a manifest or removing a directory.
+	finishing sync.WaitGroup
 	persistMu sync.Mutex
+	// removeAll deletes the folder of a pruned process; it is a field so a test can hold
+	// the finisher inside the prune that follows the close of its done channel.
+	removeAll func(string) error
 	recoverMu sync.Mutex
 	recovered bool
 	// stopOrphans and orphanGrace are the policy Recover applies to a process a crashed
@@ -195,6 +202,7 @@ func NewProcessManager(directory string) *ManagedProcessManager {
 		directory: filepath.Clean(directory),
 		entries:   make(map[string]*managedProcess),
 		manifests: make(map[string]ProcessManifest),
+		removeAll: os.RemoveAll,
 	}
 }
 
@@ -381,6 +389,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	manager.mu.Lock()
 	manager.manifests[id] = manifest
 	manager.mu.Unlock()
+	manager.finishing.Add(1)
 	go manager.waitForProcess(command, entry)
 	manager.writeOwnerRecord(id, manifest.PID)
 	if err := manager.persistManifest(manifest); err != nil {
@@ -570,6 +579,12 @@ func (manager *ManagedProcessManager) Close() error {
 			failures = append(failures, fmt.Errorf("stop managed process %s: process not found", id))
 		}
 	}
+	// A stop returns as soon as the process is gone, while its finisher still writes the
+	// last manifest and prunes older directories. Close waits for it, so a caller may
+	// remove the storage folder once Close returned. It waits without a bound: the goroutine
+	// holds no lock Close needs and its remaining work is local disk work, and it cannot
+	// outlive the exit of its own process, which the Stop above waited for.
+	manager.finishing.Wait()
 	return errors.Join(failures...)
 }
 
@@ -590,6 +605,7 @@ func (manager *ManagedProcessManager) Snapshot(id string) (*ProcessSnapshot, boo
 }
 
 func (manager *ManagedProcessManager) waitForProcess(command *exec.Cmd, entry *managedProcess) {
+	defer manager.finishing.Done()
 	waitErr := command.Wait()
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		// The command itself exited 0; only a descendant kept the pipes open.
@@ -1143,7 +1159,7 @@ func (manager *ManagedProcessManager) prune(maxCompleted, retentionDays int64) e
 	manager.mu.Unlock()
 	var failures []error
 	for _, manifest := range removable {
-		if err := os.RemoveAll(filepath.Join(manager.directory, manifest.ID)); err != nil {
+		if err := manager.removeAll(filepath.Join(manager.directory, manifest.ID)); err != nil {
 			failures = append(failures, fmt.Errorf("remove managed process %s: %w", manifest.ID, err))
 		}
 	}

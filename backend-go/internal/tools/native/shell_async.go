@@ -50,6 +50,10 @@ type shellRun struct {
 	reason string
 	start  time.Time
 	label  string
+
+	// grace is how long the stop of this run may take before the child is killed; it
+	// bounds the wait of AsyncHost.Close for the goroutine that finishes the run.
+	grace time.Duration
 }
 
 func (r *shellRun) stopWith(reason string) {
@@ -92,13 +96,20 @@ func (h *AsyncHost) shellRun(id string) *shellRun {
 	return h.shellRuns[id]
 }
 
-func (h *AsyncHost) setShellRun(run *shellRun) {
+// adoptShellRun records a run before its goroutine starts, so Close sees every run it has
+// to wait for. It reports false when the host is already closing, in which case no run may
+// start.
+func (h *AsyncHost) adoptShellRun(run *shellRun) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return false
+	}
 	if h.shellRuns == nil {
 		h.shellRuns = map[string]*shellRun{}
 	}
 	h.shellRuns[run.id] = run
+	return true
 }
 
 func (h *AsyncHost) dropShellRun(id string) {
@@ -141,7 +152,7 @@ func (h *AsyncHost) sweepShellResults(spec shellAsyncSpec) {
 // startShellAsync runs the child as a handle of the async manager and blocks up to blockMs
 // for it. run gets a context of its own: only a stop, the child's timeout or the end of the
 // server ends it, never the end of the call.
-func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, execution tools.ExecutionContext, label string, blockMs *int64, run func(context.Context) shellRunResult) (string, error) {
+func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, killGrace time.Duration, execution tools.ExecutionContext, label string, blockMs *int64, run func(context.Context) shellRunResult) (string, error) {
 	callID := execution.CallID
 	owner, _ := handleOwner(execution)
 	random := make([]byte, 4)
@@ -150,7 +161,22 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 			tools.Information{Key: "system_error", Value: err.Error()}), nil
 	}
 	id := spec.idPrefix + hex.EncodeToString(random)
+	// The run keeps the values of the call that started it and drops only its cancellation:
+	// the child must outlive the call, but a group it leaves behind is still swept by the
+	// run when the run ends (kill_children_on_run_end), so ChildGroups must reach it.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	watch := newOutputWatch()
+	runCtx = withOutputWatch(runCtx, watch)
+	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch, grace: killGrace}
+	// The run is recorded before it is registered: Close refuses the runs that come later,
+	// and a registration made after Close would leave a handle nothing ever completes.
+	if !host.adoptShellRun(handle) {
+		cancel()
+		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The server is shutting down"), nil
+	}
 	if err := host.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: spec.kind, Label: label}); err != nil {
+		host.dropShellRun(id)
+		cancel()
 		code := "spawn_failed"
 		if errors.Is(err, asyncmgr.ErrCapacity) {
 			code = "async_capacity_reached"
@@ -158,15 +184,6 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
 	}
 	host.sweepShellResults(spec)
-
-	// The run keeps the values of the call that started it and drops only its cancellation:
-	// the child must outlive the call, but a group it leaves behind is still the run's to
-	// sweep when the run ends (kill_children_on_run_end), so ChildGroups must reach it.
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	watch := newOutputWatch()
-	runCtx = withOutputWatch(runCtx, watch)
-	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch}
-	host.setShellRun(handle)
 	go func() {
 		defer close(handle.done)
 		defer cancel()
@@ -178,9 +195,10 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 		}
 		outcome := shellAsyncResult(result, handle.stopReason(), int(host.Config().SummaryMaxBytes))
 		outcome.Ref = ref
-		host.dropShellRun(id)
-		// The signal is queued before done closes, so a call released by done finds it.
+		// The signal is queued before done closes, so a call released by done finds it, and
+		// the run leaves the map only once it is complete, so Close cannot miss it.
 		_, _ = host.Manager().Complete(id, outcome)
+		host.dropShellRun(id)
 	}()
 
 	timer := time.NewTimer(host.Config().BlockDuration(blockMs))
