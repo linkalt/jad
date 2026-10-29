@@ -42,16 +42,31 @@ func executeTool(ctx context.Context, current *connection, serverID, remoteName 
 		}
 		return marshalParts([]outputPart{textPart(string(errorJSON))})
 	}
-	if len(structuredContent) > 0 {
-		ordered, err := preserveStructuredContentOrder(structuredContent)
+	if len(structuredContent) > 0 && result != nil {
+		content, err := structuredContentForResult(structuredContent, current.maxResultBytes)
 		if err != nil {
-			return nil, fmt.Errorf("preserve MCP structured-content order: %w", err)
+			return nil, err
 		}
-		if result != nil {
-			result.StructuredContent = ordered
-		}
+		result.StructuredContent = content
 	}
 	return marshalParts(boundedContent(result, current.maxResultBytes))
+}
+
+// structuredContentForResult converts captured structured content into the value of the
+// tool result. A payload larger than maxResultBytes is kept as the server sent it: the
+// content parts are cut to that limit below, so ordering it first would only spend work
+// on bytes that never reach the model. Keeping the raw value also bounds the conversion
+// itself, because a JSON value of n bytes nests at most n/2 levels, and n is at most
+// max_result_bytes here; the conversion therefore needs no nesting limit of its own.
+func structuredContentForResult(raw json.RawMessage, maxResultBytes int) (any, error) {
+	if len(raw) > maxResultBytes {
+		return raw, nil
+	}
+	ordered, err := preserveStructuredContentOrder(raw)
+	if err != nil {
+		return nil, fmt.Errorf("preserve MCP structured-content order: %w", err)
+	}
+	return ordered, nil
 }
 
 func contentParts(result *mcpSDK.CallToolResult) []outputPart {

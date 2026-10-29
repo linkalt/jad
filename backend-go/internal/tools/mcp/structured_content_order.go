@@ -3,8 +3,10 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 )
@@ -22,6 +24,10 @@ type orderedJSONObject struct {
 // keeping object-key order for JavaScript-compatible structured-content text.
 func preserveStructuredContentOrder(raw json.RawMessage) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
+	// Numbers stay json.Number so the encoder writes the literal the server sent:
+	// a float64 would round an integer beyond 2^53 and would reject a literal
+	// outside float64's range.
+	decoder.UseNumber()
 	value, err := readOrderedJSONValue(decoder)
 	if err != nil {
 		return nil, err
@@ -122,24 +128,72 @@ func javascriptArrayIndex(name string) (uint64, bool) {
 }
 
 func (object orderedJSONObject) MarshalJSON() ([]byte, error) {
-	var buffer bytes.Buffer
-	buffer.WriteByte('{')
-	for index, field := range object.fields {
-		if index > 0 {
-			buffer.WriteByte(',')
+	return appendOrderedJSONValue(nil, object)
+}
+
+// appendOrderedJSONValue encodes a preserved structured-content value onto dst,
+// recursing into nested objects and arrays instead of encoding each subtree on its
+// own. One buffer for the whole value keeps the cost linear in the size of the
+// payload: a nested object no longer re-encodes and re-copies everything below it.
+func appendOrderedJSONValue(dst []byte, value any) ([]byte, error) {
+	switch typed := value.(type) {
+	case orderedJSONObject:
+		dst = append(dst, '{')
+		for index, field := range typed.fields {
+			if index > 0 {
+				dst = append(dst, ',')
+			}
+			name, err := marshalJSON(field.name)
+			if err != nil {
+				return nil, fmt.Errorf("encode structured content key: %w", err)
+			}
+			dst = append(dst, name...)
+			dst = append(dst, ':')
+			dst, err = appendOrderedJSONValue(dst, field.value)
+			if err != nil {
+				return nil, fmt.Errorf("encode structured content value for %q: %w", field.name, err)
+			}
 		}
-		name, err := marshalJSON(field.name)
+		return append(dst, '}'), nil
+	case []any:
+		dst = append(dst, '[')
+		for index, item := range typed {
+			if index > 0 {
+				dst = append(dst, ',')
+			}
+			var err error
+			dst, err = appendOrderedJSONValue(dst, item)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return append(dst, ']'), nil
+	case json.Number:
+		return appendOrderedJSONNumber(dst, typed)
+	default:
+		encoded, err := marshalJSON(value)
 		if err != nil {
-			return nil, fmt.Errorf("encode structured content key: %w", err)
+			return nil, err
 		}
-		value, err := marshalJSON(field.value)
-		if err != nil {
-			return nil, fmt.Errorf("encode structured content value for %q: %w", field.name, err)
-		}
-		buffer.Write(name)
-		buffer.WriteByte(':')
-		buffer.Write(value)
+		return append(dst, encoded...), nil
 	}
-	buffer.WriteByte('}')
-	return buffer.Bytes(), nil
+}
+
+// appendOrderedJSONNumber writes the number literal the server sent, so an integer
+// beyond 2^53 keeps its digits. A literal above float64's range cannot be
+// represented by JavaScript's JSON.parse either: it becomes Infinity there, which
+// JSON.stringify writes as null, and null is what this writes too.
+func appendOrderedJSONNumber(dst []byte, number json.Number) ([]byte, error) {
+	parsed, err := strconv.ParseFloat(number.String(), 64)
+	switch {
+	case err == nil:
+		return append(dst, number...), nil
+	case errors.Is(err, strconv.ErrRange) && math.IsInf(parsed, 0):
+		return append(dst, "null"...), nil
+	case errors.Is(err, strconv.ErrRange):
+		// Underflow to zero keeps the digits as sent, like every in-range literal.
+		return append(dst, number...), nil
+	default:
+		return nil, fmt.Errorf("encode structured content number %q: %w", number, err)
+	}
 }

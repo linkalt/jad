@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"sync"
@@ -75,21 +76,23 @@ func (capture *structuredContentCapture) observeWrite(message jsonrpc.Message) {
 	capture.mu.Unlock()
 }
 
-func (capture *structuredContentCapture) observeRead(message jsonrpc.Message) {
+// observeRead records the structured content of a tools/call response and reports
+// whether it captured that field.
+func (capture *structuredContentCapture) observeRead(message jsonrpc.Message) bool {
 	response, ok := message.(*jsonrpc.Response)
 	if !ok || capture == nil {
-		return
+		return false
 	}
 	id, ok := jsonRPCIDKey(response.ID)
 	if !ok {
-		return
+		return false
 	}
 	capture.mu.Lock()
 	pending := capture.byID[id]
 	delete(capture.byID, id)
 	capture.mu.Unlock()
 	if pending == nil {
-		return
+		return false
 	}
 
 	raw, present := rawStructuredContent(response.Result)
@@ -100,6 +103,35 @@ func (capture *structuredContentCapture) observeRead(message jsonrpc.Message) {
 	pending.raw = append(pending.raw[:0], raw...)
 	pending.present = present
 	pending.mu.Unlock()
+	return present
+}
+
+// withoutStructuredContent removes the structuredContent member from a tools/call
+// response, so the SDK does not decode a field the capture already holds exactly. That
+// decode builds a second copy of the whole value, rounds numbers beyond 2^53 and
+// rejects a literal outside float64's range, which would fail a call whose result is
+// otherwise valid.
+func withoutStructuredContent(message jsonrpc.Message) jsonrpc.Message {
+	response, ok := message.(*jsonrpc.Response)
+	if !ok {
+		return message
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(response.Result, &fields) != nil {
+		return message
+	}
+	if _, present := fields["structuredContent"]; !present {
+		return message
+	}
+	delete(fields, "structuredContent")
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(fields); err != nil {
+		return message
+	}
+	response.Result = bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	return response
 }
 
 func rawStructuredContent(result json.RawMessage) (json.RawMessage, bool) {
@@ -150,8 +182,11 @@ func (connection *structuredContentConnection) Write(ctx context.Context, messag
 
 func (connection *structuredContentConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	message, err := connection.Connection.Read(ctx)
-	if err == nil {
-		connection.capture.observeRead(message)
+	if err != nil {
+		return message, err
 	}
-	return message, err
+	if connection.capture.observeRead(message) {
+		message = withoutStructuredContent(message)
+	}
+	return message, nil
 }

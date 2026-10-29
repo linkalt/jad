@@ -109,3 +109,29 @@ func TestBoundedContentProvidesFallbackForEmptyAndInvalidResults(t *testing.T) {
 		})
 	}
 }
+
+// Structured content that fits max_result_bytes is reordered the way JavaScript lists
+// object keys; a larger payload is kept as the server sent it, because the content parts
+// are cut to that limit anyway.
+func TestStructuredContentForResultOrdersOnlyWhatFitsTheLimit(t *testing.T) {
+	raw := json.RawMessage(`{"b":"value","2":"two","1":"one"}`)
+	content, err := structuredContentForResult(raw, len(raw))
+	if err != nil {
+		t.Fatalf("structuredContentForResult() error = %v", err)
+	}
+	ordered, err := compactJSON(content)
+	if err != nil {
+		t.Fatalf("compactJSON() error = %v", err)
+	}
+	if want := `{"1":"one","2":"two","b":"value"}`; ordered != want {
+		t.Fatalf("structured content = %s, want %s", ordered, want)
+	}
+
+	content, err = structuredContentForResult(raw, len(raw)-1)
+	if err != nil {
+		t.Fatalf("structuredContentForResult() error = %v", err)
+	}
+	if got, ok := content.(json.RawMessage); !ok || string(got) != string(raw) {
+		t.Fatalf("structured content over the limit = %#v, want the raw %s", content, raw)
+	}
+}
