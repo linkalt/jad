@@ -1,7 +1,9 @@
 package tools
 
 // CutText cuts text to at most maxBytes of UTF-8 without leaving half a character.
+// A negative limit cuts everything instead of panicking.
 func CutText(text string, maxBytes int64) (string, bool) {
+	maxBytes = max(maxBytes, 0)
 	if int64(len(text)) <= maxBytes {
 		return text, false
 	}

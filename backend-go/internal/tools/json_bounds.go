@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
-	"strings"
 )
 
 // DraftJSONBytes returns the UTF-8 byte size of a compact JSON payload after
@@ -21,14 +20,10 @@ func DraftJSONBytes(raw json.RawMessage) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var encoded bytes.Buffer
-	encoder := json.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(normalized); err != nil {
+	compact, err := MarshalJSON(normalized)
+	if err != nil {
 		return 0, err
 	}
-	compact := strings.TrimSuffix(encoded.String(), "\n")
-	compact = string(replaceJSONStringSeparators([]byte(compact)))
 	return int64(len(compact)), nil
 }
 

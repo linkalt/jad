@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,9 +9,10 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"jad/backend-go/internal/tools"
 )
 
 var mcpMIMETypePattern = regexp.MustCompile(`^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$`)
@@ -31,7 +31,7 @@ func executeTool(ctx context.Context, current *connection, serverID, remoteName 
 	defer cancel()
 	result, structuredContent, err := current.callTool(callCtx, &mcpSDK.CallToolParams{Name: remoteName, Arguments: arguments})
 	if err != nil {
-		errorJSON, encodeErr := marshalJSON(struct {
+		errorJSON, encodeErr := tools.MarshalJSON(struct {
 			Status string `json:"status"`
 			Server string `json:"server"`
 			Tool   string `json:"tool"`
@@ -165,13 +165,13 @@ func boundedContent(result *mcpSDK.CallToolResult, maxBytes int) []outputPart {
 	for _, part := range parts {
 		size := partSize(part)
 		if used+size+noticeBytes > maxBytes {
-			if part.Type == "input_text" && len(bounded) == 0 {
-				room := max(0, (maxBytes-used-noticeBytes-128)/6)
-				text := truncateUTF8(*part.Text, room)
-				if text != "" {
-					truncated := textPart(text)
+			// The part that does not fit is cut rather than dropped, wherever it sits in
+			// the result: an isError message or a single large text then still reaches the
+			// model instead of vanishing behind the omission notice.
+			if part.Type == "input_text" {
+				if truncated, truncatedSize, ok := fitTextPart(*part.Text, maxBytes-used-noticeBytes); ok {
 					bounded = append(bounded, truncated)
-					used = partSize(truncated)
+					used += truncatedSize
 				}
 			}
 			if used+noticeBytes <= maxBytes {
@@ -192,7 +192,7 @@ func marshalParts(parts []outputPart) (json.RawMessage, error) {
 	if parts == nil {
 		parts = []outputPart{}
 	}
-	encoded, err := marshalJSON(parts)
+	encoded, err := tools.MarshalJSON(parts)
 	if err != nil {
 		return nil, fmt.Errorf("encode MCP tool result: %w", err)
 	}
@@ -200,7 +200,7 @@ func marshalParts(parts []outputPart) (json.RawMessage, error) {
 }
 
 func partSize(part outputPart) int {
-	encoded, err := marshalJSON(part)
+	encoded, err := tools.MarshalJSON(part)
 	if err != nil {
 		return 0
 	}
@@ -209,6 +209,32 @@ func partSize(part outputPart) int {
 
 func textPart(text string) outputPart {
 	return outputPart{Type: "input_text", Text: &text}
+}
+
+// fitTextPart cuts text to the longest prefix whose encoded part still fits in budget
+// bytes, and reports that encoded size. It measures the encoding instead of assuming a
+// worst-case escape expansion, which used to leave most of the budget unspent.
+func fitTextPart(text string, budget int) (outputPart, int, bool) {
+	room := min(len(text), budget-partSize(textPart("")))
+	for room > 0 {
+		cut, _ := tools.CutText(text, int64(room))
+		part := textPart(cut)
+		size := partSize(part)
+		if size <= budget {
+			if cut == "" {
+				return outputPart{}, 0, false
+			}
+			return part, size, true
+		}
+		// Escaping made the part too large: shrink by the measured ratio, at least one byte,
+		// so the loop always makes progress.
+		next := room * budget / size
+		if next >= room {
+			next = room - 1
+		}
+		room = next
+	}
+	return outputPart{}, 0, false
 }
 
 func imagePart(mimeType string, data []byte) outputPart {
@@ -253,61 +279,10 @@ func resourceFilename(uri string) string {
 	return builder.String()
 }
 
-func truncateUTF8(value string, maxBytes int) string {
-	if maxBytes <= 0 {
-		return ""
-	}
-	if len(value) <= maxBytes {
-		return value
-	}
-	bytes := []byte(value[:maxBytes])
-	for len(bytes) > 0 && !utf8.Valid(bytes) {
-		bytes = bytes[:len(bytes)-1]
-	}
-	return string(bytes)
-}
-
 func compactJSON(value any) (string, error) {
-	encoded, err := marshalJSON(value)
+	encoded, err := tools.MarshalJSON(value)
 	if err != nil {
 		return "", err
 	}
 	return string(encoded), nil
-}
-
-func marshalJSON(value any) (json.RawMessage, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
-	return json.RawMessage(unescapeJSONSeparators(encoded)), nil
-}
-
-func unescapeJSONSeparators(encoded []byte) []byte {
-	var buffer bytes.Buffer
-	for index := 0; index < len(encoded); {
-		if encoded[index] == '\\' && len(encoded)-index >= 6 {
-			switch string(encoded[index : index+6]) {
-			case `\u2028`:
-				buffer.WriteRune('\u2028')
-				index += 6
-				continue
-			case `\u2029`:
-				buffer.WriteRune('\u2029')
-				index += 6
-				continue
-			}
-		}
-		if encoded[index] == '\\' && index+1 < len(encoded) {
-			buffer.Write(encoded[index : index+2])
-			index += 2
-			continue
-		}
-		buffer.WriteByte(encoded[index])
-		index++
-	}
-	return buffer.Bytes()
 }

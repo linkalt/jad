@@ -412,15 +412,18 @@ func recoverToolPanic(err *error) {
 }
 
 func encodeFunctionCallOutput(callID, output string) (json.RawMessage, error) {
-	encodedOutput, err := json.Marshal(output)
+	encodedOutput, err := MarshalJSON(output)
 	if err != nil {
 		return nil, fmt.Errorf("encode function call output value: %w", err)
 	}
 	return encodeFunctionCallOutputValue(callID, encodedOutput)
 }
 
+// encodeFunctionCallOutputValue builds the envelope with the shared marshaler, so the
+// escaping done on the value (raw <, >, & and the U+2028/U+2029 separators) survives it:
+// json.Marshal would compact the RawMessage with HTML escaping on and undo it.
 func encodeFunctionCallOutputValue(callID string, output json.RawMessage) (json.RawMessage, error) {
-	encoded, err := json.Marshal(struct {
+	encoded, err := MarshalJSON(struct {
 		Type   string          `json:"type"`
 		CallID string          `json:"call_id"`
 		Output json.RawMessage `json:"output"`

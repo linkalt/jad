@@ -1,7 +1,6 @@
 package extension
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -263,7 +262,7 @@ func parseDecideSystemoneInput(raw any) ([]decideSystemoneInputPart, error) {
 		case map[string]any:
 			kind, _ := value["type"].(string)
 			if kind == "json" {
-				encoded, err := marshalDecideSystemoneJSON(value["value"])
+				encoded, err := tools.MarshalJSON(value["value"])
 				if err != nil {
 					return nil, fmt.Errorf("input part %d: the JSON value cannot be encoded: %v", index+1, err)
 				}
@@ -281,18 +280,6 @@ func parseDecideSystemoneInput(raw any) ([]decideSystemoneInputPart, error) {
 		parts = append(parts, part)
 	}
 	return parts, nil
-}
-
-// marshalDecideSystemoneJSON encodes compactly and leaves <, > and & as they are, which a
-// reader of the text finds easier than \u003c.
-func marshalDecideSystemoneJSON(value any) (json.RawMessage, error) {
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return json.RawMessage(bytes.TrimRight(out.Bytes(), "\n")), nil
 }
 
 // parseDecideSystemoneQuestions turns the validated arguments into questions: it infers a

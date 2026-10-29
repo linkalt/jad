@@ -20,3 +20,16 @@ func TestCutTextNeverSplitsACharacter(t *testing.T) {
 		t.Fatalf("zero bytes = %q, cut %v", got, cut)
 	}
 }
+
+// A negative limit used to panic on text[end] with a negative index.
+func TestCutTextClampsANegativeLimit(t *testing.T) {
+	for _, limit := range []int64{-1, -1 << 20} {
+		got, cut := CutText("hello", limit)
+		if got != "" || !cut {
+			t.Fatalf("CutText(hello, %d) = %q, cut %v", limit, got, cut)
+		}
+		if got, cut := CutText("", limit); got != "" || cut {
+			t.Fatalf("CutText(\"\", %d) = %q, cut %v", limit, got, cut)
+		}
+	}
+}

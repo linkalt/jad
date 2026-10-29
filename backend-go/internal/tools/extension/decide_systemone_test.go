@@ -30,6 +30,7 @@ type decideSystemoneRig struct {
 type decideSystemoneRecorded struct {
 	Method, Path, Authorization string
 	Body                        map[string]any
+	Raw                         []byte
 }
 
 func newDecideSystemoneRig(t *testing.T, status int, reply string, adjust func(*sessionfs.ExtensionDecideSystemoneSettings)) *decideSystemoneRig {
@@ -37,7 +38,7 @@ func newDecideSystemoneRig(t *testing.T, status int, reply string, adjust func(*
 	rig := &decideSystemoneRig{}
 	rig.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
-		recorded := decideSystemoneRecorded{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization")}
+		recorded := decideSystemoneRecorded{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), Raw: data}
 		_ = json.Unmarshal(data, &recorded.Body)
 		rig.requests = append(rig.requests, recorded)
 		w.Header().Set("Content-Type", "application/json")
@@ -747,5 +748,30 @@ func TestDecideSystemoneReportsA422DetailWithItsLocation(t *testing.T) {
 	rig = newDecideSystemoneRig(t, 422, `{"detail":"plain detail"}`, nil)
 	if output = rig.call(t, `{"input":"x",`+predicateQuestion+`}`); !strings.Contains(output, "plain detail") {
 		t.Fatalf("got:\n%s", output)
+	}
+}
+
+// max_input_bytes counts the JSON input parts as they are encoded. json.Marshal used to
+// HTML-escape the same bytes again on the wire, so a payload of <, > and & counted smaller
+// than it was sent; the request now goes out through the shared marshaler.
+func TestDecideSystemoneRequestKeepsTheJSONInputBytesItCounted(t *testing.T) {
+	rig := newDecideSystemoneRig(t, 200, `{"answers":{"q":{"type":"noul","noul":0.9}}}`, func(settings *sessionfs.ExtensionDecideSystemoneSettings) {
+		settings.MaxInputBytes = 20000
+	})
+	rig.call(t, `{"input":[{"type":"json","value":{"x":"a<b&c","y":"\u2028"}}],"questions":[{"name":"q","instructions":"Is it fine?"}]}`)
+	if len(rig.requests) != 1 {
+		t.Fatalf("%d requests", len(rig.requests))
+	}
+	raw := string(rig.requests[0].Raw)
+	for _, escaped := range []string{`\u003c`, `\u003e`, `\u0026`, `\u2028`} {
+		if strings.Contains(raw, escaped) {
+			t.Fatalf("request body contains %s: %s", escaped, raw)
+		}
+	}
+	if !strings.Contains(raw, `"a<b&c"`) {
+		t.Fatalf("request body = %s, want the JSON input as it was counted", raw)
+	}
+	if !strings.Contains(raw, "\u2028") {
+		t.Fatalf("request body = %s, want the raw U+2028 separator", raw)
 	}
 }

@@ -77,7 +77,9 @@ func (e *decideSystemoneResponseError) Error() string { return e.Message }
 
 // requestDecisions sends one request and returns the answers by question name.
 func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
-	payload, err := json.Marshal(systemoneRequest(settings.Model, input, questions))
+	// The shared marshaler keeps <, > and & as they are, so the bytes max_input_bytes
+	// counted for the JSON input parts are the bytes on the wire.
+	payload, err := tools.MarshalJSON(systemoneRequest(settings.Model, input, questions))
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
@@ -138,7 +140,7 @@ func decideSystemoneErrorMessage(data []byte, key string) string {
 		}
 	}
 	text = decideSystemoneRedact(oneLine(text), key)
-	if cut, ok := cutUTF8(text, 400); ok {
+	if cut, ok := tools.CutText(text, 400); ok {
 		text = cut + "..."
 	}
 	return text

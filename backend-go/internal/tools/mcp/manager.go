@@ -330,7 +330,7 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 		if len(remote.Description) > current.maxDescriptionBytes {
 			return nil, configError(server.ConfigPath, "MCP tool %s/%s description is %d bytes, above max_description_bytes (%d)", server.ID, remote.Name, len(remote.Description), current.maxDescriptionBytes)
 		}
-		schema, err := marshalJSON(remote.InputSchema)
+		schema, err := tools.MarshalJSON(remote.InputSchema)
 		if err != nil || !objectInputSchema(schema) {
 			return nil, configError(server.ConfigPath, "MCP tool %s/%s must provide an object inputSchema", server.ID, remote.Name)
 		}

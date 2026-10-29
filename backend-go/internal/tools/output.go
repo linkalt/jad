@@ -148,6 +148,11 @@ func valueText(value any) string {
 	return string(encoded)
 }
 
+// MarshalJSON is the one marshaler for the bytes the model and messages.jsonl see: compact,
+// with <, > and & left as they are, and the U+2028/U+2029 separators written raw inside
+// strings, which is what JavaScript's JSON.stringify prints. Everything that reaches a
+// json.RawMessage has to be encoded this way, because json.Marshal of a RawMessage would
+// HTML-escape it again.
 func MarshalJSON(value any) ([]byte, error) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -155,7 +160,7 @@ func MarshalJSON(value any) ([]byte, error) {
 	if err := encoder.Encode(value); err != nil {
 		return nil, err
 	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'}), nil
+	return replaceJSONStringSeparators(bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'})), nil
 }
 
 func contentToken(content string) (string, error) {

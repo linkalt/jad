@@ -135,3 +135,80 @@ func TestStructuredContentForResultOrdersOnlyWhatFitsTheLimit(t *testing.T) {
 		t.Fatalf("structured content over the limit = %#v, want the raw %s", content, raw)
 	}
 }
+
+// boundedPartBytes is the encoded size of a bounded result, which is what max_result_bytes
+// limits.
+func boundedPartBytes(parts []outputPart) int {
+	total := 0
+	for _, part := range parts {
+		total += partSize(part)
+	}
+	return total
+}
+
+// An isError result used to keep only the canned marker once it exceeded
+// max_result_bytes, so the server's message never reached the model.
+func TestBoundedContentKeepsTheErrorTextAboveTheLimit(t *testing.T) {
+	const maxBytes = 2048
+	message := strings.Repeat("the server failed: detail; ", 220)
+	parts := boundedContent(&mcpSDK.CallToolResult{IsError: true, Content: []mcpSDK.Content{
+		&mcpSDK.TextContent{Text: message},
+	}}, maxBytes)
+	if parts[0].Text == nil || *parts[0].Text != "MCP server reported a tool error." {
+		t.Fatalf("first part = %#v", parts[0])
+	}
+	kept := ""
+	for _, part := range parts[1:] {
+		if part.Text != nil && strings.HasPrefix(*part.Text, "the server failed: detail; ") {
+			kept = *part.Text
+		}
+	}
+	if len(kept) < 1000 {
+		t.Fatalf("error text kept %d bytes of %d, parts = %#v", len(kept), len(message), parts)
+	}
+	if total := boundedPartBytes(parts); total > maxBytes {
+		t.Fatalf("bounded output size = %d, exceeds %d", total, maxBytes)
+	}
+	if last := parts[len(parts)-1].Text; last == nil || !strings.Contains(*last, "Additional MCP result content omitted") {
+		t.Fatalf("no omission notice: %#v", parts)
+	}
+}
+
+// A part past the budget is cut instead of being dropped whole, so a short first part no
+// longer costs the model everything after it.
+func TestBoundedContentCutsThePartPastTheBudgetInsteadOfDroppingIt(t *testing.T) {
+	const maxBytes = 2048
+	long := strings.Repeat("abcdefgh", 400)
+	parts := boundedContent(&mcpSDK.CallToolResult{Content: []mcpSDK.Content{
+		&mcpSDK.TextContent{Text: "hi"},
+		&mcpSDK.TextContent{Text: long},
+	}}, maxBytes)
+	if len(parts) != 3 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[0].Text == nil || *parts[0].Text != "hi" {
+		t.Fatalf("first part = %#v", parts[0])
+	}
+	if parts[1].Text == nil || !strings.HasPrefix(*parts[1].Text, "abcdefgh") || len(*parts[1].Text) < 1000 {
+		t.Fatalf("second part = %#v", parts[1])
+	}
+	if total := boundedPartBytes(parts); total > maxBytes {
+		t.Fatalf("bounded output size = %d, exceeds %d", total, maxBytes)
+	}
+}
+
+// The truncation used to size the kept text as budget/6, to allow for the worst case of
+// \u00XX expansions, and so spent about a sixth of the budget.
+func TestBoundedContentUsesMostOfTheBudgetForOneLongText(t *testing.T) {
+	const maxBytes = 2048
+	parts := boundedContent(&mcpSDK.CallToolResult{Content: []mcpSDK.Content{
+		&mcpSDK.TextContent{Text: strings.Repeat("x", 4000)},
+	}}, maxBytes)
+	total := boundedPartBytes(parts)
+	if total > maxBytes {
+		t.Fatalf("bounded output size = %d, exceeds %d", total, maxBytes)
+	}
+	if total < maxBytes*3/4 {
+		t.Fatalf("bounded output size = %d, less than three quarters of %d", total, maxBytes)
+	}
+}

@@ -9,6 +9,8 @@ import (
 	"math"
 	"sort"
 	"strconv"
+
+	"jad/backend-go/internal/tools"
 )
 
 type orderedJSONField struct {
@@ -143,7 +145,7 @@ func appendOrderedJSONValue(dst []byte, value any) ([]byte, error) {
 			if index > 0 {
 				dst = append(dst, ',')
 			}
-			name, err := marshalJSON(field.name)
+			name, err := tools.MarshalJSON(field.name)
 			if err != nil {
 				return nil, fmt.Errorf("encode structured content key: %w", err)
 			}
@@ -171,7 +173,7 @@ func appendOrderedJSONValue(dst []byte, value any) ([]byte, error) {
 	case json.Number:
 		return appendOrderedJSONNumber(dst, typed)
 	default:
-		encoded, err := marshalJSON(value)
+		encoded, err := tools.MarshalJSON(value)
 		if err != nil {
 			return nil, err
 		}
