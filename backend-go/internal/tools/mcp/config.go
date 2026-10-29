@@ -23,6 +23,23 @@ const (
 	defaultMaxResultBytes       = 1_048_576
 	minMaxResultBytes           = 512
 	maxMaxResultBytes           = 16 * 1024 * 1024
+
+	// Discovery budgets. The defaults follow the phase-6a measurement: a server that
+	// returned 500 tools with 16 KiB input schemas cost 158 ms of CPU and 229 MB of
+	// allocation per run (about 458 KB per tool, 28x its schema, because every schema is
+	// copied, marshalled, compiled, cached and re-serialized into each request). A
+	// server whose tools fit the defaults still loads; one oversized definition is
+	// refused before it is copied, compiled or cached, and the run fails with the
+	// setting named instead of the tool silently disappearing.
+	defaultMaxTools            = 256
+	minMaxTools                = 1
+	maxMaxTools                = 2_048
+	defaultMaxSchemaBytes      = 65_536
+	minMaxSchemaBytes          = 512
+	maxMaxSchemaBytes          = 1_048_576
+	defaultMaxDescriptionBytes = 4_096
+	minMaxDescriptionBytes     = 1
+	maxMaxDescriptionBytes     = 65_536
 )
 
 var (
@@ -49,10 +66,13 @@ type transportConfig struct {
 }
 
 type loadedConfig struct {
-	transport      transportConfig
-	timeout        time.Duration
-	maxResultBytes int
-	fingerprint    string
+	transport           transportConfig
+	timeout             time.Duration
+	maxResultBytes      int
+	maxTools            int
+	maxSchemaBytes      int
+	maxDescriptionBytes int
+	fingerprint         string
 }
 
 func normalizeConfig(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string) (loadedConfig, error) {
@@ -119,20 +139,38 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 	if err != nil {
 		return loadedConfig{}, err
 	}
+	maxTools, err := configuredInteger(fields["max_tools"], defaultMaxTools, minMaxTools, maxMaxTools, path, "max_tools")
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	maxSchemaBytes, err := configuredInteger(fields["max_schema_bytes"], defaultMaxSchemaBytes, minMaxSchemaBytes, maxMaxSchemaBytes, path, "max_schema_bytes")
+	if err != nil {
+		return loadedConfig{}, err
+	}
+	maxDescriptionBytes, err := configuredInteger(fields["max_description_bytes"], defaultMaxDescriptionBytes, minMaxDescriptionBytes, maxMaxDescriptionBytes, path, "max_description_bytes")
+	if err != nil {
+		return loadedConfig{}, err
+	}
 	fingerprintBytes, err := json.Marshal(struct {
-		Transport      any   `json:"transport"`
-		TimeoutMS      int64 `json:"timeout_ms"`
-		MaxResultBytes int   `json:"max_result_bytes"`
-	}{Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes)})
+		Transport           any   `json:"transport"`
+		TimeoutMS           int64 `json:"timeout_ms"`
+		MaxResultBytes      int   `json:"max_result_bytes"`
+		MaxTools            int   `json:"max_tools"`
+		MaxSchemaBytes      int   `json:"max_schema_bytes"`
+		MaxDescriptionBytes int   `json:"max_description_bytes"`
+	}{Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes), MaxTools: int(maxTools), MaxSchemaBytes: int(maxSchemaBytes), MaxDescriptionBytes: int(maxDescriptionBytes)})
 	if err != nil {
 		return loadedConfig{}, configError(path, "could not fingerprint MCP server configuration")
 	}
 	digest := sha256.Sum256(fingerprintBytes)
 	return loadedConfig{
-		transport:      transport,
-		timeout:        time.Duration(timeoutMS) * time.Millisecond,
-		maxResultBytes: int(maxResultBytes),
-		fingerprint:    hex.EncodeToString(digest[:]),
+		transport:           transport,
+		timeout:             time.Duration(timeoutMS) * time.Millisecond,
+		maxResultBytes:      int(maxResultBytes),
+		maxTools:            int(maxTools),
+		maxSchemaBytes:      int(maxSchemaBytes),
+		maxDescriptionBytes: int(maxDescriptionBytes),
+		fingerprint:         hex.EncodeToString(digest[:]),
 	}, nil
 }
 

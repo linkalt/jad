@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ func TestNormalizeConfigDefaultsAndAppliesStdioEnvironmentPrecedence(t *testing.
 	}
 	if config.timeout != 30_000*time.Millisecond || config.maxResultBytes != 1_048_576 {
 		t.Fatalf("default MCP limits = timeout %v, max bytes %d", config.timeout, config.maxResultBytes)
+	}
+	if config.maxTools != defaultMaxTools || config.maxSchemaBytes != defaultMaxSchemaBytes || config.maxDescriptionBytes != defaultMaxDescriptionBytes {
+		t.Fatalf("default MCP discovery limits = %d tools, %d schema bytes, %d description bytes", config.maxTools, config.maxSchemaBytes, config.maxDescriptionBytes)
 	}
 	stdio := config.transport.stdio
 	if stdio == nil || stdio.cwd != serverCWD || len(stdio.args) != 0 {
@@ -102,6 +106,18 @@ func TestNormalizeConfigRejectsMissingSecretsAndInvalidLimits(t *testing.T) {
 		{name: "timeout below minimum", raw: `{"transport":{"type":"stdio","command":"x"},"timeout_ms":0}`, want: "timeout_ms"},
 		{name: "timeout above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"timeout_ms":600001}`, want: "timeout_ms"},
 		{name: "result limit below minimum", raw: `{"transport":{"type":"stdio","command":"x"},"max_result_bytes":511}`, want: "max_result_bytes"},
+		{name: "tool limit zero", raw: `{"transport":{"type":"stdio","command":"x"},"max_tools":0}`, want: "max_tools must be an integer"},
+		{name: "tool limit negative", raw: `{"transport":{"type":"stdio","command":"x"},"max_tools":-1}`, want: "max_tools must be an integer"},
+		{name: "tool limit not an integer", raw: `{"transport":{"type":"stdio","command":"x"},"max_tools":2.5}`, want: "max_tools must be an integer"},
+		{name: "tool limit above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"max_tools":2049}`, want: "max_tools must be an integer"},
+		{name: "schema limit below minimum", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":511}`, want: "max_schema_bytes must be an integer"},
+		{name: "schema limit zero", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":0}`, want: "max_schema_bytes must be an integer"},
+		{name: "schema limit not an integer", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":512.5}`, want: "max_schema_bytes must be an integer"},
+		{name: "schema limit above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":1048577}`, want: "max_schema_bytes must be an integer"},
+		{name: "description limit zero", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":0}`, want: "max_description_bytes must be an integer"},
+		{name: "description limit negative", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":-4}`, want: "max_description_bytes must be an integer"},
+		{name: "description limit not an integer", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":64.25}`, want: "max_description_bytes must be an integer"},
+		{name: "description limit above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":65537}`, want: "max_description_bytes must be an integer"},
 		{name: "duplicate stdio environment source", raw: `{"transport":{"type":"stdio","command":"x","env":{"TOKEN":"value"},"env_from":{"TOKEN":"MCP_TOKEN"}}}`, env: map[string]string{"MCP_TOKEN": "secret"}, want: "must not set the same variable"},
 	}
 	for _, test := range cases {
@@ -144,5 +160,57 @@ func TestMCPInputSchemaSupportsDraft04Through202012(t *testing.T) {
 				t.Fatalf("schema %s accepted a value equal to its exclusive minimum", test.draft)
 			}
 		})
+	}
+}
+
+// The schema in sample/schemes is the user-facing contract of an MCP server file: its
+// keys, defaults and bounds must be the ones the loader enforces.
+func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
+	data, err := os.ReadFile("../../../../sample/schemes/mcp-server.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Type    string  `json:"type"`
+			Minimum float64 `json:"minimum"`
+			Maximum float64 `json:"maximum"`
+			Default float64 `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	limits := []struct {
+		key              string
+		minimum, maximum int64
+		defaultValue     int64
+	}{
+		{key: "timeout_ms", minimum: 1, maximum: maxTimeoutMS, defaultValue: defaultTimeoutMS},
+		{key: "max_result_bytes", minimum: minMaxResultBytes, maximum: maxMaxResultBytes, defaultValue: defaultMaxResultBytes},
+		{key: "max_tools", minimum: minMaxTools, maximum: maxMaxTools, defaultValue: defaultMaxTools},
+		{key: "max_schema_bytes", minimum: minMaxSchemaBytes, maximum: maxMaxSchemaBytes, defaultValue: defaultMaxSchemaBytes},
+		{key: "max_description_bytes", minimum: minMaxDescriptionBytes, maximum: maxMaxDescriptionBytes, defaultValue: defaultMaxDescriptionBytes},
+	}
+	for _, limit := range limits {
+		property, exists := schema.Properties[limit.key]
+		if !exists {
+			t.Errorf("mcp-server.schema.json does not document %s", limit.key)
+			continue
+		}
+		if property.Type != "integer" || property.Minimum != float64(limit.minimum) || property.Maximum != float64(limit.maximum) || property.Default != float64(limit.defaultValue) {
+			t.Errorf("%s = type %q min %v max %v default %v; the loader uses min %d max %d default %d",
+				limit.key, property.Type, property.Minimum, property.Maximum, property.Default, limit.minimum, limit.maximum, limit.defaultValue)
+		}
+	}
+	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes"}
+	keys := make([]string, 0, len(schema.Properties))
+	for key := range schema.Properties {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	sort.Strings(documented)
+	if strings.Join(keys, ",") != strings.Join(documented, ",") {
+		t.Errorf("mcp-server.schema.json properties = %v, want %v", keys, documented)
 	}
 }

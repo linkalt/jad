@@ -36,17 +36,84 @@ type connection struct {
 	session                  *mcpSDK.ClientSession
 	timeout                  time.Duration
 	maxResultBytes           int
+	maxTools                 int
+	maxSchemaBytes           int
+	maxDescriptionBytes      int
 	structuredContentCapture *structuredContentCapture
 	closed                   bool
 }
 
-func (c *connection) listTools(ctx context.Context) (*mcpSDK.ListToolsResult, error) {
+// listTools follows the tools/list cursors until the server reports the end of the list,
+// within the connection's discovery budgets.
+func (c *connection) listTools(ctx context.Context) ([]*mcpSDK.Tool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closed {
 		return nil, errors.New("MCP connection is closed")
 	}
-	return c.session.ListTools(ctx, nil)
+	return collectToolPages(ctx, c.maxTools, func(ctx context.Context, cursor string) (toolListPage, error) {
+		var params *mcpSDK.ListToolsParams
+		if cursor != "" {
+			params = &mcpSDK.ListToolsParams{Cursor: cursor}
+		}
+		result, err := c.session.ListTools(ctx, params)
+		if err != nil {
+			return toolListPage{}, err
+		}
+		if result == nil {
+			return toolListPage{}, errors.New("MCP server returned an invalid tools/list result")
+		}
+		return toolListPage{tools: result.Tools, nextCursor: result.NextCursor}, nil
+	})
+}
+
+// toolListPage is one tools/list response: the tools of that page and the cursor that
+// asks for the next one, empty at the end of the list.
+type toolListPage struct {
+	tools      []*mcpSDK.Tool
+	nextCursor string
+}
+
+// toolListLimitError is a tools/list that exceeded a discovery bound. The message names
+// the setting; loadServer reports it as a configuration error, because the generic list
+// failure path reduces an error to its type.
+type toolListLimitError struct {
+	message string
+}
+
+func (e *toolListLimitError) Error() string { return e.message }
+
+// collectToolPages follows NextCursor until it is empty. maxTools bounds the tools and,
+// through maxTools+1 pages, the requests: a server that returns at least one tool per
+// page reaches the tool bound first, and the extra page is the one whose tools would
+// exceed it, while a server that keeps answering with a fresh cursor and no tool still
+// stops. A cursor that repeats is a loop and is refused at once instead of after
+// maxTools+1 requests.
+func collectToolPages(ctx context.Context, maxTools int, listPage func(context.Context, string) (toolListPage, error)) ([]*mcpSDK.Tool, error) {
+	requested := make(map[string]struct{})
+	collected := make([]*mcpSDK.Tool, 0)
+	cursor := ""
+	for page := 1; ; page++ {
+		if page > maxTools+1 {
+			return nil, &toolListLimitError{message: fmt.Sprintf("did not finish tools/list within max_tools (%d) pages", maxTools)}
+		}
+		current, err := listPage(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		collected = append(collected, current.tools...)
+		if len(collected) > maxTools {
+			return nil, &toolListLimitError{message: fmt.Sprintf("returned more than max_tools (%d) tools", maxTools)}
+		}
+		if current.nextCursor == "" {
+			return collected, nil
+		}
+		if _, loop := requested[current.nextCursor]; loop {
+			return nil, &toolListLimitError{message: fmt.Sprintf("repeated the tools/list cursor on page %d", page+1)}
+		}
+		requested[current.nextCursor] = struct{}{}
+		cursor = current.nextCursor
+	}
 }
 
 func (c *connection) callTool(ctx context.Context, params *mcpSDK.CallToolParams) (*mcpSDK.CallToolResult, json.RawMessage, error) {
@@ -215,9 +282,13 @@ func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs
 		return nil, err
 	}
 	listCtx, cancel := context.WithTimeout(runCtx, current.timeout)
-	listed, err := current.listTools(listCtx)
+	remoteTools, err := current.listTools(listCtx)
 	cancel()
 	if err != nil {
+		var limit *toolListLimitError
+		if errors.As(err, &limit) {
+			return nil, configError(server.ConfigPath, "MCP server %s %s", server.ID, limit.Error())
+		}
 		if callerCtx.Err() != nil || runCtx.Err() == nil {
 			m.mu.Lock()
 			if m.connections[server.ID] == current {
@@ -228,10 +299,7 @@ func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs
 		}
 		return nil, configError(server.ConfigPath, "failed to list tools from MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
-	if listed == nil {
-		return nil, configError(server.ConfigPath, "MCP server %s returned an invalid tools/list result", server.ID)
-	}
-	return m.toolsFromList(server, current, listed.Tools)
+	return m.toolsFromList(server, current, remoteTools)
 }
 
 func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool) ([]tools.Tool, error) {
@@ -252,9 +320,15 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 			return nil, configError(server.ConfigPath, "MCP server %s returned duplicate tool %s", server.ID, remote.Name)
 		}
 		seen[remote.Name] = struct{}{}
+		if len(remote.Description) > current.maxDescriptionBytes {
+			return nil, configError(server.ConfigPath, "MCP tool %s/%s description is %d bytes, above max_description_bytes (%d)", server.ID, remote.Name, len(remote.Description), current.maxDescriptionBytes)
+		}
 		schema, err := marshalJSON(remote.InputSchema)
 		if err != nil || !objectInputSchema(schema) {
 			return nil, configError(server.ConfigPath, "MCP tool %s/%s must provide an object inputSchema", server.ID, remote.Name)
+		}
+		if len(schema) > current.maxSchemaBytes {
+			return nil, configError(server.ConfigPath, "MCP tool %s/%s inputSchema is %d bytes, above max_schema_bytes (%d)", server.ID, remote.Name, len(schema), current.maxSchemaBytes)
 		}
 		validator, err := m.schemas.get(schema)
 		if err != nil {
@@ -364,6 +438,9 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		session:                  clientSession,
 		timeout:                  config.timeout,
 		maxResultBytes:           config.maxResultBytes,
+		maxTools:                 config.maxTools,
+		maxSchemaBytes:           config.maxSchemaBytes,
+		maxDescriptionBytes:      config.maxDescriptionBytes,
 		structuredContentCapture: structuredCapture,
 	}
 	m.mu.Lock()

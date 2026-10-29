@@ -63,6 +63,27 @@
       "maximum": 16777216,
       "description": "Maximum serialized MCP tool result content sent to the model. Defaults to 1048576.",
       "default": 1048576
+    },
+    "max_tools": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2048,
+      "description": "Maximum tools this server may expose. Every tools/list page is followed; a server that returns more tools, or keeps paginating past this count, fails the run with this key named. Defaults to 256.",
+      "default": 256
+    },
+    "max_schema_bytes": {
+      "type": "integer",
+      "minimum": 512,
+      "maximum": 1048576,
+      "description": "Maximum size of one tool input schema, counted as the JSON bytes the schema is held as. A larger tool is refused and named. Defaults to 65536.",
+      "default": 65536
+    },
+    "max_description_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65536,
+      "description": "Maximum size of one tool description, which is sent to the model with every request. A longer one is refused and the tool is named. Defaults to 4096.",
+      "default": 4096
     }
   },
   "required": ["transport"],
