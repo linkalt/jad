@@ -3,7 +3,6 @@ package native
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -43,31 +42,18 @@ func readImageFile(path string, policy sessionfs.NativePathPolicy, store *images
 	if !info.Mode().IsRegular() {
 		return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "not_a_file", prefix+target.errorPath+" is not a regular file")
 	}
-	file, err := os.Open(target.realPath)
-	if err != nil {
-		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
-	}
-	defer file.Close()
-	// Read one byte more than the limit to see that the file is over it, without reading
-	// the whole file.
-	data, within, err := readWithin(file, maxBytes)
-	if err != nil {
-		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
-	}
-	if !within {
+	if info.Size() > maxBytes {
 		return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s%s is larger than %d bytes", prefix, target.errorPath, maxBytes))
 	}
-	return data, ""
-}
-
-// readWithin reads at most limit bytes. It reads one byte more to learn that the source
-// is over the limit, and stops there, so a source of any size costs limit+1 bytes.
-func readWithin(source io.Reader, limit int64) (data []byte, within bool, err error) {
-	data, err = io.ReadAll(io.LimitReader(source, limit+1))
+	// The same open and identity check as read: the file read is the one Lstat described.
+	data, _, err := readVerifiedRegularFile(target.realPath, info, maxBytes)
 	if err != nil {
-		return nil, false, err
+		if strings.Contains(err.Error(), "past configured limit") {
+			return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s%s is larger than %d bytes", prefix, target.errorPath, maxBytes))
+		}
+		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
 	}
-	return data, int64(len(data)) <= limit, nil
+	return data, ""
 }
 
 func imageReadFailure(callID string, err error, path string) string {
