@@ -81,6 +81,93 @@ func TestCompactHistoryPersistsCompactionOverlayAndResetInvalidatesFiles(t *test
 	}
 }
 
+func mustReadInputItems(t *testing.T, store *TurnStore) [][]byte {
+	t.Helper()
+	items, err := store.ReadInputItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
+func TestResetKeepsTheTranscriptWhenTheCompactionCacheCannotBeRemoved(t *testing.T) {
+	f := newMemoFixture(t)
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	f.compact(t, 2)
+	f.addTurn(t, 4)
+	before := mustReadInputItems(t, f.store)
+	transcript, err := os.ReadFile(f.journal.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcript) == 0 {
+		t.Fatal("precondition: transcript is empty, so a publish would not show")
+	}
+	staging := filepath.Join(f.dir, "staging")
+	if err := os.Chmod(staging, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(staging, 0o700) })
+	if err := f.store.Reset(); err == nil {
+		t.Skip("the staging directory is writable despite mode 0500, as for root")
+	}
+	if err := os.Chmod(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(f.journal.path); err != nil || string(got) != string(transcript) {
+		t.Fatalf("transcript after failed reset = %q, err=%v; want unchanged %q", got, err, transcript)
+	}
+	if after := mustReadInputItems(t, f.store); len(after) != len(before) {
+		t.Fatalf("history after failed reset has %d items, want %d unchanged", len(after), len(before))
+	}
+}
+
+func TestCompactHistoryRemovesTheCacheWhenTheTranscriptReplaceFails(t *testing.T) {
+	dir := t.TempDir()
+	transcriptDir := filepath.Join(dir, "transcript")
+	staging := filepath.Join(dir, "staging")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := NewJournal(filepath.Join(transcriptDir, "messages.jsonl"), DurabilityProcess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewTurnStore(journal, staging, TurnStoreOptions{
+		MaxItemBytes:        1 << 20,
+		ResponseMetadata:    ResponseMetadataMinimal,
+		MessagesBackupPath:  filepath.Join(dir, "messages.backup.jsonl"),
+		CompactionCachePath: filepath.Join(staging, "compaction-cache.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := memoFixture{dir: dir, journal: journal, store: store}
+	for index := 0; index < 4; index++ {
+		f.addTurn(t, index)
+	}
+	before := mustReadInputItems(t, store)
+	if err := os.Chmod(transcriptDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(transcriptDir, 0o700) })
+	_, compactErr := store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: 2, BackupMode: "append"})
+	if err := os.Chmod(transcriptDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if compactErr == nil {
+		t.Skip("the transcript directory is writable despite mode 0500, as for root")
+	}
+	if _, err := os.Stat(f.compactionCachePath()); !os.IsNotExist(err) {
+		t.Fatalf("compaction cache after failed replace: err=%v, want removed", err)
+	}
+	if after := mustReadInputItems(t, store); len(after) != len(before) {
+		t.Fatalf("history after failed compaction has %d items, want %d unchanged", len(after), len(before))
+	}
+}
+
 func TestCompactHistoryNoOpWhenRecentTurnDoesNotReduceHistory(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := NewJournal(filepath.Join(dir, "messages.jsonl"), DurabilityProcess)

@@ -179,6 +179,11 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		activeTailRecords[index] = append([]byte(nil), record...)
 	}
 	if err := s.journal.ReplaceRecords(activeTailRecords...); err != nil {
+		// The cache describes the transcript that was not replaced; drop it so the
+		// next read serves the old transcript as it is.
+		if removeErr := s.removeCompactionCaches(); removeErr != nil {
+			return result, errors.Join(fmt.Errorf("replace transcript during compaction: %w", err), removeErr)
+		}
 		return result, fmt.Errorf("replace transcript during compaction: %w", err)
 	}
 	if err := s.removeDerivedFiles(false, false); err != nil {
@@ -665,6 +670,11 @@ func (s *TurnStore) Reset() error {
 	if len(s.activeTurns) != 0 {
 		return errors.New("cannot reset while response turns are active")
 	}
+	// The cache goes first: once the transcript is published empty, a cache that
+	// survived would still be served as history.
+	if err := s.removeCompactionCaches(); err != nil {
+		return err
+	}
 	if err := s.journal.ReplaceRecords(); err != nil {
 		return err
 	}
@@ -700,6 +710,22 @@ func (s *TurnStore) removeDerivedFiles(reset, keepStateContext bool) error {
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove session cache %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// removeCompactionCaches deletes the compaction cache and its backup. A caller
+// that changes the transcript must do it before publishing the new transcript
+// when the cache would otherwise be served for the old one.
+func (s *TurnStore) removeCompactionCaches() error {
+	defer s.compactionGeneration.Add(1)
+	if s.options.CompactionCachePath == "" {
+		return nil
+	}
+	for _, path := range []string{s.options.CompactionCachePath, s.options.CompactionCachePath + ".backup"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove compaction cache %q: %w", path, err)
 		}
 	}
 	return nil
