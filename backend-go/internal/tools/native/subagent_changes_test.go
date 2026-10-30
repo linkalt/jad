@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -201,4 +202,42 @@ func persistedWriterCatalog(t *testing.T, dir string, launcher SubagentLauncher)
 		t.Fatal(err)
 	}
 	return catalog, manager
+}
+
+// The changed-file list is bounded in bytes as well as by count: a long list of long paths
+// is cut to the result limit, and the files it leaves out are counted.
+func TestSubagentChangedFilesListIsCutToTheResultLimit(t *testing.T) {
+	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings.ChangedFilesMax, settings.ResultMaxBytes = 100, 512
+	var files []string
+	for i := range 40 {
+		files = append(files, fmt.Sprintf("generated/%03d/%s.go", i, strings.Repeat("deep", 20)))
+	}
+	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(files...), readOnlyTool("read"), writeTool("write"))
+	out := subagentCall(t, catalog, `{"task":"fix"}`)
+	line := ""
+	for _, text := range strings.Split(out, "\n") {
+		if strings.HasPrefix(text, "written_files: ") {
+			line = text
+		}
+	}
+	if len(line) > 512+len("written_files: ") {
+		t.Fatalf("the written_files value is %d bytes, over result_max_bytes 512:\n%s", len(line), out)
+	}
+	kept := strings.Count(line, " (created)")
+	if !strings.Contains(out, fmt.Sprintf("written_files_omitted: %d\n", 40-kept)) {
+		t.Fatalf("the %d files the cut left out are not all counted (kept %d):\n%s", 40-kept, kept, out)
+	}
+}
+
+// The byte count that decides whether a file fits is the length of the list it would make.
+func TestSubagentChangedFilesByteCountIsTheLengthOfTheList(t *testing.T) {
+	files := []subagentFileChange{{Path: "a.go", Action: "created"}, {Path: "src/b.go", Action: "edited"}}
+	more := subagentFileChange{Path: "c/d.go", Action: "created"}
+	if got, want := filesValueBytes(files, more), len(filesValue(append(append([]subagentFileChange(nil), files...), more))); got != int64(want) {
+		t.Fatalf("filesValueBytes = %d, the list is %d bytes", got, want)
+	}
+	if got, want := filesValueBytes(nil, more), len(filesValue([]subagentFileChange{more})); got != int64(want) {
+		t.Fatalf("filesValueBytes of the first file = %d, the list is %d bytes", got, want)
+	}
 }

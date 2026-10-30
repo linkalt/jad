@@ -587,8 +587,8 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	spec.request.Execution.ProcessAsync = spec.asyncHost != nil && spec.childAsync
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
-		changedMax := spec.changedMax
-		spec.request.Execution.OnFileChange = func(path, action string) { run.recordChange(path, action, changedMax) }
+		changedMax, changedBytes := spec.changedMax, spec.resultMax
+		spec.request.Execution.OnFileChange = func(path, action string) { run.recordChange(path, action, changedMax, changedBytes) }
 	}
 	m.runs[id] = run
 	m.active.Add(1)
