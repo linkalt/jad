@@ -205,16 +205,20 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 }
 
 // lookupProfile finds a profile of a session, or fails with a not-found error that names the
-// nearest profiles or sessions.
+// nearest profiles or sessions. Without allow_other_sessions it names only the caller's profiles.
 func (t *transcriptTool) lookupProfile(ctx context.Context, execution tools.ExecutionContext, session, profile string) (TranscriptTarget, string) {
 	target, err := t.profiles.Profile(ctx, execution.SessionKey, session, profile)
 	if err == nil {
 		return target, ""
 	}
+	callerSession, _, _ := strings.Cut(execution.SessionKey, "\x00")
 	profiles, sessions := t.profiles.Candidates(ctx, execution.SessionKey, session)
 	names, query := profiles, profile
 	if profiles == nil {
 		names, query = sessions, session
+	}
+	if !t.settings.AllowOtherSessions && (profiles == nil || session != "" && session != callerSession) {
+		names = nil
 	}
 	return TranscriptTarget{}, t.notFound(execution, "no_such_profile", err.Error(), query, names)
 }

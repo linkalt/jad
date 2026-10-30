@@ -178,6 +178,20 @@ func TestTranscriptNotFoundNamesTheNearestCandidatesUpToTheCap(t *testing.T) {
 	}
 }
 
+func TestTranscriptNotFoundHidesOtherSessionsWhenTheyAreOff(t *testing.T) {
+	f := newSelectFixture(t)
+	settings := transcriptTestSettings()
+	settings.AllowOtherSessions = false
+	for _, path := range []string{"profile:nosuch/review/reviewer", "profile:elsewhere/cat/nosuch"} {
+		if out := f.run(t, settings, map[string]any{"path": path}, tools.ExecutionContext{}); !strings.Contains(out, "no_such_profile") || strings.Contains(out, "available") || strings.Contains(out, "review/reviewer") {
+			t.Fatalf("%s names other sessions: %s", path, out)
+		}
+	}
+	if out := f.run(t, settings, map[string]any{"path": "profile:review/revewer"}, tools.ExecutionContext{}); !strings.Contains(out, "review/reviewer") {
+		t.Fatalf("the caller's own profiles stay suggested: %s", out)
+	}
+}
+
 func TestTranscriptSubagentFollowsTheProfileLayout(t *testing.T) {
 	f := newSelectFixture(t)
 	out := f.run(t, transcriptTestSettings(), map[string]any{"path": "subagent:review/reviewer/sub_00000004"}, tools.ExecutionContext{})
