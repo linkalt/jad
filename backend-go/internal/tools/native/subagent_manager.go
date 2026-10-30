@@ -74,6 +74,9 @@ type SubagentManager struct {
 	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
 	// memory only.
 	store *subagentStore
+	// removeManifest deletes the manifest of a pruned run; it is a field so a test can
+	// hold the pruner inside the removal. The store sets it.
+	removeManifest func(id string)
 	// transcriptRoot, when set, is the storage directory whose child folders are
 	// deleted as runs are dropped; see DeleteTranscriptsUnder.
 	transcriptRoot string
@@ -82,7 +85,10 @@ type SubagentManager struct {
 // NewSubagentManager returns an empty manager that keeps its runs in memory only.
 func NewSubagentManager() *SubagentManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), byRoot: make(map[string]int), bySession: make(map[string]int), freed: make(chan struct{})}
+	manager := &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), byRoot: make(map[string]int), bySession: make(map[string]int), freed: make(chan struct{})}
+	// A nil store removes nothing, so a memory-only manager keeps no manifests.
+	manager.removeManifest = manager.store.remove
+	return manager
 }
 
 // SubagentManagerOptions configures a manager that keeps run manifests on disk.
@@ -105,6 +111,7 @@ type SubagentManagerOptions struct {
 func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManager {
 	manager := NewSubagentManager()
 	manager.store = newSubagentStore(options.StorageDir, options.Logger)
+	manager.removeManifest = manager.store.remove
 	if options.DeleteTranscripts {
 		manager.transcriptRoot = filepath.Clean(options.StorageDir)
 	}
@@ -141,35 +148,39 @@ func (m *SubagentManager) recover(keep int) {
 		}
 		return a.id < b.id
 	})
-	var dropped []string
+	var dropped []droppedRun
 	for len(m.finished) > keep {
-		if dir := m.dropOldestLocked(); dir != "" {
-			dropped = append(dropped, dir)
-		}
+		dropped = append(dropped, m.dropOldestLocked())
 	}
-	m.removeTranscripts(dropped)
+	m.removeDropped(dropped)
 }
 
-// dropOldestLocked forgets the oldest ended run and its manifest; the caller holds mu or
-// is the only user of the manager. It returns the transcript folder to delete, or "" when
-// the folder stays; the caller deletes it after releasing mu, so a slow disk never holds
-// the lock.
-func (m *SubagentManager) dropOldestLocked() string {
+// droppedRun is a run that was forgotten under mu: its manifest and, when it is to be
+// deleted, its transcript folder. Both are removed by removeDropped after mu is released.
+type droppedRun struct {
+	id  string
+	dir string
+}
+
+// dropOldestLocked forgets the oldest ended run. The caller holds mu or is the only user of
+// the manager, and must pass the result to removeDropped after releasing mu, so a slow disk
+// never holds the lock.
+func (m *SubagentManager) dropOldestLocked() droppedRun {
 	id := m.finished[0]
 	m.finished = m.finished[1:]
 	run := m.runs[id]
 	delete(m.runs, id)
-	m.store.remove(id)
+	dropped := droppedRun{id: id}
 	if run == nil {
-		return ""
+		return dropped
 	}
 	run.mu.Lock()
 	dir := run.dir
 	run.mu.Unlock()
-	if !transcriptFolderUnder(m.transcriptRoot, dir) {
-		return ""
+	if transcriptFolderUnder(m.transcriptRoot, dir) {
+		dropped.dir = dir
 	}
-	return dir
+	return dropped
 }
 
 // DeleteTranscriptsUnder makes the manager delete a run's transcript folder when
@@ -185,12 +196,17 @@ func (m *SubagentManager) DeleteTranscriptsUnder(root string) {
 	m.transcriptRoot = filepath.Clean(root)
 }
 
-// removeTranscripts deletes transcript folders chosen by dropOldestLocked. A failure is
-// logged and does not stop the others.
-func (m *SubagentManager) removeTranscripts(dirs []string) {
-	for _, dir := range dirs {
-		if err := os.RemoveAll(dir); err != nil {
-			m.logger().Warn("delete sub-agent transcript folder", "dir", dir, "error", err)
+// removeDropped deletes the manifests and transcript folders chosen by dropOldestLocked. The
+// caller must not hold mu: a manifest removal waits for the store, which a save holds across
+// its fsync. A failure is logged and does not stop the others.
+func (m *SubagentManager) removeDropped(dropped []droppedRun) {
+	for _, run := range dropped {
+		m.removeManifest(run.id)
+		if run.dir == "" {
+			continue
+		}
+		if err := os.RemoveAll(run.dir); err != nil {
+			m.logger().Warn("delete sub-agent transcript folder", "dir", run.dir, "error", err)
 		}
 	}
 }
@@ -740,18 +756,16 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	// wait returns sees the end.
 	run.store.save(run)
 
-	var dropped []string
+	var dropped []droppedRun
 	m.mu.Lock()
 	countDown(m.byRoot, run.root)
 	countDown(m.bySession, run.session)
 	m.finished = append(m.finished, run.id)
 	for len(m.finished) > spec.keep {
-		if dir := m.dropOldestLocked(); dir != "" {
-			dropped = append(dropped, dir)
-		}
+		dropped = append(dropped, m.dropOldestLocked())
 	}
 	m.mu.Unlock()
-	m.removeTranscripts(dropped)
+	m.removeDropped(dropped)
 	if run.countedWriter {
 		m.releaseWriter(run.owner)
 	}
