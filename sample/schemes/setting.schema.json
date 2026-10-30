@@ -1929,7 +1929,7 @@
                           "allow": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may change only paths inside one of these. A relative entry is taken from the workspace root. Narrows the session's own write and edit rules, never widens them."},
                           "deny": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may not change a path inside any of these, even one allow permits."}
                         },
-                        "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused."
+                        "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused. It does not limit what the agent reads: read, grep, glob and fetch ignore it."
                       }
                     },
                     "additionalProperties": false

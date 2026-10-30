@@ -110,7 +110,7 @@
         }
       },
       "minProperties": 1,
-      "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused."
+      "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused. It does not limit what the agent reads: read, grep, glob and fetch ignore it."
     }
   },
   "additionalProperties": false
