@@ -94,8 +94,8 @@ type subagentAgent struct {
 }
 
 // backgroundSafe reports whether a writer agent may run as a handle: the session turned
-// background_writers on, the async tool is there to collect the run, and no native tool
-// of the agent is limited.
+// background_writers on, the async tool is there to collect the run, and the agent
+// has a tool that changes files.
 func backgroundSafe(settings sessionfs.NativeSubagentSettings, agent subagentAgent, host *AsyncHost) bool {
 	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesFiles() {
 		return false
@@ -644,8 +644,8 @@ func newMCPPool(mcpTools []tools.Tool) mcpPool {
 }
 
 // expandMCPWildcard returns the loaded tools of one server, by ID order, for an entry
-// written mcp:<server>:*. The server prefix is the profile's matching rule. A tool whose
-// a wildcard that matches no tool is an error that names the server.
+// written mcp:<server>:*. The server prefix is the profile's matching rule. A wildcard
+// that matches no tool is an error that names the server.
 func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.Tool) ([]tools.Tool, error) {
 	var matched []tools.Tool
 	for id, tool := range byID {
