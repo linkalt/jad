@@ -252,3 +252,34 @@ func TestSubagentCancelOwnerCountsARunThatEndsDuringTheCall(t *testing.T) {
 		t.Fatalf("CancelOwner(alpha) = %d, want 2: the child was running when the call began", got)
 	}
 }
+
+// A user stop of a sub-agent run that blocks its call keeps its reason, so the stopped result
+// says why it ended, as a stopped handle does.
+func TestSubagentCancelUnmanagedOwnerKeepsTheStopReason(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	tool, err := NewSubagentToolWithManager(subagentSettings(agentNamed("explore")), withExecutors(t, readOnlyTool("read")), blockedLauncher(release, nil), nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A run without a handle keeps its call waiting, so the call runs beside the test.
+	done := make(chan string, 1)
+	go func() { done <- subagentCall(t, catalog, `{"task":"one"}`) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for manager.CancelUnmanagedOwner(testSessionKey, "user_stop") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the unmanaged run was never active to cancel")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if out := <-done; !strings.Contains(out, "stopped") || !strings.Contains(out, "user_stop") {
+		t.Fatalf("the stopped run does not say why it stopped:\n%s", out)
+	}
+}

@@ -870,21 +870,22 @@ func (m *SubagentManager) CancelOwner(owner string) int {
 	if m == nil {
 		return 0
 	}
-	return cancelActive(m.ownedRuns(owner), false)
+	return cancelActive(m.ownedRuns(owner), false, "")
 }
 
 // CancelUnmanagedOwner is CancelOwner for the runs that are not async handles. A handle is
 // stopped and counted by the async manager, so a host that sums both counts each run once.
-func (m *SubagentManager) CancelUnmanagedOwner(owner string) int {
+// The reason is kept the way a handle's stop keeps it, so the stopped result can say why.
+func (m *SubagentManager) CancelUnmanagedOwner(owner, reason string) int {
 	if m == nil {
 		return 0
 	}
-	return cancelActive(m.ownedRuns(owner), true)
+	return cancelActive(m.ownedRuns(owner), true, reason)
 }
 
 // CancelUnmanagedOwnersWithPrefix is CancelUnmanagedOwner for every session key that starts
 // with prefix.
-func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix string) int {
+func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix, reason string) int {
 	if m == nil {
 		return 0
 	}
@@ -896,14 +897,14 @@ func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix string) int {
 		}
 	}
 	m.mu.Unlock()
-	return cancelActive(runs, false)
+	return cancelActive(runs, false, reason)
 }
 
 // cancelActive asks every run of runs that is still queued or running to stop and returns
 // how many it asked. The runs are chosen before any is cancelled: a cancel can end a nested
 // run of the same list during the call, and that run was still one the call asked to stop.
-// unmanaged keeps only the runs that are not async handles.
-func cancelActive(runs []*subagentRun, unmanaged bool) int {
+// unmanaged keeps only the runs that are not async handles. An empty reason keeps none.
+func cancelActive(runs []*subagentRun, unmanaged bool, reason string) int {
 	var active []*subagentRun
 	for _, run := range runs {
 		if (!unmanaged || run.async == nil) && run.active() {
@@ -911,7 +912,7 @@ func cancelActive(runs []*subagentRun, unmanaged bool) int {
 		}
 	}
 	for _, run := range active {
-		run.cancel()
+		run.stopWith(reason)
 	}
 	return len(active)
 }

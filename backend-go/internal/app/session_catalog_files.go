@@ -181,7 +181,7 @@ func (r *Resolver) CancelAllSessionChildren(reference string) int {
 	}
 	subagents := 0
 	for _, manager := range r.subagentManagerList() {
-		subagents += manager.CancelUnmanagedOwnersWithPrefix(prefix)
+		subagents += manager.CancelUnmanagedOwnersWithPrefix(prefix, reasonSessionDelete)
 	}
 	return cancelled + subagents
 }

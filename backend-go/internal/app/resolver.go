@@ -179,7 +179,7 @@ func (r *Resolver) CancelSessionChildren(reference, profile string) int {
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.CancelOwner(owner, reasonUserStop)
 	}
-	return cancelled + r.cancelSubagentOwner(owner)
+	return cancelled + r.cancelSubagentOwner(owner, reasonUserStop)
 }
 
 // ResetSessionChildren is CancelSessionChildren for a reset: the session's unread
@@ -190,7 +190,7 @@ func (r *Resolver) ResetSessionChildren(reference, profile string) int {
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.ResetOwner(owner, reasonSessionReset)
 	}
-	return cancelled + r.cancelSubagentOwner(owner)
+	return cancelled + r.cancelSubagentOwner(owner, reasonSessionReset)
 }
 
 // BackgroundWriters implements httpapi.SessionWriters: how many sub-agent runs of the session
@@ -206,11 +206,11 @@ func (r *Resolver) BackgroundWriters(reference, profile string) int {
 
 // cancelSubagentOwner reaches the sub-agent runs that are not async handles (a session
 // without the async tool, or a run that blocks its call); a handle was already asked to stop
-// and counted by its async manager.
-func (r *Resolver) cancelSubagentOwner(owner string) int {
+// and counted by its async manager. The reason is the one the async manager is given.
+func (r *Resolver) cancelSubagentOwner(owner, reason string) int {
 	cancelled := 0
 	for _, manager := range r.subagentManagerList() {
-		cancelled += manager.CancelUnmanagedOwner(owner)
+		cancelled += manager.CancelUnmanagedOwner(owner, reason)
 	}
 	return cancelled
 }
