@@ -24,7 +24,7 @@ const (
 
 var nativeTranscriptKeys = []string{
 	"response_max_bytes", "line_max_bytes", "scan_max_bytes",
-	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_path", "allow_remote", "remotes",
+	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_reasoning", "allow_other_profiles", "allow_children", "allow_path", "allow_remote", "remotes",
 }
 
 // NativeTranscriptSettings holds the limits and switches of native.transcript. The path
@@ -41,9 +41,12 @@ type NativeTranscriptSettings struct {
 	MaxListEntries     int64
 	MaxDetailBytes     int64
 	AllowOtherSessions bool
-	AllowOtherProfiles bool
-	AllowChildren      bool
-	AllowPath          bool
+	// AllowOtherReasoning shows the reasoning of another session in detail mode. Off by default:
+	// reasoning is private planning, so a session reads another session's only when this is set.
+	AllowOtherReasoning bool
+	AllowOtherProfiles  bool
+	AllowChildren       bool
+	AllowPath           bool
 	// AllowRemote lets the tool read transcripts of other JAD servers (remote:<name>/...);
 	// Remotes are the remote entries it may use. Off by default.
 	AllowRemote bool
@@ -112,6 +115,7 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		name   string
 	}{
 		{&settings.AllowOtherSessions, "allow_other_sessions"},
+		{&settings.AllowOtherReasoning, "allow_other_reasoning"},
 		{&settings.AllowOtherProfiles, "allow_other_profiles"},
 		{&settings.AllowChildren, "allow_children"},
 		{&settings.AllowPath, "allow_path"},

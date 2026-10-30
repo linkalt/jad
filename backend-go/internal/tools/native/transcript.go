@@ -54,6 +54,8 @@ var transcriptRejectedProperties = map[string]string{
 type TranscriptFiles struct {
 	Messages string
 	Backup   string
+	// OtherSession is set when the transcript belongs to another session than the caller.
+	OtherSession bool
 }
 
 // TranscriptTarget is a profile transcript the source found: the canonical session reference
@@ -316,6 +318,9 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 				return t.fail(execution, tools.StatusError, "cursor_stale", "The transcript changed (compaction or reset) since this cursor was made; repeat the call without cursor")
 			}
 			offset = cursor.Bytes
+		}
+		if part == "reasoning" && files.OtherSession && !t.settings.AllowOtherReasoning {
+			return t.fail(execution, tools.StatusForbidden, "reasoning_denied", "Another session's reasoning is not shown: tools.native.transcript.allow_other_reasoning is false")
 		}
 		return t.detail(transcriptRun{ctx: ctx, execution: execution, file: file, turns: turns, complete: complete, identity: identity, selector: selector, source: source, path: path, label: label},
 			stepFrom, stepTo, part, offset)

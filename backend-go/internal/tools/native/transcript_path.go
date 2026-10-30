@@ -169,7 +169,7 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		if dir == "" {
 			return TranscriptFiles{}, "", t.fail(execution, tools.StatusNotFound, "no_transcript_yet", "Sub-agent run "+id+" has no transcript yet")
 		}
-		files := TranscriptFiles{Messages: filepath.Join(dir, "messages.jsonl")}
+		files := TranscriptFiles{Messages: filepath.Join(dir, "messages.jsonl"), OtherSession: ownerSession != callerSession}
 		if t.deniedFile(files.Messages, policy) {
 			return forbid("path_denied", "The sub-agent transcript is denied by the read path rules")
 		}
@@ -197,7 +197,9 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		if (otherSession || otherProfile) && t.deniedFile(target.Files.Messages, policy) {
 			return forbid("path_denied", "The transcript is denied by the read path rules")
 		}
-		return target.Files, "profile:" + target.Session + "/" + target.Profile, ""
+		files := target.Files
+		files.OtherSession = otherSession
+		return files, "profile:" + target.Session + "/" + target.Profile, ""
 	}
 	return invalid("unknown prefix " + kind + ":")
 }

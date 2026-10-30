@@ -1134,3 +1134,12 @@ Audit: `audit_findings/p6c_merged.md` (batch (i): P6CM-04, 07, 02, 08).
 Audit: `audit_findings/p7b_merged.md` (MRG-30, from R1-12).
 
 - **`transcript` and `transcripts` are not wrapped by `tool_event` hooks (decision, not a defect).** `buildNativeTools` wraps every native tool in the `tool_event` hooks (`WithToolEventHooksAll`), but the two transcript tools are appended after that wrapping, so a `pre_tool` hook does not see a transcript read while it sees every other native tool. `request_draft` is appended after it for the same reason (it is a question, not an action). The two transcript tools are read-only and only read a transcript the caller names or its own, so a hook would add an event for a read the user has no reason to gate. A hook that must see them is not served by this, and wrapping them is a separate decision.
+
+## Another session's reasoning is hidden by default (Go only, 2026-11-04)
+
+Audit: `audit_findings/p7b_merged.md` (MRG-07, from R3-07). Decided by the user.
+
+- **`tools.native.transcript.allow_other_reasoning`, default `false` (new key).** Reasoning is private planning. Until now a session that could read another session's transcript (`allow_other_sessions` true, the default) could also read its reasoning steps with `step` and `part: reasoning`. The new key sits in the family of `allow_other_sessions`, `allow_other_profiles` and `allow_children`, and gates one thing: `part: reasoning` on a transcript that belongs to another session. Other profiles of the caller's own session, the caller's own transcript and sub-agent runs of the caller's session keep their reasoning, unchanged. The key is not in `transcripts`, which lists and has no reasoning part.
+- **Denial.** A refused read returns status `forbidden` with the code `reasoning_denied` and the text "Another session's reasoning is not shown: tools.native.transcript.allow_other_reasoning is false". The check runs before the file is opened. The code is new and visible to the model; no existing code list or error table needed it, because the tool's error codes are not enumerated outside the code that returns them.
+- **Model-visible change.** With the default, a cross-session `part: reasoning` read returns the `reasoning_denied` result instead of the reasoning text. Every other read of another session is unchanged: the list, `part: both`, `part: call` and `part: result`.
+- **Enabling.** Set `allow_other_reasoning` to `true` in the `transcript` block of `tools.native`.

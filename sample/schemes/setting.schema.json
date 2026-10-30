@@ -1443,6 +1443,11 @@
                   "default": true,
                   "description": "false limits the tool to the caller's own session."
                 },
+                "allow_other_reasoning": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "true shows another session's reasoning in step detail; false refuses it with reasoning_denied. Reasoning is private planning."
+                },
                 "allow_other_profiles": {
                   "type": "boolean",
                   "default": true,
