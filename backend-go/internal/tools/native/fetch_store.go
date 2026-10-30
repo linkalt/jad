@@ -155,7 +155,8 @@ func (s *FetchStore) Page(cursor string, limit int64) (FetchPage, error) {
 		return FetchPage{}, &FetchStoreError{Message: "fetch cursor was not found"}
 	}
 	markdown := string(markdownBytes)
-	if metadata.ID != id || offset > int64(utf16Length(markdown)) {
+	length := int64(utf16Length(markdown))
+	if metadata.ID != id || offset > length {
 		return FetchPage{}, &FetchStoreError{Message: "fetch cursor is invalid"}
 	}
 	content, consumed := sliceFetchCharacters(markdown, offset, limit)
@@ -168,7 +169,7 @@ func (s *FetchStore) Page(cursor string, limit int64) (FetchPage, error) {
 		},
 		Content: content,
 	}
-	if nextOffset < int64(utf16Length(markdown)) {
+	if nextOffset < length {
 		page.NextCursor = fetchCursor(metadata.ID, nextOffset)
 	}
 	return page, nil
