@@ -200,7 +200,7 @@ Side by side at `3bf8c33`, the same shape appears twice in each of these pairs: 
 
 ### P6CM-18 (low, A) Crash residue in `.runs` — r1-12 — confirmed by reading
 
-**Open (batch iv, decision 2): no code change.** Ownership format decision needed. A sweep of `run-*.tmp` in `load` is unsafe on this directory: a temp file has no owner, and a second server on the same directory may be between `CreateTemp` and `Rename`, so a sweep can delete its in-flight file. A safe sweep needs the owning server or run in the temp name (a format change to `.runs`), or a lock per file. Decide the format before the sweep is written.
+**Deferred, low (user decision): no code change until all phases finish. Planned fix: owner-tagged temp name with a sweep that skips live owners, plus a test that a live owner's temp file survives.** Ownership format decision needed. A sweep of `run-*.tmp` in `load` is unsafe on this directory: a temp file has no owner, and a second server on the same directory may be between `CreateTemp` and `Rename`, so a sweep can delete its in-flight file. A safe sweep needs the owning server or run in the temp name (a format change to `.runs`), or a lock per file. Decide the format before the sweep is written.
 
 `write` creates `run-*.tmp` (`subagent_store.go:96`) and relies on `defer os.Remove` (`:99`), so a kill between create and rename leaves the file; `load` skips every name the manifest pattern does not match (`:120-141`) and nothing sweeps the directory. **low**: one small file per crash, never reclaimed.
 
