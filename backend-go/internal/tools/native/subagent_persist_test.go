@@ -392,3 +392,26 @@ func TestSubagentManifestKeepsTheSessionAndRootOfANestedRun(t *testing.T) {
 		t.Fatalf("old manifest restored as %+v, want owner alpha and no session or root", old)
 	}
 }
+
+func TestSubagentStoppingARestoredRunDoesNotPanic(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, subagentManifestDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	running := `{"version":1,"id":"sub_0000dddd","owner":"alpha","agent":"explore","task":"x","state":"running","started_at":"2025-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(root, subagentManifestDir, "sub_0000dddd.json"), []byte(running), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = manager.Close() })
+	external, ok := manager.External("sub_0000dddd")
+	if !ok {
+		t.Fatal("the restored run is not held")
+	}
+	restored := manager.byID("sub_0000dddd")
+	external.Stop("user_stop")
+	<-external.Done()
+	if reason := restored.takeStopReason(); reason != "" {
+		t.Errorf("a stop on an ended run kept the reason %q", reason)
+	}
+}

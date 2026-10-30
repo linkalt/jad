@@ -371,10 +371,13 @@ func (r *subagentRun) manifest() subagentManifest {
 func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subagentRun {
 	done := make(chan struct{})
 	close(done)
+	// The run has ended, so its context is already cancelled: a stop on it records no reason.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	return &subagentRun{
 		id: manifest.ID, owner: manifest.Owner, session: manifest.Session, root: manifest.Root, agent: manifest.Agent, task: manifest.Task,
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
-		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
+		cancel: cancel, ctx: ctx, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
 		store: store, restored: true,
 	}
