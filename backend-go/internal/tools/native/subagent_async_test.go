@@ -226,3 +226,9 @@ func TestSubagentAsyncSummaryIsNotPushedPastTheResultLimit(t *testing.T) {
 		t.Fatalf("the handle's summary is %d bytes, over the result limit %d", len(got), limit)
 	}
 }
+
+func TestSubagentBlockForWithoutAnAsyncHostIsZero(t *testing.T) {
+	if got := (&subagentTool{}).blockFor(map[string]any{"block_ms": int64(5)}); got != 0 {
+		t.Fatalf("blockFor without a host = %v, want 0", got)
+	}
+}

@@ -176,6 +176,9 @@ func handleOwner(execution tools.ExecutionContext) (string, bool) {
 
 // blockFor is the block the call asked for, or the default, within the async policy cap.
 func (s *subagentTool) blockFor(arguments map[string]any) time.Duration {
+	if s.async == nil {
+		return 0
+	}
 	var asked *int64
 	if value, ok := safeInteger(arguments["block_ms"]); ok {
 		asked = &value
