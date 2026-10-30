@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,14 +59,7 @@ type remoteAgentSettings struct {
 	timeout   time.Duration
 }
 
-func (r remoteAgentSettings) allowed(name string) bool {
-	for _, allowed := range r.names {
-		if allowed == name {
-			return true
-		}
-	}
-	return false
-}
+func (r remoteAgentSettings) allowed(name string) bool { return slices.Contains(r.names, name) }
 
 // remoteListText is appended to the tool description when the session enables remotes.
 func remoteListText(names []string) string {

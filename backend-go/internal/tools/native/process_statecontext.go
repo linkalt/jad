@@ -3,6 +3,7 @@ package native
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	"jad/backend-go/internal/sessionfs"
@@ -70,7 +71,7 @@ func CollectProcessStateContext(manager ProcessStateSource, settings sessionfs.N
 		listed = make([]ProcessSnapshot, 0, len(matching))
 		for _, snapshot := range matching {
 			values = append(values, string(snapshot.State))
-			if containsState(settings.DetailStates, string(snapshot.State)) {
+			if slices.Contains(settings.DetailStates, string(snapshot.State)) {
 				listed = append(listed, snapshot)
 			}
 		}

@@ -24,15 +24,6 @@ func countStates(states []string, values []string) []StateContextCount {
 	return counts
 }
 
-func containsState(states []string, wanted string) bool {
-	for _, state := range states {
-		if state == wanted {
-			return true
-		}
-	}
-	return false
-}
-
 func stateContextItemCount[Item any](items []Item, counts []StateContextCount) int {
 	return len(items) + len(counts)
 }

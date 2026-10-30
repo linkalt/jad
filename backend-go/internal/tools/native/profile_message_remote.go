@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,14 +36,7 @@ type remoteSettings struct {
 	directory *remote.Directory
 }
 
-func (r remoteSettings) allowed(name string) bool {
-	for _, allowed := range r.names {
-		if allowed == name {
-			return true
-		}
-	}
-	return false
-}
+func (r remoteSettings) allowed(name string) bool { return slices.Contains(r.names, name) }
 
 // executeRemote sends the message to remote:<name>/<session>/<category>/<profile> and follows the
 // run the way a local message is followed: an answer within block_ms, else a handle.

@@ -2,6 +2,7 @@ package native
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
@@ -58,7 +59,7 @@ func CollectSubagentStateContext(manager *SubagentManager, owner string, setting
 		listed = make([]subagentRunView, 0, len(matching))
 		for _, view := range matching {
 			values = append(values, view.state)
-			if containsState(settings.DetailStates, view.state) {
+			if slices.Contains(settings.DetailStates, view.state) {
 				listed = append(listed, view)
 			}
 		}

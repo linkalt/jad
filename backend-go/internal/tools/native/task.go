@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf16"
 
@@ -661,7 +662,7 @@ func collectTaskSummary(source TaskStateSource, settings sessionfs.NativeTaskSta
 	hasMore := false
 	for _, task := range listed.Tasks {
 		values = append(values, string(task.Status))
-		if !containsState(settings.DetailStatuses, string(task.Status)) {
+		if !slices.Contains(settings.DetailStatuses, string(task.Status)) {
 			continue
 		}
 		if len(items) >= int(settings.Limit) {
