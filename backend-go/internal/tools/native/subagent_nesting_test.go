@@ -264,11 +264,11 @@ func TestANestedToolRunsAtOnceInAChild(t *testing.T) {
 func TestNestedRunBelongsToTheSessionThatStartedTheTree(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	var grandchild string
+	grandchild := make(chan string, 1)
 	catalog, manager, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf")),
 		map[string]nestedBehaviour{
 			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
-				grandchild = childCall(t, ctx, request, "subagent", `{"task":"deep","agent":"leaf","block_ms":5}`)
+				grandchild <- childCall(t, ctx, request, "subagent", `{"task":"deep","agent":"leaf","block_ms":5}`)
 				<-release
 				return SubagentResult{Text: "boss done"}, nil
 			},
@@ -277,11 +277,13 @@ func TestNestedRunBelongsToTheSessionThatStartedTheTree(t *testing.T) {
 	go func() {
 		_, _ = catalog.ExecuteFunctionCall(context.Background(), []byte(`{"type":"function_call","call_id":"c","name":"subagent","arguments":"{\"task\":\"go\",\"agent\":\"boss\",\"block_ms\":5}"}`), tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", SessionKey: "alpha"})
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for grandchild == "" && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	var childID string
+	select {
+	case out := <-grandchild:
+		childID = runIDOf(t, out)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the boss did not start its grandchild")
 	}
-	childID := runIDOf(t, grandchild)
 	if _, owner, found := manager.RunTranscript(childID); !found || owner != "alpha" {
 		t.Fatalf("RunTranscript(grandchild) owner = %q, found %v; want the session alpha", owner, found)
 	}
