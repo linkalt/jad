@@ -106,18 +106,8 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The run id could not be created"), nil
 		}
 		id = "rs_" + hex.EncodeToString(random)
-		label, cut := cutUTF8(target.String()+": "+oneLine(task), profileMessageLabelBytes)
-		if cut {
-			label += "..."
-		}
-		s.async.beginProfileMessage(id)
-		if err := s.async.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindRemoteSubagent, Label: label}); err != nil {
-			s.async.abandonProfileMessage(id)
-			code := "spawn_failed"
-			if errors.Is(err, asyncmgr.ErrCapacity) {
-				code = "async_capacity_reached"
-			}
-			return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
+		if err := s.async.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindRemoteSubagent, Label: handleLabel(target.String() + ": " + oneLine(task))}); err != nil {
+			return tools.ExecutionError(callID, tools.StatusError, registerErrorCode(err), err.Error()), nil
 		}
 	}
 	body := map[string]any{"session": target.Session, "profile": target.Profile, "agent": target.Agent, "task": task}

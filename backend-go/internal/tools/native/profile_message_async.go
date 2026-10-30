@@ -63,6 +63,34 @@ func (h *AsyncHost) abandonProfileMessage(id string) {
 	delete(h.profileStarting, id)
 }
 
+// registerProfileMessage registers a handle the way a message or a remote run starts: the
+// handle is marked as starting first, and the mark is dropped again when registration fails.
+func (h *AsyncHost) registerProfileMessage(id string, reg asyncmgr.Registration) error {
+	h.beginProfileMessage(id)
+	if err := h.manager.Register(reg); err != nil {
+		h.abandonProfileMessage(id)
+		return err
+	}
+	return nil
+}
+
+// handleLabel is the label a handle shows for its message or task, cut to profileMessageLabelBytes.
+func handleLabel(text string) string {
+	label, cut := cutUTF8(text, profileMessageLabelBytes)
+	if cut {
+		label += "..."
+	}
+	return label
+}
+
+// registerErrorCode is the error code a handle that failed to register reports.
+func registerErrorCode(err error) string {
+	if errors.Is(err, asyncmgr.ErrCapacity) {
+		return "async_capacity_reached"
+	}
+	return "spawn_failed"
+}
+
 // stopProfileMessage stops the run of a handle; a handle still starting is stopped as
 // soon as its run exists.
 func (h *AsyncHost) stopProfileMessage(id, reason string) {
@@ -140,18 +168,8 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 			tools.Information{Key: "system_error", Value: err.Error()}), nil
 	}
 	id := "pm_" + hex.EncodeToString(random)
-	label, cut := cutUTF8(profile+": "+oneLine(message), profileMessageLabelBytes)
-	if cut {
-		label += "..."
-	}
-	host.beginProfileMessage(id)
-	if err := host.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindProfileMessage, Label: label, Queued: true}); err != nil {
-		host.abandonProfileMessage(id)
-		code := "spawn_failed"
-		if errors.Is(err, asyncmgr.ErrCapacity) {
-			code = "async_capacity_reached"
-		}
-		return tools.ExecutionError(callID, tools.StatusError, code, err.Error()), nil
+	if err := host.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindProfileMessage, Label: handleLabel(profile + ": " + oneLine(message)), Queued: true}); err != nil {
+		return tools.ExecutionError(callID, tools.StatusError, registerErrorCode(err), err.Error()), nil
 	}
 	run, err := plan.Start(ctx)
 	if err != nil {
