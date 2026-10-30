@@ -318,3 +318,39 @@ func TestEnvironmentWithoutServerToken(t *testing.T) {
 		}
 	}
 }
+
+func TestRunRipgrepChildEnvironmentIsTheBashAllowlist(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell fixture")
+	}
+	t.Setenv("FIXTURE_PROVIDER_KEY", "provider-secret")
+	t.Setenv("UNLISTED_AMBIENT", "ambient-value")
+	directory := t.TempDir()
+	dump := filepath.Join(directory, "environment")
+	binary := filepath.Join(directory, "fake-rg")
+	script := "#!/bin/sh\nenv > " + dump + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := runRipgrep(context.Background(), nativeGrepSettings(binary), nil, "unused", []string{"."}, directory)
+	if result.failure != nil {
+		t.Fatalf("runRipgrep failure = %+v", result.failure)
+	}
+	assertChildEnvironmentHasNoAmbientSecrets(t, dump)
+	settings := globSettingsForTest(binary, false)
+	executeGlobForTest(t, directory, settings, map[string]any{"pattern": "*"})
+	assertChildEnvironmentHasNoAmbientSecrets(t, dump)
+}
+
+func assertChildEnvironmentHasNoAmbientSecrets(t *testing.T, dump string) {
+	t.Helper()
+	environment, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"FIXTURE_PROVIDER_KEY=", "UNLISTED_AMBIENT=", "JAD_API_TOKEN="} {
+		if strings.Contains(string(environment), "\n"+name) || strings.HasPrefix(string(environment), name) {
+			t.Fatalf("child environment contains %s", name)
+		}
+	}
+}

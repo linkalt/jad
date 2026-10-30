@@ -350,11 +350,18 @@ func readBoundedAndDrain(reader io.Reader, limit int) string {
 	}
 }
 
+// environmentWithoutServerToken keeps only the bash allowlist, so the provider key and
+// every other ambient variable stay out of ripgrep and glob children, as they do for bash.
 func environmentWithoutServerToken() []string {
+	allowed := make(map[string]struct{}, len(bashEnvironmentAllowlist))
+	for _, name := range bashEnvironmentAllowlist {
+		allowed[name] = struct{}{}
+	}
 	environment := os.Environ()
 	safe := make([]string, 0, len(environment))
 	for _, value := range environment {
-		if !strings.HasPrefix(value, "JAD_API_TOKEN=") {
+		name, _, _ := strings.Cut(value, "=")
+		if _, ok := allowed[name]; ok {
 			safe = append(safe, value)
 		}
 	}
