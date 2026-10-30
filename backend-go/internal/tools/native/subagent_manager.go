@@ -920,30 +920,6 @@ func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix string) int {
 	return cancelled
 }
 
-// CancelOwnersWithPrefix is CancelOwner for every session key that starts with prefix, so a
-// session is cancelled whatever profile started the run.
-func (m *SubagentManager) CancelOwnersWithPrefix(prefix string) int {
-	if m == nil {
-		return 0
-	}
-	m.mu.Lock()
-	var runs []*subagentRun
-	for _, run := range m.runs {
-		if strings.HasPrefix(run.owner, prefix) {
-			runs = append(runs, run)
-		}
-	}
-	m.mu.Unlock()
-	cancelled := 0
-	for _, run := range runs {
-		if run.active() {
-			run.cancel()
-			cancelled++
-		}
-	}
-	return cancelled
-}
-
 // list returns the retained runs of one session, newest first.
 func (m *SubagentManager) list(owner string) []subagentRunView {
 	runs := m.ownedRuns(owner)

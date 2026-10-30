@@ -201,7 +201,6 @@ type remoteRun struct {
 	stopReason string
 	outcome    ProfileMessageOutcome
 	stopOnce   sync.Once
-	stopCtx    context.Context
 }
 
 func (r *remoteRun) Queued() bool             { return false }
