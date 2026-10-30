@@ -130,7 +130,10 @@ func startRemoteRun(ctx context.Context, directory *remote.Directory, target rem
 	run := &remoteRun{client: client, target: target, what: what, id: view.ID, began: time.Now(), start: make(chan struct{}), done: make(chan struct{}), state: view.State}
 	close(run.start)
 	if !directory.Go(func(hubCtx context.Context) { run.follow(hubCtx, timeout) }) {
-		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: "the server is shutting down"}
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopCallTimeout)
+		defer cancel()
+		_, _ = client.StopRun(stopCtx, view.ID)
+		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: "the server is shutting down; the remote run was asked to stop"}
 	}
 	return run, nil
 }

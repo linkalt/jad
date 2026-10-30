@@ -63,6 +63,8 @@ type peerBackend struct {
 	subs     []remoteapi.SubagentRequest
 	runs     []*peerRun
 	err      error
+	// onSubagentStart runs after the peer accepted a sub-agent run, before it answers.
+	onSubagentStart func()
 }
 
 func (b *peerBackend) Profiles(context.Context, string) ([]string, error) {
@@ -91,6 +93,9 @@ func (b *peerBackend) StartSubagent(_ context.Context, r remoteapi.SubagentReque
 	b.subs = append(b.subs, r)
 	run := newPeerRun()
 	b.runs = append(b.runs, run)
+	if b.onSubagentStart != nil {
+		b.onSubagentStart()
+	}
 	return run, nil
 }
 func (b *peerBackend) run(t *testing.T, index int) *peerRun {

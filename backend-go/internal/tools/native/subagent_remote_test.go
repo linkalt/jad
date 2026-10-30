@@ -311,3 +311,15 @@ func TestRemoteSubagentInlineCancelDoesNotWaitForAnUnreachableRemote(t *testing.
 		t.Fatal("the cancelled inline call still waits for the remote (lost_after_ms is 1500)")
 	}
 }
+
+func TestRemoteSubagentStartRefusedByAClosedHubStopsTheRemoteRun(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	f.peer.backend.onSubagentStart = f.hub.Close
+	out := f.start(t, remoteAgent, 0, remoteCaller)
+	if !strings.Contains(out, "shutting down") || !strings.Contains(out, "asked to stop") {
+		t.Fatalf("result:\n%s", out)
+	}
+	if stops := f.peer.backend.run(t, 0).stops(); len(stops) != 1 {
+		t.Fatalf("the remote run was asked to stop %d times, want 1", len(stops))
+	}
+}
