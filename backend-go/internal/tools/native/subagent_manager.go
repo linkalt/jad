@@ -217,6 +217,7 @@ type subagentRun struct {
 	// changes is set when the agent can change files: its result then warns that an
 	// unfinished run may have left changes behind.
 	changes   bool
+	resultMax int64
 	startedAt time.Time
 	cancel    context.CancelFunc
 	ctx       context.Context
@@ -263,6 +264,7 @@ type subagentRun struct {
 type subagentRunView struct {
 	id, agent, task, state, reason string
 	result                         SubagentResult
+	resultMax                      int64
 	cut                            bool
 	changes                        bool
 	files                          []subagentFileChange
@@ -283,7 +285,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -564,6 +566,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		task:          subagentTaskPreview(spec.request.Task),
 		timeoutMS:     spec.request.Agent.TimeoutMS,
 		changes:       spec.changes,
+		resultMax:     spec.resultMax,
 		note:          spec.note,
 		startedAt:     time.Now(),
 		countedWriter: spec.writerReserved,

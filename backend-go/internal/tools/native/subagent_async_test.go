@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -206,5 +207,22 @@ func TestSubagentReportedInTheCallConsumesItsSignal(t *testing.T) {
 	}
 	if counts := f.host.Manager().Counts("s1"); counts.Unread != 0 || counts.Total != 1 {
 		t.Errorf("counts = %+v, want the finished run read", counts)
+	}
+}
+
+// The files a writer changed are put ahead of its summary, and the whole summary stays
+// within the run's result limit: the files line does not add to the cut answer.
+func TestSubagentAsyncSummaryIsNotPushedPastTheResultLimit(t *testing.T) {
+	const limit = 1024
+	var files []subagentFileChange
+	for i := range 20 {
+		files = append(files, subagentFileChange{Path: fmt.Sprintf("generated/%02d/%s.go", i, strings.Repeat("x", 60)), Action: "created"})
+	}
+	view := subagentRunView{
+		state: subagentRunDone, tracked: true, changes: true,
+		files: files, result: SubagentResult{Text: strings.Repeat("a", limit)},
+	}
+	if got := subagentAsyncResult(view).Summary; len(got) > limit {
+		t.Fatalf("the handle's summary is %d bytes, over the result limit %d", len(got), limit)
 	}
 }

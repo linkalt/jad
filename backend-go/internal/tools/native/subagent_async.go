@@ -55,9 +55,11 @@ func (h *subagentAsyncHandle) markRead(id string) { h.host.Manager().MarkRead(h.
 // or the partial text a cut-off child left, or the failure reason.
 func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	result := subagentAsyncOutcome(run)
-	// The files a writer changed come first, so the summary's cut keeps them.
+	// The files a writer changed come first, so the summary's cut keeps them. The answer
+	// gives up what the files line takes, so the summary stays within the run's limit.
 	if files, _ := cutUTF8(changedFilesText(run), subagentAsyncFilesBytes); files != "" {
-		result.Summary = strings.TrimSpace(files + "\n" + result.Summary)
+		answer, _ := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
+		result.Summary = strings.TrimSpace(files + "\n" + answer)
 	}
 	return result
 }
