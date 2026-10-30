@@ -174,6 +174,54 @@ func TestStrictFirstItemDirectorySyncFailureRollsBack(t *testing.T) {
 	}
 }
 
+func TestPublishedReplacementsSyncTheirDirectory(t *testing.T) {
+	for _, mode := range []DurabilityMode{DurabilityTurn, DurabilityStrict, DurabilityProcess} {
+		t.Run(string(mode), func(t *testing.T) {
+			dir := t.TempDir()
+			journal, err := NewJournal(filepath.Join(dir, "messages.jsonl"), mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := &dirSyncRecorder{}
+			journal.dirSyncHook = recorder.hook
+			if err := journal.ReplaceRecords([]byte(`{"a":1}`)); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{dir}
+			if mode == DurabilityProcess {
+				want = nil
+			}
+			if got := recorder.take(); strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Fatalf("ReplaceRecords syncs = %v, want %v", got, want)
+			}
+			if err := journal.Append([]byte(`{"a":2}`)); err != nil {
+				t.Fatal(err)
+			}
+			recorder.take()
+			archiveDir := filepath.Join(dir, "deleted-history")
+			if err := os.Mkdir(archiveDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			size := int64(len(`{"a":1}`) + 1 + len(`{"a":2}`) + 1)
+			if err := journal.ReplaceWithPrefix(int64(len(`{"a":1}`)+1), size, filepath.Join(archiveDir, "archive.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+			wantPrefix := append([]string(nil), want...)
+			if mode != DurabilityProcess {
+				wantPrefix = []string{archiveDir, dir}
+			}
+			if got := recorder.take(); strings.Join(got, "|") != strings.Join(wantPrefix, "|") {
+				t.Fatalf("ReplaceWithPrefix syncs = %v, want %v", got, wantPrefix)
+			}
+			recorder.fail = dir
+			err = journal.ReplaceRecords([]byte(`{"a":3}`))
+			if mode != DurabilityProcess && (err == nil || !strings.Contains(err.Error(), "sync transcript directory")) {
+				t.Fatalf("ReplaceRecords error = %v, want directory sync failure", err)
+			}
+		})
+	}
+}
+
 func TestJournalCreationSyncsItsDirectoryOnce(t *testing.T) {
 	for _, mode := range []DurabilityMode{DurabilityTurn, DurabilityStrict, DurabilityProcess} {
 		t.Run(string(mode), func(t *testing.T) {

@@ -719,7 +719,13 @@ func writeJSONAtomic(path string, data []byte, sync bool) (result error) {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, path)
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	if sync {
+		return syncDirectory(filepath.Dir(path))
+	}
+	return nil
 }
 
 func validTurnID(value string) bool {

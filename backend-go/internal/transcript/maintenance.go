@@ -655,7 +655,13 @@ func backupTranscript(source, destination, mode string, minTurns int, durability
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, destination)
+	if err := os.Rename(tempPath, destination); err != nil {
+		return err
+	}
+	if durability != DurabilityProcess {
+		return syncDirectory(filepath.Dir(destination))
+	}
+	return nil
 }
 
 func (s *TurnStore) Reset() error {
@@ -816,7 +822,13 @@ func writeCompactionJSONAtomic(path string, encoded []byte, durability Durabilit
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	if durability != DurabilityProcess {
+		return syncDirectory(filepath.Dir(path))
+	}
+	return nil
 }
 
 func hashTranscriptFile(path string) (string, int64, error) {

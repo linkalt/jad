@@ -248,6 +248,11 @@ func (j *Journal) ReplaceWithPrefix(boundary, expectedSize int64, archivePath st
 		if err := os.Rename(archiveTempPath, archivePath); err != nil {
 			return fmt.Errorf("publish front-compaction archive: %w", err)
 		}
+		if j.durability != DurabilityProcess {
+			if err := j.syncDirectory(filepath.Dir(archivePath)); err != nil {
+				return fmt.Errorf("sync front-compaction archive directory: %w", err)
+			}
+		}
 	}
 
 	prefixTemp, err := os.CreateTemp(filepath.Dir(j.path), ".front-compact-prefix-*")
@@ -280,5 +285,10 @@ func (j *Journal) ReplaceWithPrefix(boundary, expectedSize int64, archivePath st
 		return fmt.Errorf("publish front-compaction transcript: %w", err)
 	}
 	j.generation++
+	if j.durability != DurabilityProcess {
+		if err := j.syncDirectory(filepath.Dir(j.path)); err != nil {
+			return fmt.Errorf("sync transcript directory: %w", err)
+		}
+	}
 	return nil
 }

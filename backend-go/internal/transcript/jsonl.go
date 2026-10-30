@@ -127,6 +127,11 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 		return err
 	}
 	j.generation++
+	if j.durability != DurabilityProcess {
+		if err := j.syncDirectory(filepath.Dir(j.path)); err != nil {
+			return fmt.Errorf("sync transcript directory: %w", err)
+		}
+	}
 	return nil
 }
 
