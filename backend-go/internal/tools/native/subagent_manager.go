@@ -249,9 +249,10 @@ type subagentRun struct {
 
 	store *subagentStore // nil when runs are not persisted
 	// restored marks a run loaded from disk. Its text is not in memory: it is read
-	// from the transcript the first time the run is looked at.
-	restored   bool
-	textLoaded bool
+	// from the transcript the first time the run is looked at; a reader that arrives
+	// during that read waits for it.
+	restored bool
+	textOnce sync.Once
 }
 
 // subagentRunView is a copy of a run's state taken under its lock.
@@ -352,14 +353,17 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 
 // loadText reads the text of a restored run from its transcript, once. A finished run
 // gets its final answer; a run that was cut off or lost gets the newest text it wrote.
-// A missing or unreadable transcript leaves the text empty. The text is cut to limit.
-func (r *subagentRun) loadText(limit int64) {
-	r.mu.Lock()
-	if !r.restored || r.textLoaded {
-		r.mu.Unlock()
-		return
+// A missing or unreadable transcript leaves the text empty. The text is kept whole: a
+// reader cuts what it returns, so the first reader's limit does not decide what later
+// readers see.
+func (r *subagentRun) loadText() {
+	if r.restored {
+		r.textOnce.Do(r.readText)
 	}
-	r.textLoaded = true
+}
+
+func (r *subagentRun) readText() {
+	r.mu.Lock()
 	dir, state := r.dir, r.state
 	r.mu.Unlock()
 	if dir == "" {
@@ -373,10 +377,8 @@ func (r *subagentRun) loadText(limit int64) {
 	if state == subagentRunDone {
 		text = answers.last
 	}
-	text, cut := cutUTF8(text, limit)
 	r.mu.Lock()
 	r.result.Text = text
-	r.cut = r.cut || cut
 	r.mu.Unlock()
 }
 

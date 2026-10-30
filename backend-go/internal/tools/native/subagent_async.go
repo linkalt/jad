@@ -132,7 +132,7 @@ func (d *subagentDriver) Detail(id string, maxBytes int) string {
 		}
 		return text
 	}
-	run.loadText(int64(maxBytes))
+	run.loadText()
 	view = run.view()
 	text := strings.TrimSpace(view.result.Text)
 	if files := changedFilesText(view); files != "" {

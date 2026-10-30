@@ -42,7 +42,7 @@ func restoredOutput(t *testing.T, manager *SubagentManager, owner, id string) st
 	if run == nil {
 		return "error_code: unknown_run"
 	}
-	run.loadText(1024)
+	run.loadText()
 	out, err := (&subagentTool{}).renderRun("c", run.view())
 	if err != nil {
 		t.Fatal(err)
@@ -334,5 +334,31 @@ func TestSubagentNonPersistentManagerWritesNothing(t *testing.T) {
 	subagentCall(t, catalog, `{"task":"x"}`)
 	if _, err := os.Stat(filepath.Join(root, subagentManifestDir)); !os.IsNotExist(err) {
 		t.Errorf("persist_runs off still created %s (err %v)", subagentManifestDir, err)
+	}
+}
+
+func TestSubagentRestoredAnswerIsNotPinnedToTheFirstReadersLimit(t *testing.T) {
+	root := t.TempDir()
+	answer := strings.Repeat("a", 21000)
+	transcript := writeTranscript(t, root, "call-7", answer)
+	launcher := &fakeLauncher{run: func(_ context.Context, request SubagentRequest) (SubagentResult, error) {
+		request.OnTranscript(transcript)
+		return SubagentResult{Text: answer, Rounds: 1, Tokens: 5}, nil
+	}}
+	first, firstManager := persistedCatalog(t, root, launcher, 10)
+	id := startedRunID(t, first, firstManager, "", `{"task":"x"}`)
+	_ = firstManager.Close()
+
+	_, restarted := persistedCatalog(t, root, &fakeLauncher{}, 10)
+	driver := &subagentDriver{host: hostWith(t, restarted)}
+	cutBefore := restarted.byID(id).view().cut
+	if got := driver.Detail(id, 4096); len(got) != 4096 {
+		t.Fatalf("a status-sized read returned %d bytes, want 4096", len(got))
+	}
+	if got := driver.Detail(id, 32768); len(got) != len(answer) {
+		t.Fatalf("a later, larger read returned %d bytes, want %d: the first reader's limit was kept", len(got), len(answer))
+	}
+	if cutAfter := restarted.byID(id).view().cut; cutAfter != cutBefore {
+		t.Fatalf("a read changed the retained answer's cut flag from %v to %v", cutBefore, cutAfter)
 	}
 }
