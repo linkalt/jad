@@ -100,19 +100,14 @@ func (b *peerBackend) StartSubagent(_ context.Context, r remoteapi.SubagentReque
 }
 func (b *peerBackend) run(t *testing.T, index int) *peerRun {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	eventually(t, fmt.Sprintf("the peer to start run %d", index), func() bool {
 		b.mu.Lock()
-		if index < len(b.runs) {
-			run := b.runs[index]
-			b.mu.Unlock()
-			return run
-		}
-		b.mu.Unlock()
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("the peer never started run %d", index)
-	return nil
+		defer b.mu.Unlock()
+		return index < len(b.runs)
+	})
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.runs[index]
 }
 
 // peer is a fake remote JAD: the real remote API over a fake backend, on plain http.
@@ -126,16 +121,18 @@ type peer struct {
 
 // switchHandler lets a test cut the connection or answer with something else.
 type switchHandler struct {
-	mu     sync.Mutex
-	next   http.Handler
-	cut    atomic.Bool
-	polled atomic.Int32
+	mu      sync.Mutex
+	next    http.Handler
+	cut     atomic.Bool
+	dropped atomic.Int32
+	polled  atomic.Int32
 }
 
 func (h *switchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cut.Load() {
 		if hj, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hj.Hijack(); err == nil {
+				h.dropped.Add(1)
 				conn.Close()
 				return
 			}
@@ -277,7 +274,6 @@ func TestRemoteProfileMessageBecomesAHandleAndWaitStatusStopWork(t *testing.T) {
 		t.Fatalf("status:\n%s", status)
 	}
 	go func() {
-		time.Sleep(50 * time.Millisecond)
 		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "the late answer"})
 	}()
 	waited := f.asyncCall(t, remoteCaller.SessionKey, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")})
@@ -295,11 +291,8 @@ func TestRemoteProfileMessageStopStopsTheRemoteRun(t *testing.T) {
 	if !strings.Contains(stopped, `"state":"stopped"`) {
 		t.Fatalf("stop:\n%s", stopped)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for len(run.stops()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(run.stops()) == 0 || run.stops()[0] != "remote_stop" {
+	eventually(t, "the remote run to be asked to stop", func() bool { return len(run.stops()) > 0 })
+	if run.stops()[0] != "remote_stop" {
 		t.Fatalf("the remote run was not stopped: %v", run.stops())
 	}
 }
@@ -327,7 +320,7 @@ func TestRemoteProfileMessageRecoversFromABriefDrop(t *testing.T) {
 	out := f.send(t, remoteTarget, 0, remoteCaller)
 	id := handleIDPattern.FindString(out)
 	f.peer.handler.cut.Store(true)
-	time.Sleep(300 * time.Millisecond)
+	eventually(t, "a poll to fail on the dropped connection", func() bool { return f.peer.handler.dropped.Load() > 0 })
 	f.peer.handler.cut.Store(false)
 	f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "survived"})
 	waited := f.asyncCall(t, remoteCaller.SessionKey, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("20000")})
@@ -466,13 +459,7 @@ func TestRemoteProfileMessageLocalTimeoutStopsTheRemoteRun(t *testing.T) {
 	if !strings.Contains(waited, `"state":"timed_out"`) {
 		t.Fatalf("timeout:\n%s", waited)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for len(run.stops()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(run.stops()) == 0 {
-		t.Fatal("the remote run kept going after the local timeout")
-	}
+	eventually(t, "the remote run to be asked to stop after the local timeout", func() bool { return len(run.stops()) > 0 })
 }
 
 func TestRemoteProfileMessageCloseEndsFollowersWithoutLeaks(t *testing.T) {
@@ -485,13 +472,7 @@ func TestRemoteProfileMessageCloseEndsFollowersWithoutLeaks(t *testing.T) {
 	f.host.Close()
 	f.peer.server.Close()
 	f.peer.api.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > before+4 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if after := runtime.NumGoroutine(); after > before+4 {
-		t.Fatalf("goroutines: %d before, %d after closing the hub", before, after)
-	}
+	eventually(t, fmt.Sprintf("the goroutines to drop back to %d after closing the hub (%d before)", before+4, before), func() bool { return runtime.NumGoroutine() <= before+4 })
 }
 
 func TestRemoteConfigNamesMustHaveAFile(t *testing.T) {

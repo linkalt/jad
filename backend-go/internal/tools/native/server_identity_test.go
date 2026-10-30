@@ -137,13 +137,9 @@ func TestSubagentCancelOwnerReachesAQueuedRun(t *testing.T) {
 	if got := manager.CancelOwner("alpha"); got != 2 {
 		t.Fatalf("CancelOwner = %d, want 2 (one running, one queued)", got)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(asyncCallAs(t, catalog, "alpha", `{"action":"status","id":"`+queued+`"}`), "stopped") {
-		if time.Now().After(deadline) {
-			t.Fatal("the queued run did not end as stopped")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(t, "the queued run to end as stopped", func() bool {
+		return strings.Contains(asyncCallAs(t, catalog, "alpha", `{"action":"status","id":"`+queued+`"}`), "stopped")
+	})
 }
 
 func stateContextSettings(states ...string) sessionfs.NativeSubagentStateContextSettings {
@@ -158,10 +154,9 @@ func TestSubagentStateContextListsOnlyTheSessionsRunsInTheAllowedStates(t *testi
 	subagentCallAs(t, first, "beta", `{"task":"belongs to beta","block_ms":5}`)
 	close(release)
 	// Both are done now.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(asyncCallAs(t, first, "alpha", `{"action":"status","id":"`+running+`"}`), "late answer") {
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(t, "the running run to finish", func() bool {
+		return strings.Contains(asyncCallAs(t, first, "alpha", `{"action":"status","id":"`+running+`"}`), "late answer")
+	})
 
 	section, err := CollectSubagentStateContext(manager, "alpha", stateContextSettings("done"))
 	if err != nil {
@@ -273,13 +268,7 @@ func TestSubagentCancelUnmanagedOwnerKeepsTheStopReason(t *testing.T) {
 	// A run without a handle keeps its call waiting, so the call runs beside the test.
 	done := make(chan string, 1)
 	go func() { done <- subagentCall(t, catalog, `{"task":"one"}`) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for manager.CancelUnmanagedOwner(testSessionKey, "user_stop") == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the unmanaged run was never active to cancel")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	eventually(t, "the unmanaged run to be active", func() bool { return manager.CancelUnmanagedOwner(testSessionKey, "user_stop") > 0 })
 	if out := <-done; !strings.Contains(out, "stopped") || !strings.Contains(out, "user_stop") {
 		t.Fatalf("the stopped run does not say why it stopped:\n%s", out)
 	}

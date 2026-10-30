@@ -121,7 +121,6 @@ func TestRemoteSubagentHandleWaitStatusAndStop(t *testing.T) {
 		t.Fatalf("list:\n%s", list)
 	}
 	go func() {
-		time.Sleep(40 * time.Millisecond)
 		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "found it"})
 	}()
 	waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")})
@@ -135,13 +134,7 @@ func TestRemoteSubagentHandleWaitStatusAndStop(t *testing.T) {
 	if !strings.Contains(stopped, `"state":"stopped"`) {
 		t.Fatalf("stop:\n%s", stopped)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for len(run.stops()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(run.stops()) == 0 {
-		t.Fatal("async stop never reached the remote run")
-	}
+	eventually(t, "the async stop to reach the remote run", func() bool { return len(run.stops()) > 0 })
 }
 
 func TestRemoteSubagentConnectionDropBecomesLost(t *testing.T) {
@@ -162,13 +155,7 @@ func TestRemoteSubagentLocalTimeoutStopsTheRemoteRun(t *testing.T) {
 	if !strings.Contains(waited, `"state":"timed_out"`) {
 		t.Fatalf("timeout:\n%s", waited)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for len(run.stops()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(run.stops()) == 0 {
-		t.Fatal("the remote run kept going after the local timeout")
-	}
+	eventually(t, "the remote run to be asked to stop after the local timeout", func() bool { return len(run.stops()) > 0 })
 }
 
 func TestRemoteSubagentRefusals(t *testing.T) {
@@ -265,13 +252,7 @@ func TestRemoteSubagentCloseLeavesNoGoroutines(t *testing.T) {
 	f.host.Close()
 	f.peer.server.Close()
 	f.peer.api.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > before+4 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if after := runtime.NumGoroutine(); after > before+4 {
-		t.Fatalf("goroutines: %d before, %d after", before, after)
-	}
+	eventually(t, fmt.Sprintf("goroutines to drop back to %d (%d before)", before+4, before), func() bool { return runtime.NumGoroutine() <= before+4 })
 }
 
 func TestRemoteSubagentConfigNamesMustHaveAFile(t *testing.T) {

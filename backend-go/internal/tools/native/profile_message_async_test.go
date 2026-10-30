@@ -123,6 +123,13 @@ func (m *controlMessenger) run(t *testing.T, index int) *controlRun {
 	return m.runs[index]
 }
 
+// started counts the runs the messenger has started so far.
+func (m *controlMessenger) started() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.runs)
+}
+
 type profileMessageHandleFixture struct {
 	host      *AsyncHost
 	messenger *controlMessenger
@@ -188,16 +195,10 @@ var sessionCaller = tools.ExecutionContext{SessionKey: "s1:main"}
 func TestProfileMessageAnsweringWithinBlockMsReturnsTheAnswerAndConsumesTheSignal(t *testing.T) {
 	f := newProfileMessageHandleFixture(t, nil, nil)
 	go func() {
-		for {
-			f.messenger.mu.Lock()
-			n := len(f.messenger.runs)
-			f.messenger.mu.Unlock()
-			if n > 0 {
-				f.messenger.run(t, 0).finish(ProfileMessageOutcome{Text: "looks fine"})
-				return
-			}
+		for f.messenger.started() == 0 {
 			time.Sleep(time.Millisecond)
 		}
+		f.messenger.run(t, 0).finish(ProfileMessageOutcome{Text: "looks fine"})
 	}()
 	out := f.send(t, sessionCaller, 5000)
 	if !strings.Contains(out, "looks fine") || !strings.Contains(out, "answered") || strings.Contains(out, "Do not send") {
@@ -254,17 +255,9 @@ func TestProfileMessageQueuedHandleIsQueuedUntilTheTargetIsFree(t *testing.T) {
 		t.Fatalf("list does not show the queued state:\n%s", list)
 	}
 	f.messenger.run(t, 0).begin()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		list := f.asyncCall(t, sessionCaller, map[string]any{"action": "list", "state": "active"})
-		if strings.Contains(list, `"state":"running"`) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the handle never became running:\n%s", list)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	eventually(t, "the handle to become running", func() bool {
+		return strings.Contains(f.asyncCall(t, sessionCaller, map[string]any{"action": "list", "state": "active"}), `"state":"running"`)
+	})
 }
 
 func TestProfileMessageStopOfAQueuedAndOfARunningHandle(t *testing.T) {
@@ -368,19 +361,7 @@ func TestProfileMessageWithoutTheAsyncHostWaitsInlineAndCancelStopsIt(t *testing
 		out, _ := tool.Execute(ctx, map[string]any{"profile": "reviewer", "message": "hi", "block_ms": json.Number("0")}, tools.ExecutionContext{CallID: "c", SessionKey: "s1:main"})
 		done <- out
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		messenger.mu.Lock()
-		n := len(messenger.runs)
-		messenger.mu.Unlock()
-		if n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the message never started")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	eventually(t, "the message to start", func() bool { return messenger.started() == 1 })
 	cancel()
 	select {
 	case out := <-done:
@@ -411,16 +392,10 @@ func TestProfileMessageFromAChildIsAHandleOnlyWhenTheChildHasTheAsyncTool(t *tes
 	// A child without the async tool cannot collect a handle, so the call waits for the end.
 	without := tools.ExecutionContext{CallID: "c2", SessionKey: "s1:main", ProcessOwner: "sub_00000002", AgentDepth: 1}
 	go func() {
-		for {
-			f.messenger.mu.Lock()
-			n := len(f.messenger.runs)
-			f.messenger.mu.Unlock()
-			if n >= 2 {
-				f.messenger.run(t, 1).finish(ProfileMessageOutcome{Text: "inline answer"})
-				return
-			}
+		for f.messenger.started() < 2 {
 			time.Sleep(time.Millisecond)
 		}
+		f.messenger.run(t, 1).finish(ProfileMessageOutcome{Text: "inline answer"})
 	}()
 	out, err := f.message.Execute(context.Background(), map[string]any{"profile": "reviewer", "message": "hi", "block_ms": json.Number("0")}, without)
 	if err != nil || !strings.Contains(out, "inline answer") {

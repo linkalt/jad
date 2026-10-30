@@ -462,10 +462,7 @@ func TestSubagentBoundsChildrenRunningAtOnce(t *testing.T) {
 			subagentCall(t, catalog, `{"task":"x"}`)
 		}()
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for running.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
-	}
+	eventually(t, "two children to run", func() bool { return running.Load() == 2 })
 	time.Sleep(50 * time.Millisecond) // give a third child the chance to start wrongly
 	if got := running.Load(); got != 2 {
 		t.Fatalf("%d children running while the limit is 2", got)

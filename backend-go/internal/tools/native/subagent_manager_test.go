@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -175,7 +176,8 @@ func TestSubagentTimeoutAfterDetachingIsSignalledAsTimedOut(t *testing.T) {
 func TestSubagentCancellingTheStartCallDoesNotStopTheRun(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Int64
-	catalog, tool := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), blockedLauncher(release, &cancelled), readOnlyTool("read"))
+	launcher := blockedLauncher(release, &cancelled)
+	catalog, tool := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher, readOnlyTool("read"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -183,7 +185,7 @@ func TestSubagentCancellingTheStartCallDoesNotStopTheRun(t *testing.T) {
 		_, err := tool.Execute(ctx, map[string]any{"task": "x", "block_ms": int64(5000)}, tools.ExecutionContext{CallID: "c", SessionKey: testSessionKey})
 		done <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	eventually(t, "the child to start", func() bool { return launcher.count() == 1 })
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
@@ -199,14 +201,15 @@ func TestSubagentCancellingTheStartCallDoesNotStopTheRun(t *testing.T) {
 
 func TestSubagentRunWithoutAHandleStillDiesWithItsCall(t *testing.T) {
 	var cancelled atomic.Int64
-	_, tool := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), blockedLauncher(make(chan struct{}), &cancelled), readOnlyTool("read"))
+	launcher := blockedLauncher(make(chan struct{}), &cancelled)
+	_, tool := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher, readOnlyTool("read"))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		_, err := tool.Execute(ctx, map[string]any{"task": "x"}, tools.ExecutionContext{CallID: "c"})
 		done <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	eventually(t, "the child to start", func() bool { return launcher.count() == 1 })
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
@@ -277,13 +280,9 @@ func TestSubagentQueuedRunStartsWhenASlotFrees(t *testing.T) {
 		t.Errorf("the waiting run is not queued:\n%s", out)
 	}
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(asyncCall(t, catalog, `{"action":"status","id":"`+queued+`"}`), "late answer") {
-		if time.Now().After(deadline) {
-			t.Fatal("the queued run never ran")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(t, "the queued run to finish", func() bool {
+		return strings.Contains(asyncCall(t, catalog, `{"action":"status","id":"`+queued+`"}`), "late answer")
+	})
 }
 
 func TestSubagentCountsRunningChildrenAcrossToolsSharingAManager(t *testing.T) {
@@ -347,14 +346,9 @@ func TestSubagentKeepsOnlyTheNewestFinishedRuns(t *testing.T) {
 
 func waitUntilListed(t *testing.T, catalog *tools.Catalog, id, state string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if out := asyncCall(t, catalog, `{"action":"status","id":"`+id+`"}`); strings.Contains(out, state) {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("run %s never reached %s", id, state)
+	eventually(t, fmt.Sprintf("run %s to reach %s", id, state), func() bool {
+		return strings.Contains(asyncCall(t, catalog, `{"action":"status","id":"`+id+`"}`), state)
+	})
 }
 
 func TestSubagentNeverDropsARunThatIsStillGoing(t *testing.T) {
