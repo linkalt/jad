@@ -486,6 +486,12 @@ func isPublicFetchAddress(address net.IPAddr) bool {
 			return false
 		case first == 198 && (second == 18 || second == 19):
 			return false
+		case first == 198 && second == 51 && int(v4[2]) == 100:
+			return false
+		case first == 203 && second == 0 && int(v4[2]) == 113:
+			return false
+		case first == 192 && second == 88 && int(v4[2]) == 99:
+			return false
 		}
 		return true
 	}
@@ -504,6 +510,15 @@ func isPublicFetchAddress(address net.IPAddr) bool {
 		return false
 	}
 	if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x0d && ip[3] == 0xb8 {
+		return false
+	}
+	// Benchmarking (2001:2::/48) and deprecated ORCHID (2001:10::/28) are special-purpose
+	// blocks in the IANA registry. ORCHIDv2 (2001:20::/28) and Teredo (2001::/32) are
+	// globally reachable, so they stay open.
+	if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3] == 0x02 && ip[4] == 0x00 && ip[5] == 0x00 {
+		return false
+	}
+	if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3]&0xf0 == 0x10 {
 		return false
 	}
 	// Site-local (deprecated, but still treated as internal by many networks).
