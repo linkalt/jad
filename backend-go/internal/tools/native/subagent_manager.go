@@ -19,6 +19,10 @@ import (
 // subagentTaskPreviewBytes bounds the task text kept per run for the run list.
 const subagentTaskPreviewBytes = 80
 
+// closeGrace is how long Close waits for the children to return after cancelling them.
+// A child still going after it is logged and left behind, so shutdown is bounded.
+const closeGrace = 2 * time.Second
+
 // Run states. A run is queued until it holds a slot, running while its child works,
 // and ends as exactly one of done, failed, timed_out or stopped.
 const (
@@ -922,8 +926,8 @@ func (m *SubagentManager) Closed() bool {
 	return m.closed
 }
 
-// Close stops every run and waits for the children to return. Starting a run after
-// Close fails.
+// Close stops every run and waits up to closeGrace for the children to return. A child
+// still going after that is logged and left behind. Starting a run after Close fails.
 func (m *SubagentManager) Close() error {
 	if m == nil {
 		return nil
@@ -932,7 +936,27 @@ func (m *SubagentManager) Close() error {
 	m.closed = true
 	m.mu.Unlock()
 	m.cancel()
-	m.active.Wait()
+	returned := make(chan struct{})
+	go func() {
+		m.active.Wait()
+		close(returned)
+	}()
+	timer := time.NewTimer(closeGrace)
+	defer timer.Stop()
+	select {
+	case <-returned:
+	case <-timer.C:
+		m.mu.Lock()
+		var going []string
+		for id, run := range m.runs {
+			if run.active() {
+				going = append(going, id)
+			}
+		}
+		m.mu.Unlock()
+		sort.Strings(going)
+		slog.Warn("sub-agent runs still going after Close; leaving them behind", "runs", going, "grace", closeGrace)
+	}
 	return nil
 }
 
