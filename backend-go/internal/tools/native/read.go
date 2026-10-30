@@ -347,7 +347,7 @@ func renderDirectory(callID string, target resolvedTarget, settings sessionfs.Na
 	visible := make([]fs.DirEntry, 0, len(entries))
 	for _, entry := range entries {
 		entryPath := filepath.Join(target.realPath, entry.Name())
-		if !pathAllowed(entryPath, target.workspaceRoot, settings.Policy) {
+		if pathPolicyError(entryPath, target.workspaceRoot, settings.Policy, callID) != "" {
 			continue
 		}
 		visible = append(visible, entry)

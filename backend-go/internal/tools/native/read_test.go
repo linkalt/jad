@@ -113,6 +113,26 @@ func TestNativeReadListsDirectoriesWithPathPolicyAndConfiguredLimit(t *testing.T
 	}
 }
 
+func TestNativeReadDirectoryHidesDeniedEntriesEvenBelowTheLimit(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "allowed.txt"), []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "denied.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := newReadCatalog(t, sessionfs.NativeReadSettings{
+		Policy:       sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(workspace, "denied.txt")}}},
+		MaxBytes:     1024,
+		MaxFileBytes: 4096,
+		DefaultLimit: 10,
+	})
+	output := invokeRead(t, catalog, workspace, "directory", `{"path":"."}`)
+	if !strings.Contains(output, "entry_count: 1") || strings.Contains(output, "denied.txt") {
+		t.Fatalf("directory output leaked a denied entry: %s", output)
+	}
+}
+
 func TestNativeReadChoosesBase64ForBinaryAndHonorsExplicitEncoding(t *testing.T) {
 	workspace := t.TempDir()
 	binary := []byte{0xff, 0xfe, 0x00, 0x01}
