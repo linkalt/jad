@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,27 @@ func TestPlanBashSpillPrunesOncePerInterval(t *testing.T) {
 	planBashSpill(policy, workspace, workspace, "second")
 	if got := countSpillFiles(t, storage); got != 4 {
 		t.Fatalf("second plan inside the interval left %d files, want the 4 new expired files untouched", got)
+	}
+}
+
+func TestPruneBashSpillThrottleForgetsExpiredKeys(t *testing.T) {
+	directory := t.TempDir()
+	interval := time.Millisecond
+	for call := 0; call < 50; call++ {
+		pattern := regexp.MustCompile(fmt.Sprintf("^bash-%d\\.log$", call))
+		pruneBashSpillFilesThrottled(directory, pattern, 14, interval)
+		time.Sleep(2 * interval)
+	}
+	bashSpillPrunes.Lock()
+	size := 0
+	for key := range bashSpillPrunes.last {
+		if strings.HasPrefix(key, directory+"\x00") {
+			size++
+		}
+	}
+	bashSpillPrunes.Unlock()
+	if size > 5 {
+		t.Fatalf("throttle map holds %d keys for this directory after 50 calls with distinct patterns, want the expired ones forgotten", size)
 	}
 }
 

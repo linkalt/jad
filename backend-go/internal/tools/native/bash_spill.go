@@ -276,10 +276,18 @@ func pruneBashSpillFilesThrottled(directory string, pattern *regexp.Regexp, rete
 	if interval > 0 {
 		key := directory + "\x00" + pattern.String()
 		bashSpillPrunes.Lock()
+		now := time.Now()
+		// A key older than the interval is due on its next call anyway, so dropping it
+		// changes nothing; without this, a template with {call_id} grows the map per call.
+		for other, when := range bashSpillPrunes.last {
+			if now.Sub(when) >= interval {
+				delete(bashSpillPrunes.last, other)
+			}
+		}
 		last, scanned := bashSpillPrunes.last[key]
-		due := !scanned || time.Since(last) >= interval
+		due := !scanned || now.Sub(last) >= interval
 		if due {
-			bashSpillPrunes.last[key] = time.Now()
+			bashSpillPrunes.last[key] = now
 		}
 		bashSpillPrunes.Unlock()
 		if !due {
