@@ -25,9 +25,13 @@ var subagentManifestName = regexp.MustCompile(`^(sub_[0-9a-f]{8})\.json$`)
 // subagentManifest is what survives a restart about one run. It holds no answer: the
 // answer is already in the child's transcript, and is read back from there.
 type subagentManifest struct {
-	Version   int       `json:"version"`
-	ID        string    `json:"id"`
-	Owner     string    `json:"owner"`
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Owner   string `json:"owner"`
+	// Session and Root are the session of the run tree and its top-level run. A manifest
+	// that predates them has none, and such a run keeps the owner as its only key.
+	Session   string    `json:"session,omitempty"`
+	Root      string    `json:"root,omitempty"`
 	Agent     string    `json:"agent"`
 	Task      string    `json:"task"`
 	TimeoutMS int64     `json:"timeout_ms"`

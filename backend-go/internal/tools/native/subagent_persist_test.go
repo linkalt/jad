@@ -362,3 +362,33 @@ func TestSubagentRestoredAnswerIsNotPinnedToTheFirstReadersLimit(t *testing.T) {
 		t.Fatalf("a read changed the retained answer's cut flag from %v to %v", cutBefore, cutAfter)
 	}
 }
+
+// A manifest keeps the session and the top-level run of a nested run, so a restart still
+// places it; one written before those fields existed loads with them empty.
+func TestSubagentManifestKeepsTheSessionAndRootOfANestedRun(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, subagentManifestDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"version":1,"id":"sub_0000aaaa","owner":"alpha","agent":"explore","task":"x","state":"done","started_at":"2025-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(root, subagentManifestDir, "sub_0000aaaa.json"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := newSubagentStore(root, nil)
+	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = manager.Close() })
+	run := &subagentRun{id: "sub_0000bbbb", owner: "alpha", session: "alpha", root: "sub_0000cccc", agent: "explore", task: "y", state: subagentRunDone, startedAt: time.Now(), done: make(chan struct{}), store: store}
+	store.save(run)
+	if got := manifestOf(t, root, "sub_0000bbbb"); got.Session != "alpha" || got.Root != "sub_0000cccc" {
+		t.Fatalf("manifest lacks the session and root: %+v", got)
+	}
+	restarted := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = restarted.Close() })
+	restored := restarted.byID("sub_0000bbbb")
+	if restored == nil || restored.session != "alpha" || restored.root != "sub_0000cccc" {
+		t.Fatalf("restored run = %+v, want session alpha and root sub_0000cccc", restored)
+	}
+	if old := restarted.byID("sub_0000aaaa"); old == nil || old.owner != "alpha" || old.session != "" || old.root != "" {
+		t.Fatalf("old manifest restored as %+v, want owner alpha and no session or root", old)
+	}
+}

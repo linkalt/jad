@@ -258,3 +258,37 @@ func TestANestedToolRunsAtOnceInAChild(t *testing.T) {
 		t.Errorf("a nested tool was gated or never called: %q", saw)
 	}
 }
+
+// A nested run belongs to the session that started its tree: the session's listing, its
+// cancel and the transcript gate see it, while its handle stays the child's.
+func TestNestedRunBelongsToTheSessionThatStartedTheTree(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	var grandchild string
+	catalog, manager, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf")),
+		map[string]nestedBehaviour{
+			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+				grandchild = childCall(t, ctx, request, "subagent", `{"task":"deep","agent":"leaf","block_ms":5}`)
+				<-release
+				return SubagentResult{Text: "boss done"}, nil
+			},
+			"leaf": blockedLauncher(release, nil).run,
+		})
+	go func() {
+		_, _ = catalog.ExecuteFunctionCall(context.Background(), []byte(`{"type":"function_call","call_id":"c","name":"subagent","arguments":"{\"task\":\"go\",\"agent\":\"boss\",\"block_ms\":5}"}`), tools.ExecutionContext{WorkspaceRoot: "/work", SessionDir: "/sess", SessionKey: "alpha"})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for grandchild == "" && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	childID := runIDOf(t, grandchild)
+	if _, owner, found := manager.RunTranscript(childID); !found || owner != "alpha" {
+		t.Fatalf("RunTranscript(grandchild) owner = %q, found %v; want the session alpha", owner, found)
+	}
+	if got := len(manager.list("alpha")); got != 2 {
+		t.Errorf("list(alpha) = %d runs, want 2 (the child and its grandchild)", got)
+	}
+	if got := manager.CancelOwner("alpha"); got != 2 {
+		t.Errorf("CancelOwner(alpha) = %d, want 2: the grandchild is the session's run too", got)
+	}
+}

@@ -204,6 +204,9 @@ type subagentRun struct {
 	// owner is the session key of the call that started the run. Only calls of the
 	// same session can see it, and a stop or reset of that session cancels it.
 	owner string
+	// handleOwner owns the run's async handle: the session key, or the run id of the
+	// parent run for a run a child starts (see handleOwner).
+	handleOwner string
 	// session is the session of the whole run tree and root the top-level run (its own id
 	// for one); they key the nested-start limits.
 	session   string
@@ -332,7 +335,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return subagentManifest{
-		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Agent: r.agent, Task: r.task,
+		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Session: r.session, Root: r.root, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
 		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked,
 	}
@@ -344,7 +347,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 	done := make(chan struct{})
 	close(done)
 	return &subagentRun{
-		id: manifest.ID, owner: manifest.Owner, agent: manifest.Agent, task: manifest.Task,
+		id: manifest.ID, owner: manifest.Owner, session: manifest.Session, root: manifest.Root, agent: manifest.Agent, task: manifest.Task,
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
 		cancel: func() {}, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
@@ -389,6 +392,8 @@ type subagentStart struct {
 	request  SubagentRequest
 	// owner is the session key of the starting call; see subagentRun.owner.
 	owner string
+	// handleOwner owns the async handle; see subagentRun.handleOwner.
+	handleOwner string
 	// session is the session the whole tree belongs to. depth is the AgentDepth of the
 	// starting call (0 for the session's own call), rootRun the top-level run it runs
 	// under and parentID the run it runs in; the last two are empty at depth 0.
@@ -552,6 +557,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		store:         m.store,
 		id:            id,
 		owner:         spec.owner,
+		handleOwner:   spec.handleOwner,
 		session:       spec.session,
 		root:          root,
 		agent:         spec.request.Agent.Name,

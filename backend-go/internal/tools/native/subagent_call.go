@@ -84,19 +84,20 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	}
 	// A run started inside a child belongs to that child's run: its handle is the child's
 	// own, and exists only when the child has the async tool to collect it.
-	owner, canHandle := handleOwner(execution)
+	asyncOwner, canHandle := handleOwner(execution)
 	var handle *subagentAsyncHandle
 	observe := externalObserver(ctx)
 	if observe == nil && s.async != nil && (!changes || background) && canHandle {
-		handle = newSubagentAsyncHandle(s.async, owner, agent.config.Name, subagentTaskPreview(task))
+		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task))
 	}
 	run, err := s.manager.start(subagentStart{
 		async:          handle,
 		asyncHost:      s.async,
 		childAsync:     agent.hasNativeTool(asyncToolID),
 		launcher:       s.launcher,
-		owner:          owner,
+		owner:          execution.SessionKey,
 		session:        execution.SessionKey,
+		handleOwner:    asyncOwner,
 		depth:          depth,
 		rootRun:        execution.RootRun,
 		parentID:       execution.ProcessOwner,
@@ -202,7 +203,7 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 	}
 	var latest []tools.Information
 	if run.async != nil && (view.state == subagentRunQueued || view.state == subagentRunRunning) {
-		latest = s.async.latestInformation(run.owner, run.id)
+		latest = s.async.latestInformation(run.handleOwner, run.id)
 	}
 	return s.renderRun(callID, view, latest...)
 }
