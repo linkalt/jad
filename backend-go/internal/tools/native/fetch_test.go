@@ -683,6 +683,27 @@ func TestFetchToolCacheHitWorksWhenStorageIsFull(t *testing.T) {
 	}
 }
 
+func TestFetchToolFullStorageErrorNamesTheLimitAndTheRecovery(t *testing.T) {
+	settings := fetchTestSettings(t.TempDir())
+	store := NewFetchStore(settings.StorageDir)
+	tool, _ := newFetchTestTool(t, settings, store, fetchTestResponse(http.StatusOK, "text/plain", "stored"))
+	executeFetchTestTool(t, tool, map[string]any{"url": "https://example.com/first"}, "one")
+
+	used, err := fetchDirectoryBytes(settings.StorageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := settings
+	full.MaxStorageBytes = used
+	fullTool, _ := newFetchTestTool(t, full, store, fetchTestResponse(http.StatusOK, "text/plain", "new"))
+	output := executeFetchTestTool(t, fullTool, map[string]any{"url": "https://example.com/second"}, "full")
+	for _, want := range []string{"fetch_storage_error", "fetch storage is full", "storage_dir", "max_storage_bytes"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("full storage result lacks %q: %s", want, output)
+		}
+	}
+}
+
 func BenchmarkNativeFetchHTMLConversion(b *testing.B) {
 	html := "<html><head><title>Benchmark page</title></head><body><h1>Heading</h1><p>Repeated body text for native.fetch conversion benchmarking.</p></body></html>"
 	options := &htmltomarkdown.ConversionOptions{

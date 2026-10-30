@@ -118,7 +118,7 @@ func (s *FetchStore) Create(document FetchDocument, policy sessionfs.NativeFetch
 		return FetchDocument{}, err
 	}
 	if usedBytes+storedBytes > policy.MaxStorageBytes {
-		return FetchDocument{}, &FetchStoreError{Message: "fetch storage is full"}
+		return FetchDocument{}, &FetchStoreError{Message: "fetch storage is full: the stored documents in storage_dir use the whole max_storage_bytes limit and are not removed automatically; deleting a document's .md and .json files in storage_dir frees its space but also ends its cursors, or raise max_storage_bytes"}
 	}
 	markdownPath := filepath.Join(s.directory, id+".md")
 	if err := atomicFetchWrite(markdownPath, []byte(document.Markdown)); err != nil {
