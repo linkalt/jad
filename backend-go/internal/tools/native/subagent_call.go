@@ -68,9 +68,8 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	}
 	changes := agent.config.ChangesFiles()
 	depth := execution.AgentDepth
-	if depth+1 > max(int(s.settings.MaxDepth), 1) {
-		return tools.ExecutionError(callID, tools.StatusError, "subagent_depth_exceeded",
-			"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)"), nil
+	if s.depthExceeded(depth) {
+		return depthExceededError(callID), nil
 	}
 	childExecution := childExecutionContext(execution, agent.config)
 	// A writer becomes a handle only when it is allowed to (background_writers) and its
@@ -153,6 +152,16 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		wait = s.blockFor(arguments)
 	}
 	return s.await(ctx, callID, run, wait, handle == nil)
+}
+
+// depthExceeded reports whether a call at depth may not start a sub-agent, local or remote.
+func (s *subagentTool) depthExceeded(depth int) bool {
+	return depth+1 > max(int(s.settings.MaxDepth), 1)
+}
+
+func depthExceededError(callID string) string {
+	return tools.ExecutionError(callID, tools.StatusError, "subagent_depth_exceeded",
+		"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)")
 }
 
 // handleOwner is the owner under which a call registers a handle of the async manager and

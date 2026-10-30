@@ -323,3 +323,31 @@ func TestRemoteSubagentStartRefusedByAClosedHubStopsTheRemoteRun(t *testing.T) {
 		t.Fatalf("the remote run was asked to stop %d times, want 1", len(stops))
 	}
 }
+
+// A remote agent is gated by the nesting depth the way a local one is, and by nothing else:
+// the run caps count local runs only.
+func TestRemoteSubagentStartHonoursMaxDepth(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth = 2 })
+	atMax := remoteCaller
+	atMax.AgentDepth, atMax.RootRun = 2, "sub_00000001"
+	out := f.start(t, remoteAgent, 0, atMax)
+	if !strings.Contains(out, "subagent_depth_exceeded") || len(f.peer.backend.subs) != 0 {
+		t.Fatalf("a remote start at max_depth reached the peer:\n%s", out)
+	}
+	below := remoteCaller
+	below.AgentDepth, below.RootRun = 1, "sub_00000001"
+	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
+	if out := f.start(t, remoteAgent, 5000, below); !strings.Contains(out, "finished") || len(f.peer.backend.subs) != 1 {
+		t.Fatalf("a remote start one level below max_depth was refused:\n%s", out)
+	}
+}
+
+func TestRemoteSubagentStartIsNotCountedAgainstTheRunCaps(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
+	nested := remoteCaller
+	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
+	if out := f.start(t, remoteAgent, 5000, nested); !strings.Contains(out, "finished") {
+		t.Fatalf("a remote start was refused by a local run cap:\n%s", out)
+	}
+}

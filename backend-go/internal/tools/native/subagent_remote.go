@@ -79,6 +79,9 @@ func remoteListText(names []string) string {
 // tool, or inline when the call cannot collect a handle later.
 func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 	name, _, _ := remote.Split(reference)
+	if s.depthExceeded(execution.AgentDepth) {
+		return depthExceededError(callID), nil
+	}
 	if len(s.remotes.names) == 0 || s.remotes.directory == nil {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "remote_unavailable",
 			"This session does not enable remote agents (tools.native.subagent.remotes)"), nil
