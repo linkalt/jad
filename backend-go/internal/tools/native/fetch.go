@@ -608,11 +608,6 @@ func fetchTooLargeError(maximum, declared int64) error {
 	return &fetchRequestError{Code: "response_too_large", Message: message}
 }
 
-func readFetchResponse(response *http.Response, maximum int64) ([]byte, error) {
-	contents, _, err := readFetchResponseTruncating(response, maximum, false)
-	return contents, err
-}
-
 func readFetchResponseTruncating(response *http.Response, maximum int64, truncate bool) ([]byte, bool, error) {
 	defer closeFetchResponse(response)
 	if response.Body == nil {

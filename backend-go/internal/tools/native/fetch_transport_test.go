@@ -48,7 +48,7 @@ func fetchOnce(t *testing.T, requester pinnedFetchRequester, target validatedFet
 	if err != nil {
 		t.Fatalf("pinned request: %v", err)
 	}
-	if _, err := readFetchResponse(response, 1_000); err != nil {
+	if _, _, err := readFetchResponseTruncating(response, 1_000, false); err != nil {
 		t.Fatalf("read response: %v", err)
 	}
 }
@@ -230,7 +230,7 @@ func TestPinnedFetchRequesterConcurrentCallsAcrossEvictionAreRaceFree(t *testing
 					t.Errorf("pinned request: %v", err)
 					return
 				}
-				if _, err := readFetchResponse(response, 1_000); err != nil {
+				if _, _, err := readFetchResponseTruncating(response, 1_000, false); err != nil {
 					t.Errorf("read response: %v", err)
 					return
 				}

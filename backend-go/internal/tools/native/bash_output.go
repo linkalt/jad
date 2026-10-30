@@ -151,10 +151,6 @@ func (collector *bashStreamCollector) end() {
 	}
 }
 
-func (collector *bashStreamCollector) render(maxLineChars int, stripANSI bool) bashStreamOutput {
-	return collector.renderWithProducedBytes(maxLineChars, stripANSI, collector.producedBytes, false)
-}
-
 // lineAwareWindows drops the partial line at the end of the head and at the start of the
 // tail, so a cut stream shows whole lines only. A window with no line break (one very
 // long line) is left as it is. The dropped bytes are counted by the caller as omitted.

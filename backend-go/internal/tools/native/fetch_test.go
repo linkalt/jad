@@ -264,7 +264,7 @@ func TestPinnedFetchRequesterConnectsToValidatedIPAndDecodesGzip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pinned request: %v", err)
 	}
-	body, err := readFetchResponse(response, 1_000)
+	body, _, err := readFetchResponseTruncating(response, 1_000, false)
 	if err != nil {
 		t.Fatalf("read pinned response: %v", err)
 	}
