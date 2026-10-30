@@ -77,6 +77,8 @@ type SubagentManager struct {
 	// removeManifest deletes the manifest of a pruned run; it is a field so a test can
 	// hold the pruner inside the removal. The store sets it.
 	removeManifest func(id string)
+	// newRunID makes the id of a new run; it is a field so a test can force a collision.
+	newRunID func() (string, error)
 	// transcriptRoot, when set, is the storage directory whose child folders are
 	// deleted as runs are dropped; see DeleteTranscriptsUnder.
 	transcriptRoot string
@@ -88,6 +90,7 @@ func NewSubagentManager() *SubagentManager {
 	manager := &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), byRoot: make(map[string]int), bySession: make(map[string]int), freed: make(chan struct{})}
 	// A nil store removes nothing, so a memory-only manager keeps no manifests.
 	manager.removeManifest = manager.store.remove
+	manager.newRunID = newSubagentRunID
 	return manager
 }
 
@@ -506,17 +509,38 @@ func (m *SubagentManager) undoReservationLocked(holdsSlot bool, root, session st
 	m.queued--
 }
 
+// freeRunIDLocked draws a run id that no run of the manager holds. The ids are 32 bits, so a
+// collision is rare but a repeat would overwrite a live run; the caller holds mu.
+func (m *SubagentManager) freeRunIDLocked() (string, error) {
+	for range runIDAttempts {
+		id, err := m.newRunID()
+		if err != nil {
+			return "", err
+		}
+		if m.runs[id] == nil {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("create sub-agent run id: every id drawn was already in use")
+}
+
+// runIDAttempts bounds the draws of freeRunIDLocked. With 2^32 ids and at most a few hundred
+// runs held, one draw collides with probability far below 1e-6, so this bound is never hit
+// in practice.
+const runIDAttempts = 8
+
 // start registers a run and launches its goroutine. It fails when the manager is
 // closed or when the run would have to wait and the queue is full.
 func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
-	id, err := newSubagentRunID()
-	if err != nil {
-		return nil, err
-	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return nil, errSubagentManagerClosed
+	}
+	id, err := m.freeRunIDLocked()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
 	}
 	root := spec.rootRun
 	if root == "" {
