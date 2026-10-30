@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -287,4 +288,26 @@ func (f *fakeLauncher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.requests)
+}
+
+func TestRemoteSubagentInlineCancelDoesNotWaitForAnUnreachableRemote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan error, 1)
+	go func() {
+		_, err := f.tool.Execute(ctx, map[string]any{"task": "find the answer", "agent": remoteAgent, "block_ms": json.Number("0")}, tools.ExecutionContext{CallID: "call"})
+		returned <- err
+	}()
+	f.peer.backend.run(t, 0)
+	f.peer.handler.cut.Store(true)
+	cancel()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(700 * time.Millisecond):
+		t.Fatal("the cancelled inline call still waits for the remote (lost_after_ms is 1500)")
+	}
 }

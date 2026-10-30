@@ -141,7 +141,6 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		case <-run.Done():
 		case <-ctx.Done():
 			run.Stop("caller_cancelled")
-			<-run.Done()
 			return "", ctx.Err()
 		}
 		return s.renderRemoteOutcome(callID, target, run.Outcome())
