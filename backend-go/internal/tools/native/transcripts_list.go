@@ -169,6 +169,9 @@ func (t *transcriptsTool) listProfiles(ctx context.Context, request transcriptsR
 	if t.profiles != nil {
 		var sessions []string
 		if names, sessions = t.profiles.Candidates(ctx, execution.SessionKey, request.level.session); names == nil && request.level.session != "" && !containsName(sessions, request.level.session) {
+			if !t.settings.AllowOtherSessions {
+				sessions = nil
+			}
 			return listing, t.notFound(execution, "no_such_session", "No session "+request.level.session, request.level.session, sessions)
 		}
 	} else if request.level.session == "" || request.level.session == callerSession {
@@ -337,6 +340,9 @@ func (t *transcriptsTool) listRuns(ctx context.Context, request transcriptsReque
 			names, query := profiles, profile
 			if profiles == nil {
 				names, query = sessions, request.level.session
+				if !t.settings.AllowOtherSessions {
+					names = nil
+				}
 			}
 			return listing, t.notFound(execution, "no_such_profile", err.Error(), query, names)
 		}

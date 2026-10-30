@@ -245,6 +245,39 @@ func TestTranscriptsSwitchOffListsOnlyTheCallersProfile(t *testing.T) {
 	}
 }
 
+// unreadableLayout is a caller whose own session has no readable layout: Candidates names the
+// catalog sessions instead of profiles.
+type unreadableLayout struct{ uniqueProfiles }
+
+func (u unreadableLayout) Candidates(context.Context, string, string) ([]string, []string) {
+	return nil, []string{"elsewhere"}
+}
+
+func TestTranscriptsNotFoundHidesOtherSessionsWhenTheyAreOff(t *testing.T) {
+	f := newListFixture(t)
+	f.settings.AllowOtherSessions = false
+	tool, err := NewTranscriptsTool(f.settings, TranscriptFiles{}, unreadableLayout{uniqueProfiles{f.profiles}}, fakeSessions{"elsewhere"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := callTranscripts(t, tool, `{"path":"session:demo"}`, tools.ExecutionContext{SessionKey: listCaller})
+	if !strings.Contains(out, "no_such_session") || strings.Contains(out, "elsewhere") {
+		t.Fatalf("a missing own session names other sessions:\n%s", out)
+	}
+	out = callTranscripts(t, tool, `{"path":"profile:dev/nosuch"}`, tools.ExecutionContext{SessionKey: listCaller})
+	if !strings.Contains(out, "no_such_profile") || strings.Contains(out, "elsewhere") {
+		t.Fatalf("a missing profile names other sessions:\n%s", out)
+	}
+	f.settings.AllowOtherSessions = true
+	tool, err = NewTranscriptsTool(f.settings, TranscriptFiles{}, unreadableLayout{uniqueProfiles{f.profiles}}, fakeSessions{"elsewhere"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out = callTranscripts(t, tool, `{"path":"profile:dev/nosuch"}`, tools.ExecutionContext{SessionKey: listCaller}); !strings.Contains(out, "elsewhere") {
+		t.Fatalf("switch on keeps the session names:\n%s", out)
+	}
+}
+
 func TestTranscriptsSessionsLevel(t *testing.T) {
 	f := newListFixture(t)
 	out := f.call(t, fakeSessions{"demo", "elsewhere", "demo2"}, `{"path":"sessions","filters":["demo*"]}`)
