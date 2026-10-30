@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -591,6 +592,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec subagentStart, holdsSlot bool) {
 	defer m.active.Done()
 	defer run.cancel()
+	defer m.recoverRun(run, spec)
 	if !holdsSlot {
 		if !m.acquire(ctx, spec.limit) {
 			m.finish(run, subagentRunStopped, SubagentResult{}, "", spec)
@@ -641,14 +643,40 @@ func stopRunProcesses(processes ProcessManager, runID string) int {
 }
 
 // runLauncher turns a panic in the launcher into a failed run, because the goroutine
-// has no caller that could recover it.
+// has no caller that could recover it. The panic is logged; the run's reason does not
+// carry its text.
 func (m *SubagentManager) runLauncher(ctx context.Context, spec subagentStart) (result SubagentResult, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("sub-agent launcher panicked: %v", recovered)
+			slog.Error("sub-agent launcher panicked", "panic", recovered, "stack", string(debug.Stack()))
+			err = errors.New("sub-agent launcher panicked")
 		}
 	}()
 	return spec.launcher.Run(ctx, spec.request)
+}
+
+// recoverRun is the panic boundary of the rest of execute (the process sweep, finish and
+// the bookkeeping in it): the goroutine has no caller that could recover it, and a panic
+// would end the server and leave the run going. The run is finished as failed, unless
+// finish had already begun, in which case only the waiters are released.
+func (m *SubagentManager) recoverRun(run *subagentRun, spec subagentStart) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	slog.Error("sub-agent run failed inside the server", "run", run.id, "panic", recovered, "stack", string(debug.Stack()))
+	run.mu.Lock()
+	ended := !run.endedAt.IsZero()
+	run.mu.Unlock()
+	if !ended {
+		m.finish(run, subagentRunFailed, SubagentResult{}, "internal error", spec)
+		return
+	}
+	select {
+	case <-run.done:
+	default:
+		close(run.done)
+	}
 }
 
 // acquire waits for a free slot. It reports false when ctx ends first.

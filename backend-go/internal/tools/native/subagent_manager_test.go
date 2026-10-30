@@ -3,8 +3,10 @@ package native
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -456,5 +458,66 @@ func TestSubagentManagerCloseStopsDetachedChildrenAndWaitsForThem(t *testing.T) 
 	}
 	if counts := host.Manager().Counts(testSessionKey); counts.Active != 0 {
 		t.Fatalf("a refused start left a live handle: %+v", counts)
+	}
+}
+
+type panickingProcesses struct{ ProcessManager }
+
+func (panickingProcesses) ownerOf(string) (string, bool) { return "", false }
+func (panickingProcesses) stopOwned(string, string) int  { panic("sweep exploded") }
+
+type lockedLog struct {
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.String()
+}
+
+func TestSubagentPanicAfterTheLauncherFailsTheRunInsteadOfEndingTheServer(t *testing.T) {
+	logged := &lockedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	parent := withExecutors(t, readOnlyTool("read"))
+	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, &fakeLauncher{}, nil, manager, panickingProcesses{}, newTestAsyncHost(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog(append(parent, tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, returned := callReturnsWithin(t, catalog, `{"task":"x"}`, 5*time.Second)
+	if !returned {
+		t.Fatal("the call never returned: the run was left going")
+	}
+	if !strings.Contains(out, "error_code: subagent_failed") || strings.Contains(out, "sweep exploded") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if views := manager.list(testSessionKey); len(views) != 1 || views[0].state != subagentRunFailed {
+		t.Fatalf("runs after the panic: %+v", views)
+	}
+	if text := logged.String(); !strings.Contains(text, "sweep exploded") || !strings.Contains(text, "stack=") {
+		t.Fatalf("the panic left no log line with its value and stack:\n%s", text)
+	}
+}
+
+func TestSubagentLauncherPanicTextStaysOutOfTheRunReason(t *testing.T) {
+	launcher := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) { panic("secret /srv/path") }}
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher, readOnlyTool("read"))
+	if out := subagentCall(t, catalog, `{"task":"x"}`); strings.Contains(out, "secret /srv/path") {
+		t.Fatalf("the panic value reached the result:\n%s", out)
 	}
 }
