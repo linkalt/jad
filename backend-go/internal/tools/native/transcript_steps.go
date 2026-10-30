@@ -97,6 +97,9 @@ func collapseSpaces(text string) string {
 }
 
 func replaceDataURLs(text string) string {
+	if !strings.Contains(text, "data:") {
+		return text
+	}
 	return transcriptDataURL.ReplaceAllStringFunc(text, func(match string) string {
 		return fmt.Sprintf("[data URL %d bytes]", len(match))
 	})
