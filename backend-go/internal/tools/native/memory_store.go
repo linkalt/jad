@@ -226,6 +226,60 @@ func (s *MemoryStore) Update(recordType, ref, ifMatch string, data map[string]an
 	return s.UpdateValue(recordType, ref, ifMatch, memoryValueFromGo(data), data, policy)
 }
 
+// RepairLegacyRecord rewrites one record written with the doubled escapes. It changes
+// the record only when memoryLegacyEscapeText proves it, and keeps a sibling backup until
+// the rewrite succeeds. It reports false, without writing, for a record that is valid JSON.
+func (s *MemoryStore) RepairLegacyRecord(recordType, ref string, policy sessionfs.NativeMemorySettings) (bool, error) {
+	repaired := false
+	err := s.withLock(func() error {
+		if err := s.checkType(recordType, policy); err != nil {
+			return err
+		}
+		path, err := s.target(recordType, ref)
+		if err != nil {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return &MemoryStoreError{Message: "memory record is not a safe file"}
+		}
+		text, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, err := parseMemoryJSON(text); err == nil {
+			return nil
+		}
+		undone, _, ok := memoryLegacyEscapeText(text)
+		if !ok {
+			return &MemoryStoreError{Message: "memory record is malformed"}
+		}
+		backup := path + ".legacy-backup"
+		if _, err := os.Lstat(backup); err == nil {
+			return &MemoryStoreError{Message: "memory repair backup already exists; remove it before repairing"}
+		}
+		if err := s.atomicWrite(backup, text); err != nil {
+			return err
+		}
+		if err := s.atomicWrite(path, undone); err != nil {
+			return err
+		}
+		if err := os.Remove(backup); err != nil {
+			return err
+		}
+		s.rememberSize(recordType, strings.TrimPrefix(ref, recordType+"/"), int64(len(undone)))
+		repaired = true
+		return nil
+	})
+	return repaired, err
+}
+
 // UpdateValue is the insertion-order-preserving form of Update.
 func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memoryJSONValue, data map[string]any, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
 	var item MemoryItem
@@ -419,7 +473,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				break
 			}
 			scannedBytes += int64(len(text))
-			value, parseErr := parseMemoryJSON([]byte(text))
+			value, parseErr := parseStoredMemoryJSON([]byte(text))
 			if parseErr != nil || value.kind != memoryObject {
 				position = ref
 				if len(warnings) < 8 {
@@ -684,7 +738,7 @@ func (s *MemoryStore) load(recordType, ref string) (MemoryItem, error) {
 	if err != nil {
 		return MemoryItem{}, err
 	}
-	value, err := parseMemoryJSON(text)
+	value, err := parseStoredMemoryJSON(text)
 	if err != nil || value.kind != memoryObject {
 		return MemoryItem{}, &MemoryStoreError{Message: "memory record is malformed"}
 	}

@@ -123,6 +123,43 @@ func parseMemoryJSON(data []byte) (*memoryJSONValue, error) {
 	return value, nil
 }
 
+// parseStoredMemoryJSON parses a stored record. A record that fails to parse is read
+// through its undone text only when memoryLegacyEscapeText proves it was written with
+// the doubled escapes.
+func parseStoredMemoryJSON(text []byte) (*memoryJSONValue, error) {
+	value, err := parseMemoryJSON(text)
+	if err == nil {
+		return value, nil
+	}
+	if _, legacy, ok := memoryLegacyEscapeText(text); ok {
+		return legacy, nil
+	}
+	return nil, err
+}
+
+// memoryLegacyEscapeText proves a record was written by quoteMemoryString before its
+// fix. The old writer doubled every backslash in the correct encoding, so undoing that
+// is one ReplaceAll. The proof needs all of these: the stored text is invalid JSON, the
+// undone text parses to an object, and the undone text is the canonical pretty form of
+// that object. A record that is valid JSON is never reported as legacy, because an old
+// backslash, newline or tab record is valid JSON with a wrong value and cannot be told
+// apart from a correct record.
+func memoryLegacyEscapeText(text []byte) ([]byte, *memoryJSONValue, bool) {
+	if _, err := parseMemoryJSON(text); err == nil {
+		return nil, nil, false
+	}
+	undone := bytes.ReplaceAll(text, []byte(`\\`), []byte(`\`))
+	value, err := parseMemoryJSON(undone)
+	if err != nil || value.kind != memoryObject {
+		return nil, nil, false
+	}
+	canonical, err := memoryJSONPretty(value)
+	if err != nil || canonical != string(undone) {
+		return nil, nil, false
+	}
+	return undone, value, true
+}
+
 func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
 	token, err := decoder.Token()
 	if err != nil {
@@ -370,22 +407,22 @@ func quoteMemoryString(value string) ([]byte, error) {
 	for _, character := range value {
 		switch character {
 		case '"':
-			output.WriteString(`\\"`)
+			output.WriteString(`\"`)
 		case '\\':
-			output.WriteString(`\\\\`)
+			output.WriteString(`\\`)
 		case '\b':
-			output.WriteString(`\\b`)
+			output.WriteString(`\b`)
 		case '\f':
-			output.WriteString(`\\f`)
+			output.WriteString(`\f`)
 		case '\n':
-			output.WriteString(`\\n`)
+			output.WriteString(`\n`)
 		case '\r':
-			output.WriteString(`\\r`)
+			output.WriteString(`\r`)
 		case '\t':
-			output.WriteString(`\\t`)
+			output.WriteString(`\t`)
 		default:
 			if character < 0x20 {
-				fmt.Fprintf(&output, `\\u%04x`, character)
+				fmt.Fprintf(&output, `\u%04x`, character)
 			} else {
 				output.WriteRune(character)
 			}
