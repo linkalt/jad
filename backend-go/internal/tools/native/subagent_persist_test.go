@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,24 @@ func startedRunID(t *testing.T, catalog *tools.Catalog, manager *SubagentManager
 		t.Fatal("the call made no run")
 	}
 	return views[0].id
+}
+
+// steppedClock stands in for a manager's clock: each reading is a second after the last, so
+// runs that start and end one after another get distinct, ordered run times without a sleep.
+type steppedClock struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+func newSteppedClock() *steppedClock {
+	return &steppedClock{last: time.Now()}
+}
+
+func (c *steppedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.last = c.last.Add(time.Second)
+	return c.last
 }
 
 // writeTranscript writes a child transcript with the given completed-response texts,
@@ -207,7 +226,6 @@ func TestSubagentKeepFinishedAlsoPrunesTheManifests(t *testing.T) {
 	var ids []string
 	for range 4 {
 		ids = append(ids, startedRunID(t, first, firstManager, "", `{"task":"x"}`))
-		time.Sleep(2 * time.Millisecond)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, subagentManifestDir))
 	if err != nil {
@@ -226,10 +244,10 @@ func TestSubagentKeepFinishedAlsoPrunesTheManifests(t *testing.T) {
 func TestSubagentRecoveryDropsTheOldestRunsBeyondKeep(t *testing.T) {
 	root := t.TempDir()
 	first, firstManager := persistedCatalog(t, root, &fakeLauncher{}, 10)
+	firstManager.now = newSteppedClock().now
 	var ids []string
 	for range 5 {
 		ids = append(ids, startedRunID(t, first, firstManager, "", `{"task":"x"}`))
-		time.Sleep(2 * time.Millisecond)
 	}
 	_, second := persistedCatalog(t, root, &fakeLauncher{}, 2)
 	listed := map[string]bool{}

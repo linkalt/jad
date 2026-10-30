@@ -79,6 +79,9 @@ type SubagentManager struct {
 	removeManifest func(id string)
 	// newRunID makes the id of a new run; it is a field so a test can force a collision.
 	newRunID func() (string, error)
+	// now reads the clock for the run times that the lists and the pruning order by; it is a
+	// field so a test can give runs an exact order.
+	now func() time.Time
 	// transcriptRoot, when set, is the storage directory whose child folders are
 	// deleted as runs are dropped; see DeleteTranscriptsUnder.
 	transcriptRoot string
@@ -91,6 +94,7 @@ func NewSubagentManager() *SubagentManager {
 	// A nil store removes nothing, so a memory-only manager keeps no manifests.
 	manager.removeManifest = manager.store.remove
 	manager.newRunID = newSubagentRunID
+	manager.now = time.Now
 	return manager
 }
 
@@ -126,7 +130,7 @@ func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManag
 // drops the oldest ended runs beyond keep.
 func (m *SubagentManager) recover(keep int) {
 	manifests := m.store.load()
-	now := time.Now()
+	now := m.now()
 	for _, manifest := range manifests {
 		// A run of another server that is still going on this directory is not ours:
 		// marking it lost or pruning it would corrupt that server's runs.
@@ -615,7 +619,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		changes:       spec.changes,
 		resultMax:     spec.resultMax,
 		note:          spec.note,
-		startedAt:     time.Now(),
+		startedAt:     m.now(),
 		countedWriter: spec.writerReserved,
 		cancel:        cancel,
 		ctx:           ctx,
@@ -777,7 +781,7 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	run.state = state
 	run.result = result
 	run.reason = reason
-	run.endedAt = time.Now()
+	run.endedAt = m.now()
 	run.mu.Unlock()
 	// The manifest is written before the waiters wake, so a read of the file after a
 	// wait returns sees the end.

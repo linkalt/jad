@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
@@ -183,10 +182,10 @@ func TestSubagentStateContextSortsNewestFirstAndLimits(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	first, _, manager := sharedManagerCatalogs(t, blockedLauncher(release, nil))
+	manager.now = newSteppedClock().now
 	var ids []string
 	for _, task := range []string{"one", "two", "three"} {
 		ids = append(ids, runIDOf(t, subagentCallAs(t, first, "alpha", `{"task":"`+task+`","block_ms":2}`)))
-		time.Sleep(3 * time.Millisecond)
 	}
 	// Max concurrent is 2, so the third is queued; both states are listed.
 	settings := sessionfs.NativeSubagentStateContextSettings{States: []string{"queued", "running"}, Limit: 2}
