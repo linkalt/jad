@@ -705,6 +705,8 @@ func (s *subagentTool) selectAgent(arguments map[string]any) (subagentAgent, str
 }
 
 func (s *subagentTool) agentNames() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	names := make([]string, 0, len(s.agents))
 	for _, agent := range s.agents {
 		names = append(names, agent.config.Name)

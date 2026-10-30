@@ -1102,3 +1102,21 @@ func TestSubagentListIsCutAtTheResultLimit(t *testing.T) {
 		t.Fatalf("a long list was not marked truncated:\n%s", output)
 	}
 }
+
+// The agent names are read while Bind fills in the catalogs, which it does under the
+// tool's lock; a run with -race fails here if the names are read without it.
+func TestSubagentAgentNamesAreReadWhileTheMCPToolsBind(t *testing.T) {
+	hook := &SubagentMCP{}
+	if _, err := NewSubagentToolWithMCP(subagentSettings(agentWithTools("a", "mcp:zvec:search")), withExecutors(t, readOnlyTool("read")), &fakeLauncher{}, hook); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = hook.Bind([]tools.Tool{mcpStub(t, "zvec", "search")})
+	}()
+	for range 100 {
+		_ = hook.tool.agentNames()
+	}
+	<-done
+}
