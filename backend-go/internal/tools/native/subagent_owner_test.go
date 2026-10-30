@@ -229,3 +229,26 @@ func TestSubagentStateContextNeedsAManager(t *testing.T) {
 		t.Fatal("a missing manager was accepted")
 	}
 }
+
+// A run that ends because an earlier cancel in the same CancelOwner call reached it is still
+// one the call asked to stop, so it is counted.
+func TestSubagentCancelOwnerCountsARunThatEndsDuringTheCall(t *testing.T) {
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	childCtx, childCancel := context.WithCancel(parentCtx)
+	defer childCancel()
+	parent := &subagentRun{id: "sub_parent01", owner: "alpha", state: subagentRunRunning, ctx: parentCtx, cancel: parentCancel, done: make(chan struct{})}
+	child := &subagentRun{id: "sub_child001", owner: "alpha", state: subagentRunRunning, ctx: childCtx, cancel: childCancel, done: make(chan struct{})}
+	// The parent's cancel ends the child too, the way a nested run's context hangs off its parent's.
+	parentCancelled := parent.cancel
+	parent.cancel = func() {
+		parentCancelled()
+		child.setState(subagentRunStopped)
+	}
+	manager.runs[parent.id], manager.runs[child.id] = parent, child
+
+	if got := manager.CancelOwner("alpha"); got != 2 {
+		t.Fatalf("CancelOwner(alpha) = %d, want 2: the child was running when the call began", got)
+	}
+}

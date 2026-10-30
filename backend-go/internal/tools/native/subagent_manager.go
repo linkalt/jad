@@ -870,14 +870,7 @@ func (m *SubagentManager) CancelOwner(owner string) int {
 	if m == nil {
 		return 0
 	}
-	cancelled := 0
-	for _, run := range m.ownedRuns(owner) {
-		if run.active() {
-			run.cancel()
-			cancelled++
-		}
-	}
-	return cancelled
+	return cancelActive(m.ownedRuns(owner), false)
 }
 
 // CancelUnmanagedOwner is CancelOwner for the runs that are not async handles. A handle is
@@ -886,14 +879,7 @@ func (m *SubagentManager) CancelUnmanagedOwner(owner string) int {
 	if m == nil {
 		return 0
 	}
-	cancelled := 0
-	for _, run := range m.ownedRuns(owner) {
-		if run.async == nil && run.active() {
-			run.cancel()
-			cancelled++
-		}
-	}
-	return cancelled
+	return cancelActive(m.ownedRuns(owner), true)
 }
 
 // CancelUnmanagedOwnersWithPrefix is CancelUnmanagedOwner for every session key that starts
@@ -910,14 +896,24 @@ func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix string) int {
 		}
 	}
 	m.mu.Unlock()
-	cancelled := 0
+	return cancelActive(runs, false)
+}
+
+// cancelActive asks every run of runs that is still queued or running to stop and returns
+// how many it asked. The runs are chosen before any is cancelled: a cancel can end a nested
+// run of the same list during the call, and that run was still one the call asked to stop.
+// unmanaged keeps only the runs that are not async handles.
+func cancelActive(runs []*subagentRun, unmanaged bool) int {
+	var active []*subagentRun
 	for _, run := range runs {
-		if run.active() {
-			run.cancel()
-			cancelled++
+		if (!unmanaged || run.async == nil) && run.active() {
+			active = append(active, run)
 		}
 	}
-	return cancelled
+	for _, run := range active {
+		run.cancel()
+	}
+	return len(active)
 }
 
 // list returns the retained runs of one session, newest first.
