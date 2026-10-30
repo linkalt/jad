@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -281,5 +282,33 @@ func TestSubagentCancelUnmanagedOwnerKeepsTheStopReason(t *testing.T) {
 	}
 	if out := <-done; !strings.Contains(out, "stopped") || !strings.Contains(out, "user_stop") {
 		t.Fatalf("the stopped run does not say why it stopped:\n%s", out)
+	}
+}
+
+// A failed run keeps a bounded reason, the same bound the model's text has: the reason is
+// stored in the manifest and handed to a remote peer by Outcome, so a provider's error body
+// does not go there whole.
+func TestSubagentFailedRunStoresABoundedReason(t *testing.T) {
+	launcher := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+		return SubagentResult{}, errors.New("POST /v1/responses: 500 " + strings.Repeat("secret-body ", 200))
+	}}
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	tool, err := NewSubagentToolWithManager(subagentSettings(agentNamed("explore")), withExecutors(t, readOnlyTool("read")), launcher, nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subagentCall(t, catalog, `{"task":"x"}`)
+	runs := manager.allRuns()
+	if len(runs) != 1 {
+		t.Fatalf("manager holds %d runs, want 1", len(runs))
+	}
+	<-runs[0].done
+	if _, _, reason := (&ExternalRun{run: runs[0]}).Outcome(); len(reason) > subagentReasonBytes+len("...") {
+		t.Fatalf("the stored reason is %d bytes, want at most %d", len(reason), subagentReasonBytes+len("..."))
 	}
 }

@@ -683,7 +683,7 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	case childContext.Err() != nil:
 		m.finish(run, subagentRunTimedOut, result, "", spec)
 	default:
-		m.finish(run, subagentRunFailed, result, err.Error(), spec)
+		m.finish(run, subagentRunFailed, result, boundedReason(err.Error()), spec)
 	}
 }
 
