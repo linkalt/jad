@@ -495,8 +495,29 @@ func (s *Store) putPayload(mime, payload string) (string, bool) {
 	return name, true
 }
 
+// TooLargeError is what OpenWithin returns for a stored file over its limit. The file is not
+// read; Size is its size from Stat.
+type TooLargeError struct {
+	Size  int64
+	Limit int64
+}
+
+func (e *TooLargeError) Error() string {
+	return fmt.Sprintf("stored image is %d bytes; the limit is %d", e.Size, e.Limit)
+}
+
 // Open reads one stored file by its name (<64 hex>.<ext>). It never takes a path.
 func (s *Store) Open(name string) ([]byte, string, error) {
+	if s == nil {
+		return nil, "", errors.New("image store is off")
+	}
+	return s.OpenWithin(name, s.options.MaxFileBytes)
+}
+
+// OpenWithin is Open with its own size limit, for a caller that accepts less than the store
+// does. A file over the limit is refused by its size before any of it is read, so a caller
+// that refuses large images costs no memory for them.
+func (s *Store) OpenWithin(name string, limit int64) ([]byte, string, error) {
 	if s == nil {
 		return nil, "", errors.New("image store is off")
 	}
@@ -522,6 +543,9 @@ func (s *Store) Open(name string) ([]byte, string, error) {
 	}
 	if !linkInfo.Mode().IsRegular() || !info.Mode().IsRegular() || !os.SameFile(linkInfo, info) || info.Size() > s.options.MaxFileBytes {
 		return nil, "", errors.New("stored image is not a regular file within the size limit")
+	}
+	if info.Size() > limit {
+		return nil, "", &TooLargeError{Size: info.Size(), Limit: limit}
 	}
 	data := make([]byte, info.Size())
 	if _, err := readFull(file, data); err != nil {

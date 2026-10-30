@@ -22,12 +22,13 @@ func readImageFile(path string, policy sessionfs.NativePathPolicy, store *images
 		prefix = label + ": "
 	}
 	if name, isReference := strings.CutPrefix(path, imagestore.RefPrefix); isReference {
-		data, _, err := store.Open(name)
+		data, _, err := store.OpenWithin(name, maxBytes)
+		var tooLarge *imagestore.TooLargeError
+		if errors.As(err, &tooLarge) {
+			return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%sthe image is %d bytes; the limit is %d", prefix, tooLarge.Size, maxBytes))
+		}
 		if err != nil {
 			return nil, tools.ExecutionError(execution.CallID, tools.StatusNotFound, "image_not_found", prefix+"the stored image cannot be read: "+oneLine(err.Error()))
-		}
-		if int64(len(data)) > maxBytes {
-			return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%sthe image is %d bytes; the limit is %d", prefix, len(data), maxBytes))
 		}
 		return data, ""
 	}
