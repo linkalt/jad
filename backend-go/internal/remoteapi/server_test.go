@@ -250,6 +250,13 @@ func TestProfilesListIsFilteredByTheToken(t *testing.T) {
 	if status, body := f.do("GET", Prefix+"/profiles?session=nope", secretA, nil); status != 404 || body["code"] != "no_session" {
 		t.Fatalf("missing session must not be created or guessed: %d %v", status, body)
 	}
+	// The token sees none of side's profiles: the answer must match a missing session.
+	f.backend.profiles["side"] = []string{"dev/coder"}
+	missing, missingBody := f.do("GET", Prefix+"/profiles?session=nope", secretA, nil)
+	hidden, hiddenBody := f.do("GET", Prefix+"/profiles?session=side", secretA, nil)
+	if hidden != missing || hiddenBody["code"] != missingBody["code"] {
+		t.Fatalf("an inaccessible session must answer like a missing one: %d %v, %d %v", hidden, hiddenBody, missing, missingBody)
+	}
 	if status, _ := f.do("GET", Prefix+"/profiles?session=main", secretB, nil); status != 403 {
 		t.Fatalf("a token with no message/subagent/transcripts action: %d", status)
 	}

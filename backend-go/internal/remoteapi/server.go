@@ -302,6 +302,12 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request, token To
 			visible = append(visible, name)
 		}
 	}
+	// A session the token cannot see answers like a missing one, so the status does not show
+	// whether the session exists.
+	if len(visible) == 0 {
+		writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": session, "profiles": visible})
 }
 
