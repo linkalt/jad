@@ -1243,3 +1243,7 @@ Audit: `audit_findings/p3_merged.md` (P3-11).
 Audit: `audit_findings/p3_merged.md` (P3-10).
 
 - **Status: the debug log redacts headers named `token` or `secret`, and the URL inside a transport error (P3-10, option a).** `sensitiveHeaderPattern` (`httpdebug/transport.go`) gains `token` and `secret`, so `X-Session-Token` and `X-Client-Secret` are logged as `[REDACTED]`. A transport error is logged with its request URL replaced by the redacted URL (`redactErrorURL`), so a `key=` query value in the `*url.Error` text does not reach the file. Before, both were written in full. This changes what the debug log records; it does not change what the provider receives. Test: `TestTransportRedactsTokenHeadersAndTheURLInATransportError` (fails at HEAD on both assertions, and with the pattern narrowed back, CAUGHT).
+
+## listen_unix_mode description names the write-bit refusal (Go only, 2026-11-09)
+
+Audit: step-2 impact pass on `a7ad56b`. Range 384-438 is unchanged; `remote_api_settings.go` refuses a mode with a group or other write bit (`mode & 0o022`). Modes 0644 and 0600 are accepted; 0664 and 0666 are refused. `sample/schemes/root-setting.schema.json` now says so in the description. Test: `TestRemoteAPIListenUnixModeSchemaMatchesTheLoader` (fails on the previous description, and with the write-bit refusal disabled, CAUGHT).
