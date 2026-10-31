@@ -67,32 +67,32 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 |---|---|---|---|---|
 | N06 | p1 | low | HOLDS: Restore never calls startPendingReclaim (checkpoint/service.go:679-717); the flag is set by storeRecord (:836-837) and started only from Begin (:582) and Finish (:627) |
 | N08 | p1 | low | HOLDS: q.try is held from :231 across StartProfileRun (:258) to :277; BeforeRun runs the compaction synchronously (httpapi/profile_run.go:126-127; app/profile_message.go:145-155) |
-| N09 | p1 | low | perf, needs measurement | S |
+| N09 | Deferred: the cost is per sub-agent run and only matters for sub-agent-heavy use. | low | perf, needs measurement | S |
 | N10 | p1 | low | HOLDS (remote/entry.go:141,145) |
 | N11 | p1 | low | done (batch 5; closed) | client.go:112 post-dial checkPeerOwner; socket_unix.go:36. Closing evidence: TestClientRefusesARealForeignPeerAfterTheDial (backend-go/internal/remote/client_unix_test.go:101) runs a daemon-owned socat listener, chowns its socket to this user with one 'sudo -n chown', and checks the post-dial refusal 'answered by another user'. Fails with the checkPeerOwner call removed (mutate-check: 'request failed: EOF'), passes with it. |
 | N12 | p1 | low | done (batch 6) | 27f8f28; app/remote_listen.go:63-65 maxUnixSocketPath check (104 bytes), refusal test in remote_listen_unix_test.go |
 | N13 | p1 | low | HOLDS (reach narrow, not reproduced): the select at app/remote_api.go:233-244 has no priority; observe runs before await (tools/native/subagent_call.go:146) |
 | N14 | p1 | low | HOLDS (service.go:112-127, resolver.go:907) |
 | N15 | p1 | low | MOVED (resolver.go:1035-1036) |
-| N17 | p1 | low | perf, needs measurement | S |
+| N17 | Deferred: the lock is held across process-kill waits; needs a concurrency test showing a stall. | low | perf, needs measurement | S |
 | N18 | p1 | low | done (batch 10, 099989f) | app/catalog.go:234 list calls sharedStore; openSharedSession no longer MkdirAll (app/resolver.go:958-959); transcript/jsonl.go:226-228 RepairTail and :298-300 withRepairedFile open without O_CREATE, missing journal read as empty; input_history_memo.go:67-111 memo reset; run path MkdirAll at app/bound_runner.go:41 before PersistInputWithImages (append at session/runner.go:199, transcript/input_history.go:89). Tests: transcript/missing_journal_test.go TestMissingJournalStaysAbsentWhenRepairedOrRead, app/catalog_test.go TestListingANeverRunSessionCreatesNoMessagesDirectory. Changed transcript/recovery_test.go:270 existence check to allow an absent journal. |
 | N19 | p1 | low | HOLDS (dead list checked at HEAD) |
 | N20 | p1 | low | verified | cmd/openai-auth/browser.go:11, cmd/claude-auth/browser.go:11 |
 | N21 | p1 | low | HOLDS (misplaced comment at app/resolver.go:36-38; resolver.go is 1175 lines and catalog.go 632 at HEAD, merge said 1122 and 768) |
 | N22 | p1 | low | HOLDS in part: gaps stand for N13, N27, N06 (restore gc), N32 (mid-restore cancel); tests exist for N01, N02, N03, N04, N05, N12, N16, N18 (REFUTED items); sleep counts match (6,4,4,2,2) |
 | N23 | p1 | low | MOVED (resolver.go:929, :710) |
-| N24 | p1 | low | perf, needs measurement | S |
+| N24 | Deferred: concurrent transcript reads from a remote client are not yet seen. | low | perf, needs measurement | S |
 | N25 | p1 | low | HOLDS (remoteapi/server.go:351-358) |
 | N26 | p1 | low | verified | remote_api_settings.go:116 (same as P2B2-20) |
 | N27 | p1 | low | done (batch 6) | 2ebad42; app/remote_listen.go Link publish and unixListener.info own-inode Close; tests in remote_listen_unix_test.go |
 | N28 | p1 | low | done (batch 5) | logging/logging.go:72-77 Chmod 0o600 after open |
 | N29 | p1 | low | verified | cmd/anthropic-adapter/main.go:57 (same as P5M-08) |
-| N30 | p1 | low | perf, needs measurement | S |
+| N30 | Deferred: lock contention on concurrent turn starts is not measured. | low | perf, needs measurement | S |
 | N31 | p1 | low | stale | tools/native/transcript.go:146-152 rejects Bytes < 0 |
 | N32 | p1 | low | HOLDS: the handler passes r.Context() (httpapi/checkpoint_handlers.go:122) to Restore, which reaches git via exec.CommandContext (checkpoint/git.go:167) |
 | N33 | p1 | low | perf, needs measurement | R |
-| N34 | p1 | low | perf, needs measurement | R |
-| N35 | p1 | low | perf, needs measurement | R |
+| N34 | Deferred: tool rebuild per call matters only when remote transcript latency is a problem. | low | perf, needs measurement | R |
+| N35 | Deferred: the re-render cost matters only near `max_bytes`. | low | perf, needs measurement | R |
 | P2A-05 | p2a | low | HOLDS (native_process_settings.go:272-313, native_task_settings.go:172-213) |
 | P2A-06 | p2a | low | HOLDS (all five drift points checked key by key against sample/schemes/setting.schema.json and sessionfs loader; see verdict table) |
 | P2A-07 | p2a | low | closed: helper nativeEnvelope in b271a02; read settings converted in 9e779d7. tools.extension (extension_decide_systemone_settings.go:58,125) keeps its current behaviour by decision: a null extension node is absent, a null decide_systemone is refused at section level. Not aligned with the P2A-08 refusal, because loaded tools.native null is rewritten to {} (tool_shape.go:50-58) and aligning extension would make it the only node that refuses on the loaded path. Residual: no test pins the null-extension skip; a test is not added by decision. Item 1: the copy counts in the earlier analysis were not reproduced at b271a02, and the null-skip drift (sections guard literal null differently) is unchanged and open under P2A-08. |
@@ -127,7 +127,7 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P2B2-06 | p2b2 | low | closed dc3f4b5 (rule side): deny rules in allowedByNativeReadPolicy now match the resolved path too; test TestCollectSessionFilesDenyRuleMatchesTheResolvedWorkspacePath failed at 8fa87bb and the removal mutation was CAUGHT. Previously visible denied files under a symlinked workspace root are now hidden; intended. Allow clause unchanged. |
 | P2B2-07 | p2b2 | low | perf, needs measurement | S |
 | P2B2-08 | p2b2 | low | stale | backend-go/internal/sessionfs/tool_settings.go:168 bounds default_limit with maxSafeInteger, but output is capped by max_bytes (tools/native/read.go:582-590, called at :424), file size by max_file_bytes (:291-292), listing by visibleCount (:361-365) |
-| P2B2-09 | p2b2 | low | perf, needs measurement | S |
+| P2B2-09 | Deferred by user decision. | low | perf, needs measurement | S |
 | P2B2-11 | p2b2 | low | HOLDS (runner.go:181-201, input_history.go:223-233) |
 | P2B2-12 | p2b2 | low | HOLDS (storage_paths.go:88-113, tool_storage.go:10-31) |
 | P2B2-13 | p2b2 | low | HOLDS (session_files.go:225-266) |
@@ -192,7 +192,7 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P5M-14 | p5 | low | verified (batch 2) | anthropicadapter/response.go:182-185 json.Marshal |
 | P5M-15 | p5 | low | refuted (merge) | S (benign) |
 | P5M-16 | p5 | low | HOLDS (claudeauth/refresh.go:61,74 clock read after the exchange) |
-| P5M-17 | p5 | low | perf, needs measurement | S |
+| P5M-17 | Accepted by user decision: a maintainability cost, not throughput; the trigger is a maintainability event, not a metric. | low | perf, needs measurement | S |
 | P5M-18 | p5 | low | refuted (merge) | S (documented) |
 | P5M-19 | p5 | low | HOLDS (openaiauth/config.go:85 hostPattern accepts any bare host) |
 | P5M-20 | p5 | low | refuted (merge) | S (refuted as a defect) |
@@ -219,8 +219,8 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P6BM-10 | p6b | low | CHANGED in part: start honours a stop that came first (process_manager.go:402-408); the pid<=0 path in Stop still sets LeftRunning (:548-549) |
 | P6BM-11 | p6b | low | HOLDS: problems and strays are uncapped (native/exec_functions.go:246-255), only shown is capped (:272-274) |
 | P6BM-12 | p6b | low | CHANGED: staleScratchDirs also sweeps /tmp (native/scratch_sweep.go:35-41) |
-| P6BM-14 | p6b | low | perf, needs measurement | S |
-| P6BM-15 | p6b | low | perf, needs measurement | S |
+| P6BM-14 | Deferred: capped by `list_max_files` and `function_max_bytes`; matters only at the cap. | low | perf, needs measurement | S |
+| P6BM-15 | Deferred: matters only when a live handle has a long transcript on the async path. | low | perf, needs measurement | S |
 | P6BM-16 | p6b | low | perf, needs measurement | S |
 | P6BM-17 | p6b | low | HOLDS: openLibraryFile reached from exec_functions.go:61, tool_smith_fn.go:83, tool_smith_list.go:290 |
 | P6BM-18 | p6b | low | HOLDS: process_manager.go is 1235 lines at HEAD (merge: 1117); env builder at :860 duplicates the bash one (bash.go:382-386) |
@@ -249,7 +249,7 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P6CM-25 | p6c | low | HOLDS: path.Match glob for sessions vs exact DenyProfiles (profile_message.go:373-395) |
 | P6CM-26 | p6c | low | accepted per decider: file split not approved without a neutrality argument; sizes confirmed at HEAD (988, 728). |
 | P6CM-27 | p6c | low | HOLDS (count differs): 12 time.Sleep in the phase's test files at HEAD (merge: 34); the merge's named files show 0 sleeps |
-| P6CM-28 | p6c | low | perf, needs measurement | S |
+| P6CM-28 | Deferred: matters only with many sub-agent manifests in one profile. | low | perf, needs measurement | S |
 | P7A-04 | p7a | low | CHANGED: ripgrep and glob children use the bash allowlist (native/ripgrep.go:101,353-365; glob.go:236) |
 | P7A-05 | p7a | low | HOLDS: validateFetchURL applies no port policy; the port is only canonicalised and dialled (native/fetch.go:388-444, :439, :553-573) |
 | P7A-06 | p7a | low | CHANGED: OpenWithin refuses by size before reading (imagestore/store.go:520-535; native/image_file.go:25) |
@@ -259,14 +259,14 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P7A-10 | p7a | low | CHANGED: the local read verifies the opened file with SameFile and IsRegular (native/path.go:126-154); the FIFO swap is rejected |
 | P7A-11 | p7a | low | verified | tools/native/path_locks.go:22-26 nil receiver locks nothing shared |
 | P7A-12 | p7a | low | verified | bash_output.go:186 method has no caller; fetch.go:626 is readFetchResponseTruncating |
-| P7A-13 | p7a | low | perf, needs measurement | confirmed (read); perf unmeasured (M3) |
+| P7A-13 | Deferred: fix would keep the UTF-16 length in the stored metadata. | low | perf, needs measurement | confirmed (read); perf unmeasured (M3) |
 | P7A-14 | p7a | low | perf, needs measurement | confirmed (read); perf unmeasured (M2) |
 | P7A-15 | p7a | low | perf, needs measurement | confirmed (read); perf unmeasured (M4) |
 | P7A-16 | p7a | low | HOLDS: scopedPolicy is called only by edit, write, transcript_path and transcripts_list (native/path_scope.go:14; edit.go:92; write.go:94; transcript_path.go:78; transcripts_list.go:133); read, grep, glob and read_image do not consult it |
 | P7B-MRG-03 | p7b | low (deferred) | perf, needs measurement | **confirmed, reproduced** (251.7 MB vs 1.38 MB). **Deferred as low by  |
 | P7B-MRG-04 | p7b | low (deferred) | perf, needs measurement | **confirmed, reproduced** (flat 5.2-5.3 MB per page). **Deferred as lo |
 | P7B-MRG-05 | p7b | low (deferred) | perf, needs measurement | **confirmed, reproduced** (0.73 → 2.10 MB for 40 → 400 turns, output f |
-| P7B-MRG-06 | p7b | low | perf, needs measurement | **confirmed by reading**; its cost is part of the MRG-04 measurement |
+| P7B-MRG-06 | Deferred: part of the P7B-MRG-04 measurement. | low | perf, needs measurement | **confirmed by reading**; its cost is part of the MRG-04 measurement |
 | P7B-MRG-08 | p7b | low | HOLDS: the cursor branch checks only the remote switch (native/transcript_remote.go:251-264); entry.Allows runs only on the path branch (:104, via selector :269-270) |
 | P7B-MRG-09 | p7b | low | HOLDS: memory and task writes Close and Rename with no Sync (native/memory_store.go:762-786, task_store.go:406-429); Sync is absent from both stores |
 | P7B-MRG-10 | p7b | low | HOLDS: taskStorageError returns the store error text (native/task.go:558-563); storage errors carry %v of the OS error (task_store.go:365-395) |
@@ -277,13 +277,13 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P7B-MRG-16 | p7b | low | HOLDS: TaskStore.mu is per instance (native/task_store.go:197); resolver shares one store per key in-process (app/resolver.go:768-786) |
 | P7B-MRG-17 | p7b | low | HOLDS: seven BuildCatalog constructors chain through each other (native/catalog.go:50-88); the 25-arm count is not re-checked |
 | P7B-MRG-18 | p7b | low | HOLDS: memory.go:262 maps status by substring 'not found' though MemoryStoreError.Kind exists (memory_store.go:35-46) |
-| P7B-MRG-19 | p7b | low | perf, needs measurement | **confirmed by reading**; unmeasured |
+| P7B-MRG-19 | Deferred: memory writes are not seen in a profile. | low | perf, needs measurement | **confirmed by reading**; unmeasured |
 | P7B-MRG-20 | p7b | low | perf, needs measurement | **confirmed by reading**; unmeasured; small (bounded by `max_cursors`) |
 | P7B-MRG-21 | p7b | low | HOLDS: transcriptIdentity hashes the first line only, capped at 4 KiB (native/transcript_scan.go:130-141) |
 | P7B-MRG-22 | p7b | low | HOLDS: skill returns Go errors (native/skill.go:159-161) where its neighbour returns ExecutionError (:166) |
 | P7B-MRG-23 | p7b | low | perf, needs measurement | **confirmed by reading**; unmeasured (`BenchmarkTaskStoreList100` exis |
-| P7B-MRG-24 | p7b | low | perf, needs measurement | **confirmed by reading**; unmeasured. F-13 (`5d09534`) fixed the Stat  |
-| P7B-MRG-25 | p7b | low | perf, needs measurement | **confirmed by reading** (both calls at `hooks.go:123` and `:158`); un |
+| P7B-MRG-24 | Deferred: lock wait across the scan matters only under concurrent writes. | low | perf, needs measurement | **confirmed by reading**; unmeasured. F-13 (`5d09534`) fixed the Stat  |
+| P7B-MRG-25 | Deferred: matters only for a hook that watches a large file. | low | perf, needs measurement | **confirmed by reading** (both calls at `hooks.go:123` and `:158`); un |
 | P7B-MRG-26 | p7b | low | HOLDS: request_draft.go:403 and memory_json.go:163 are two ordered-JSON decoders; json_bounds.go:12,120 is a third measurement |
 | P7B-MRG-27 | p7b | low | perf, needs measurement | **confirmed by reading** (the loop at `:427-431` is as read); unmeasur |
 | P7B-MRG-28 | p7b | low | accepted per decider: file splits not approved; sizes confirmed at HEAD (memory_store.go 1116, task.go 703, catalog.go 632, request_draft.go 591). |
@@ -291,9 +291,9 @@ One row per unique id. `file` is the merge file where the row first appears. Sta
 | P7B-MRG-30 | p7b | low (decision) | refuted (merge) | **confirmed by reading**; a documented-or-fix decision, not a defect |
 | P7B-MRG-31 | p7b | low (deferred), partly fixed in `632ebed` | perf, needs measurement | **measured** (about 240 MB of the 294.7 MB at HEAD, 400 turns). **Defe |
 | P8-M-04 | p8 | low | carried | earlier pass (low_batches.md section 5) |
-| P8-M-05 | p8 | low | perf, needs measurement | confirmed (read); impact narrower, see below |
+| P8-M-05 | Deferred: a durability question, not throughput; belongs to the image-store durability review (low_batches.md section 8). | low | perf, needs measurement | confirmed (read); impact narrower, see below |
 | P8-M-06 | p8 | low | perf, needs measurement | confirmed (read); prior art B-C5 is accepted-low, not open |
-| P8-M-07 | p8 | low | perf, needs measurement | confirmed (read); no deadlock found |
+| P8-M-07 | Deferred: the observer runs under the turn lock; matters only if an observer is slow. | low | perf, needs measurement | confirmed (read); no deadlock found |
 | P8-M-09 | p8 | low | perf, needs measurement | confirmed (read); cost unmeasured |
 | P8-M-10 | p8 | low | verified (batch 2) | recovery.go:272, maintenance.go:834, prefix_hash.go:14 |
 | P8-M-11 | p8 | low | HOLDS: ReadCursorIndex takes cursorMu (transcript/cursor_cache.go:61-63) but rewrites do not (maintenance.go:656,823; jsonl.go:126; front_compact.go:248,284); cache is self-checking (cursor_cache.go:160-169) |
@@ -397,7 +397,7 @@ Recorded from the Phase A table and the Phase B run. Medians are `go test -bench
 - **P7B-MRG-23 (task list): accepted (cost kept).** The pin test `TestTaskStoreListPinsOrderAndWindow` and `BenchmarkTaskStoreListManyMatches` (commit `2ae8f35`) are kept. `load()` dominates at 18 ms for 3000 tasks (17.9 of 18.3 ms); the filter and sort are about 0.5 ms. A window-only clone change measured 18.28 ms after against 18.34 ms before, so it was not kept. Caching the decoded document would need proof of a single writer per file, which is not established.
 - **P7A-14 (fetch Create scan): accepted (no code change).** The directory scan stays under `s.mu`. Lock hold grows with the stored file count: 4.4 ms at 100 docs, 22 ms at 5000 (`BenchmarkPhaseAFetchCreateCount`, scratch, removed). Moving the scan out of the lock would let concurrent creates both pass the quota check and exceed `max_storage_bytes`. An incremental byte total is not exact either: several `FetchStore` instances share one directory, each with its own mutex, and the total is lost on restart.
 - **Accepted (cost kept).**
-  - **P2A-18** (`agent.json` read and parsed twice in `native_subagent_dir.go:105-140`): the cost is one extra parse per agent folder at load; the two reads can disagree only if the file changes between them, which is the existing behaviour. Accepted: a small one-off cost per folder, and a single read would change the load path.
+  - **P2A-18** (`agent.json` read and parsed twice in `sessionfs/native_subagent_dir.go:116,120`): the cost is one extra parse per agent folder at load; the two reads can disagree only if the file changes between them, which is the existing behaviour. Accepted: a small one-off cost per folder, and a single read would change the load path.
   - **P2B2-07** (workspace listing walk takes no context; schema maxima 200 times the defaults): the walk is bounded by the configured `max_entries` (code maximum 1,000,000) and `max_depth` (code maximum 64), so the cost is bounded by configuration. Accepted: a context parameter is an API change on the listing path, and the bound is set by the operator.
   - **P2B2-14** (`configSafeInteger` runs `big.Rat.SetString` on the whole literal): the cost is paid once per configured integer at config load, not per request. Accepted: config load is startup-only and the function is small; a length cap would be a new limit to configure.
   - **P5M-17** (the two auth packages duplicate about 1.2k lines): a maintainability cost, not a throughput cost. Accepted: the copies differ on purpose in mode and sync handling; merging is a refactor, not a performance fix (see the atomic-writers review in low_batches.md section 8).
@@ -406,28 +406,54 @@ Recorded from the Phase A table and the Phase B run. Medians are `go test -bench
   - **P8-M-06** (image store mutex covers the first-write directory scan and file I/O, B-C5): prior art, already accepted as low in the earlier review. Accepted, not reopened.
   - **N33** (history block re-reads the whole backup on each snapshot): measured 0.82 ms at 100 turns and 8.0 ms at 1000 turns for `readBackupTail` (scratch benchmark, removed). Accepted: the cost is linear in the backup size, the backup is bounded by the compaction policy, and a cache would need the same single-writer proof as P7B-MRG-23.
   - **P7B-MRG-27** (`request_draft` key dedupe is quadratic): measured 41.8 µs for 100 keys and 7.08 ms for 2000 keys (scratch, removed). Accepted: the input is a draft written by the model in one call, and the quadratic cost only shows at thousands of keys.
-- **Deferred, with the trigger to revisit.**
-  - **N09** (a sub-agent run builds its own transport when `provider_network` is not tcp): revisit when a sub-agent-heavy workload shows connection setup in a profile.
-  - **N17** (session delete holds `settingsMu` across process-kill waits): revisit with a concurrency test that shows a delete stalling other settings calls.
-  - **N24** (remote transcript reads have no per-token concurrency bound and rescan per page): revisit when a remote client drives concurrent transcript reads.
-  - **N30** (`readTurnStarts` holds `turnStartsMu` across a journal read): revisit with a lock-contention measurement on concurrent turn starts.
-  - **N34** (each remote transcript request rebuilds the tool and re-indexes the transcript): the tool rebuild is per call in `remoteBackend.Transcript`. Revisit when remote transcript latency is measured as a problem.
-  - **N35** (state-context trim re-renders the whole document after each removed item): revisit when a state context near `max_bytes` is measured to be slow to build.
-  - **P6BM-14** (each `tool_smith` run re-reads and re-copies every library header and valid function): capped by `list_max_files` (200) and `function_max_bytes` (64 KiB). Revisit when a library at the cap is measured slow per run.
-  - **P6BM-15** (each async wait, list or status re-indexes the transcript of every live agent handle from offset 0): revisit when a live handle with a long transcript is measured on the async path.
-  - **P6CM-28** (a cross-profile transcript read loads every manifest before it knows which it needs): revisit when a profile with many sub-agent manifests is measured.
-  - **P7B-MRG-19** (memory record is pretty-printed and compact-encoded on each create and update, `memory_store.go:83,176,300`): revisit when memory writes show up in a profile.
-  - **P7B-MRG-24** (memory quota scan lists every type directory per write; List and GroupBy hold the store lock across the scan): revisit with a concurrent memory-write benchmark that shows lock wait.
-  - **P8-M-05** (`writeAtomic` in `imagestore/store.go` has no `Sync`; dedupe checks size only): a durability question, not a throughput one. Revisit with the durability review of the image store (see section 8 of low_batches.md).
-  - **P8-M-07** (the commit observer runs while the per-turn mutex is held, `transcript/turn.go:405`): revisit when an observer is measured to hold the turn lock long enough to matter.
-  - **P7A-13** (fetch page converts the whole stored document to UTF-16 per page, `fetch_store.go:188,265-277`): measured 3.2 ms per 1 MiB page and 22.6 ms per 8 MiB page. Revisit when fetch pagination of large documents is a measured problem; the fix keeps the UTF-16 length in the stored metadata.
-  - **P7B-MRG-06** (transcript reads scan the file twice per call; the turn index is rebuilt each page): part of the P7B-MRG-04 measurement, so it is revisited with it.
-  - **P7B-MRG-03, P7B-MRG-04, P7B-MRG-05, P7B-MRG-31** (transcript detail and list paging costs, 240 MB per 400-turn page at 64 KiB results): deferred by user decision earlier. Revisit with a stored per-result decode, or when a transcript list at 400 turns is a reported problem.
-  - **P7B-MRG-25** (post-edit hook hashes the watched file twice with no size bound): measured 8.3 µs at 4 KiB and 5.45 ms at 8 MiB per digest. Revisit when a hook watches a large file.
-  - **P2B2-09** (session-file listing reads every `<id>.json` with no entry-count cap; an aggregate 64 MiB byte budget exists): decided as defer (user decision). Revisit when the profiles catalog is measured slow with many session files.
+- **Deferred rows:** each has a specific trigger in the table after this list (HEAD e33ffec). The generic triggers that were here are removed.
 - **P6AM-03, P7A-07, P8-M-09, P6BM-16 (sequential Close), P2B1-14, P7A-08 (partly):** stale or not a perf item at HEAD (see Phase A table).
 
 
+
+### Trigger table for the 35 performance rows (HEAD e33ffec)
+
+Each trigger below names the code location, the workload or config that exercises it, and the metric and threshold that would justify measuring. Every cited `file:line` was read at HEAD `e33ffec`. Nothing here is measured again. A threshold marked "measured" comes from an earlier scratch benchmark; every other threshold is a proposed bound, to be confirmed by the measurement itself before any change.
+
+| Row | Status (section 10) | Cited file:line at HEAD | Trigger | Stale reference fixed |
+|---|---|---|---|---|
+| N09 | deferred: the cost is per sub-agent run; matters only for sub-agent-heavy use | `app/subagent.go:62`, `app/resolver.go:489-493` (`newProviderStreamer`) | A sub-agent run with `provider_network` not `tcp`: measure when 20 or more such runs in one session spend more than 5% of their wall time in transport setup (dial and TLS). | `resolver.go:481-515` in the findings -> `resolver.go:489-493` |
+| N17 | deferred: the lock is held across process-kill waits; needs a concurrency test that shows a stall | `app/session_catalog_files.go:74-77` (`DeleteSessionConfig` takes `settingsMu`, then `sessionfs.DeleteSessionFile`) | A session delete while the session has a running process: measure when a concurrent settings call (for example `app/session_settings.go:23`) waits longer than the summed `kill_grace_ms` of the processes the delete stops. | `session_catalog_files.go:47` (a different function) -> `:74-77` |
+| N24 | deferred: no concurrent remote transcript reads seen yet | `app/remote_transcripts.go:88` (`Transcript`), `tools/native/transcript.go:306` (`indexTranscriptTurns`) | Eight or more concurrent remote transcript requests on a transcript near `tools.native.transcript.scan_max_bytes`: measure when aggregate bytes read per second exceed 256 MiB (proposed bound). | `transcript.go:296-306` -> `:306`; `remoteapi/server.go:647` was a closing brace, dropped |
+| N30 | deferred: lock contention on concurrent turn starts not measured | `app/turn_starts.go:41` (lock), `:56` (`ReadCompleteRecordsRange` under the lock) | Four or more concurrent turn starts while the transcript has grown by 1000 or more records since the last scan: measure when p99 wait on `turnStartsMu` exceeds 10 ms. | none (`turn_starts.go:41-92` range kept, function is `:32-109`) |
+| N33 | accepted (section 10): linear in the backup size; the backup is bounded by the compaction policy; a cache would need the single-writer proof of P7B-MRG-23 | `app/history.go:242` (`readBackupTail`), `app/catalog.go:398` (caller) | Catalog snapshots of a session with `BackupTurns` at 1000 turns or more: measure when `readBackupTail` takes more than 10 ms per snapshot (8.0 ms measured at 1000 turns). | `app/history.go:222-240` added for `readHistoryBlock` |
+| N34 | deferred: tool rebuild per call matters only when remote transcript latency is a problem | `app/remote_transcripts.go:104-106` (tool built per call), `tools/native/transcript.go:306` (index per call) | Ten or more remote transcript requests per second on a transcript of 10,000 lines or more: measure when tool construction plus indexing exceeds 5 ms per request. | `transcript.go:296-306` -> `:306`; `remote_transcripts.go:88-122` -> `:104-106` |
+| N35 | deferred: the re-render cost matters only near `max_bytes` | `app/state_context.go:207` (trim loop), `:234` (re-render) | A state context whose rendered size is above `statecontext.triggers.<name>.max_bytes` by 100 or more trimmed items: measure when the loop runs more than 100 iterations or one build takes over 10 ms. | none |
+| P2A-18 | accepted (section 10): one extra parse per agent folder at load; a single read would change the load path | `sessionfs/native_subagent_dir.go:116` (raw read), `:120` (`readSessionObject`, second read and parse) | An `agents_dir` with 100 or more agent folders at load: measure when `loadSubagentFolder` over all folders exceeds 50 ms. | `native_subagent_dir.go:105-140` -> `sessionfs/native_subagent_dir.go:116,120` (`:105` is a comment) |
+| P2B2-07 | accepted (section 10): the walk is bounded by configured `max_entries` and `max_depth`; a context parameter is an API change; the operator sets the bound | `sessionfs/files.go:22` (`CollectSessionFiles`), `sessionfs/file_settings.go:13-14` (caps 64 and 1,000,000), `:49-50` (defaults 12 and 5000) | A workspace listing with `max_entries` raised above 100,000 and the walk ignoring the request context: measure when a listing keeps running more than 1 s after the client disconnects. | none |
+| P2B2-09 | deferred: decided as defer (user decision) | `sessionfs/session_files.go:59` (`listSessionFiles`), `:79` (budget check), `app/catalog_files.go:41` (`ListCatalogFiles`) | A profiles catalog with 1000 or more session files: measure when the listing takes over 500 ms or hits the 64 MiB budget (`truncated` true). | `session_files.go:25-57` -> `:59-95`; `app/catalog_files.go:43` -> `:41` |
+| P2B2-14 | accepted (section 10): paid once per configured integer at config load; a length cap would be a new limit | `sessionfs/tool_settings.go:195-213` (`configSafeInteger`), `:204` (`big.Rat.SetString`) | A config file with one integer literal of 10,000 digits or more: measure when config load takes over 100 ms. | `tool_settings.go:190-208` -> `:195-213` |
+| P5M-17 | accepted (section 10): a maintainability cost, not throughput; the copies differ on purpose; a merge is a refactor | `backend-go/internal/claudeauth/store.go:211` and `openaiauth/store.go:225` (`writeAtomic` copies) | Any change to one auth copy's mode or sync handling that is not made in the other, or a third auth package: review when a diff touches one copy and not the other. | `sessionlock/lock.go:91`, `store.go:160`, `stream_sse.go:19` (unrelated files) -> the two `writeAtomic` copies |
+| P6AM-03 | Phase A: stale or not perf (section 10): stale or not perf at HEAD (Phase A); a correctness question, see the row | `tools/mcp/structured_content_capture.go:112-114` (`withoutStructuredContent`) | An MCP `tools/call` result whose `structuredContent` holds a number outside float64 range or an integer above 2^53: the call fails. Trigger: any such call returns an error (correctness, not cost). | `catalog.go:374`, `content.go:45`, `manager.go:337` (unrelated) -> `structured_content_capture.go:112-114` |
+| P6BM-14 | deferred: capped by `list_max_files` and `function_max_bytes`; matters only at the cap | `tools/native/tool_smith_fn.go:27` (`stageToolSmithFunctions`), `:79` (`copyToolSmithFunction`); cap `sessionfs/native_exec_settings.go:102` (`ListMaxFiles`), `:104` (`FunctionMaxBytes`) | A `tool_smith` run with a library at `list_max_files` (200) files, each near `function_max_bytes` (64 KiB): measure when staging takes over 200 ms per run. | `:77` was a comment -> `:79` |
+| P6BM-15 | deferred: matters only with a live handle that has a long transcript on the async path | `tools/native/async_tool.go:194` (`liveHandleIDs` then `latestBlocks`), `async_latest.go:41` (`latestBlocks`), `:112` (`liveHandleIDs`), `asyncmgr/config.go:72` (`LatestScanMaxBytes` 8 MiB) | Twenty or more live handles each with a transcript over 8 MiB, one async wait per second: measure when bytes scanned per call exceed 160 MiB (20 x 8 MiB). | `async_latest.go:213,249` and `subagent_manager.go:152-168` (not this path) -> `:41-70` and `:112-123` |
+| P6CM-28 | deferred: matters only with many sub-agent manifests in one profile | `tools/native/subagent_store.go:228` (`subagentRunIDs`), `:233` (`load` of every manifest), `transcript_path.go:155` (cross-profile call) | A profile with 500 or more sub-agent manifests and a cross-profile transcript read: measure when `subagentRunIDs` takes over 50 ms before the target is known. | `subagent_manager.go:100-133`, `subagent_store.go:120-141` -> `subagent_store.go:228-240` |
+| P7A-07 | Phase A: stale or not perf (section 10): stale or not perf at HEAD (Phase A); the throttle map is pruned when a key is due | `tools/native/bash_spill.go:277` (key), `:281-290` (map insert, evicts only keys past `interval`) | A legacy `stdout_full` template with `{call_id}` in the directory and 10,000 or more bash calls in one process: measure when `len(bashSpillPrunes.last)` exceeds 1000 with a non-zero interval. | none |
+| P7A-13 | deferred: deferred; the fix would keep the UTF-16 length in the stored metadata | `tools/native/fetch_store.go:158` (`fetchWindow`), `:188` (`utf16Length` of the stored markdown on each page) | A fetch page of a stored document over 8 MiB: measure when one page read takes over 10 ms (22.6 ms measured at 8 MiB). | `ripgrep.go:353-417` (unrelated) -> `fetch_store.go:158,188` |
+| P7A-14 | accepted (section 10): the scan stays under `s.mu`: moving it out would let concurrent creates exceed `max_storage_bytes` | `tools/native/fetch_store.go:91` (lock), `:116` (`fetchDirectoryBytes` under the lock) | 5000 or more stored fetch documents: measure when the `Create` lock hold exceeds 20 ms (22 ms measured at 5000). | none |
+| P7A-15 | accepted (section 10): a few milliseconds at the match cap | `tools/native/grep.go:122-131` (resolve loop per matched group) | A grep at the match cap across 1000 or more files: measure when the resolve loop takes over 50 ms per call. | none |
+| P7B-MRG-03 | deferred (user decision): deferred by user decision (240 MB per 400-turn page measured) | `tools/native/transcript_detail.go:101` (`detail`), `transcript_steps.go:167-180` (`result` keeps full text) | Detail over a 400-turn range with 64 KiB results: measure when one call's peak heap exceeds 100 MiB (240 MB per 400-turn page measured). | `transcript_steps.go:60-62` -> `:60` (keep predicate), text retention at `:167-180` |
+| P7B-MRG-04 | deferred (user decision): deferred by user decision (flat 5.2-5.3 MB per page measured) | `tools/native/transcript.go:306` (index rebuilt per page), `:368` (`scanTranscript` over the range) | A list page over a transcript of 400 turns: measure when bytes scanned per page exceed 2x the page output bytes (5.2 MB flat per page measured). | `transcript.go:332` (a `hasResume` assignment) -> `:306,368` |
+| P7B-MRG-05 | deferred (user decision): deferred by user decision (0.73 to 2.10 MB for 40 to 400 turns measured) | `tools/native/transcript_steps.go:201` (`visit` materialises each record), `transcript.go:368` | List mode over a 400-turn range: measure when materialised steps exceed 10x the steps emitted in the page. | `transcript.go:363-390` -> `:368` and `transcript_steps.go:201` |
+| P7B-MRG-06 | deferred: part of the P7B-MRG-04 measurement | `tools/native/transcript.go:306` (turn index), `:368` (second walk), `transcript_scan.go:95-97` (`indexTranscriptTurns`) | Transcript reads of 400 turns or more: measure when the index build takes over 10% of total read time. | `transcript.go:304` (an error return) -> `:306` |
+| P7B-MRG-19 | deferred: deferred; memory writes not seen in a profile | `tools/native/memory_store.go:83` (compact), `:176` (`CreateValue` pretty), `:300` (update pretty), `memory_json.go:317-323` (`memoryJSONPretty`) | A memory create or update of a record at the policy's max bytes: measure when the pretty-print step takes over 1 ms per write. | `memory_store.go:513-525` (not the encoder) -> `:176,:300` |
+| P7B-MRG-20 | accepted (section 10): bounded by `max_cursors`; small | `tools/native/memory_store.go:847` (`pruneCursors`), `:863` (`os.Stat` per cursor) | `max_cursors` raised to 1000 or more: measure when one cursor creation takes over 10 ms in `pruneCursors`. | `memory_store.go:793-829` (`load`, not the prune) -> `:847-883` |
+| P7B-MRG-23 | accepted (section 10): the load dominates (17.9 of 18.3 ms at 3000 tasks); a window-only change did not help | `tools/native/task_store.go:249` (`List`, load then clone and sort of all matches) | 10,000 or more tasks with a small `limit`: measure when `List` takes over 50 ms (18 ms measured at 3000). | `task.go:250-265` (argument parsing) -> `task_store.go:249` |
+| P7B-MRG-24 | deferred: deferred; lock wait across the scan matters only under concurrent writes | `tools/native/memory_group.go:28` (`GroupBy` under `withLock`), `memory_store.go:665` (`totals`), `:611` (mkdir per write) | A `GroupBy` over `MaxScanRecords` records with concurrent memory writes: measure when a writer waits over 10 ms for the store lock. | `memory_store.go:609-655` -> `:611` and `:665` |
+| P7B-MRG-25 | deferred: deferred; matters only for a hook that watches a large file | `tools/native/hooks.go:123` and `:158` (two `fileDigest` calls), `:233` (`fileDigest`) | A post-edit hook watching a file of 1 MiB or more: measure when digesting takes over 10 ms per edit (5.45 ms measured at 8 MiB). | none |
+| P7B-MRG-27 | accepted (section 10): the input is one model-written draft; quadratic cost only at thousands of keys | `tools/native/request_draft.go:427-433` (linear key scan) | A `request_draft` object with 2000 or more keys: measure when decoding takes over 10 ms (7.08 ms measured at 2000). | `request_draft.go:425-432` -> `:427-433` |
+| P7B-MRG-31 | deferred (user decision): deferred by user decision (about 240 MB of 294.7 MB at 400 turns measured) | `tools/native/transcript_steps.go:167-168` (`replaceDataURLs(transcriptText)`), `transcript_render.go:9` (data-URL regex), `transcript_steps.go:186` (`transcriptResultStatus`) | A list over a 400-turn transcript with 64 KiB results: measure when one `result()` call takes over 1 s of CPU in total. | none (added the missing location) |
+| P8-M-05 | deferred: a durability question, not throughput; belongs to the image-store durability review (section 8) | `imagestore/store.go:602-626` (`writeAtomic`, no `Sync`), `:481` (dedupe by size only) | A crash test that loses an image whose write returned success: review the durability of the image store when that happens. | `store.go:479-481,520-559` -> `:481`, `:602-626` |
+| P8-M-06 | accepted (section 10): prior art, accepted as low earlier (B-C5); not reopened | `imagestore/store.go:479` (lock), `:484-487` (first-write `directorySize`), `:491` (`writeAtomic`) | Image writes into a directory of 5000 or more files: measure when a writer waits over 20 ms on `s.mu`. | `app/bound_runner.go:51` (a brace) -> `:479,:484-487` |
+| P8-M-07 | deferred: the observer runs under the turn lock; matters only if an observer is slow | `transcript/turn.go:343` (lock), `:405` (observer call under the lock), `:424` (`callCommitObserver`), `session/runner_response.go:122` (`CommitWithObserver`) | A commit observer that does I/O on a turn: measure when a concurrent turn method waits over 10 ms for `t.mu`. | none |
+| P8-M-09 | Phase A: stale or not perf (section 10): stale or not perf at HEAD (Phase A) | `transcript/input_history.go:289` (`objectFieldsValid` on the response), `jsoncompat.go:284-337` (`canonicalJSONValid`) | A completed output item with a response of 1 MiB or more: measure when validation and scan take over 10 ms per expansion. | `input_history.go:280-289` -> `:289`; `jsoncompat.go:284-306` -> `:284-337` |
+
+Rows P7B-MRG-03, P7B-MRG-04, P7B-MRG-05 and P7B-MRG-31 were deferred by user decision before this table. The table is their trigger; the decision is unchanged.
 
 ## 11. Closeout of the remaining items (HEAD b7bff35 onward)
 
@@ -440,7 +466,7 @@ Recorded from the Phase A table and the Phase B run. Medians are `go test -bench
 - **-cpu / -count split (accepted).** `TestManyConcurrentSubscribersSeeAnUninterruptedStream` passed 100 of 100 with `-count=100 -v` under load. A split re-run adds no evidence. Closed.
 - **Named return on `Runner.Run` (accepted).** Nothing defers on `err` or `result` in that range; the named return is used by the `return result, err` paths. Rewriting it would be churn with no behaviour change.
 - **Root working docs (decided this round).** `audit_findings/p2b2_merged.md` and `audit_plan.md` committed as docs (P2B2-08 stale verdict checked against `read.go:426` and `tool_settings.go:168`; audit plan section 6.6 backs `final_perf.md`; the R1 profile `jad/reviewer0` matches the reviewer runtime state). `audit_findings/p4_r4.md` was an empty placeholder skeleton in the working tree; restored to the committed review. `EXECUTOR.md` and `MASTER.md` are orchestration role prompts, not audit records, and are excluded and left modified.
-- **Performance rows (decision, per row).** The section 5 table has 38 rows, not 21. Nothing was measured. Per row: **closed** where code shows the cost is already fixed or not a performance item; **accepted** where section 10 records the cost and its reason; **deferred** where section 10 gives a trigger. Rows without a section 10 entry are listed here. **Closed (stale at HEAD):** P6BM-16 (`ProcessManager` `Close` stops in parallel with a finishing wait, `process_manager.go:571-622`). **Closed (not a performance item):** P2B1-14 (absolute paths in `ConfigError` are a disclosure hardening item, tracked as a finding), P7A-08 (a same-inode write race in edit, unreproduced, same-user actor, ms window; accepted as a correctness risk, not a cost). **Accepted and deferred:** the other 35 rows have a section 10 entry with its reason and trigger. Trigger for any row is the one stated there; none is a blanket trigger.
+- **Performance rows (decision, per row).** The section 5 table has 38 rows, not 21. Nothing was measured. Per row: **closed** where code shows the cost is already fixed or not a performance item; **accepted** where section 10 records the cost and its reason; **deferred** where the trigger table (after section 10) gives a specific trigger. **Closed (stale at HEAD):** P6BM-16 (`ProcessManager` `Close` stops in parallel with a finishing wait, `process_manager.go:571-622`). **Closed (not a performance item):** P2B1-14 (absolute paths in `ConfigError` are a disclosure hardening item, tracked as a finding), P7A-08 (a same-inode write race in edit, unreproduced, same-user actor, ms window; accepted as a correctness risk, not a cost). **Accepted and deferred:** the other 35 rows have a section 10 entry with its reason and trigger. Each deferred row has its own trigger in the table; no trigger is a blanket trigger.
 
 ## 12. Final classification (HEAD 9c521b3)
 
