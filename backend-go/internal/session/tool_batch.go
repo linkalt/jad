@@ -1,24 +1,23 @@
 package session
 
 import (
-	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"sync"
 )
 
-// toolBatchPanic is a panic recovered on a batch worker. Its text names only the
-// panic value, because it can reach a model (a sub-agent's failure reason); the stack
-// is added to the server log by LogValue when the error is logged.
+// toolBatchPanic is a panic recovered on a batch worker. Its text is generic,
+// because it can reach a model (a sub-agent's failure reason); the panic value and
+// the stack are added to the server log by LogValue when the error is logged.
 type toolBatchPanic struct {
 	value any
 	stack []byte
 }
 
-func (p *toolBatchPanic) Error() string { return fmt.Sprintf("tool batch call panicked: %v", p.value) }
+func (p *toolBatchPanic) Error() string { return "tool call panicked" }
 
 func (p *toolBatchPanic) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("message", p.Error()), slog.String("stack", string(p.stack)))
+	return slog.GroupValue(slog.String("message", p.Error()), slog.Any("value", p.value), slog.String("stack", string(p.stack)))
 }
 
 // toolBatchConcurrency is how many calls of one response may run at once. With

@@ -187,14 +187,15 @@ func TestRunToolBatchTurnsAPanicIntoTheCallsError(t *testing.T) {
 					return tc.execute(call)
 				},
 				tc.onFinished, nil)
-			if err == nil || !strings.Contains(err.Error(), "panicked: boom in "+name) {
-				t.Fatalf("error = %v, want the recovered panic", err)
-			}
-			if strings.Contains(err.Error(), "goroutine") || strings.Contains(err.Error(), ".go:") {
-				t.Fatalf("error text %q carries a stack; it can reach a model", err.Error())
+			// The error can reach a model, so its text is generic: no panic value, no stack.
+			if err == nil || err.Error() != "tool call panicked" {
+				t.Fatalf("error = %v, want the generic panic text", err)
 			}
 			var logged bytes.Buffer
 			slog.New(slog.NewTextHandler(&logged, nil)).Error("run failed", slog.Any("error", err))
+			if !strings.Contains(logged.String(), "boom in "+name) {
+				t.Fatalf("log line %q has no panic value for the server log", logged.String())
+			}
 			if !strings.Contains(logged.String(), "goroutine") {
 				t.Fatalf("log line %q has no stack for the server log", logged.String())
 			}
