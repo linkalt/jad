@@ -83,3 +83,10 @@ func TestDisplayUpstreamURLDropsUserinfoAndQuery(t *testing.T) {
 		t.Fatalf("displayUpstreamURL() = %q, want scheme, host and path only", got)
 	}
 }
+
+func TestDisplayUpstreamURLFallsBackForAMalformedURL(t *testing.T) {
+	got := displayUpstreamURL("http://[::1")
+	if got != "<invalid upstream URL>" {
+		t.Fatalf("displayUpstreamURL() = %q, want the invalid-URL fallback", got)
+	}
+}
