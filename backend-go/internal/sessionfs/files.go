@@ -198,7 +198,7 @@ func containedRegularFile(path, workspaceRoot string) (string, bool) {
 
 func allowedByNativeReadPolicy(path, root, resolvedPath, workspaceRoot string, policy NativePathPolicy) bool {
 	for _, rule := range policy.Paths {
-		if rule.Action == "deny" && PathWithin(rule.Path, path) {
+		if rule.Action == "deny" && (PathWithin(rule.Path, path) || PathWithin(rule.Path, resolvedPath)) {
 			return false
 		}
 	}

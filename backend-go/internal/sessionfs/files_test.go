@@ -51,6 +51,34 @@ func TestCollectSessionFilesFiltersHiddenIgnoredSymlinkAndDeniedPaths(t *testing
 	}
 }
 
+func TestCollectSessionFilesDenyRuleMatchesTheResolvedWorkspacePath(t *testing.T) {
+	real := t.TempDir()
+	base := t.TempDir()
+	root := filepath.Join(base, "link")
+	if err := os.Symlink(real, root); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "secrets", "key.txt"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "README.md"), []byte("readme"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := defaultSessionFileListingSettings()
+	settings.MaxDepth = 4
+	policy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(real, "secrets")}}}
+	listing := CollectSessionFiles(root, settings, policy)
+	for _, name := range listing.Files {
+		if name == "secrets/key.txt" {
+			t.Fatalf("listing = %+v, want secrets/key.txt hidden by the canonical deny rule", listing)
+		}
+	}
+}
+
 func TestCollectSessionFilesListsNestedFoldersAndCountsThemAgainstTheCap(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"a/b/c.txt", "a/d.txt", "empty/.keep"} {
