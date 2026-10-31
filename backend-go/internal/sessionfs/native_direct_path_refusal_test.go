@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// nativeDirectPathBaseline records the direct-path result of each native section normalizer
-// for the probe inputs. It pins HEAD behaviour so a later change to null handling shows up
-// as an exact diff. Each line is "<section> native=<input> <outcome>".
-const nativeDirectPathBaseline = `async native=string err: setting.json: tools.native must be a JSON object
+// nativeDirectPathRefusals records the direct-path result of each native section normalizer
+// for the probe inputs. It pins that a literal tools.native null is refused by every section,
+// so a change to null handling shows up as an exact diff. Each line is "<section> native=<input> <outcome>".
+const nativeDirectPathRefusals = `async native=string err: setting.json: tools.native must be a JSON object
 async native=number err: setting.json: tools.native must be a JSON object
 async native=array err: setting.json: tools.native must be a JSON object
 async native=null err: setting.json: tools.native must be a JSON object
@@ -152,7 +152,7 @@ read_policy native=missing non-nil
 read_policy native=tools-null err: setting.json: tools must be a JSON object
 read_policy native=valid-empty-object non-nil`
 
-func TestNativeDirectPathBaseline(t *testing.T) {
+func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 	const settingPath = "setting.json"
 	inputs := []struct {
 		name    string
@@ -271,7 +271,7 @@ func TestNativeDirectPathBaseline(t *testing.T) {
 		}
 	}
 	gotText := strings.Join(got, "\n")
-	if gotText != nativeDirectPathBaseline {
-		t.Fatalf("direct-path baseline mismatch\n--- got ---\n%s", gotText)
+	if gotText != nativeDirectPathRefusals {
+		t.Fatalf("direct-path refusal table mismatch\n--- got ---\n%s", gotText)
 	}
 }
