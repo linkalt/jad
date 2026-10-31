@@ -1201,3 +1201,9 @@ Audit: `audit_findings/p4_merged.md` (M21, M27), `audit_findings/low_unverified_
 Audit: `audit_findings/p3_merged.md` (P3-11).
 
 - **Status: a session file the listing could not read is listed without an `etag` (P3-11, option a).** The `etag` field on a catalog listing row is omitted when empty (`CatalogFileInfo.ETag`, `catalog_files_handlers.go`). Before, the unreadable row carried `"etag": ""`. The frontend accepts a row with no `etag` (`fetchCatalogFiles`, `api.ts`), keeps it, and disables its delete, since a delete needs a version. Opening a file still needs an etag, and a row with none cannot be opened. Tests: `TestSessionListLeavesOutTheEtagOfAnUnreadableFile` (backend, fails with `omitempty` removed) and `fetchCatalogFiles accepts a session row that carries an error and no etag` (frontend, fails before the validator change).
+
+## Debug log: token and secret headers, and transport errors (P3-10)
+
+Audit: `audit_findings/p3_merged.md` (P3-10).
+
+- **Status: the debug log redacts headers named `token` or `secret`, and the URL inside a transport error (P3-10, option a).** `sensitiveHeaderPattern` (`httpdebug/transport.go`) gains `token` and `secret`, so `X-Session-Token` and `X-Client-Secret` are logged as `[REDACTED]`. A transport error is logged with its request URL replaced by the redacted URL (`redactErrorURL`), so a `key=` query value in the `*url.Error` text does not reach the file. Before, both were written in full. This changes what the debug log records; it does not change what the provider receives. Test: `TestTransportRedactsTokenHeadersAndTheURLInATransportError` (fails at HEAD on both assertions, and with the pattern narrowed back, CAUGHT).

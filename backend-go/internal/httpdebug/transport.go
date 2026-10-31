@@ -25,7 +25,7 @@ const redactedValue = "[REDACTED]"
 const bodyFileSuffix = ".body"
 
 var (
-	sensitiveHeaderPattern = regexp.MustCompile(`(?i)(?:authorization|api[-_]?key|cookie|set-cookie|proxy-authorization)`)
+	sensitiveHeaderPattern = regexp.MustCompile(`(?i)(?:authorization|api[-_]?key|token|secret|cookie|set-cookie|proxy-authorization)`)
 	debugFilePattern       = regexp.MustCompile(`^(?:request|response)([0-9]+)$`)
 	debugAnyFilePattern    = regexp.MustCompile(`^(?:request|response)[0-9]+(?:\.body)?$`)
 	sensitiveQueryPattern  = regexp.MustCompile(`(?i)(?:key|token|secret|signature|sig|password|passwd|auth|credential)`)
@@ -100,7 +100,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 			"direction": "response",
 			"url":       redactURL(request.URL),
-			"error":     err.Error(),
+			"error":     redactErrorURL(err.Error(), request.URL),
 		})
 		return response, err
 	}
@@ -229,6 +229,15 @@ func redactURL(u *url.URL) string {
 		clean.RawQuery = strings.Join(parts, "&")
 	}
 	return clean.String()
+}
+
+// redactErrorURL replaces the raw URL inside a transport error, which the HTTP client
+// writes in full, with the redacted form, so its credentials stay out of the log.
+func redactErrorURL(message string, u *url.URL) string {
+	if u == nil {
+		return message
+	}
+	return strings.ReplaceAll(message, u.String(), redactURL(u))
 }
 
 func responseStatusText(response *http.Response) string {

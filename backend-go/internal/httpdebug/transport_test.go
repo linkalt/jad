@@ -355,6 +355,29 @@ func TestTransportRedactsResponseHeadersAndQueryAndUsesPrivateDirectory(t *testi
 	}
 }
 
+func TestTransportRedactsTokenHeadersAndTheURLInATransportError(t *testing.T) {
+	failing := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Get", URL: request.URL.String(), Err: io.ErrUnexpectedEOF}
+	})
+	directory := filepath.Join(t.TempDir(), "debug")
+	transport := NewTransport(directory, Settings{Enabled: true, IncludeRequestHeaders: true, MaxBodyBytes: 8}, failing).(*Transport)
+	request := httptest.NewRequest(http.MethodGet, "https://h/v1?key=query-secret&model=m", nil)
+	request.Header.Set("X-Session-Token", "header-token")
+	request.Header.Set("X-Client-Secret", "header-secret")
+	if _, err := transport.RoundTrip(request); err == nil {
+		t.Fatal("want the transport error")
+	}
+	transport.logger.pending.Wait()
+
+	headers := readRecord(t, directory, "request1")["headers"].(map[string]any)
+	if headers["x-session-token"] != "[REDACTED]" || headers["x-client-secret"] != "[REDACTED]" {
+		t.Errorf("request headers = %#v", headers)
+	}
+	if raw := readRaw(t, directory, "response1"); strings.Contains(raw, "query-secret") {
+		t.Errorf("transport error leaks the query credential: %s", raw)
+	}
+}
+
 func TestTransportPrunesOldestFilesBeyondTheTotalCap(t *testing.T) {
 	directory := t.TempDir()
 	base := time.Now().Add(-time.Hour)
