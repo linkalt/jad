@@ -841,12 +841,7 @@ func hashTranscriptFile(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	defer file.Close()
-	hash := sha256.New()
-	size, err := io.Copy(hash, file)
-	if err != nil {
-		return "", 0, err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), size, nil
+	return hashReader(file)
 }
 
 // cacheSourceIsTranscript reports whether the transcript still holds the bytes the

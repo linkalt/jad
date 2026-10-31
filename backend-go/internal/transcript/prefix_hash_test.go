@@ -55,3 +55,26 @@ func TestHashFileRangeRejectsInvalidAndShortRanges(t *testing.T) {
 		t.Errorf("missing file error = %v, want os.ErrNotExist", err)
 	}
 }
+
+func TestWholeFileHashesAgree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	body := []byte(`{"type":"message"}` + "\n")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	whole, err := HashFileRange(path, 0, int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromTranscript, size, err := hashTranscriptFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromFile != whole || fromTranscript != whole || size != int64(len(body)) {
+		t.Errorf("hashes disagree: range %q, hashFile %q, hashTranscriptFile %q (%d bytes)", whole, fromFile, fromTranscript, size)
+	}
+}

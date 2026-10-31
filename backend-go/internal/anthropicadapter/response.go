@@ -1,7 +1,7 @@
 package anthropicadapter
 
 import (
-	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -180,6 +180,5 @@ func functionCallItem(block anthropicBlock) map[string]any {
 }
 
 func itoa(value int) string {
-	encoded, _ := json.Marshal(value)
-	return string(encoded)
+	return strconv.Itoa(value)
 }

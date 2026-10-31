@@ -275,9 +275,16 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
+	hash, _, err := hashReader(file)
+	return hash, err
+}
+
+// hashReader returns the hex SHA-256 of everything the reader holds, and how many bytes that was.
+func hashReader(reader io.Reader) (string, int64, error) {
 	digest := sha256.New()
-	if _, err := io.CopyBuffer(digest, file, make([]byte, 64*1024)); err != nil {
-		return "", err
+	size, err := io.CopyBuffer(digest, reader, make([]byte, 64*1024))
+	if err != nil {
+		return "", 0, err
 	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(digest.Sum(nil)), size, nil
 }
