@@ -394,7 +394,7 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 // Responses provider rounds. It commits each completed or incomplete response;
 // when a tool catalog is configured, it executes function calls, persists their
 // outputs, and requests follow-on rounds up to the configured tool-round limit.
-func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOptions) (result RunResult, runErr error) {
+func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOptions) (result RunResult, err error) {
 	if r == nil || r.store == nil || r.streamer == nil {
 		return RunResult{}, errors.New("session runner is not initialized")
 	}
@@ -409,16 +409,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	trace := options.MemoryTrace.BeginRun()
 	defer trace.Stop()
 
-	var err error
-	persisted := options.PersistedInput
-	if persisted == nil {
-		persisted, err = PersistInputWithImages(r.store, input, options.NextSessionTurn, options.ImageStore)
-		if err != nil {
-			return RunResult{}, err
-		}
-		if options.OnInputAccepted != nil {
-			options.OnInputAccepted(*persisted)
-		}
+	persisted, err := r.persistRunInput(input, options)
+	if err != nil {
+		return RunResult{}, err
 	}
 	sessionTurn := persisted.SessionTurn
 	trace.Mark("input-normalized", map[string]any{"input_items": persisted.Items})
@@ -468,34 +461,8 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		history, err := inputHistory.Read()
+		request, err := r.buildRoundRequest(ctx, trace, inputHistory, options, responseTools)
 		if err != nil {
-			return result, fmt.Errorf("read session history: %w", err)
-		}
-		historyDetails := map[string]any{"history_items": len(history)}
-		if trace.Enabled() {
-			if transcriptBytes, err := r.store.TranscriptBytes(); err == nil {
-				historyDetails["transcript_bytes"] = transcriptBytes
-			}
-		}
-		trace.Mark("history-loaded", historyDetails)
-		// References come back as data URLs first, so the resize step sees real bytes.
-		sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
-		sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
-		request, err := BuildRequestWithStateContext(r.settings, sentHistory, responseTools, options.StateContext)
-		if err != nil {
-			return result, fmt.Errorf("build Responses request: %w", err)
-		}
-		trace.Mark("request-built", map[string]any{
-			"history_items":     len(history),
-			"has_state_context": len(options.StateContext) > 0,
-			"tool_count":        len(responseTools),
-			"images_resized":    resizeStats.Resized,
-			"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,
-			"images_restored":   restoreStats.Restored,
-			"images_missing":    restoreStats.Missing,
-		})
-		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 
@@ -515,30 +482,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err != nil {
 			return result, err
 		}
-		refreshStateContext := false
-		if responseID, shouldCompact := automaticCompactionTrigger(result.Event, options.AutomaticCompaction); shouldCompact {
-			compactionOptions := transcript.CompactionOptions{
-				TurnType:       options.AutomaticCompaction.TurnType,
-				KeepTurns:      options.AutomaticCompaction.KeepTurns,
-				KeepToolPairs:  options.AutomaticCompaction.KeepToolPairs,
-				BackupMode:     options.AutomaticCompaction.BackupMode,
-				BackupMinTurns: options.AutomaticCompaction.BackupMinTurns,
-			}
-			if len(calls) > 0 && responseID != "" {
-				compactionOptions.PreserveResponseID = responseID
-			}
-			compact := r.store.CompactHistory
-			if options.CompactHistory != nil {
-				compact = options.CompactHistory
-			}
-			compacted, err := compact(compactionOptions)
-			if err != nil {
-				return result, fmt.Errorf("automatically compact session transcript: %w", err)
-			}
-			refreshStateContext = compacted.Compacted
-			if compacted.Compacted && options.OnUsageChanged != nil {
-				options.OnUsageChanged()
-			}
+		refreshStateContext, err := r.compactAfterResponse(result.Event, calls, options)
+		if err != nil {
+			return result, err
 		}
 		refreshAfterCompaction := func() error {
 			if !refreshStateContext || options.RefreshStateContext == nil {
@@ -557,89 +503,190 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			}
 			return result, nil
 		}
-		if round >= options.MaxToolRounds {
-			summary := fmt.Sprintf("Tool execution was not started because the %d-round limit was reached.", options.MaxToolRounds)
-			if _, err := appendToolOutputs(r.store, calls, nil, "tool_round_limit", summary); err != nil {
-				return result, err
-			}
-			if err := refreshAfterCompaction(); err != nil {
-				return result, err
-			}
-			return result, fmt.Errorf("tool execution exceeded %d tool rounds", options.MaxToolRounds)
+		if err := r.enforceToolLimits(calls, round, usedTokens, options, refreshAfterCompaction); err != nil {
+			return result, err
 		}
-		// The cap is checked here, between rounds, from usage already reported: a
-		// round in flight is never cut, but the next one is not started. The calls
-		// get a result so the transcript stays a valid history for a later run.
-		if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
-			limit := &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
-			if _, err := appendToolOutputs(r.store, calls, nil, "run_token_limit", "Tool execution was not started. "+limit.Error()); err != nil {
-				return result, err
-			}
-			if err := refreshAfterCompaction(); err != nil {
-				return result, err
-			}
-			return result, limit
-		}
-
-		// Takes the checkpoint once, just before the first call that can change
-		// files. A user-decision tool runs alone, so only its call counts then.
-		checkpointRun.BeforeCalls(ctx, roundChangesWorkspace(options.ToolCatalog, calls, checkpointRun))
-		// Remember how a user-decision tool was answered: a decline, a timeout or a
-		// cancellation ends the run once its result is persisted, because the model
-		// must not carry on as if the user had approved the draft.
-		var decisionAnswer decisionRecorder
-		toolExecution := options.ToolExecution
-		resolved := toolExecution.OnInteractionResolved
-		toolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {
-			decisionAnswer.record(answer)
-			if resolved == nil {
-				return nil
-			}
-			return resolved(identity, answer, proposed)
-		}
-		// A result is published the moment its call settles; the ids published
-		// here are skipped by the pass after persistence below.
-		toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, options.ToolCallScheduling, func(output json.RawMessage) {
-			if options.OnToolResult != nil {
-				options.OnToolResult(output)
-			}
-		})
-		completed := toolRun.Completed
-		errorCode := "tool_execution_failed"
-		errorSummary := "Tool execution failed before every call produced a persisted result."
-		if errors.Is(executionErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-			errorCode = "tool_execution_cancelled"
-			errorSummary = "Tool execution was cancelled before every call produced a persisted result."
-		}
-		// Large images go to the store first; the transcript keeps a reference. The live
-		// stream above already carried the original result.
-		persisted, _ := options.ImageStore.ExternalizeAll(completed)
-		outputs, err := appendToolOutputs(r.store, calls, persisted, errorCode, errorSummary)
+		declined, err := r.executeToolCalls(ctx, trace, checkpointRun, calls, round, options, refreshAfterCompaction)
 		if err != nil {
 			return result, err
 		}
-		trace.Mark("tool-results-persisted", map[string]any{"round": round, "tool_calls": len(calls), "tool_results": len(outputs)})
-		if options.OnToolResult != nil {
-			for _, output := range outputs {
-				if _, published := toolRun.Published[functionCallID(output)]; published {
-					continue
-				}
-				options.OnToolResult(cloneRaw(output))
-			}
-		}
-		if err := refreshAfterCompaction(); err != nil {
-			return result, err
-		}
-		if executionErr != nil {
-			return result, executionErr
-		}
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		if decisionAnswer.declined() {
+		if declined {
 			return result, nil
 		}
 	}
+}
+
+// persistRunInput stores the user input unless the caller already persisted it,
+// then reports the accepted input to OnInputAccepted.
+func (r *Runner) persistRunInput(input json.RawMessage, options RunOptions) (*PersistedInput, error) {
+	if options.PersistedInput != nil {
+		return options.PersistedInput, nil
+	}
+	persisted, err := PersistInputWithImages(r.store, input, options.NextSessionTurn, options.ImageStore)
+	if err != nil {
+		return nil, err
+	}
+	if options.OnInputAccepted != nil {
+		options.OnInputAccepted(*persisted)
+	}
+	return persisted, nil
+}
+
+// buildRoundRequest reads the history for one provider round and builds the request
+// with the images sent as their resized copies.
+func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle, inputHistory *transcript.InputHistory, options RunOptions, responseTools []json.RawMessage) (json.RawMessage, error) {
+	history, err := inputHistory.Read()
+	if err != nil {
+		return nil, fmt.Errorf("read session history: %w", err)
+	}
+	historyDetails := map[string]any{"history_items": len(history)}
+	if trace.Enabled() {
+		if transcriptBytes, err := r.store.TranscriptBytes(); err == nil {
+			historyDetails["transcript_bytes"] = transcriptBytes
+		}
+	}
+	trace.Mark("history-loaded", historyDetails)
+	// References come back as data URLs first, so the resize step sees real bytes.
+	sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
+	sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
+	request, err := BuildRequestWithStateContext(r.settings, sentHistory, responseTools, options.StateContext)
+	if err != nil {
+		return nil, fmt.Errorf("build Responses request: %w", err)
+	}
+	trace.Mark("request-built", map[string]any{
+		"history_items":     len(history),
+		"has_state_context": len(options.StateContext) > 0,
+		"tool_count":        len(responseTools),
+		"images_resized":    resizeStats.Resized,
+		"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,
+		"images_restored":   restoreStats.Restored,
+		"images_missing":    restoreStats.Missing,
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return request, nil
+}
+
+// compactAfterResponse compacts the transcript when the automatic compaction trigger
+// fires for the response. It reports whether the state context must be refreshed.
+func (r *Runner) compactAfterResponse(event json.RawMessage, calls []json.RawMessage, options RunOptions) (bool, error) {
+	responseID, shouldCompact := automaticCompactionTrigger(event, options.AutomaticCompaction)
+	if !shouldCompact {
+		return false, nil
+	}
+	compactionOptions := transcript.CompactionOptions{
+		TurnType:       options.AutomaticCompaction.TurnType,
+		KeepTurns:      options.AutomaticCompaction.KeepTurns,
+		KeepToolPairs:  options.AutomaticCompaction.KeepToolPairs,
+		BackupMode:     options.AutomaticCompaction.BackupMode,
+		BackupMinTurns: options.AutomaticCompaction.BackupMinTurns,
+	}
+	if len(calls) > 0 && responseID != "" {
+		compactionOptions.PreserveResponseID = responseID
+	}
+	compact := r.store.CompactHistory
+	if options.CompactHistory != nil {
+		compact = options.CompactHistory
+	}
+	compacted, err := compact(compactionOptions)
+	if err != nil {
+		return false, fmt.Errorf("automatically compact session transcript: %w", err)
+	}
+	if compacted.Compacted && options.OnUsageChanged != nil {
+		options.OnUsageChanged()
+	}
+	return compacted.Compacted, nil
+}
+
+// enforceToolLimits refuses to start the calls of a round when the tool-round limit or
+// the run token cap is reached. The calls get a result so the transcript stays valid.
+func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedTokens int64, options RunOptions, refreshAfterCompaction func() error) error {
+	if round >= options.MaxToolRounds {
+		summary := fmt.Sprintf("Tool execution was not started because the %d-round limit was reached.", options.MaxToolRounds)
+		if _, err := appendToolOutputs(r.store, calls, nil, "tool_round_limit", summary); err != nil {
+			return err
+		}
+		if err := refreshAfterCompaction(); err != nil {
+			return err
+		}
+		return fmt.Errorf("tool execution exceeded %d tool rounds", options.MaxToolRounds)
+	}
+	// The cap is checked here, between rounds, from usage already reported: a
+	// round in flight is never cut, but the next one is not started. The calls
+	// get a result so the transcript stays a valid history for a later run.
+	if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
+		limit := &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
+		if _, err := appendToolOutputs(r.store, calls, nil, "run_token_limit", "Tool execution was not started. "+limit.Error()); err != nil {
+			return err
+		}
+		if err := refreshAfterCompaction(); err != nil {
+			return err
+		}
+		return limit
+	}
+	return nil
+}
+
+// executeToolCalls runs the calls of one round, persists their outputs and reports
+// whether the user declined a draft, which ends the run.
+func (r *Runner) executeToolCalls(ctx context.Context, trace memorytrace.Handle, checkpointRun *checkpoint.Run, calls []json.RawMessage, round int, options RunOptions, refreshAfterCompaction func() error) (bool, error) {
+	// Takes the checkpoint once, just before the first call that can change
+	// files. A user-decision tool runs alone, so only its call counts then.
+	checkpointRun.BeforeCalls(ctx, roundChangesWorkspace(options.ToolCatalog, calls, checkpointRun))
+	// Remember how a user-decision tool was answered: a decline, a timeout or a
+	// cancellation ends the run once its result is persisted, because the model
+	// must not carry on as if the user had approved the draft.
+	var decisionAnswer decisionRecorder
+	toolExecution := options.ToolExecution
+	resolved := toolExecution.OnInteractionResolved
+	toolExecution.OnInteractionResolved = func(identity tools.InteractionIdentity, answer tools.InteractionAnswer, proposed json.RawMessage) error {
+		decisionAnswer.record(answer)
+		if resolved == nil {
+			return nil
+		}
+		return resolved(identity, answer, proposed)
+	}
+	// A result is published the moment its call settles; the ids published
+	// here are skipped by the pass after persistence below.
+	toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, options.ToolCallScheduling, func(output json.RawMessage) {
+		if options.OnToolResult != nil {
+			options.OnToolResult(output)
+		}
+	})
+	completed := toolRun.Completed
+	errorCode := "tool_execution_failed"
+	errorSummary := "Tool execution failed before every call produced a persisted result."
+	if errors.Is(executionErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		errorCode = "tool_execution_cancelled"
+		errorSummary = "Tool execution was cancelled before every call produced a persisted result."
+	}
+	// Large images go to the store first; the transcript keeps a reference. The live
+	// stream above already carried the original result.
+	persisted, _ := options.ImageStore.ExternalizeAll(completed)
+	outputs, err := appendToolOutputs(r.store, calls, persisted, errorCode, errorSummary)
+	if err != nil {
+		return false, err
+	}
+	trace.Mark("tool-results-persisted", map[string]any{"round": round, "tool_calls": len(calls), "tool_results": len(outputs)})
+	if options.OnToolResult != nil {
+		for _, output := range outputs {
+			if _, published := toolRun.Published[functionCallID(output)]; published {
+				continue
+			}
+			options.OnToolResult(cloneRaw(output))
+		}
+	}
+	if err := refreshAfterCompaction(); err != nil {
+		return false, err
+	}
+	if executionErr != nil {
+		return false, executionErr
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return decisionAnswer.declined(), nil
 }
 
 func responseTraceDetails(raw json.RawMessage) map[string]any {
