@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 
@@ -185,7 +186,8 @@ func parseLayoutFile(path string, contents []byte, into any) error {
 	if err := decoder.Decode(into); err != nil {
 		return configError("%s: %v", path, err)
 	}
-	if _, err := decoder.Token(); err == nil {
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return configError("%s: unexpected data after the JSON object", path)
 	}
 	return nil

@@ -156,6 +156,21 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 	}
 }
 
+// A padded env_deny name is trimmed, as the bash and exec readers trim it, so the same
+// name in a setting loads for every reader.
+func TestNormalizeNativeProcessEnvDenyTrimsNames(t *testing.T) {
+	globalRoot := t.TempDir()
+	settingPath := filepath.Join(globalRoot, "setting.json")
+	setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"process":{"env_deny":[" PROCESS_SECRET "]}}}`)}
+	settings, err := normalizeNativeProcessSettings(setting, globalRoot, settingPath, globalRoot, "", "", "")
+	if err != nil {
+		t.Fatalf("normalizeNativeProcessSettings(padded env_deny) error = %v", err)
+	}
+	if !reflect.DeepEqual(settings.EnvDeny, []string{"PROCESS_SECRET"}) {
+		t.Fatalf("EnvDeny = %q, want the trimmed name", settings.EnvDeny)
+	}
+}
+
 func TestNormalizeNativeProcessLegacyStatusLogBytesDefaultsNull(t *testing.T) {
 	globalRoot := t.TempDir()
 	settingPath := filepath.Join(globalRoot, "setting.json")

@@ -226,7 +226,11 @@ func normalizeNativeProcessSettings(
 		}
 		for index, rawName := range names {
 			var name string
-			if err := json.Unmarshal(rawName, &name); err != nil || !bashEnvNamePattern.MatchString(name) {
+			if err := json.Unmarshal(rawName, &name); err != nil {
+				return nil, configError("%s: tools.native.process.env_deny[%d] must be an environment variable name", settingPath, index)
+			}
+			name = strings.TrimSpace(name)
+			if name == "" || !bashEnvNamePattern.MatchString(name) {
 				return nil, configError("%s: tools.native.process.env_deny[%d] must be an environment variable name", settingPath, index)
 			}
 			settings.EnvDeny = append(settings.EnvDeny, name)

@@ -120,6 +120,11 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 		}
 	}
 	settings.MaxHops, settings.MaxRuns, settings.MaxRunsPerToken, settings.ListenUnixMode = int(hops), int(runs), int(perToken), uint32(mode)
+	// The socket's mode is its permission: a group or other write bit lets another user
+	// write to it, so the range check above is not enough on its own.
+	if settings.ListenUnixMode&0o022 != 0 {
+		return RemoteAPISettings{}, fmt.Errorf("%s: server.remote_api.listen_unix_mode must not grant group or other write access", path)
+	}
 	if !settings.Enabled {
 		return settings, nil
 	}

@@ -29,6 +29,23 @@ var layoutErrorPrefix = regexp.MustCompile(`^\S+\.json(: settings)?: `)
 // block goes in the toolset, the rest in the session's settings) and compares each
 // rejection's message with the text in testdata/layout-settings.cases.json. The texts were
 // written by the removed TypeScript loader and are fixed test data.
+func TestLayoutFileRefusesDataAfterTheObject(t *testing.T) {
+	for _, contents := range []string{`{"name":"a"} garbage`, `{"name":"a"} }`, `{"name":"a"} {}`, `{"name":"a"} 1`} {
+		var into struct {
+			Name string `json:"name"`
+		}
+		if err := parseLayoutFile("f.json", []byte(contents), &into); err == nil || !strings.Contains(err.Error(), "unexpected data after the JSON object") {
+			t.Fatalf("parseLayoutFile(%s) error = %v, want the trailing-data refusal", contents, err)
+		}
+	}
+	var into struct {
+		Name string `json:"name"`
+	}
+	if err := parseLayoutFile("f.json", []byte("{\"name\":\"a\"}\n"), &into); err != nil {
+		t.Fatalf("a trailing newline must be allowed: %v", err)
+	}
+}
+
 func TestLayoutSettingsCases(t *testing.T) {
 	var cases []layoutSettingsCase
 	readJSONFile(t, "testdata/layout-settings.cases.json", &cases)
