@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -219,8 +223,18 @@ func TestResolverClosedDuringABuildClosesTheManagerAndPublishesNothing(t *testin
 	held.mu.Lock()
 	orphans := append([]*native.SubagentManager(nil), held.built...)
 	held.mu.Unlock()
-	if len(orphans) != 1 || !orphans[0].Closed() {
-		t.Errorf("the manager built while the resolver closed was not closed (%d built)", len(orphans))
+	if len(orphans) != 1 {
+		t.Fatalf("%d managers were built while the resolver closed, want 1", len(orphans))
+	}
+	// The orphan was closed: a start through it is refused and the launcher never runs.
+	var launches atomic.Int64
+	orphanTool := subagentOrphanCatalog(t, workspace, orphans[0], &launches)
+	t.Cleanup(func() { _ = orphans[0].Close() })
+	if out := subagentOutputOf(t, orphanTool); !strings.Contains(out, `"status":"error"`) {
+		t.Errorf("a start through the orphan manager was not refused:\n%s", out)
+	}
+	if launches.Load() != 0 {
+		t.Errorf("the launcher ran %d times for an orphan manager that was closed", launches.Load())
 	}
 	if got := resolver.sharedSubagentManager(persistentConfig(filepath.Join(workspace, "late"))); got != nil {
 		t.Error("a closed resolver built a new manager")
@@ -338,6 +352,57 @@ func TestAWaiterOfAPanickingBuildBuildsItselfAfterwards(t *testing.T) {
 	if attempts.Load() != 2 {
 		t.Errorf("builder ran %d times, want 2 (the panicking one and the waiter's)", attempts.Load())
 	}
+}
+
+// subagentOrphanCatalog builds the subagent tool on an orphan manager with a fake launcher,
+// through the sample definitions (subagentSampleTool) and a session that loads its agent
+// from setting.json.
+func subagentOrphanCatalog(t *testing.T, workspace string, manager *native.SubagentManager, launches *atomic.Int64) *tools.Catalog {
+	t.Helper()
+	loaded, _ := layoutConfig(t, layouttest.Spec{
+		SessionID:           "orphan",
+		CWD:                 workspace,
+		ToolDefinitionPaths: []string{subagentSampleTool(t, "read.json"), subagentSampleTool(t, "subagent.json"), subagentSampleTool(t, "async.json")},
+		Native: map[string]any{
+			"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
+			"subagent": map[string]any{"agents": map[string]any{"explore": map[string]any{"model": "openai/default"}}},
+			"async":    map[string]any{},
+		},
+	}, map[string]string{})
+	location, err := sessionfs.Resolve(loaded.Roots, "orphan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := subagentLauncherFunc(func(context.Context, native.SubagentRequest) (native.SubagentResult, error) {
+		launches.Add(1)
+		return native.SubagentResult{}, nil
+	})
+	catalog, err := native.BuildCatalogWithSubagents(config, nil, nil, nil, nil, nil, launcher, nil, manager, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+// subagentOutputOf starts one run through the catalog and returns the tool result text.
+func subagentOutputOf(t *testing.T, catalog *tools.Catalog) string {
+	t.Helper()
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call_1", "name": "subagent", "arguments": `{"task":"x","block_ms":0}`})
+	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{SessionKey: "session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatal(err)
+	}
+	return item.Output
 }
 
 // A caller parked on a build when the resolver closes gets nil, not a manager the

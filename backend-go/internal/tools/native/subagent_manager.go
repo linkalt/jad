@@ -937,13 +937,6 @@ func (m *SubagentManager) list(owner string) []subagentRunView {
 	return views
 }
 
-// Closed reports whether Close has been called.
-func (m *SubagentManager) Closed() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.closed
-}
-
 // Close stops every run and waits up to closeGrace for the children to return. A child
 // still going after that is logged and left behind. Starting a run after Close fails.
 func (m *SubagentManager) Close() error {
