@@ -105,15 +105,10 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 
 func normalizeNativeReadPolicy(setting map[string]json.RawMessage, globalJadRoot, path string) (NativePathPolicy, error) {
 	policy := NativePathPolicy{Paths: []NativePathRule{}}
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return policy, nil
-	}
-	tools, err := decodeConfigObject(toolsRaw, path+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, path)
 	if err != nil {
 		return NativePathPolicy{}, err
 	}
-	nativeRaw, exists := tools["native"]
 	if !exists {
 		return policy, nil
 	}

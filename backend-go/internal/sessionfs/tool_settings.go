@@ -134,15 +134,10 @@ func normalizeToolDefinitionPaths(raw json.RawMessage, globalJadRoot, path strin
 }
 
 func normalizeNativeReadSettings(setting map[string]json.RawMessage, globalJadRoot, path string) (*NativeReadSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	tools, err := decodeConfigObject(toolsRaw, path+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, path)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := tools["native"]
 	if !exists {
 		return nil, nil
 	}
