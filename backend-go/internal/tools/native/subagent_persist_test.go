@@ -422,11 +422,11 @@ func TestSubagentStoppingARestoredRunDoesNotPanic(t *testing.T) {
 	}
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
-	external, ok := manager.External("sub_0000dddd")
-	if !ok {
+	restored := manager.byID("sub_0000dddd")
+	if restored == nil {
 		t.Fatal("the restored run is not held")
 	}
-	restored := manager.byID("sub_0000dddd")
+	external := &ExternalRun{run: restored}
 	external.Stop("user_stop")
 	<-external.Done()
 	if reason := restored.takeStopReason(); reason != "" {

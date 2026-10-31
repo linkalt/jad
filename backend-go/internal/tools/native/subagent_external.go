@@ -22,15 +22,6 @@ type ExternalRun struct {
 	run *subagentRun
 }
 
-// External returns the run with the id, or false when this manager does not hold it.
-func (m *SubagentManager) External(id string) (*ExternalRun, bool) {
-	run := m.byID(id)
-	if run == nil {
-		return nil, false
-	}
-	return &ExternalRun{run: run}, true
-}
-
 // Done closes when the run has ended.
 func (e *ExternalRun) Done() <-chan struct{} { return e.run.done }
 

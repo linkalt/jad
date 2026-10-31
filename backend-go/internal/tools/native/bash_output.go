@@ -183,10 +183,6 @@ func (collector *bashStreamCollector) freeze() frozenStream {
 	}
 }
 
-func (collector *bashStreamCollector) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64, lineAware bool) bashStreamOutput {
-	return collector.freeze().renderWithProducedBytes(maxLineChars, stripANSI, producedBytes, lineAware)
-}
-
 func (frozen frozenStream) renderWithProducedBytes(maxLineChars int, stripANSI bool, producedBytes int64, lineAware bool) bashStreamOutput {
 	headText := sanitizeBashOutput(frozen.head, stripANSI)
 	tailText := sanitizeBashOutput(frozen.tail, stripANSI)
