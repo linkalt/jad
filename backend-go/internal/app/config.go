@@ -42,6 +42,8 @@ type Config struct {
 	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests.
 	RecoverSubagentRunsAtStart bool
 	Roots                      []sessionfs.Root
+	// RootSettingWarnings are the notices of the root setting load: keys it does not read.
+	RootSettingWarnings []string
 	// RemoteAPI is server.remote_api.
 	RemoteAPI          sessionfs.RemoteAPISettings
 	HTTP               httpapi.Config
@@ -95,6 +97,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		RecoverProcessesAtStart:    loaded.Server.RecoverProcessesAtStart,
 		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
+		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],

@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -120,6 +122,8 @@ type Config struct {
 	Roots       []Root
 	Server      ServerSettings
 	SettingPath string
+	// Warnings are notices about the root setting, not errors: keys the loader does not read.
+	Warnings []string
 }
 
 // LoadOptions allows tests and embedders to provide deterministic environment
@@ -250,7 +254,7 @@ func Load(options LoadOptions) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	roots, err := rootsFromSetting(setting, settingPath)
+	roots, warnings, err := rootsFromSetting(setting, settingPath)
 	if err != nil {
 		return Config{}, err
 	}
@@ -261,7 +265,7 @@ func Load(options LoadOptions) (Config, error) {
 	if serverSettings.LogFile != "" {
 		serverSettings.LogFile = resolveFrom(filepath.Dir(settingPath), serverSettings.LogFile)
 	}
-	return Config{Roots: roots, Server: serverSettings, SettingPath: settingPath}, nil
+	return Config{Roots: roots, Server: serverSettings, SettingPath: settingPath, Warnings: warnings}, nil
 }
 
 // Resolve selects a root from an unqualified session ID or a root:session
@@ -396,29 +400,31 @@ func readObject(path string) (map[string]json.RawMessage, error) {
 	return value, nil
 }
 
-func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([]Root, error) {
+func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([]Root, []string, error) {
+	var warnings []string
 	if raw, exists := setting["schema_version"]; exists {
 		version, ok := configSafeInteger(raw)
 		if !ok || version != 1 {
-			return nil, fmt.Errorf("%s: unsupported schema_version %s", settingPath, strings.TrimSpace(string(raw)))
+			return nil, nil, fmt.Errorf("%s: unsupported schema_version %s", settingPath, strings.TrimSpace(string(raw)))
 		}
 	}
+	warnings = append(warnings, unknownSettingKeyWarnings(setting, settingPath, rootSettingKeys)...)
 	rootsRaw, hasRoots := setting["session_roots"]
 	pathsRaw, hasPaths := setting["session_paths"]
 	if hasRoots && hasPaths {
-		return nil, fmt.Errorf("%s: use only one of session_roots or session_paths", settingPath)
+		return nil, nil, fmt.Errorf("%s: use only one of session_roots or session_paths", settingPath)
 	}
 	if !hasRoots {
 		rootsRaw = pathsRaw
 	}
 	var entries []json.RawMessage
 	if !hasRoots && !hasPaths || json.Unmarshal(rootsRaw, &entries) != nil || entries == nil {
-		return nil, fmt.Errorf("%s: session_roots must be an array", settingPath)
+		return nil, nil, fmt.Errorf("%s: session_roots must be an array", settingPath)
 	}
 	settingDir := filepath.Dir(settingPath)
 	layout, err := layoutFromSetting(setting, settingPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	roots := make([]Root, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
@@ -427,10 +433,13 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 		entryPath := fmt.Sprintf("%s: session_roots[%d]", settingPath, index)
 		entry, err := parseRootEntry(raw, index, entryPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if fields, ok := rawObjectFields(raw); ok {
+			warnings = append(warnings, unknownSettingKeyWarnings(fields, entryPath, rootEntryKeys)...)
 		}
 		if _, exists := ids[entry.id]; exists {
-			return nil, fmt.Errorf("%s: duplicate session root id %s", settingPath, entry.id)
+			return nil, nil, fmt.Errorf("%s: duplicate session root id %s", settingPath, entry.id)
 		}
 		directory := resolveFrom(settingDir, entry.path)
 		if _, exists := directories[directory]; exists {
@@ -447,9 +456,42 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 		})
 	}
 	if err := checkUniqueSessionIDs(roots, settingPath); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return roots, nil
+	return roots, warnings, nil
+}
+
+// rootSettingKeys are the keys the root setting object reads; rootEntryKeys are the keys of
+// an object session_roots entry. A key outside these lists is ignored and warned about.
+var (
+	rootSettingKeys = []string{"schema_version", "server", "session_roots", "session_paths", "libraries", "catalogs", "defaults"}
+	rootEntryKeys   = []string{"id", "label", "path"}
+)
+
+// unknownSettingKeyWarnings returns one warning per key of fields that the loader does not
+// read, in sorted order. The root setting is lenient, so these are warnings, not errors.
+func unknownSettingKeyWarnings(fields map[string]json.RawMessage, where string, allowed []string) []string {
+	var keys []string
+	for key := range fields {
+		if !slices.Contains(allowed, key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	warnings := make([]string, 0, len(keys))
+	for _, key := range keys {
+		warnings = append(warnings, fmt.Sprintf("%s: %s is not read by the loader and is ignored", where, key))
+	}
+	return warnings
+}
+
+// rawObjectFields decodes raw as a JSON object, reporting false for anything else.
+func rawObjectFields(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return nil, false
+	}
+	return fields, true
 }
 
 type rootEntry struct{ id, label, path string }

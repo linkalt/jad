@@ -71,6 +71,9 @@ func run() error {
 	}
 	defer closeLog.Close()
 	config.HTTP.Logger = logger
+	for _, warning := range config.RootSettingWarnings {
+		logger.Warn(warning)
+	}
 	service, err := app.NewService(config)
 	if err != nil {
 		return fmt.Errorf("initialize Go backend: %w", err)

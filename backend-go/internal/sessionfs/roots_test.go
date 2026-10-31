@@ -303,6 +303,27 @@ func TestIsExactOriginMatchesCanonicalHTTPOrigins(t *testing.T) {
 	}
 }
 
+func TestLoadWarnsOnUnknownRootSettingKeysWithoutRefusing(t *testing.T) {
+	cwd := t.TempDir()
+	setting := `{"session_roots":[{"path":"a","lable":"typo"}],"typo_key":true}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Load(%s) error = %v, want the unknown keys warned, not refused", setting, err)
+	}
+	for _, key := range []string{"typo_key", "lable"} {
+		found := false
+		for _, warning := range config.Warnings {
+			found = found || strings.Contains(warning, key)
+		}
+		if !found {
+			t.Errorf("Warnings = %q, want one naming %q", config.Warnings, key)
+		}
+	}
+}
+
 func TestLoadRejectsInvalidRootsAndServerSettings(t *testing.T) {
 	for _, setting := range []string{
 		`{"session_roots":[],"session_paths":[]}`,
