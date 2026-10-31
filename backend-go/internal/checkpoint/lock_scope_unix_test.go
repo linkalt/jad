@@ -226,3 +226,38 @@ func TestRestoreRunsNoGitWhileFinishIsInsideGit(t *testing.T) {
 	<-finished
 	<-restored
 }
+
+// Assertion 5: a gc a prune asked for runs only once the gate is free. While the
+// first Finish is blocked inside git, the second service's reclaim runs no git call,
+// and it runs after the Finish releases the gate.
+func TestReclaimWaitsForTheGateWhileFinishIsInsideGit(t *testing.T) {
+	l := newLockScopeFixture(t)
+	finished, unblock := l.startFinish(t)
+	l.second.mu.Lock()
+	l.second.gcPending = true
+	l.second.mu.Unlock()
+	l.second.startPendingReclaim()
+	reclaimed := make(chan struct{})
+	go func() {
+		defer close(reclaimed)
+		l.second.reclaiming.Wait()
+	}()
+	select {
+	case <-reclaimed:
+		unblock()
+		<-finished
+		t.Fatal("the reclaim finished while the first Finish was still blocked in git")
+	case <-time.After(2 * time.Second):
+	}
+	if seen := l.gitLog(t); slices.ContainsFunc(seen, func(line string) bool { return strings.HasPrefix(line, "second ") }) {
+		unblock()
+		<-finished
+		t.Fatalf("the reclaim ran git while the first Finish was blocked: %v", seen)
+	}
+	unblock()
+	<-finished
+	<-reclaimed
+	if seen := l.gitLog(t); !slices.ContainsFunc(seen, func(line string) bool { return strings.HasPrefix(line, "second ") }) {
+		t.Fatalf("the reclaim never ran git after the first Finish released the gate: %v", seen)
+	}
+}
