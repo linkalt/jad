@@ -145,8 +145,12 @@ type Service struct {
 	metadataPath string
 	git          *shadowGit
 	logger       *slog.Logger
-	mu           *sync.Mutex
-	size         *repoSize
+	// gate serializes the git work and the metadata file of the staging directory:
+	// no git command of one operation runs while another operation's is in flight.
+	gate *sync.Mutex
+	// mu guards the in-memory state only (gcPending); it is never held across git.
+	mu   *sync.Mutex
+	size *repoSize
 	// gcPending is set under mu by a prune that dropped records while the
 	// repository was over a quarter of max_total_bytes; the run's Finish, or a
 	// Begin that opened no checkpoint, starts the gc once mu is released.
@@ -178,12 +182,15 @@ const reclaimSizeDivisor = 4
 
 var repoSizes sync.Map
 
-// locks serialize services that share one staging directory, so a run's
-// snapshots and a restore never interleave their git commands.
+// gates serialize the git work of services that share one staging directory, so a
+// run's snapshots and a restore never interleave their git commands. locks back
+// the mutex, which guards only the in-memory state and is never held across git.
+var gates sync.Map
 var locks sync.Map
 
 // NewService builds the service for the given options.
 func NewService(options Options) *Service {
+	gate, _ := gates.LoadOrStore(filepath.Clean(options.StagingDir), &sync.Mutex{})
 	mutex, _ := locks.LoadOrStore(filepath.Clean(options.StagingDir), &sync.Mutex{})
 	size, _ := repoSizes.LoadOrStore(filepath.Clean(options.StagingDir), &repoSize{})
 	return &Service{
@@ -197,6 +204,7 @@ func NewService(options Options) *Service {
 			maxOutput: maxGitOutputBytes,
 		},
 		logger: logging.Or(options.Logger),
+		gate:   gate.(*sync.Mutex),
 		mu:     mutex.(*sync.Mutex),
 		size:   size.(*repoSize),
 	}
@@ -511,6 +519,17 @@ func (s *Service) prune(records []Record) ([]Record, int) {
 	return records[excess:], int(excess)
 }
 
+// requestReclaim asks for the gc a prune needs; Finish, or a Begin that opened no
+// checkpoint, starts it once the gate is released.
+func (s *Service) requestReclaim(dropped int) {
+	if !s.reclaimDue(dropped) {
+		return
+	}
+	s.mu.Lock()
+	s.gcPending = true
+	s.mu.Unlock()
+}
+
 // reclaimDue reports whether the objects a prune leaves behind are worth a gc:
 // the measured repository size is over a quarter of max_total_bytes, so most of
 // what the size gate counts is garbage rather than the checkpoints that are kept.
@@ -519,7 +538,7 @@ func (s *Service) reclaimDue(dropped int) bool {
 }
 
 // startPendingReclaim runs the gc a prune asked for, if any, in the background.
-// The caller must have released the staging mutex: the gc takes it again, so it
+// The caller must have released the gate: the gc takes it again, so it
 // never interleaves with a capture and never holds up the run that pruned.
 func (s *Service) startPendingReclaim() {
 	s.mu.Lock()
@@ -543,8 +562,8 @@ func (s *Service) startPendingReclaim() {
 // staging directory reads the same cache: without that the gate would keep
 // refusing a repository gc has already emptied.
 func (s *Service) reclaim() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.gate.Lock()
+	defer s.gate.Unlock()
 	if _, err := os.Stat(filepath.Join(s.git.gitDir, "HEAD")); err != nil {
 		return
 	}
@@ -578,16 +597,16 @@ func (s *Service) Begin(ctx context.Context, turnID string, sessionTurn int64) s
 	id := s.begin(ctx, turnID, sessionTurn)
 	if id == "" {
 		// No checkpoint is open, so no Finish will come: the gc a prune asked for
-		// has to start here, once the staging mutex is released.
+		// has to start here, once the gate is released.
 		s.startPendingReclaim()
 	}
 	return id
 }
 
-// begin takes the checkpoint under the staging mutex.
+// begin takes the checkpoint under the gate.
 func (s *Service) begin(ctx context.Context, turnID string, sessionTurn int64) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.gate.Lock()
+	defer s.gate.Unlock()
 	record := Record{ID: newCheckpointID(), Kind: KindRun, TurnID: turnID, SessionTurn: sessionTurn, CreatedAt: timestamp(), State: StateOpen}
 	if captured, err := s.capture(ctx); err != nil {
 		record.State = stateFor(err)
@@ -603,9 +622,7 @@ func (s *Service) begin(ctx context.Context, turnID string, sessionTurn int64) s
 		record.RepositoryBytes = &captured.bytes
 	}
 	records, dropped := s.prune(append(s.readAll(), record))
-	if s.reclaimDue(dropped) {
-		s.gcPending = true
-	}
+	s.requestReclaim(dropped)
 	if err := s.writeAll(records); err != nil {
 		// Without the record there is nothing to finish or restore later.
 		s.logger.Error("checkpoint: cannot record checkpoint", "checkpoint", record.ID, "error", err)
@@ -623,10 +640,10 @@ func (s *Service) Finish(id string) {
 	// stays bounded by timeout_ms and is what safe restore needs.
 	ctx := context.Background()
 	// Registered before the unlock, so the gc a prune asked for starts after the
-	// staging mutex is released (defers run in reverse order).
+	// gate is released (defers run in reverse order).
 	defer s.startPendingReclaim()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.gate.Lock()
+	defer s.gate.Unlock()
 	records := s.readAll()
 	index := -1
 	for position := range records {
@@ -677,8 +694,8 @@ func paths(changes []TreeChange) []string {
 // Restore reverts what a checkpoint's run changed. A restore first records its
 // own checkpoint, so it can be undone. It returns *Error for a refusal.
 func (s *Service) Restore(ctx context.Context, id string, options RestoreOptions) (RestoreResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.gate.Lock()
+	defer s.gate.Unlock()
 	records := s.readAll()
 	var record *Record
 	for position := range records {
@@ -833,9 +850,7 @@ func (s *Service) storeRecord(ctx context.Context, record Record) error {
 		}
 	}
 	records, dropped := s.prune(append(records, record))
-	if s.reclaimDue(dropped) {
-		s.gcPending = true
-	}
+	s.requestReclaim(dropped)
 	return s.writeAll(records)
 }
 

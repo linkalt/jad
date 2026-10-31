@@ -229,7 +229,7 @@ func (g *shadowGit) prepare(ctx context.Context, excludePatterns []string) error
 		return err
 	}
 	// A git killed by a cancelled context or the timeout leaves its index lock behind. Callers hold the
-	// staging mutex and no git of this service runs between commands, so a lock here is stale.
+	// gate and no git of this service runs between commands, so a lock here is stale.
 	for _, index := range []string{snapshotIndex, restoreIndex} {
 		if err := os.Remove(filepath.Join(g.gitDir, index+".lock")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
