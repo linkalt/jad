@@ -33,8 +33,7 @@ import (
 	"jad/backend-go/internal/transcript"
 )
 
-// Resolver composes the root catalog, on-disk session configuration, transcript
-// stores, and provider clients for the HTTP run routes.
+// CatalogConfig holds the limits the root catalog and transcript views read.
 type CatalogConfig struct {
 	SnapshotTurns      int
 	MaxPageTurns       int
@@ -47,6 +46,8 @@ type profileTurnsEntry struct {
 	turns int64
 }
 
+// Resolver composes the root catalog, on-disk session configuration, transcript
+// stores, and provider clients for the HTTP run routes.
 type Resolver struct {
 	// callerRuns tracks the targets each running caller run has compacted; callerRunSeq
 	// hands out the run ids.
