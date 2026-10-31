@@ -210,10 +210,3 @@ func checkLayoutSettings(settings map[string]json.RawMessage, where string) erro
 	sort.Strings(unknown)
 	return configError("%s: settings may not carry %s; it has its own file or field in the catalog layout", where, strings.Join(unknown, ", "))
 }
-
-// LayoutSettingKey reports whether name may appear in a session, profile or root
-// `settings`/`defaults` object of the catalog layout.
-func LayoutSettingKey(name string) bool {
-	_, ok := layoutSettingKeys[name]
-	return ok
-}
