@@ -63,8 +63,9 @@ func TestCheckCommandRefusesOtherArguments(t *testing.T) {
 }
 
 func TestCheckCommandFailsWithoutTheCatalogLayout(t *testing.T) {
+	t.Chdir(t.TempDir())
 	t.Setenv("JAD_ROOT_SETTING_PATH", "")
-	t.Setenv("JAD_SESSIONS_DIR", t.TempDir())
+	t.Setenv("JAD_SESSIONS_DIR", "")
 	var out bytes.Buffer
 	err := runCommand([]string{"check"}, &out)
 	if err == nil || errors.Is(err, errCheckFailed) || !strings.Contains(err.Error(), "catalog layout") {

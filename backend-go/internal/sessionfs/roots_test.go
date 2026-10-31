@@ -201,21 +201,22 @@ func TestLoadRootSettingAliasesDeduplicatesPathsAndHonorsSessionsDir(t *testing.
 	}
 
 	explicit := filepath.Join(cwd, "explicit-sessions")
-	config, err = Load(LoadOptions{
+	_, err = Load(LoadOptions{
 		WorkingDir: cwd,
 		Environment: map[string]string{
 			"JAD_SESSIONS_DIR":      explicit,
 			"JAD_ROOT_SETTING_PATH": filepath.Join(cwd, "missing.json"),
 		},
 	})
+	if err == nil || !strings.Contains(err.Error(), "JAD_SESSIONS_DIR is no longer read") {
+		t.Fatalf("Load(JAD_SESSIONS_DIR) error = %v, want it refused", err)
+	}
+	config, err = Load(LoadOptions{WorkingDir: cwd, SessionsDir: explicit, Environment: map[string]string{}})
 	if err != nil {
-		t.Fatalf("Load(JAD_SESSIONS_DIR precedence) error = %v", err)
+		t.Fatalf("Load(SessionsDir option) error = %v", err)
 	}
 	if len(config.Roots) != 1 || config.Roots[0].ID != "default" || config.Roots[0].Directory != explicit {
 		t.Fatalf("explicit sessions root = %+v", config.Roots)
-	}
-	if config.SettingPath != "" || config.Server.Port != Defaults().Port {
-		t.Errorf("JAD_SESSIONS_DIR should bypass root settings: %+v", config)
 	}
 }
 

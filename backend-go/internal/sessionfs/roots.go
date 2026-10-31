@@ -218,8 +218,8 @@ func Load(options LoadOptions) (Config, error) {
 	}
 
 	sessionsDir := strings.TrimSpace(options.SessionsDir)
-	if sessionsDir == "" {
-		sessionsDir = strings.TrimSpace(env["JAD_SESSIONS_DIR"])
+	if sessionsDir == "" && strings.TrimSpace(env["JAD_SESSIONS_DIR"]) != "" {
+		return Config{}, errors.New("JAD_SESSIONS_DIR is no longer read; name the session folder in session_roots of the root setting")
 	}
 	if sessionsDir != "" {
 		directory := resolveFrom(cwd, sessionsDir)
