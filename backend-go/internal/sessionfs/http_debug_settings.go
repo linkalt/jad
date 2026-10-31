@@ -2,7 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"math"
 	"strings"
 )
 
@@ -63,18 +62,18 @@ func normalizeHTTPDebugSettings(raw json.RawMessage, path string) (HTTPDebugSett
 		}
 	}
 	if value, exists := fields["max_body_bytes"]; exists && strings.TrimSpace(string(value)) != "null" {
-		var number float64
-		if err := json.Unmarshal(value, &number); err != nil || math.Trunc(number) != number || number < 1 || number > float64(maxHTTPDebugBodyBytes) {
+		number, ok := plainConfigInteger(value)
+		if !ok || number < 1 || number > maxHTTPDebugBodyBytes {
 			return HTTPDebugSettings{}, configError("%s: http_debug.max_body_bytes must be a safe integer between 1 and 10485760", path)
 		}
-		settings.MaxBodyBytes = int64(number)
+		settings.MaxBodyBytes = number
 	}
 	if value, exists := fields["max_total_bytes"]; exists && strings.TrimSpace(string(value)) != "null" {
-		var number float64
-		if err := json.Unmarshal(value, &number); err != nil || math.Trunc(number) != number || number < 0 || number > float64(maxHTTPDebugTotalBytes) {
+		number, ok := plainConfigInteger(value)
+		if !ok || number < 0 || number > maxHTTPDebugTotalBytes {
 			return HTTPDebugSettings{}, configError("%s: http_debug.max_total_bytes must be a safe integer between 0 and 1099511627776", path)
 		}
-		settings.MaxTotalBytes = int64(number)
+		settings.MaxTotalBytes = number
 	}
 	return settings, nil
 }
