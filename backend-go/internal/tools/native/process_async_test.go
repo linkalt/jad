@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -74,6 +75,37 @@ func jsonInt(value int64) json.Number { return json.Number(strings.TrimSpace(str
 func mustJSON(value any) []byte {
 	encoded, _ := json.Marshal(value)
 	return encoded
+}
+
+// An abort carries the cause as the stored reason; the reason is capped at the process
+// tool's own summary limit, so a long error text cannot fill the signal a model reads.
+func TestProcessAbortCapsTheStoredReasonAtTheSummaryLimit(t *testing.T) {
+	cfg := asyncmgr.DefaultConfig()
+	cfg.SummaryMaxBytes = 40
+	host, err := NewAsyncHost(filepath.Join(t.TempDir(), ".async"), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(host.Close)
+	dir := t.TempDir()
+	settings := processTestRequest(dir, "", 1<<20).Policy
+	settings.StorageDir = filepath.Join(dir, "processes")
+	settings.Shell = "/bin/sh"
+	if _, err := NewProcessToolWithAsync(settings, NewProcessManager(settings.StorageDir), "KEY", host); err != nil {
+		t.Fatal(err)
+	}
+	handle := newProcessAsyncHandle(host, "owner", "sleep 1", settings.StorageDir)
+	if err := handle.Begin("p-1"); err != nil {
+		t.Fatal(err)
+	}
+	handle.Abort("p-1", errors.New(strings.Repeat("the storage path is long ", 20)))
+	entry, err := host.Manager().Status("owner", "p-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.Reason) > int(cfg.SummaryMaxBytes)+len("...") {
+		t.Fatalf("stored reason is %d bytes, want at most %d", len(entry.Reason), cfg.SummaryMaxBytes+3)
+	}
 }
 
 func TestProcessStartIsAnAsyncHandleOwnedByTheSession(t *testing.T) {

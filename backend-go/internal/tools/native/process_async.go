@@ -47,9 +47,12 @@ func (h *processAsyncHandle) End(snapshot ProcessSnapshot) {
 	_, _ = h.host.Manager().Complete(snapshot.ID, result)
 }
 
+// Abort ends a handle whose process never ran. The cause is capped at the summary limit, as the
+// other text of a result is, so a long error text cannot fill the reason a model reads.
 func (h *processAsyncHandle) Abort(id string, cause error) {
 	manager := h.host.Manager()
-	_, _ = manager.Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: cause.Error()})
+	reason, _ := cutUTF8(cause.Error(), h.host.Config().SummaryMaxBytes)
+	_, _ = manager.Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: reason})
 	manager.MarkRead(h.owner, id)
 }
 
