@@ -374,7 +374,7 @@ Listed separately, not batched. Each needs a benchmark or profile before any fix
 - P6CM-19: done in d4d38f9. SubagentManager.Closed removed; the two app tests were rewritten through the resolver (see the table row for the evidence and mutation results). The 'Directory()' sub-item is refuted (merge)
 - P8-M-04: carried; earlier pass (low_batches.md section 5)
 
-- **P7A-07 (moved out of the perf table, HEAD e33ffec):** the spill throttle loop at `tools/native/bash_spill.go:281-290` already drops every key older than `interval` on each call (the comment at 280-281 says so), so the map is bounded by the interval; a `{call_id}` template grows it only inside one interval. Not a performance row. Removed.
+- **P7A-07 (moved out of the perf table, HEAD e33ffec):** the spill throttle loop at `tools/native/bash_spill.go:282-290` already drops every key older than `interval` on each call (the comment at 280-281 says so), so the map is bounded by the interval; a `{call_id}` template grows it only inside one interval. Not a performance row. Removed.
 - **P8-M-09 (moved out of the perf table, HEAD e33ffec):** the row said the input is validated twice. `transcript/input_history.go:287-289` validates the response once through `objectFieldsValid`, which the comment says skips re-validation of bytes already checked by `objectFields`. The "twice" claim does not hold. Stale.
 - **P6AM-03 (moved to the correctness batch, HEAD e33ffec):** an MCP `tools/call` structured-content number outside float64 range or above 2^53 fails the call (`tools/mcp/structured_content_capture.go:114`, `withoutStructuredContent`). This is a correctness defect, not a cost. Track it as a correctness item; trigger: any such call returns an error.
 
@@ -397,7 +397,7 @@ Source: N20 (p1_merged.md), the atomic-writer sub-item. Status at HEAD 4aa04e1: 
 - Name drift: P7A-12's `readFetchResponse` is now `readFetchResponseTruncating`; P8-M-10 names `hashFile`, which exists.
 - All 13 merge files were readable. p7a_approval.md and final_perf.md were read for their decisions.
 
-## 10. Performance decisions (Phase B, HEAD 96264e3)
+## 10. Performance decisions (Phase B, HEAD 4da6954)
 
 Recorded from the Phase A table and the Phase B run. Medians are `go test -bench -benchmem -count=5` on this machine, load about 1.3 to 1.8. Numbers are HEAD-only unless a before and after is given.
 
@@ -418,7 +418,7 @@ Recorded from the Phase A table and the Phase B run. Medians are `go test -bench
 
 
 
-### Trigger table for the 35 performance rows (HEAD e33ffec)
+### Trigger table for the 35 performance rows (HEAD 4da6954)
 
 Each trigger below names the code location, the workload or config that exercises it, and the metric and threshold that would justify measuring. Every cited `file:line` was read at HEAD `e33ffec`. Nothing here is measured again. A threshold marked "measured" comes from an earlier scratch benchmark; every other threshold is a proposed bound, to be confirmed by the measurement itself before any change.
 
