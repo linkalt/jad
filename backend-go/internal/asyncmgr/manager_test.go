@@ -3,6 +3,7 @@ package asyncmgr
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -406,6 +407,33 @@ func TestStatusUsesDetailerForLiveHandles(t *testing.T) {
 	if e, _ := f.m.Status("s1", "a"); e.Summary != "live detail of a" {
 		t.Fatalf("live Status = %+v", e)
 	}
+}
+
+func TestStatusReadsOkUnderTheLockWhenTheRecordIsGone(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "a")
+	f.finish(t, "a", Result{Summary: "hi", OK: true})
+	f.m.mu.Lock()
+	f.m.rows["a"].rec = nil
+	f.m.mu.Unlock()
+	if err := os.Remove(f.m.recordPath("a")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			f.m.mu.Lock()
+			f.m.rows["a"].ok = i%2 == 0
+			f.m.mu.Unlock()
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		if _, err := f.m.Status("s1", "a"); err != nil {
+			t.Fatalf("Status = %v", err)
+		}
+	}
+	<-done
 }
 
 func TestCloseWaitsForACompleteThatIsStillWritingItsRecord(t *testing.T) {

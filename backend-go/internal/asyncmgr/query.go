@@ -157,14 +157,14 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 		rec = *r.rec
 	}
 	driver := m.drivers[r.kind]
-	state, changed := r.state, r.changed
+	state, ok, changed := r.state, r.ok, r.changed
 	m.mu.Unlock()
 
 	if !have {
 		var err error
 		if rec, err = m.readRecord(id); err != nil {
 			m.opts.Logger.Warn("async record unreadable", "handle", id, "error", err)
-			return Entry{ID: id, Kind: r.kind, State: state, OK: r.ok, Label: r.label, T: formatTime(changed)}, nil
+			return Entry{ID: id, Kind: r.kind, State: state, OK: ok, Label: r.label, T: formatTime(changed)}, nil
 		}
 	}
 	limit := int(m.cfg.StatusSummaryBytes)
