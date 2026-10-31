@@ -8,7 +8,7 @@ Model: four different reviewer agents (section 4.1) run on ONE machine; ALL FOUR
 - **In scope:** all 37 packages under `backend-go/cmd` (4) and `backend-go/internal` (33), 79.6k non-test lines (377 files), 96120 test lines (measured by the section 3.4 check and 3.1 command).
 - **Out of scope:** `frontend/`, `frontend_new/`, generated files (for example `html-to-markdown-rs_cgo_link.go`), `testdata/`, `sample/` content except where a setting is defined. Tests are review targets only for test quality (checklist D) and as evidence.
 - **Goals:** per phase, four independent full reviews of the same files, compared to separate consensus from single-reviewer claims; a measured, ranked, bounded fix backlog for the user.
-- **Done** = for each of the 8 phases (and sub-passes) all 4 reviewer files exist, every finding meets the evidence rule (section 5), the merge file records which reviewers found what (section 6), measurements of the performance hypotheses are done, and the user has approved, rejected or deferred every finding. Fixes are a later stage and not part of "done" for the audit.
+- **Done** = for each of the 8 phases (and sub-passes) all 4 reviewer files exist, every finding meets the evidence rule (section 5), the merge file records which reviewers found what (section 6), measurements of the performance hypotheses are done, and the user has approved, rejected or deferred every finding. Fixes are a later stage and not part of "done" for the audit, except the final performance regression pass (section 6.6), which closes the fix stage.
 
 ### 1.1 Prior material (read first; do not re-report)
 
@@ -168,7 +168,7 @@ Expected: `missing [] duplicated {}`, exit 0.
 
 | Slot | Profile / model id | Notes (strengths, known limits) |
 |---|---|---|
-| R1 | `jad/reviewer` (id `r1`) | |
+| R1 | `jad/reviewer0` (id `r1`) | |
 | R2 | `jad/reviewer1` (id `r2`) | |
 | R3 | `jad/reviewer2` (id `r3`) | |
 | R4 | `jad/reviewer3` (id `r4`) | |
@@ -257,6 +257,9 @@ Runs after the merge, alone on the machine (no reviewer, build or test running; 
 
 ### 6.5 Fixes
 A separate stage by an implementing agent following `feature-development` steps 1-5 per batch (explore, plan, trace impact, revise, implement and verify). One bounded commit per fix or small related group. Every bug fix has a regression test proven to fail without the fix (`mutate-check.sh`); performance fixes have a benchmark before and after; changes that can touch `messages.jsonl` run `messages-golden-diff`; settings follow the config rules (default, schema, sample, DECISIONS.md). Per batch: `gofmt -l`, `go vet`, `git diff --check`, affected package tests; at the end `verify-go.sh` with `--race` on touched packages. No push. Reviewers do not fix.
+
+### 6.6 Final performance regression pass
+After the last phase and after the deferred low fixes, run ONE serialized pass of the section 2 hot-path benchmarks on an idle machine (check `uptime` before and after), `-count=10`, and compare against the `audit_findings/baseline.md` numbers. Report any path that moved more than the noise; a spread above 5% is noisy, so repeat that path once. Output: `audit_findings/final_perf.md`. No repo changes; prototypes in `/tmp`.
 
 ## 7. Prompt templates
 

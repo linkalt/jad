@@ -151,10 +151,11 @@ Every probe below ran through `go test ./internal/sessionfs/ -overlay /tmp/p2b2/
 - **severity: low** as filed, with the caveat that the missing cancellation is a correctness edge (a disconnected client keeps the walk running).
 - fix (S): pass the resolver's `ctx` and check it once per directory level, returning what was collected with `Truncated`. Lowering the maxima is optional (§12 D10).
 
-### P2B2-08 (low, B) `default_limit` bounded only by `maxSafeInteger` — r2-04 — **confirmed by reading**
+### P2B2-08 (low, B) `default_limit` bounded only by `maxSafeInteger` — r2-04 — **stale** (verified at HEAD ef22f19)
+- Evidence: the bound is `backend-go/internal/sessionfs/tool_settings.go:168` (`maxSafeInteger`, `:26`). Output is capped by `max_bytes` in `scanLines` (`backend-go/internal/tools/native/read.go:582-590`), called with `settings.MaxBytes` at `read.go:424`. File size is capped at `read.go:291-292`. The directory listing is sized by `visibleCount` at `read.go:361-365`. A large `default_limit` therefore cannot read more than `max_bytes` or `max_file_bytes`.
 - `tool_settings.go:168`: `configuredInteger(read, "default_limit", defaultNativeReadLimit, 1, maxSafeInteger, …)`, while `max_bytes` is capped at `maxNativeToolBytes` (`:160`), `max_file_bytes` at `maxNativeReadMaxFile` (`:164`) and `max_parallel_tool_calls` at 64 (`:19-20`). `default_limit` is the line count a `read` uses when the model passes no `limit`, so the ceiling on "read the whole file" is `max_file_bytes` (64 MiB default, 1 GiB allowed) instead of a line bound. The `uint64` check right after (`:171-173`) only rejects values that do not fit an `int`.
 - **severity: low**: the operator sets it, and `max_file_bytes` still bounds the bytes. It is a missing ceiling beside neighbours that all have one, not an escalation.
-- fix (S): add a `maxNativeReadLimit` constant (say 100,000) and use it at `:168`, the way `native_fetch_settings.go` ties `default_limit` to its own maximum.
+- fix (S, superseded by the stale verdict above; no change): ~~add a `maxNativeReadLimit` constant (say 100,000) and use it at `:168`~~, the way `native_fetch_settings.go` ties `default_limit` to its own maximum.
 
 ### P2B2-13 … P2B2-26 (low) — the remaining lows, each confirmed by reading
 - **P2B2-13** (`r1-12`): `CheckSessionDelete` (`session_files.go:225-245`) reads the file and compares `If-Match`; `DeleteSessionFile` (`:247-266`) then calls `os.Remove(location.File)` with no second check and removes `<file>.lock` even if another process holds it. The app layer serialises in-process writers under `settingsMu`, so only an external writer (an editor, `git checkout`, a second server) can hit the window; the state delete is `os.RemoveAll` on `<state>/<id>` with an id validated by `sessionIDPattern` (no traversal). Same shape as p2b1's P2B1-06 delete window — one decision, not two fixes.
@@ -264,7 +265,7 @@ The four reviewers agree on every overlapping *fact* in this merge. The disagree
 | 18 | P2B2-20 | low | read | 1 | S | require `mode&0o077 == 0` (or `mode&^0o666 == 0 && mode&0o600 == 0o600`), or take an octal string |
 | 19 | P2B2-21 | low | read | 1 | S | reject query/fragment/userinfo in `base_url`; warn on plain `http` for a non-loopback host |
 | 20 | P2B2-18 | low | read | 1 | S | cap the embedded provider JSON (keep `error.message`/`code`); return fixed text for a panic |
-| 21 | P2B2-08 | low | read | 1 | S | add a `maxNativeReadLimit` ceiling for `default_limit` |
+| 21 | P2B2-08 | low | stale | 0 | - | none: output and file size are already bounded (see the stale verdict at :154) |
 | 22 | P2B2-15 | low | read | 2 | M | decide B-C8: global tool-worker semaphore, or change the `max_concurrent_runs` default (measure first) |
 | 23 | P2B2-25 | low | read | 3 | M | split `Run`; delete or unexport the three dead exports; drop `shouldStop`; replace the sleeps |
 | 24 | P2B2-24 | low | read | 1 | M | one `configuredInteger(nullIsDefault bool)` and one `nativeToolNode` helper |
