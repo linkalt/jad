@@ -2,7 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"strings"
 )
 
 const defaultNativeReadImageMaxBytes int64 = 5 * 1024 * 1024
@@ -21,7 +20,7 @@ func normalizeNativeReadImageSettings(setting map[string]json.RawMessage, global
 	if err != nil {
 		return nil, err
 	}
-	if !exists || strings.TrimSpace(string(nativeRaw)) == "null" {
+	if !exists {
 		return nil, nil
 	}
 	nativeFields, err := decodeConfigObject(nativeRaw, settingPath+": tools.native")

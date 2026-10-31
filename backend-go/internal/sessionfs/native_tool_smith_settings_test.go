@@ -23,7 +23,6 @@ func TestNormalizeNativeToolSmithSettingsAbsent(t *testing.T) {
 	for name, setting := range map[string]map[string]json.RawMessage{
 		"no tools":      {},
 		"no tool_smith": toolSmithSettingsFor(`{}`),
-		"null native":   toolSmithSettingsFor(`null`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := normalizeNativeToolSmithSettings(setting, "", "setting.json", "", "", "", "", NativePathPolicy{}, NativePathPolicy{})
@@ -31,6 +30,9 @@ func TestNormalizeNativeToolSmithSettingsAbsent(t *testing.T) {
 				t.Fatalf("settings = %+v, %v; want nil", got, err)
 			}
 		})
+	}
+	if got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(`null`), "", "setting.json", "", "", "", "", NativePathPolicy{}, NativePathPolicy{}); err == nil || got != nil {
+		t.Fatalf("null native: got %+v, %v; want refusal", got, err)
 	}
 }
 

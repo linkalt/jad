@@ -223,7 +223,7 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 	if err != nil {
 		return nil, err
 	}
-	if !exists || strings.TrimSpace(string(nativeRaw)) == "null" {
+	if !exists {
 		return nil, nil
 	}
 	nativeFields, err := decodeConfigObject(nativeRaw, settingPath+": tools.native")

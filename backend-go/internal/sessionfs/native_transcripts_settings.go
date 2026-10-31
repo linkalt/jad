@@ -40,7 +40,7 @@ func normalizeNativeTranscriptsSettings(setting map[string]json.RawMessage, sett
 	if err != nil {
 		return nil, err
 	}
-	if !exists || strings.TrimSpace(string(nativeRaw)) == "null" {
+	if !exists {
 		return nil, nil
 	}
 	nativeFields, err := decodeConfigObject(nativeRaw, settingPath+": tools.native")

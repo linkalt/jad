@@ -15,11 +15,14 @@ func normalizeAsync(t *testing.T, tools string) (*NativeAsyncSettings, error) {
 }
 
 func TestNativeAsyncSettingsAbsentIsNil(t *testing.T) {
-	for _, tools := range []string{`{}`, `{"native":null}`, `{"native":{"process":{}}}`} {
+	for _, tools := range []string{`{}`, `{"native":{"process":{}}}`} {
 		settings, err := normalizeAsync(t, tools)
 		if err != nil || settings != nil {
 			t.Errorf("%s: settings = %+v, err = %v, want nil", tools, settings, err)
 		}
+	}
+	if _, err := normalizeAsync(t, `{"native":null}`); err == nil || err.Error() != "setting.json: tools.native must be a JSON object" {
+		t.Fatalf("null native: err = %v, want refusal", err)
 	}
 	if settings, err := normalizeNativeAsyncSettings(map[string]json.RawMessage{}, "setting.json"); settings != nil || err != nil {
 		t.Fatalf("no tools: %+v, %v", settings, err)

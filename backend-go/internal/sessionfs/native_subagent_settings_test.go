@@ -18,13 +18,15 @@ func TestNormalizeNativeSubagentSettingsAbsentMeansDisabled(t *testing.T) {
 	for name, setting := range map[string]map[string]json.RawMessage{
 		"no tools":      {},
 		"no subagent":   {"tools": json.RawMessage(`{"native":{}}`)},
-		"null native":   {"tools": json.RawMessage(`{"native":null}`)},
 		"other tool on": {"tools": json.RawMessage(`{"native":{"skill":{}}}`)},
 	} {
 		got, err := normalizeNativeSubagentSettings(setting, "/s/setting.json", "/w", "")
 		if err != nil || got != nil {
 			t.Errorf("%s: got %+v, %v; want nil, nil", name, got, err)
 		}
+	}
+	if got, err := normalizeNativeSubagentSettings(map[string]json.RawMessage{"tools": json.RawMessage(`{"native":null}`)}, "/s/setting.json", "/w", ""); err == nil || got != nil {
+		t.Fatalf("null native: got %+v, %v; want refusal", got, err)
 	}
 }
 
