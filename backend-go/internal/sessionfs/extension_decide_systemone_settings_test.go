@@ -62,6 +62,8 @@ func TestNormalizeExtensionDecideSystemoneSettingsRejectsInvalidSettings(t *test
 		"empty model":             {`{"decide_systemone":{"model":"  "}}`, "tools.extension.decide_systemone.model must be a non-empty string"},
 		"base url scheme":         {`{"decide_systemone":{"base_url":"ftp://x"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
 		"base url no host":        {`{"decide_systemone":{"base_url":"https://"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
+		"base url query":          {`{"decide_systemone":{"base_url":"https://api.example/x?k=1"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
+		"base url fragment":       {`{"decide_systemone":{"base_url":"https://api.example/#f"}}`, "tools.extension.decide_systemone.base_url must be an http or https URL"},
 		"key name":                {`{"decide_systemone":{"api_key_env":"A B"}}`, "tools.extension.decide_systemone.api_key_env must be an environment variable name"},
 		"key name digit":          {`{"decide_systemone":{"api_key_env":"1KEY"}}`, "tools.extension.decide_systemone.api_key_env must be an environment variable name"},
 		"timeout zero":            {`{"decide_systemone":{"timeout_ms":0}}`, "tools.extension.decide_systemone.timeout_ms must be a safe integer between 1 and 300000"},

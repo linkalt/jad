@@ -86,7 +86,7 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 		return nil, err
 	}
 	settings.BaseURL = strings.TrimRight(settings.BaseURL, "/")
-	if parsed, err := url.Parse(settings.BaseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+	if parsed, err := url.Parse(settings.BaseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, configError("%s: %s.base_url must be an http or https URL", settingPath, section)
 	}
 	if settings.Path, err = extensionDecideSystemoneString(fields, "path", defaultExtensionDecideSystemonePath, settingPath); err != nil {
