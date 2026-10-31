@@ -49,6 +49,7 @@ func TestRemoteAPIEnabledNeedsTokens(t *testing.T) {
 	for name, c := range map[string]struct{ body, want string }{
 		"no tokens":        {`{"enabled":true,"listen_unix":"/run/x.sock"}`, "tokens_file is required"},
 		"unknown key":      {`{"enabled":true,"insecure":true}`, "is not a setting"},
+		"relative socket":  {`{"enabled":true,"tokens_file":"t.json","listen_unix":"run.sock"}`, "listen_unix must be an absolute path"},
 		"hops cap":         {`{"max_hops":99}`, "max_hops must be an integer between 1 and 16"},
 		"world socket":     {`{"listen_unix_mode":511}`, "listen_unix_mode"},
 		"enabled not bool": {`{"enabled":"yes"}`, "must be a boolean"},

@@ -100,9 +100,9 @@ func normalizeRemoteAPI(raw json.RawMessage, path, base string) (RemoteAPISettin
 		if err := text(field.name, field.target); err != nil {
 			return RemoteAPISettings{}, err
 		}
-		if *field.target != "" {
-			*field.target = resolveFrom(base, *field.target)
-		}
+	}
+	if settings.TokensFile != "" {
+		settings.TokensFile = resolveFrom(base, settings.TokensFile)
 	}
 	hops, runs, perToken, mode := int64(settings.MaxHops), int64(settings.MaxRuns), int64(settings.MaxRunsPerToken), int64(settings.ListenUnixMode)
 	for _, field := range []struct {
