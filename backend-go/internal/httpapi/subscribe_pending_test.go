@@ -51,6 +51,15 @@ func pendingEventNames(events []streamEvent) string {
 	return strings.Join(names, ",")
 }
 
+func hasEvent(events []streamEvent, name string) bool {
+	for _, event := range events {
+		if event.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func usageValue(t *testing.T, event streamEvent) int {
 	t.Helper()
 	payload := strings.TrimSuffix(strings.SplitN(string(event.frame), "data: ", 2)[1], "\n\n")
@@ -203,16 +212,17 @@ func TestManyConcurrentSubscribersSeeAnUninterruptedStream(t *testing.T) {
 				run.cacheContent("more")
 			}
 		}
+		uiEvent, _ := makeSSEEvent("ui.message", map[string]any{"message": webUIMessage{ID: "turn", Sender: "assistant", Status: "complete"}})
 		done, _ := makeSSEEvent("done", map[string]any{})
-		run.finish("completed", []streamEvent{done})
+		run.finish("completed", []streamEvent{uiEvent, done})
 	}()
 	group.Wait()
 	for index, events := range results {
-		if len(events) < 3 || events[0].name != "run" || events[1].name != "ui.message" || events[len(events)-1].name != "done" {
+		if len(events) < 3 || events[0].name != "run" || events[len(events)-1].name != "done" || !hasEvent(events[1:len(events)-1], "ui.message") {
 			t.Fatalf("subscriber %d: events = %s", index, pendingEventNames(events))
 		}
 		last := -1
-		for _, event := range events[2 : len(events)-1] {
+		for _, event := range events[1 : len(events)-1] {
 			if event.name != "usage" {
 				continue
 			}
