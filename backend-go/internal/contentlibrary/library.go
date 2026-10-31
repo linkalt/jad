@@ -206,7 +206,7 @@ func filesForKind(ctx context.Context, kind Kind, directories []string) ([]libra
 			return nil, err
 		}
 		if !info.IsDir() {
-			return nil, configError("library directory is not a directory: %s", root)
+			return nil, configError("a library directory for %s is not a directory", kind)
 		}
 		var paths []string
 		if kind == Skill {

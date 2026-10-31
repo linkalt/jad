@@ -259,6 +259,20 @@ func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 	}
 }
 
+func TestLibraryErrorDoesNotNameTheAbsoluteDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["notes.txt"]}}`)
+	writeLibraryTestFile(t, filepath.Join(root, "notes.txt"), "not a directory")
+
+	_, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	if err == nil {
+		t.Fatal("a file named as a prompt directory was accepted")
+	}
+	if strings.Contains(err.Error(), root) {
+		t.Fatalf("error names the absolute directory: %q", err.Error())
+	}
+}
+
 // The library reads the same root setting the session loader finds: .jad/setting.json of
 // the working directory, then the one in $HOME/.jad.
 func TestLibraryFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {

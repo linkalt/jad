@@ -1202,11 +1202,13 @@ Audit: `audit_findings/p3_merged.md` (P3-12).
 
 - **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore (`checkpoint_handlers.go`) has the same order and is **not** changed here: it also holds `markRestoring` for the whole restore, so its release needs its own change.
 
-## Phase 3 batch: stale and open rows (P3-15, P3-07, P3-08)
+## Phase 3 batch: library error text and stale or open rows (P3-09, P3-15, P3-07, P3-08)
+
+- **Status text change: `/api/library` no longer names the absolute directory (P3-09).** A prompt, template or skill directory that is not a directory is refused with `a library directory for <kind> is not a directory` (`contentlibrary/library.go`) instead of the resolved path. The status (422) is unchanged. The text is client-visible only, not model-visible. Test: `TestLibraryErrorDoesNotNameTheAbsoluteDirectory` (fails at HEAD, which named the path).
 
 - **P3-15 stale.** A run retired by the failed-start guard is finished with `failureEvents(...)` (`handler.go`), not `nil`, so a late attacher replays `done`. No change.
-- **P3-07 open, needs a retention decision.** Finished runs are kept by time only (`maxRuns` counts running runs). Adding a count or byte cap changes retention and needs a configured limit; the audit accepted it at low.
-- **P3-08 open, needs a decision.** `finish` does not release the content cache or `liveImages`. The live image route (`handleLiveRunImage`) serves a finished run's images from `liveImages` until retirement, so releasing them at finish would 404 images that are not yet in the transcript. Releasing only the content cache at finish needs a check of the late-snapshot path first.
+- **P3-07 accepted limitation.** Finished runs are kept by time only. Accepted by the decider: no count or byte cap and no config key. Finished runs are kept by time only (`maxRuns` counts running runs). Adding a count or byte cap changes retention and needs a configured limit; the audit accepted it at low.
+- **P3-08 accepted limitation.** A finished run keeps its content cache and `liveImages` until retirement. Accepted by the decider: no config key and no release change, since the live image route needs `liveImages` for a finished run. `finish` does not release the content cache or `liveImages`. The live image route (`handleLiveRunImage`) serves a finished run's images from `liveImages` until retirement, so releasing them at finish would 404 images that are not yet in the transcript. Releasing only the content cache at finish needs a check of the late-snapshot path first.
 
 ## Session listing: an unreadable file has no etag (P3-11)
 
