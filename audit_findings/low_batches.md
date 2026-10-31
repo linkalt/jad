@@ -374,9 +374,9 @@ Listed separately, not batched. Each needs a benchmark or profile before any fix
 - P6CM-19: done in d4d38f9. SubagentManager.Closed removed; the two app tests were rewritten through the resolver (see the table row for the evidence and mutation results). The 'Directory()' sub-item is refuted (merge)
 - P8-M-04: carried; earlier pass (low_batches.md section 5)
 
-- **P7A-07 (moved out of the perf table, HEAD e33ffec):** the spill throttle loop at `tools/native/bash_spill.go:282-290` already drops every key older than `interval` on each call (the comment at 280-281 says so), so the map is bounded by the interval; a `{call_id}` template grows it only inside one interval. Not a performance row. Removed.
-- **P8-M-09 (moved out of the perf table, HEAD e33ffec):** the row said the input is validated twice. `transcript/input_history.go:287-289` validates the response once through `objectFieldsValid`, which the comment says skips re-validation of bytes already checked by `objectFields`. The "twice" claim does not hold. Stale.
-- **P6AM-03 (moved to the correctness batch, HEAD e33ffec):** an MCP `tools/call` structured-content number outside float64 range or above 2^53 fails the call (`tools/mcp/structured_content_capture.go:114`, `withoutStructuredContent`). This is a correctness defect, not a cost. Track it as a correctness item; trigger: any such call returns an error.
+- **P7A-07 (moved out of the perf table, HEAD 4da6954):** the spill throttle loop at `tools/native/bash_spill.go:282-290` already drops every key older than `interval` on each call (the comment at 280-281 says so), so the map is bounded by the interval; a `{call_id}` template grows it only inside one interval. Not a performance row. Removed.
+- **P8-M-09 (moved out of the perf table, HEAD 4da6954):** the row said the input is validated twice. `transcript/input_history.go:287-289` validates the response once through `objectFieldsValid`, which the comment says skips re-validation of bytes already checked by `objectFields`. The "twice" claim does not hold. Stale.
+- **P6AM-03 (moved to the correctness batch, HEAD 4da6954):** an MCP `tools/call` structured-content number outside float64 range or above 2^53 fails the call (`tools/mcp/structured_content_capture.go:114`, `withoutStructuredContent`). This is a correctness defect, not a cost. Track it as a correctness item; trigger: any such call returns an error.
 
 ## 8. Planned item: atomic writers (separate review, not a low batch)
 
@@ -413,14 +413,14 @@ Recorded from the Phase A table and the Phase B run. Medians are `go test -bench
   - **P8-M-06** (image store mutex covers the first-write directory scan and file I/O, B-C5): prior art, already accepted as low in the earlier review. Accepted, not reopened.
   - **N33** (history block re-reads the whole backup on each snapshot): measured 0.82 ms at 100 turns and 8.0 ms at 1000 turns for `readBackupTail` (scratch benchmark, removed). Accepted: the cost is linear in the backup size, the backup is bounded by the compaction policy, and a cache would need the same single-writer proof as P7B-MRG-23.
   - **P7B-MRG-27** (`request_draft` key dedupe is quadratic): measured 41.8 µs for 100 keys and 7.08 ms for 2000 keys (scratch, removed). Accepted: the input is a draft written by the model in one call, and the quadratic cost only shows at thousands of keys.
-- **Deferred rows:** each has a specific trigger in the table after this list (HEAD e33ffec). The generic triggers that were here are removed.
+- **Deferred rows:** each has a specific trigger in the table after this list (HEAD 4da6954). The generic triggers that were here are removed.
 - **P6AM-03, P7A-07, P8-M-09, P6BM-16 (sequential Close), P2B1-14, P7A-08 (partly):** stale or not a perf item at HEAD (see Phase A table).
 
 
 
 ### Trigger table for the 35 performance rows (HEAD 4da6954)
 
-Each trigger below names the code location, the workload or config that exercises it, and the metric and threshold that would justify measuring. Every cited `file:line` was read at HEAD `e33ffec`. Nothing here is measured again. A threshold marked "measured" comes from an earlier scratch benchmark; every other threshold is a proposed bound, to be confirmed by the measurement itself before any change.
+Each trigger below names the code location, the workload or config that exercises it, and the metric and threshold that would justify measuring. Every cited `file:line` was read at HEAD `4da6954`. Nothing here is measured again. A threshold marked "measured" comes from an earlier scratch benchmark; every other threshold is a proposed bound, to be confirmed by the measurement itself before any change.
 
 | Row | Status (section 10) | Cited file:line at HEAD | Trigger | Stale reference fixed |
 |---|---|---|---|---|
