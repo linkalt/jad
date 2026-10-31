@@ -60,7 +60,6 @@ var (
 	ErrInvalidID     = errors.New("invalid handle id")
 	ErrInvalidCursor = errors.New("invalid cursor")
 	ErrNoDriver      = errors.New("no driver registered for kind")
-	ErrNotLive       = errors.New("handle is not live")
 	ErrInvalidResult = errors.New("result state must be terminal")
 
 	// ErrCapacity matches every *CapacityError (errors.Is).
