@@ -130,6 +130,23 @@ func newFixture(t *testing.T, table *TokenTable, mutate func(*Options)) *fixture
 	return &fixture{t: t, backend: backend, server: server, http: httpServer}
 }
 
+// raw is do for a test that reads the response headers as well.
+func (f *fixture) raw(method, path, secret string) (int, http.Header, map[string]any) {
+	f.t.Helper()
+	request, _ := http.NewRequest(method, f.http.URL+path, bytes.NewReader(nil))
+	if secret != "" {
+		request.Header.Set("Authorization", "Bearer "+secret)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&out)
+	return response.StatusCode, response.Header, out
+}
+
 func (f *fixture) do(method, path, secret string, body any, headers ...string) (int, map[string]any) {
 	f.t.Helper()
 	var reader *bytes.Reader
@@ -705,6 +722,40 @@ func TestTokenFileMustBePrivateAndChangesAreSeenByContent(t *testing.T) {
 	}
 	if _, err := table.Authenticate("Bearer " + secretA); err == nil {
 		t.Fatal("a table that became open to others must refuse every request")
+	}
+}
+
+// A token table that cannot be read is the server's fault, not the caller's: the answer is
+// 503 without a challenge, so a client that is not refused for its own token retries and a
+// followed run is not ended. An unknown token keeps 401 and the challenge.
+func TestBrokenTokenTableAnswers503AndAnUnknownTokenStays401(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := NewTokenTable(file, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table.interval = 0
+	f := newFixture(t, table, nil)
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	status, headers, body2 := f.raw("POST", Prefix+"/messages", secretA)
+	if status != http.StatusServiceUnavailable || body2["code"] != "token_table_unusable" {
+		t.Fatalf("broken table: status %d body %v, want 503 token_table_unusable", status, body2)
+	}
+	if headers.Get("WWW-Authenticate") != "" {
+		t.Fatalf("broken table sent WWW-Authenticate %q, want none", headers.Get("WWW-Authenticate"))
+	}
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, headers, _ = f.raw("POST", Prefix+"/messages", "unknown_0123456789abcdef0123456789abcdef")
+	if status != http.StatusUnauthorized || headers.Get("WWW-Authenticate") == "" {
+		t.Fatalf("unknown token: status %d WWW-Authenticate %q, want 401 with the challenge", status, headers.Get("WWW-Authenticate"))
 	}
 }
 

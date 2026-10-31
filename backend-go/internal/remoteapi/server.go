@@ -219,6 +219,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := s.opts.Tokens.Authenticate(r.Header.Get("Authorization"))
+	if errors.Is(err, errTableBroken) {
+		// The server cannot read its own token table, so the caller is not refused for its
+		// token and gets no challenge; a followed run retries a 503 instead of ending.
+		writeError(w, http.StatusServiceUnavailable, "token_table_unusable", "the server cannot check tokens right now")
+		return
+	}
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="jad-remote"`)
 		writeError(w, http.StatusUnauthorized, "unauthorized", "a valid token is required")

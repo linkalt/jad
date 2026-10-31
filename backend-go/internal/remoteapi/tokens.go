@@ -31,12 +31,13 @@ const (
 )
 
 var (
-	allActions   = []string{ActionMessage, ActionSubagent, ActionStatus, ActionStop, ActionTranscripts}
-	tokenIDRule  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
-	sha256HexRe  = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	errNoToken   = errors.New("token required")
-	errBadToken  = errors.New("token not accepted")
-	maxTokenFile = int64(1 << 20)
+	allActions     = []string{ActionMessage, ActionSubagent, ActionStatus, ActionStop, ActionTranscripts}
+	tokenIDRule    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+	sha256HexRe    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	errNoToken     = errors.New("token required")
+	errBadToken    = errors.New("token not accepted")
+	errTableBroken = errors.New("token table is not usable")
+	maxTokenFile   = int64(1 << 20)
 )
 
 // tokenFileCheckInterval is the shortest time between two looks at the table file, so a burst
@@ -279,7 +280,7 @@ func (t *TokenTable) Authenticate(header string) (Token, error) {
 	tokens, broken := t.tokens, t.broken
 	t.mu.RUnlock()
 	if broken {
-		return Token{}, errBadToken
+		return Token{}, errTableBroken
 	}
 	var found *Token
 	for index := range tokens {
