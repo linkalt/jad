@@ -11,14 +11,14 @@ import (
 // CatalogFileInfo identifies one catalog file and the version of its bytes.
 type CatalogFileInfo struct {
 	ID   string `json:"id"`
-	ETag string `json:"etag"`
+	ETag string `json:"etag,omitempty"`
 	// Name is the display name the file sets; it is left out when unset.
 	Name string `json:"name,omitempty"`
 	// Category is the folder a session file sets; it is left out when unset and for other kinds.
 	Category string `json:"category,omitempty"`
 	// Sessions lists the sessions that can use a profile; it is set for profiles only.
 	Sessions []CatalogSessionRef `json:"sessions,omitempty"`
-	// Error is set on a session file the listing could not read; the entry has no etag.
+	// Error is set on a session file the listing could not read; the entry has no etag, and the etag is left out.
 	Error string `json:"error,omitempty"`
 }
 

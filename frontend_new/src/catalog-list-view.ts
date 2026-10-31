@@ -132,12 +132,13 @@ export interface CatalogRow extends Record<string, unknown> {
   /**
    * The version the file had when it was listed. A row delete carries it, so the
    * server refuses the delete when the file changed after the list was read.
+   * Absent for a session file the listing could not read; such a row cannot be deleted.
    */
-  etag: string;
+  etag?: string;
 }
 
 /** The two values a row delete needs: which file, and the version it was listed at. */
-export type CatalogRowTarget = Pick<CatalogRow, 'id' | 'etag'>;
+export type CatalogRowTarget = {id: string; etag: string};
 
 export function catalogRows(kind: CatalogKind, files: readonly CatalogFileInfo[]): CatalogRow[] {
   return files.map(file => ({

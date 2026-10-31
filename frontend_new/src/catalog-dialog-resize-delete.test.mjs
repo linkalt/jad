@@ -261,11 +261,11 @@ test('the delete is one control per row, and the click stops before the row open
   assert.match(column, /icon=\{<Icon icon=\{TrashIcon\} size="sm" \/>\}/);
   assert.match(column, /variant="destructive"/);
   assert.match(column, /label=\{`Delete \$\{row\.id\}`\}/);
-  assert.match(column, /isDisabled=\{isDisabled\}/);
+  assert.match(column, /isDisabled=\{isDisabled \|\| row\.etag === undefined\}/, 'a row with no version cannot be deleted');
   const stop = column.indexOf('event.stopPropagation()');
   const ask = column.indexOf('onDelete(');
   assert.ok(stop > 0 && ask > stop, 'the row click is stopped before the delete is asked for');
-  assert.match(column, /onDelete\(\{id: row\.id, etag: row\.etag\}\)/, 'the row hands over the version it was listed at');
+  assert.match(column, /if \(row\.etag !== undefined\) onDelete\(\{id: row\.id, etag: row\.etag\}\)/, 'the row hands over the version it was listed at');
   assert.match(dialog, /onDelete=\{target => setPending\(\{kind: 'row-delete', \.\.\.target\}\)\}/);
 });
 

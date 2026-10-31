@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,6 +13,7 @@ import (
 type fakeCatalogSessions struct {
 	*fakeResolver
 	mu        sync.Mutex
+	listed    []CatalogFileInfo
 	checked   []string
 	deleted   []string
 	cancelled []string
@@ -21,7 +23,7 @@ type fakeCatalogSessions struct {
 }
 
 func (f *fakeCatalogSessions) ListSessionConfigs(context.Context) ([]CatalogFileInfo, bool, error) {
-	return nil, false, nil
+	return f.listed, false, nil
 }
 func (f *fakeCatalogSessions) ReadSessionConfig(context.Context, string) (CatalogFile, error) {
 	return CatalogFile{}, nil
@@ -70,6 +72,34 @@ func newCatalogSessionsHandler(t *testing.T, wait time.Duration) (*Handler, *fak
 	handler := testHandler(t, resolver, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096, RunStateRetention: time.Minute, SessionDeleteStopWait: wait})
 	t.Cleanup(handler.Close)
 	return handler, resolver
+}
+
+func TestSessionListLeavesOutTheEtagOfAnUnreadableFile(t *testing.T) {
+	resolver := &fakeCatalogSessions{fakeResolver: &fakeResolver{}, listed: []CatalogFileInfo{
+		{ID: "demo", ETag: `"v1"`},
+		{ID: "broken", Error: "could not be read"},
+	}}
+	handler := testHandler(t, resolver, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096, RunStateRetention: time.Minute})
+	t.Cleanup(handler.Close)
+	request := httptest.NewRequest(http.MethodGet, "/api/catalog/sessions", nil)
+	request.Header.Set("Authorization", "Bearer "+testAPIToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Files []map[string]any `json:"files"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := body.Files[1]["etag"]; has {
+		t.Errorf("unreadable row carries an etag: %v", body.Files[1])
+	}
+	if body.Files[1]["error"] != "could not be read" || body.Files[0]["etag"] != `"v1"` {
+		t.Errorf("listing = %v", body.Files)
+	}
 }
 
 func TestSessionDeleteRefusedWhenARunDoesNotEndInTime(t *testing.T) {

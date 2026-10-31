@@ -101,13 +101,13 @@ function tableColumns(showSession: boolean, onDelete: (target: CatalogRowTarget)
           icon={<Icon icon={TrashIcon} size="sm" />}
           variant="destructive"
           size="sm"
-          isDisabled={isDisabled}
+          isDisabled={isDisabled || row.etag === undefined}
           // The whole body row opens the file, and IconButton hands the click
           // straight to its own onClick without stopping it, so the delete stops
           // it here — otherwise the row opens the file it is about to delete.
           onClick={event => {
             event.stopPropagation();
-            onDelete({id: row.id, etag: row.etag});
+            if (row.etag !== undefined) onDelete({id: row.id, etag: row.etag});
           }}
         />
       </Tooltip>

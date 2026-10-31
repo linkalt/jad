@@ -2027,7 +2027,8 @@ export type CatalogKind = 'profiles' | 'models' | 'sessions' | 'toolsets' | 'mcp
 
 export interface CatalogFileInfo {
   id: string;
-  etag: string;
+  /** Absent for a session file the listing could not read. */
+  etag?: string;
   /** Display name the file sets; absent when unset. */
   name?: string;
   /** Folder a session file sets to group its listing; other kinds are grouped by the ID. */
@@ -2043,6 +2044,7 @@ export interface CatalogSessionRef {
 }
 
 export interface CatalogFileContent extends CatalogFileInfo {
+  etag: string;
   text: string;
 }
 
@@ -2106,7 +2108,7 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
       file =>
         isRecord(file) &&
         typeof file.id === 'string' &&
-        typeof file.etag === 'string' &&
+        (file.etag === undefined || typeof file.etag === 'string') &&
         (file.name === undefined || typeof file.name === 'string') &&
         (file.category === undefined || typeof file.category === 'string') &&
         (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))),
@@ -2116,7 +2118,7 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
   }
   return value.files.map(file => ({
     id: file.id as string,
-    etag: file.etag as string,
+    ...(typeof file.etag === 'string' ? {etag: file.etag} : {}),
     ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
     ...(typeof file.category === 'string' && file.category.trim() !== '' ? {category: file.category.trim()} : {}),
     ...(Array.isArray(file.sessions) && file.sessions.length > 0 ? {sessions: (file.sessions as unknown[]).map(toSessionRef)} : {}),
@@ -2145,7 +2147,7 @@ export async function saveCatalogFile(
   id: string,
   text: string,
   etag: string | null,
-): Promise<{info: CatalogFileInfo; created: boolean}> {
+): Promise<{info: CatalogFileInfo & {etag: string}; created: boolean}> {
   const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), {
     method: 'PUT',
     headers: etag === null ? {'If-None-Match': '*'} : {'If-Match': etag},

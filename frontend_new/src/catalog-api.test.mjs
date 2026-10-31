@@ -23,8 +23,13 @@ test('fetchCatalogFiles reads the list and rejects a malformed one', async () =>
   reply = () => json({files: [{id: 'jad/default', etag: '"a"'}]});
   assert.deepEqual(await fetchCatalogFiles('profiles'), [{id: 'jad/default', etag: '"a"'}]);
   assert.match(requests[0].url, /\/catalog\/profiles$/);
-  reply = () => json({files: [{id: 'x'}]});
+  reply = () => json({files: [{id: 'x', etag: 7}]});
   await assert.rejects(fetchCatalogFiles('profiles'), /invalid catalog list/);
+});
+
+test('fetchCatalogFiles accepts a session row that carries an error and no etag', async () => {
+  reply = () => json({files: [{id: 'a', etag: '"1"'}, {id: 'broken', error: 'could not be read'}]});
+  assert.deepEqual(await fetchCatalogFiles('sessions'), [{id: 'a', etag: '"1"'}, {id: 'broken'}]);
 });
 
 test('fetchCatalogFiles keeps a session name, trims it, and drops a blank or non-string one', async () => {
