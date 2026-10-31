@@ -103,7 +103,7 @@ func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath s
 }
 
 func unsupportedToolKey(fieldPath, key string, candidates []string, hint string) error {
-	if suggestion, distance := closestToolKey(key, candidates); distance <= 2 {
+	if suggestion, distance := closestToolKey(key, candidates); suggestion != "" && distance <= 2 {
 		return configError("%s.%s is not supported; did you mean %s?", fieldPath, key, suggestion)
 	}
 	sorted := append([]string(nil), candidates...)

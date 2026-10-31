@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -54,7 +55,7 @@ func run() error {
 	defer stop()
 	serveErrors := make(chan error, 1)
 	go func() { serveErrors <- server.Serve(listener) }()
-	fmt.Fprintf(os.Stderr, "anthropic-adapter: listening on %s, upstream %s\n", listener.Addr(), config.Upstream.BaseURL)
+	fmt.Fprintf(os.Stderr, "anthropic-adapter: listening on %s, upstream %s\n", listener.Addr(), displayUpstreamURL(config.Upstream.BaseURL))
 
 	select {
 	case err := <-serveErrors:
@@ -67,6 +68,16 @@ func run() error {
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	return server.Shutdown(shutdownContext)
+}
+
+// displayUpstreamURL keeps the scheme, host and path of an upstream URL for logs. The
+// userinfo and query can carry credentials, so they are left out.
+func displayUpstreamURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid upstream URL>"
+	}
+	return parsed.Scheme + "://" + parsed.Host + parsed.Path
 }
 
 // requireCallerToken refuses to serve a credential_file token to anyone who can reach a

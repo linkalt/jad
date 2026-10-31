@@ -46,3 +46,13 @@ func TestNormalizeMCPServersNullDenyToolsUsesDefault(t *testing.T) {
 		t.Fatalf("normalized MCP server = %#v, want enabled server with empty deny list", servers)
 	}
 }
+
+func TestUnsupportedToolKeyWithoutSuggestion(t *testing.T) {
+	candidates := []string{"memory", "shell"}
+	for _, key := range []string{"", "x"} {
+		err := unsupportedToolKey("tools.native", key, candidates, "")
+		if err == nil || strings.Contains(err.Error(), "did you mean") {
+			t.Fatalf("key %q: error = %v, want no suggestion", key, err)
+		}
+	}
+}

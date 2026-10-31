@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestExchangeSendsAFormAndParsesTokens(t *testing.T) {
@@ -141,5 +142,14 @@ func TestTokensNeverPrint(t *testing.T) {
 		if strings.Contains(text, "SECRET") {
 			t.Fatalf("a token printed: %s", text)
 		}
+	}
+}
+
+func TestTruncateKeepsMultiByteTextValid(t *testing.T) {
+	// Each "é" is two bytes, so the limit lands inside a rune.
+	text := strings.Repeat("é", 150)
+	got := truncate(text, 201)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate() = %q, not valid UTF-8", got)
 	}
 }

@@ -76,3 +76,10 @@ func TestRequireCallerToken(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayUpstreamURLDropsUserinfoAndQuery(t *testing.T) {
+	got := displayUpstreamURL("https://user:secret@example.com/v1?key=abc#frag")
+	if got != "https://example.com/v1" {
+		t.Fatalf("displayUpstreamURL() = %q, want scheme, host and path only", got)
+	}
+}
