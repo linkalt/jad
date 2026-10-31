@@ -7,10 +7,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestClientUnixSocketOwnerAndDirectoryAreChecked(t *testing.T) {
@@ -87,5 +92,51 @@ func TestClientUnixSocketOwnerAndDirectoryAreChecked(t *testing.T) {
 	}
 	if err := call(grouped); err == nil || !strings.Contains(err.Error(), "other users can write") || groupedCalls.Load() != 0 {
 		t.Fatalf("a group-writable directory without the sticky bit must be refused: %v", err)
+	}
+}
+
+// TestClientRefusesARealForeignPeerAfterTheDial runs the listener as another user, so the peer that
+// answers is really foreign. The socket is then chowned to this user, so the pre-dial owner check
+// passes and only the post-dial peer check can refuse it.
+func TestClientRefusesARealForeignPeerAfterTheDial(t *testing.T) {
+	if _, err := exec.LookPath("sudo"); err != nil {
+		t.Skip("sudo is unavailable:", err)
+	}
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("sudo needs a password, so no listener can run as another user:", err)
+	}
+	if _, err := user.Lookup("daemon"); err != nil {
+		t.Skip("no daemon user to run the foreign listener:", err)
+	}
+	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+shortSocket(t)+`","token_env":"JAD_REMOTE_T","timeout_ms":2000,"retries":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := entry.Unix
+	if err := os.Chmod(filepath.Dir(socket), 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	listener := exec.Command("sudo", "-n", "-u", "daemon", "socat", "UNIX-LISTEN:"+socket+",fork", "OPEN:/dev/null,rdonly")
+	if err := listener.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		listener.Process.Signal(syscall.SIGTERM)
+		listener.Wait()
+	})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Lstat(socket); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the foreign listener never bound its socket")
+		}
+	}
+	if out, err := exec.Command("sudo", "-n", "chown", strconv.Itoa(os.Getuid()), socket).CombinedOutput(); err != nil {
+		t.Fatalf("chown: %v: %s", err, out)
+	}
+	err = newClient(t, entry).Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "answered by another user") {
+		t.Fatalf("a socket answered by another user must be refused after the dial: %v", err)
 	}
 }
