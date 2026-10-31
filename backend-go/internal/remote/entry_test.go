@@ -184,6 +184,24 @@ func TestListAndLoad(t *testing.T) {
 	}
 }
 
+func TestListIncludesASymlinkedEntryAsLoadDoes(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(target, []byte(`{"kind":"remote","remote":{"url":"http://b:1","token_env":"JAD_REMOTE_T"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "linked.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, "linked"); err != nil {
+		t.Fatalf("Load follows the symlink: %v", err)
+	}
+	entries, problems := List(dir)
+	if len(entries) != 1 || entries[0].Name != "linked" || len(problems) != 0 {
+		t.Fatalf("List must include the symlinked entry that Load reads: %+v %v", entries, problems)
+	}
+}
+
 func TestParseEntryRefusesCharacterClassGlobs(t *testing.T) {
 	for _, glob := range []string{"review[^x]*", "[a-z]*/x"} {
 		body := `{"kind":"remote","remote":{"url":"unix:///run/jad/api.sock","token_file":"t","profiles":["` + glob + `"]}}`

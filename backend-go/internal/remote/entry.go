@@ -345,7 +345,7 @@ func List(dir string) (entries []Entry, problems []error) {
 	}
 	for _, item := range items {
 		name, ok := strings.CutSuffix(item.Name(), ".json")
-		if !ok || !item.Type().IsRegular() {
+		if !ok {
 			continue
 		}
 		entry, err := Load(dir, name)
