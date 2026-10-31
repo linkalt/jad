@@ -78,11 +78,11 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 		case <-changed:
 		case <-timeout:
 			m.mu.Lock()
-			result, flips = m.popLocked(owner, scope)
 			if err := ctx.Err(); err != nil {
 				m.mu.Unlock()
 				return WaitResult{}, err
 			}
+			result, flips = m.popLocked(owner, scope)
 			if s := m.owners[owner]; s != nil {
 				result.Dropped = m.takeDroppedLocked(owner, s)
 			}

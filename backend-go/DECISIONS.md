@@ -1224,6 +1224,10 @@ Audit: `audit_findings/p3_merged.md` (P3-11).
 
 - **Status: a session file the listing could not read is listed without an `etag` (P3-11, option a).** The `etag` field on a catalog listing row is omitted when empty (`CatalogFileInfo.ETag`, `catalog_files_handlers.go`). Before, the unreadable row carried `"etag": ""`. The frontend accepts a row with no `etag` (`fetchCatalogFiles`, `api.ts`), keeps it, and disables its delete, since a delete needs a version. Opening a file still needs an etag, and a row with none cannot be opened. Tests: `TestSessionListLeavesOutTheEtagOfAnUnreadableFile` (backend, fails with `omitempty` removed) and `fetchCatalogFiles accepts a session row that carries an error and no etag` (frontend, fails before the validator change).
 
+## Wait timeout checks the context before it takes signals (M26)
+
+- **Fix: `Wait` checks `ctx` before it takes the ready signals on timeout (M26).** Before, a context cancelled in the window after the timeout fired still took the ready signals as read and then returned the error, so those signals were lost to the caller. The check now comes first, so a cancelled wait consumes nothing, as its doc comment states. **No deterministic fail-first test:** the window is a race between the timer and the cancel, and there is no hook to force it. The fix is by reading of `wait.go`; the existing `TestWaitCancelledConsumesNothing` and the asyncmgr suite pass.
+
 ## Debug log: token and secret headers, and transport errors (P3-10)
 
 Audit: `audit_findings/p3_merged.md` (P3-10).
