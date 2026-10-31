@@ -85,10 +85,6 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if err != nil {
 		return result, fmt.Errorf("read assistant final items for compaction: %w", err)
 	}
-	result.CompactedItems = len(history)
-	result.RetainedItems = len(history)
-	result.BackupPath = s.options.MessagesBackupPath
-
 	turns := make([][][]byte, 0)
 	for _, item := range compactableHistory {
 		fields, err := objectFields(item)
@@ -146,6 +142,8 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 			return result, fmt.Errorf("backup transcript before compaction: %w", err)
 		}
 	}
+	result.CompactedItems = len(history)
+	result.BackupPath = s.options.MessagesBackupPath
 	cache := compactionCache{
 		SchemaVersion:            1,
 		SourceSHA256:             sourceHash,

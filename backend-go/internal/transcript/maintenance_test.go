@@ -185,7 +185,7 @@ func TestCompactHistoryNoOpWhenRecentTurnDoesNotReduceHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Compacted || result.CompactedItems != 1 || result.RetainedItems != 1 {
+	if result.Compacted || result.CompactedItems != 0 || result.RetainedItems != 0 || result.BackupPath != "" {
 		t.Fatalf("unexpected no-op compaction result: %+v", result)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "backup.jsonl")); !os.IsNotExist(err) {
