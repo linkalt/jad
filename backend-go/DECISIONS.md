@@ -1202,6 +1202,12 @@ Audit: `audit_findings/p3_merged.md` (P3-12).
 
 - **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore (`checkpoint_handlers.go`) has the same order and is **not** changed here: it also holds `markRestoring` for the whole restore, so its release needs its own change.
 
+## Phase 3 batch: stale and open rows (P3-15, P3-07, P3-08)
+
+- **P3-15 stale.** A run retired by the failed-start guard is finished with `failureEvents(...)` (`handler.go`), not `nil`, so a late attacher replays `done`. No change.
+- **P3-07 open, needs a retention decision.** Finished runs are kept by time only (`maxRuns` counts running runs). Adding a count or byte cap changes retention and needs a configured limit; the audit accepted it at low.
+- **P3-08 open, needs a decision.** `finish` does not release the content cache or `liveImages`. The live image route (`handleLiveRunImage`) serves a finished run's images from `liveImages` until retirement, so releasing them at finish would 404 images that are not yet in the transcript. Releasing only the content cache at finish needs a check of the late-snapshot path first.
+
 ## Session listing: an unreadable file has no etag (P3-11)
 
 Audit: `audit_findings/p3_merged.md` (P3-11).
