@@ -17,6 +17,22 @@ func TestRunToolBatchRunsConcurrentlyUpToLimitAndReportsEachAsItFinishes(t *test
 	var active, peak atomic.Int64
 	var mu sync.Mutex
 	var finished []int
+	// The first wave of three calls starts together and each waits for its own release.
+	// The test releases them last call first, so completion order differs from call order.
+	var release [3]chan struct{}
+	for i := range release {
+		release[i] = make(chan struct{})
+	}
+	var waveStarted sync.WaitGroup
+	waveStarted.Add(3)
+	settled := make(chan int, 6)
+	go func() {
+		waveStarted.Wait()
+		for _, call := range []int{2, 1, 0} {
+			close(release[call])
+			<-settled
+		}
+	}()
 	err := runToolBatch([]int{0, 1, 2, 3, 4, 5}, 3,
 		func(call int) (int, error) {
 			now := active.Add(1)
@@ -26,8 +42,10 @@ func TestRunToolBatchRunsConcurrentlyUpToLimitAndReportsEachAsItFinishes(t *test
 					break
 				}
 			}
-			// Later calls finish first, so completion order differs from call order.
-			time.Sleep(time.Duration(6-call) * 10 * time.Millisecond)
+			if call < 3 {
+				waveStarted.Done()
+				<-release[call]
+			}
 			active.Add(-1)
 			return call * 10, nil
 		},
@@ -38,6 +56,9 @@ func TestRunToolBatchRunsConcurrentlyUpToLimitAndReportsEachAsItFinishes(t *test
 			mu.Lock()
 			finished = append(finished, call)
 			mu.Unlock()
+			if call < 3 {
+				settled <- call
+			}
 			return nil
 		}, nil)
 	if err != nil {
@@ -61,7 +82,6 @@ func TestRunToolBatchLimitOnePreservesSequentialOrder(t *testing.T) {
 	err := runToolBatch([]string{"a", "b", "c"}, 1,
 		func(call string) (string, error) {
 			order = append(order, "start "+call)
-			time.Sleep(5 * time.Millisecond)
 			order = append(order, "end "+call)
 			return call, nil
 		},
@@ -82,7 +102,6 @@ func TestRunToolBatchTreatsALimitBelowOneAsSequential(t *testing.T) {
 			if now := active.Add(1); now > peak.Load() {
 				peak.Store(now)
 			}
-			time.Sleep(5 * time.Millisecond)
 			active.Add(-1)
 			return 0, nil
 		},
