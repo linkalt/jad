@@ -183,6 +183,11 @@ func PersistInputWithImages(store *transcript.TurnStore, input json.RawMessage, 
 		return nil, err
 	}
 	for index, item := range inputItems {
+		if err := transcript.ValidateInputItem(index, item); err != nil {
+			return nil, err
+		}
+	}
+	for index, item := range inputItems {
 		inputItems[index], _ = images.Externalize(item)
 	}
 	history := store.NewInputHistory()

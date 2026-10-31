@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"jad/backend-go/internal/imagestore"
 	"jad/backend-go/internal/transcript"
 )
 
@@ -76,5 +77,24 @@ func TestPersistInputReportsAMessageForAnImageOnlyInput(t *testing.T) {
 	}
 	if persisted.SessionTurn != 1 {
 		t.Fatalf("session turn = %d, want 1", persisted.SessionTurn)
+	}
+}
+
+// A rejected batch must not leave its images in the image store: the store has a
+// per-session quota, so a refused request would otherwise spend it.
+func TestPersistInputWithImagesWritesNoImageForARejectedBatch(t *testing.T) {
+	store, _, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	dir := filepath.Join(t.TempDir(), "images")
+	images := imagestore.New(imagestore.Options{Dir: dir, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20})
+	input := json.RawMessage(`[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="}]},{"type":"response.completed"}]`)
+	if _, err := PersistInputWithImages(store, input, nil, images); err == nil {
+		t.Fatal("PersistInputWithImages succeeded, want a validation error for the response event")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("image store holds %d file(s) after a rejected batch, want 0", len(entries))
 	}
 }

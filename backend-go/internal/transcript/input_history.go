@@ -54,19 +54,10 @@ func (s *TurnStore) AppendInputItemsAt(items ...[]byte) (InputAppendResult, erro
 
 	canonicalItems := make([][]byte, len(items))
 	for index, item := range items {
-		fields, err := objectFields(item)
-		if err != nil {
-			return InputAppendResult{}, fmt.Errorf("input item %d must be an object", index)
+		if err := ValidateInputItem(index, item); err != nil {
+			return InputAppendResult{}, err
 		}
-		if err := validateInputFields(fields); err != nil {
-			return InputAppendResult{}, fmt.Errorf("input item %d: %w", index, err)
-		}
-		if _, reserved := fieldValue(fields, SessionInputBatchIDField); reserved {
-			return InputAppendResult{}, errors.New("input items may not use reserved session batch metadata fields")
-		}
-		if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
-			return InputAppendResult{}, errors.New("input items may not use reserved session batch metadata fields")
-		}
+		var err error
 		canonicalItems[index], err = canonicalJSON(item)
 		if err != nil {
 			return InputAppendResult{}, fmt.Errorf("serialize input item %d: %w", index, err)
@@ -218,6 +209,26 @@ func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compact
 		return nil, err
 	}
 	return items, nil
+}
+
+// ValidateInputItem reports whether input item index may be appended. It is the check that
+// AppendInputItemsAt runs before writing anything, exported so that a caller can run it
+// before a side effect (an image written for the item) that a refusal must not leave behind.
+func ValidateInputItem(index int, item []byte) error {
+	fields, err := objectFields(item)
+	if err != nil {
+		return fmt.Errorf("input item %d must be an object", index)
+	}
+	if err := validateInputFields(fields); err != nil {
+		return fmt.Errorf("input item %d: %w", index, err)
+	}
+	if _, reserved := fieldValue(fields, SessionInputBatchIDField); reserved {
+		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
+	}
+	if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
+		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
+	}
+	return nil
 }
 
 func validateInputFields(fields []jsonField) error {
