@@ -46,6 +46,17 @@ func TestCancelOwnerStillQueuesTheStopSignal(t *testing.T) {
 	}
 }
 
+func TestCancelOwnerAfterResetKeepsTheResetsBornReadEnd(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "live1")
+	f.m.ResetOwner("s1", "session_reset")
+	f.m.CancelOwner("s1", "user_stop")
+	f.finish(t, "live1", Result{State: StateStopped, Reason: "session_reset"})
+	if res, _ := f.m.Wait(background, "s1", nil, 0); len(res.Signals) != 0 {
+		t.Fatalf("a later CancelOwner made the reset's end unread: %+v", res.Signals)
+	}
+}
+
 func TestDeleteOwnersWithPrefixStopsLiveRemovesFinishedAndSparesOthers(t *testing.T) {
 	f := newFixture(t, nil)
 	f.start(t, "sess|a", "fin")

@@ -493,7 +493,11 @@ func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) 
 	for _, r := range m.rows {
 		if !r.state.Terminal() && !r.finishing && match(r) {
 			if d := m.drivers[r.kind]; d != nil {
-				r.after = after
+				// The strongest end wins (endKeep < endRead < endRemove): a later cancel must
+				// not undo a reset's born-read end or a delete's removal.
+				if after > r.after {
+					r.after = after
+				}
 				targets = append(targets, target{d, r.id})
 			}
 		}
