@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"jad/backend-go/internal/browser"
 	"jad/backend-go/internal/claudeauth"
 )
 
@@ -134,7 +135,7 @@ func runLogin(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 	options := claudeauth.LoginOptions{Force: *force, CopyCode: *copyCode, In: stdin, Out: stderr, Now: now}
 	if s.config.OpenBrowser && !*noBrowser {
-		options.OpenBrowser = openBrowser
+		options.OpenBrowser = browser.Open
 	}
 	if err := claudeauth.Login(ctx, s.store, s.client, options); err != nil {
 		fmt.Fprintf(stderr, "claude-auth login: %v\n", err)

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"jad/backend-go/internal/browser"
 	"jad/backend-go/internal/openaiauth"
 )
 
@@ -130,7 +131,7 @@ func runLogin(ctx context.Context, args []string, stdout, stderr io.Writer, now 
 	}
 	options := openaiauth.LoginOptions{Force: *force, Out: stderr, Now: now}
 	if s.config.OpenBrowser && !*noBrowser {
-		options.OpenBrowser = openBrowser
+		options.OpenBrowser = browser.Open
 	}
 	if err := openaiauth.Login(ctx, s.store, s.client, options); err != nil {
 		fmt.Fprintf(stderr, "openai-auth login: %v\n", err)

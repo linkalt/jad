@@ -1,4 +1,5 @@
-package main
+// Package browser asks the desktop to open a URL, for the commands that sign in through a browser.
+package browser
 
 import (
 	"errors"
@@ -6,9 +7,9 @@ import (
 	"runtime"
 )
 
-// openBrowser asks the desktop to open url. The URL goes to the program as one argument, never
+// Open asks the desktop to open url. The URL goes to the program as one argument, never
 // through a shell. The caller prints the URL as well, so a failure here is not fatal.
-func openBrowser(url string) error {
+func Open(url string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
