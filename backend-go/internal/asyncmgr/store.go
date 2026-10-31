@@ -65,13 +65,19 @@ func writeFileAtomic(path string, data []byte) error {
 }
 
 func (m *Manager) writeRecord(rec Record) error {
+	return m.writeRecordUnless(rec, nil)
+}
+
+// writeRecordUnless writes rec under ioMu unless skip reports true. skip runs with ioMu
+// held, so it may take mu (the lock order is ioMu, then mu) but must not write a record.
+func (m *Manager) writeRecordUnless(rec Record, skip func() bool) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
 	m.ioMu.Lock()
 	defer m.ioMu.Unlock()
-	if m.ioClosed {
+	if m.ioClosed || (skip != nil && skip()) {
 		return nil
 	}
 	return writeFileAtomic(m.recordPath(rec.ID), append(data, '\n'))

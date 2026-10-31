@@ -77,6 +77,9 @@ type Manager struct {
 	// ioClosed (guarded by ioMu) is set by Close once the final index is written; later
 	// record, removal and index writes are skipped so nothing touches the folder after Close.
 	ioClosed bool
+	// beforeRunningWrite is a test-only hook. It runs in MarkRunning after the state check and
+	// before the running record is written, with no lock held. Nil in production.
+	beforeRunningWrite func(id string)
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool
@@ -356,7 +359,17 @@ func (m *Manager) MarkRunning(id string) {
 	}
 	rec := *r.rec
 	m.mu.Unlock()
-	_ = m.writeRecord(rec)
+	if m.beforeRunningWrite != nil {
+		m.beforeRunningWrite(id)
+	}
+	// Complete may have run in the gap above and written a terminal record; the write is
+	// skipped then. skip runs under ioMu, so Complete's write cannot land between the re-check and this write.
+	_ = m.writeRecordUnless(rec, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		r := m.rows[id]
+		return r == nil || r.state.Terminal() || r.finishing
+	})
 }
 
 // Complete reports the end of a handle. The first call per handle wins and returns true;

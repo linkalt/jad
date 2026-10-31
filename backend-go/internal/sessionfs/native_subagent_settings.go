@@ -180,8 +180,9 @@ type NativeSubagentAgent struct {
 	// Dir is the agent's folder when it was loaded from agents_dir; empty for an
 	// agent defined inline in setting.json.
 	Dir string
-	// Tools names the read-only native tools the child may use. HasTools is false
-	// when the key is absent, which means every read-only native tool.
+	// Tools names the native tools the child may use: read-only ones, and the change tools
+	// in SubagentChangeTools when the session enables them. HasTools is false when the key
+	// is absent, which means every read-only native tool.
 	Tools    []string
 	HasTools bool
 	// Toolset lists the "<category>/<name>" of the toolset files this agent draws its tools

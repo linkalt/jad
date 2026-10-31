@@ -394,6 +394,25 @@ func TestQueuedHandleCountsAsLiveUntilItEnds(t *testing.T) {
 	}
 }
 
+func TestMarkRunningNeverOverwritesATerminalRecord(t *testing.T) {
+	f := newFixture(t, nil)
+	if err := f.m.Register(Registration{ID: "q", Owner: "s1", Kind: "fake", Queued: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.m.beforeRunningWrite = func(id string) {
+		f.finish(t, id, Result{})
+	}
+	f.m.MarkRunning("q")
+	f.m.beforeRunningWrite = nil
+	rec, err := f.m.readRecord("q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != StateDone {
+		t.Fatalf("record on disk = %s after MarkRunning raced Complete; want done", rec.State)
+	}
+}
+
 type detailDriver struct{ fakeDriver }
 
 func (d *detailDriver) Detail(id string, max int) string { return "live detail of " + id }
