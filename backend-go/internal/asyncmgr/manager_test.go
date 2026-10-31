@@ -137,6 +137,26 @@ func TestEntryFieldsAreCappedAndShaped(t *testing.T) {
 	}
 }
 
+func TestWaitTimeoutCancelledTakesNoSignal(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "a")
+	ctx, cancel := context.WithCancel(background)
+	defer cancel()
+	f.m.beforeWaitTimeout = func() {
+		f.finish(t, "a", Result{})
+		cancel()
+	}
+	res, err := f.m.Wait(ctx, "s1", nil, 30*time.Millisecond)
+	f.m.beforeWaitTimeout = nil
+	if !errors.Is(err, context.Canceled) || len(res.Signals) != 0 {
+		t.Fatalf("cancelled timeout Wait = %+v, %v; want context.Canceled and no signals", res, err)
+	}
+	res, err = f.m.Wait(background, "s1", nil, 0)
+	if err != nil || len(res.Signals) != 1 || res.Signals[0].ID != "a" {
+		t.Fatalf("second Wait = %+v, %v; want the signal for a still unread", res, err)
+	}
+}
+
 func TestWaitNothingPendingReturnsAtOnce(t *testing.T) {
 	f := newFixture(t, nil)
 	start := time.Now()

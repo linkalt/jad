@@ -80,6 +80,10 @@ type Manager struct {
 	// beforeRunningWrite is a test-only hook. It runs in MarkRunning after the state check and
 	// before the running record is written, with no lock held. Nil in production.
 	beforeRunningWrite func(id string)
+	// beforeWaitTimeout is a test-only hook. It runs in Wait on the timeout branch, after the
+	// timer fires and before the context and the ready signals are checked, with no lock held.
+	// Nil in production.
+	beforeWaitTimeout func()
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool

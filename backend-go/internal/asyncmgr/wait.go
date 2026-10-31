@@ -77,6 +77,9 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 		select {
 		case <-changed:
 		case <-timeout:
+			if m.beforeWaitTimeout != nil {
+				m.beforeWaitTimeout()
+			}
 			m.mu.Lock()
 			if err := ctx.Err(); err != nil {
 				m.mu.Unlock()
