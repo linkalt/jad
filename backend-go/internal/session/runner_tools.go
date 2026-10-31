@@ -270,7 +270,7 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 			}
 			return nil
 		},
-		nil,
+		func() bool { return ctx.Err() != nil },
 	)
 
 	round.Completed = make([]json.RawMessage, 0, len(byCallID))
