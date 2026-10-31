@@ -571,6 +571,22 @@ func TestCloseDuringStartStopsTheRunThatWasStarting(t *testing.T) {
 	}
 }
 
+// A run ID that cannot be random is refused, not minted from zero bytes, so no two runs can share an ID.
+func TestRunIDIsRefusedWhenTheRandomSourceFails(t *testing.T) {
+	f := newFixture(t, defaultTable(t), func(opts *Options) {
+		opts.Random = func([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
+	})
+	status, body := f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-entropy-0001"))
+	if status != http.StatusServiceUnavailable || body["code"] != "unavailable" {
+		t.Fatalf("run with no entropy: status %d body %v, want 503 unavailable", status, body)
+	}
+	f.server.mu.Lock()
+	defer f.server.mu.Unlock()
+	if len(f.server.runs) != 0 {
+		t.Fatalf("a run was registered without an ID: %v", f.server.runs)
+	}
+}
+
 func TestCloseStopsLiveRuns(t *testing.T) {
 	f := newFixture(t, defaultTable(t), nil)
 	f.do("POST", Prefix+"/messages", secretA, message("main", "review/a", "req-close-0001"))

@@ -1232,7 +1232,7 @@ Audit: `audit_findings/p3_merged.md` (P3-11).
 - **M16 open, design.** Checkpoint `begin`/`Finish`/`Restore` hold the staging mutex across git subprocesses. The audit's fix is a per-capture index file, which is a concurrency redesign, not a smallest fix.
 - **M17 refuted as a defect (bounded).** The `locks` and `repoSizes` maps have one entry per staging directory. The key is `config.StagingDir` (server configuration), never a session or request value, so the set is fixed for a process.
 - **M20 refuted.** The `evictFinishedLocked` precedence picks the token's own oldest finished run first, then the oldest overall; the case analysis gives the intended order. Readability only.
-- **M30 open, needs a status decision.** `begin` ignores the `rand.Read` error, so a failed read mints `rr_0000000000000000`. The audit's fix refuses the start. Reusing the existing `unavailable` refusal would answer 503 for a case that previously could not fail, an HTTP status decision.
+- **M30 fixed (decider option a).** `begin` ignores the `rand.Read` error, so a failed read mints `rr_0000000000000000`. The fix refuses the start with the existing `unavailable` refusal (503), through a new test-only seam `Options.Random` (default `crypto/rand.Read`). Test: `TestRunIDIsRefusedWhenTheRandomSourceFails` (at HEAD the run started with `rr_0000000000000000` and answered 202; the reverted line is CAUGHT).
 
 ## Wait timeout checks the context before it takes signals (M26)
 

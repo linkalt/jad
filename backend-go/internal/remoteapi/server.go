@@ -116,6 +116,8 @@ type Options struct {
 	Backend Backend
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// Random fills the bytes of a run ID; nil means crypto/rand.
+	Random func([]byte) (int, error)
 	// MaxHops is the server's hop limit; a token's own max_hops can only lower it.
 	MaxHops int
 	// MaxRuns bounds the runs held (live and finished); MaxRunsPerToken bounds the live runs of one token.
@@ -159,6 +161,9 @@ func NewServer(opts Options) (*Server, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Random == nil {
+		opts.Random = rand.Read
 	}
 	if opts.MaxHops <= 0 {
 		opts.MaxHops = DefaultMaxHops
@@ -429,7 +434,10 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, finge
 		return nil, beginStatus{err: &Refusal{Code: "too_many_runs", Message: "too many remote runs are going; wait for some to end"}}
 	}
 	random := make([]byte, 8)
-	_, _ = rand.Read(random)
+	if _, err := s.opts.Random(random); err != nil {
+		s.mu.Unlock()
+		return nil, beginStatus{err: &Refusal{Code: "unavailable", Message: "the server could not create a run ID; try again later"}}
+	}
 	entry := &runEntry{id: "rr_" + hex.EncodeToString(random), token: token.ID, requestKey: key, kind: kind, fingerprint: fingerprint, started: s.opts.Now(), ready: make(chan struct{})}
 	s.runs[entry.id] = entry
 	s.requests[key] = entry.id
