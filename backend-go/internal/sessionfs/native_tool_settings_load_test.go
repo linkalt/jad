@@ -49,3 +49,12 @@ func TestLoadSessionConfigRejectsTopLevelToolStorage(t *testing.T) {
 		t.Fatalf("LoadSessionConfig() error = %v, want it to refuse paths in settings", err)
 	}
 }
+
+func TestLoadSessionConfigSuggestsTheSettingKeyItMeant(t *testing.T) {
+	// A misspelt key in settings is refused with the closest setting key, as tool keys are.
+	_, err := loadLayoutConfig(t, layouttest.Spec{Settings: map[string]any{"max_tool_round": 3}})
+	const want = "settings may not carry max_tool_round; it has its own file or field in the catalog layout; did you mean max_tool_rounds?"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("LoadSessionConfig() error = %v, want it to contain %q", err, want)
+	}
+}

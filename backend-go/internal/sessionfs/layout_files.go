@@ -208,5 +208,13 @@ func checkLayoutSettings(settings map[string]json.RawMessage, where string) erro
 		return nil
 	}
 	sort.Strings(unknown)
-	return configError("%s: settings may not carry %s; it has its own file or field in the catalog layout", where, strings.Join(unknown, ", "))
+	candidates := make([]string, 0, len(layoutSettingKeys))
+	for key := range layoutSettingKeys {
+		candidates = append(candidates, key)
+	}
+	suggestion := ""
+	if closest, distance := closestToolKey(unknown[0], candidates); closest != "" && distance <= 2 {
+		suggestion = "; did you mean " + closest + "?"
+	}
+	return configError("%s: settings may not carry %s; it has its own file or field in the catalog layout%s", where, strings.Join(unknown, ", "), suggestion)
 }
