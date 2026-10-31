@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestToolLimitsRefuseExponentNotation(t *testing.T) {
+	for _, raw := range []string{`1e3`, `1E3`, `1e0`, `2.5e1`} {
+		if _, err := normalizeMaxToolRounds(json.RawMessage(raw), "/session/setting.json"); err == nil {
+			t.Errorf("normalizeMaxToolRounds(%s) succeeded, want refused", raw)
+		}
+		if _, err := normalizeMaxRunTokens(json.RawMessage(raw), "/session/setting.json"); err == nil {
+			t.Errorf("normalizeMaxRunTokens(%s) succeeded, want refused", raw)
+		}
+		if _, err := normalizeMaxParallelToolCalls(json.RawMessage(raw), "/session/setting.json"); err == nil {
+			t.Errorf("normalizeMaxParallelToolCalls(%s) succeeded, want refused", raw)
+		}
+	}
+}
+
 func TestNormalizeNativeReadSettingsDefaultsAndOverrides(t *testing.T) {
 	global := t.TempDir()
 	defaults, err := normalizeNativeReadSettings(map[string]json.RawMessage{

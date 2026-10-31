@@ -39,11 +39,21 @@ func normalizeMaxToolRounds(raw json.RawMessage, path string) (int64, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return defaultMaxToolRounds, nil
 	}
-	value, ok := configSafeInteger(raw)
+	value, ok := plainToolInteger(raw)
 	if !ok || value < 0 || value > maxConfiguredToolRounds {
 		return 0, configError("%s: max_tool_rounds must be a safe integer between 0 and %d", path, maxConfiguredToolRounds)
 	}
 	return value, nil
+}
+
+// plainToolInteger reads a tool limit written as a plain integer. It refuses exponent
+// notation such as 1e3, which configSafeInteger accepts, so a tool limit is written the
+// same way as the image store limits.
+func plainToolInteger(raw json.RawMessage) (int64, bool) {
+	if strings.ContainsAny(string(raw), "eE") {
+		return 0, false
+	}
+	return configSafeInteger(raw)
 }
 
 // maxConfiguredRunTokens mirrors the TypeScript MAX_CONFIGURED_RUN_TOKENS.
@@ -55,7 +65,7 @@ func normalizeMaxRunTokens(raw json.RawMessage, path string) (int64, error) {
 	if len(raw) == 0 {
 		return 0, nil
 	}
-	value, ok := configSafeInteger(raw)
+	value, ok := plainToolInteger(raw)
 	if !ok || value < 1 || value > maxConfiguredRunTokens {
 		return 0, configError("%s: max_run_tokens must be a safe integer between 1 and %d", path, maxConfiguredRunTokens)
 	}
@@ -68,7 +78,7 @@ func normalizeMaxParallelToolCalls(raw json.RawMessage, path string) (int64, err
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return defaultMaxParallelToolCalls, nil
 	}
-	value, ok := configSafeInteger(raw)
+	value, ok := plainToolInteger(raw)
 	if !ok || value < 1 || value > maxConfiguredParallelToolCalls {
 		return 0, configError("%s: max_parallel_tool_calls must be a safe integer between 1 and %d", path, maxConfiguredParallelToolCalls)
 	}
