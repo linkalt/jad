@@ -29,6 +29,24 @@ func readConfigTextFileWithin(t *testing.T, path string) ([]byte, error) {
 	}
 }
 
+func TestReadConfigTextFileReadsASymlinkedConfigFile(t *testing.T) {
+	// Symlinked config files are supported (P2B1-07): the read follows a final symlink to a
+	// regular file, so a config kept outside the folder still loads. Characterisation test.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "shared.md")
+	if err := os.WriteFile(target, []byte("shared prompt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "prompt.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got, err := readConfigTextFileWithin(t, link)
+	if err != nil || string(got) != "shared prompt" {
+		t.Fatalf("readConfigTextFile(symlink) = %q, %v; want the target text", got, err)
+	}
+}
+
 func TestReadConfigTextFileRefusesWhatIsNotABoundedRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "pipe.env")
