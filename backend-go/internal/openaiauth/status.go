@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"jad/backend-go/internal/fserr"
 )
 
 // TokenStatus describes one JWT in the file, from its claims only.
@@ -65,7 +67,7 @@ func Inspect(store *Store, margin time.Duration, now time.Time) *Status {
 		if errors.Is(err, fs.ErrNotExist) {
 			report.Problem = "file not found; run the login command"
 		} else {
-			report.Problem = "cannot be read: " + errors.Unwrap(err).Error()
+			report.Problem = "cannot be read: " + fserr.UnwrapPathError(err).Error()
 		}
 		return report
 	}

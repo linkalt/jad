@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"jad/backend-go/internal/fserr"
 )
 
 // Status is a report on the credential file. It holds no token text.
@@ -57,7 +59,7 @@ func Inspect(store *Store, margin time.Duration, now time.Time) *Status {
 		if errors.Is(err, fs.ErrNotExist) {
 			report.Problem = "file not found; run the login command"
 		} else {
-			report.Problem = "cannot be read: " + errors.Unwrap(err).Error()
+			report.Problem = "cannot be read: " + fserr.UnwrapPathError(err).Error()
 		}
 		return report
 	}

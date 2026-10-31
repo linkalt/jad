@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"jad/backend-go/internal/fserr"
 	"jad/backend-go/internal/sessionlock"
 )
 
@@ -144,7 +145,7 @@ func (s *Store) Read() (*File, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("%s: %w", s.Path, ErrNoFile)
 		}
-		return nil, fmt.Errorf("read %s: %w", s.Path, errors.Unwrap(err))
+		return nil, fmt.Errorf("read %s: %w", s.Path, fserr.UnwrapPathError(err))
 	}
 	file, err := parseFile(data)
 	if err != nil {
@@ -160,7 +161,7 @@ func (s *Store) Read() (*File, error) {
 func (s *Store) Update(ctx context.Context, change func(current *File) (*File, error)) error {
 	// The lock helper would create a missing directory with mode 0755; make it private first.
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(s.Path), errors.Unwrap(err))
+		return fmt.Errorf("create %s: %w", filepath.Dir(s.Path), fserr.UnwrapPathError(err))
 	}
 	lockPath, err := sessionlock.PathFor(s.Path)
 	if err != nil {
@@ -193,7 +194,7 @@ func (s *Store) Update(ctx context.Context, change func(current *File) (*File, e
 	if current != nil && s.KeepBackup {
 		previous, err := os.ReadFile(s.Path)
 		if err != nil {
-			return fmt.Errorf("read %s for the backup: %w", s.Path, errors.Unwrap(err))
+			return fmt.Errorf("read %s for the backup: %w", s.Path, fserr.UnwrapPathError(err))
 		}
 		if err := writeAtomic(s.BackupPath(), previous); err != nil {
 			return fmt.Errorf("write backup %s: %w", s.BackupPath(), err)

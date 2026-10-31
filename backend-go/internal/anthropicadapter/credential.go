@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"jad/backend-go/internal/fserr"
 )
 
 // credentialFile is the part of the claude-auth file that is read. Unknown keys are ignored
@@ -48,14 +50,14 @@ func loadCredential(path string, margin time.Duration, now time.Time) (string, *
 		if errors.Is(err, fs.ErrNotExist) {
 			return fail("file not found; sign in with claude-auth")
 		}
-		return fail("cannot be read: " + errors.Unwrap(err).Error())
+		return fail("cannot be read: " + fserr.UnwrapPathError(err).Error())
 	}
 	if !info.Mode().IsRegular() {
 		return fail("is not a regular file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fail("cannot be read: " + errors.Unwrap(err).Error())
+		return fail("cannot be read: " + fserr.UnwrapPathError(err).Error())
 	}
 	var file credentialFile
 	if err := json.Unmarshal(data, &file); err != nil {

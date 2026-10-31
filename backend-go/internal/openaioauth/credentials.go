@@ -13,6 +13,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"jad/backend-go/internal/fserr"
 )
 
 // Credential is what a request needs. Its text forms never show the token.
@@ -79,14 +81,14 @@ func (s *Source) Load() (Credential, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return fail("file not found; sign in with the auth tool")
 		}
-		return fail("cannot be read: " + errors.Unwrap(err).Error())
+		return fail("cannot be read: " + fserr.UnwrapPathError(err).Error())
 	}
 	if !info.Mode().IsRegular() {
 		return fail("is not a regular file")
 	}
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
-		return fail("cannot be read: " + errors.Unwrap(err).Error())
+		return fail("cannot be read: " + fserr.UnwrapPathError(err).Error())
 	}
 	var file authFile
 	if err := json.Unmarshal(data, &file); err != nil {
