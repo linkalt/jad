@@ -353,6 +353,16 @@ type mcpFixture struct {
 	image []byte
 }
 
+// subagentSampleTool returns the absolute path of one sample native tool definition.
+func subagentSampleTool(t *testing.T, file string) string {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func buildSubagentFixture(t *testing.T, agentSetting map[string]any, splitChild bool, files map[string]string) subagentFixture {
 	return buildSubagentFixtureWithMCP(t, agentSetting, splitChild, files, nil)
 }
@@ -364,13 +374,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	server := httptest.NewServer(provider.handler(t))
 	t.Cleanup(server.Close)
 
-	sampleTool := func(file string) string {
-		path, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", file))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	sampleTool := func(file string) string { return subagentSampleTool(t, file) }
 	definitions := []string{sampleTool("read.json"), sampleTool("subagent.json"), sampleTool("async.json")}
 	writeSettings, withWrite := agentSetting["__write"].(map[string]any)
 	if withWrite {
