@@ -134,6 +134,16 @@ func TestRouteTemplate(t *testing.T) {
 		"/":                                            "unmatched",
 		"/api/library/a/b/c":                           "unmatched",
 		"/api/sessions/abc/messages/m1/extra/segments": "unmatched",
+		"/api/sessions/abc/messages/m1/images/0/0":     "/api/sessions/{session}/messages/{message}/images/{image}",
+		"/api/sessions/abc/images/i1":                  "/api/sessions/{session}/images/{image}",
+		"/api/sessions/abc/run/images/c1/i1":           "/api/sessions/{session}/run/images/{call}/{image}",
+		"/api/sessions/abc/checkpoints":                "/api/sessions/{session}/checkpoints",
+		"/api/sessions/abc/checkpoints/c1/restore":     "/api/sessions/{session}/checkpoints/{checkpoint}/restore",
+		"/api/sessions/abc/run/interaction":            "/api/sessions/{session}/run/interaction",
+		"/api/catalog/models":                          "/api/catalog/{kind}",
+		"/api/catalog/models/openai/large":             "/api/catalog/{kind}/{id}",
+		"/api/catalog/profiles/dev/solo":               "/api/catalog/{kind}/{id}",
+		"/api/catalog/models/openai":                   "unmatched",
 	}
 	for path, want := range cases {
 		if got := routeTemplate(path); got != want {

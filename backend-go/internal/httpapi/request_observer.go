@@ -127,7 +127,7 @@ var knownSessionRoutes = map[string]bool{
 	"tools": true, "history": true, "files": true,
 	"model-default": true, "compact": true, "reset": true, "front-compact": true, "statecontext": true,
 	"run": true, "run/interaction": true, "run/interaction/extend": true,
-	"run/stream": true, "run/stop": true,
+	"run/stream": true, "run/stop": true, "checkpoints": true,
 }
 
 // routeTemplate maps a request path to a route with identifiers replaced by
@@ -150,6 +150,13 @@ func routeTemplate(escapedPath string) string {
 		return "/api/sessions"
 	case len(segments) == 3 && segments[0] == "api" && segments[1] == "sessions":
 		return "/api/sessions/{session}"
+	case len(segments) >= 2 && segments[0] == "api" && segments[1] == "catalog":
+		switch len(segments) {
+		case 3:
+			return "/api/catalog/{kind}"
+		case 5:
+			return "/api/catalog/{kind}/{id}"
+		}
 	case len(segments) >= 4 && segments[0] == "api" && segments[1] == "sessions":
 		suffix := strings.Join(segments[3:], "/")
 		if knownSessionRoutes[suffix] {
@@ -157,6 +164,18 @@ func routeTemplate(escapedPath string) string {
 		}
 		if len(segments) == 5 && segments[3] == "messages" {
 			return "/api/sessions/{session}/messages/{message}"
+		}
+		if len(segments) == 5 && segments[3] == "images" {
+			return "/api/sessions/{session}/images/{image}"
+		}
+		if len(segments) == 8 && segments[3] == "messages" && segments[5] == "images" {
+			return "/api/sessions/{session}/messages/{message}/images/{image}"
+		}
+		if len(segments) == 7 && segments[3] == "run" && segments[4] == "images" {
+			return "/api/sessions/{session}/run/images/{call}/{image}"
+		}
+		if len(segments) == 6 && segments[3] == "checkpoints" && segments[5] == "restore" {
+			return "/api/sessions/{session}/checkpoints/{checkpoint}/restore"
 		}
 	}
 	return "unmatched"
