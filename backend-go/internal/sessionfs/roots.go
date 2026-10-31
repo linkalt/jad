@@ -201,8 +201,8 @@ func Defaults() ServerSettings {
 	}
 }
 
-// Load reads the selected roots and server settings. JAD_SESSIONS_DIR takes
-// precedence over root settings, matching the TypeScript backend.
+// Load reads the selected roots and server settings. JAD_SESSIONS_DIR is refused, not read:
+// the root setting is the only source of roots.
 func Load(options LoadOptions) (Config, error) {
 	cwd := options.WorkingDir
 	if cwd == "" {

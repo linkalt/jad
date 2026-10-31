@@ -139,7 +139,7 @@ func findLibrarySettingPath(workingDir string, options Options, environment map[
 	if configured != "" {
 		return resolveLibraryPath(workingDir, configured), nil
 	}
-	if strings.TrimSpace(options.SessionsDir) != "" || strings.TrimSpace(environment["JAD_SESSIONS_DIR"]) != "" {
+	if strings.TrimSpace(options.SessionsDir) != "" {
 		return "", nil
 	}
 	return rootsetting.Find(workingDir, environment["HOME"])
