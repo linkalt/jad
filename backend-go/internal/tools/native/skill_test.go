@@ -311,6 +311,20 @@ func TestSkillToolDefaultsToTheEmbeddedDirectoryWithoutARootSetting(t *testing.T
 	}
 }
 
+func TestSkillToolSkipsSkillsOverTheAssetSizeLimit(t *testing.T) {
+	f := newSkillFixture(t, sessionfs.NativeSkillSettings{MaxBytes: 131072})
+	addSkill(t, f.first, "small", "Fits.", "Body.")
+	addSkill(t, f.first, "big", "Too large.", strings.Repeat("x", 1<<20))
+	output := f.run(t, `{}`)
+	if skillFields(output)["skills"] != "1" || strings.Contains(output, "big") {
+		t.Fatalf("list does not hide the oversized skill: %s", output)
+	}
+	output = f.run(t, `{"name":"big"}`)
+	if skillStatus(t, output) != "not_found" {
+		t.Fatalf("Read of the oversized skill = %s, want not_found", output)
+	}
+}
+
 func TestSkillToolSchemaTakesOneOptionalNameOnly(t *testing.T) {
 	f := newSkillFixture(t, sessionfs.NativeSkillSettings{MaxBytes: 131072})
 	var schema struct {

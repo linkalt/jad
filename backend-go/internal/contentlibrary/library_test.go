@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -151,6 +152,59 @@ func TestLibraryRejectsInvalidSettingsAndMissingExplicitSetting(t *testing.T) {
 	var configErr *ConfigError
 	if !errors.As(err, &configErr) {
 		t.Fatalf("missing explicit setting error = %v, want ConfigError", err)
+	}
+}
+
+func TestLibrarySkipsAssetsOverTheSizeLimit(t *testing.T) {
+	root := t.TempDir()
+	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["prompts"]}}`)
+	writeLibraryTestFile(t, filepath.Join(root, "prompts/small.md"), "# Small\n\nFits.\n")
+	oversized := "# Big\n\n" + strings.Repeat("x", 1<<20)
+	writeLibraryTestFile(t, filepath.Join(root, "prompts/big.md"), oversized)
+
+	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
+	catalog, err := library.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(catalog.Prompts), 1; got != want || catalog.Prompts[0].Name != "Small" {
+		t.Fatalf("prompt count = %d (names %q), want only Small", len(catalog.Prompts), catalog.Prompts[0].Name)
+	}
+	bigID := assetID(Prompt, filepath.Join(root, "prompts/big.md"))
+	if _, found, err := library.Read(context.Background(), Prompt, bigID); err != nil || found {
+		t.Fatalf("Read(oversized) = found %v, error %v; want missing", found, err)
+	}
+}
+
+func TestLibraryMaxAssetBytesDefaultsAndBounds(t *testing.T) {
+	root := t.TempDir()
+	limit, err := AssetByteLimit(root)
+	if err != nil || limit != 1<<20 {
+		t.Fatalf("default limit = %d, error %v; want %d", limit, err, 1<<20)
+	}
+	for _, test := range []struct {
+		name    string
+		setting string
+		ok      bool
+	}{
+		{name: "minimum accepted", setting: `{"libraries":{"max_asset_bytes":1024}}`, ok: true},
+		{name: "maximum accepted", setting: `{"libraries":{"max_asset_bytes":8388608}}`, ok: true},
+		{name: "below minimum rejected", setting: `{"libraries":{"max_asset_bytes":1023}}`},
+		{name: "above maximum rejected", setting: `{"libraries":{"max_asset_bytes":8388609}}`},
+		{name: "non-integer rejected", setting: `{"libraries":{"max_asset_bytes":"big"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeLibraryTestFile(t, filepath.Join(root, "setting.json"), test.setting)
+			_, err := AssetByteLimit(root)
+			var configErr *ConfigError
+			if test.ok && err != nil {
+				t.Fatalf("AssetByteLimit() error = %v, want accepted", err)
+			}
+			if !test.ok && !errors.As(err, &configErr) {
+				t.Fatalf("AssetByteLimit() error = %v, want ConfigError", err)
+			}
+		})
 	}
 }
 

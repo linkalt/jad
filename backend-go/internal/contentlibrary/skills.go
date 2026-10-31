@@ -62,7 +62,7 @@ func SkillDirectories(globalJadRoot string) ([]string, error) {
 // ListSkills returns the skills visible across directories, in directory order.
 // When two directories define the same name the earlier one wins, so a project
 // can override a shared skill. The result is sorted by name.
-func ListSkills(ctx context.Context, directories []string) ([]Asset, error) {
+func ListSkills(ctx context.Context, directories []string, maxBytes int64) ([]Asset, error) {
 	if ctx == nil {
 		return nil, errors.New("skill request context is required")
 	}
@@ -76,7 +76,7 @@ func ListSkills(ctx context.Context, directories []string) ([]Asset, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			asset, err := readAsset(Skill, file.root, file.path)
+			asset, err := readAsset(Skill, file.root, file.path, maxBytes)
 			if err != nil {
 				return nil, err
 			}
@@ -99,7 +99,7 @@ func ListSkills(ctx context.Context, directories []string) ([]Asset, error) {
 // ReadSkill returns one skill by name. A valid skill's folder name equals its
 // name, so the file is addressed directly instead of scanning every skill; the
 // name pattern rules out path separators and "..".
-func ReadSkill(ctx context.Context, directories []string, name string) (LoadedSkill, bool, error) {
+func ReadSkill(ctx context.Context, directories []string, name string, maxBytes int64) (LoadedSkill, bool, error) {
 	if ctx == nil {
 		return LoadedSkill{}, false, errors.New("skill request context is required")
 	}
@@ -111,7 +111,7 @@ func ReadSkill(ctx context.Context, directories []string, name string) (LoadedSk
 			return LoadedSkill{}, false, err
 		}
 		directory := filepath.Join(root, name)
-		asset, err := readAsset(Skill, root, filepath.Join(directory, "SKILL.md"))
+		asset, err := readAsset(Skill, root, filepath.Join(directory, "SKILL.md"), maxBytes)
 		if err != nil {
 			return LoadedSkill{}, false, err
 		}

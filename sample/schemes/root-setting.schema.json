@@ -299,6 +299,13 @@
             "type": "string"
           },
           "description": "Native tool definition files. Replaces the per-session tool_definition_paths."
+        },
+        "max_asset_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608,
+          "default": 1048576,
+          "description": "Largest prompt, template or skill file the library reads. A larger file is skipped."
         }
       },
       "additionalProperties": true

@@ -39,12 +39,20 @@ func (l rootSkillLibrary) Directories() ([]string, error) {
 	return contentlibrary.SkillDirectories(l.globalJadRoot)
 }
 
-func (rootSkillLibrary) List(ctx context.Context, directories []string) ([]contentlibrary.Asset, error) {
-	return contentlibrary.ListSkills(ctx, directories)
+func (l rootSkillLibrary) List(ctx context.Context, directories []string) ([]contentlibrary.Asset, error) {
+	maxBytes, err := contentlibrary.AssetByteLimit(l.globalJadRoot)
+	if err != nil {
+		return nil, err
+	}
+	return contentlibrary.ListSkills(ctx, directories, maxBytes)
 }
 
-func (rootSkillLibrary) Read(ctx context.Context, directories []string, name string) (contentlibrary.LoadedSkill, bool, error) {
-	return contentlibrary.ReadSkill(ctx, directories, name)
+func (l rootSkillLibrary) Read(ctx context.Context, directories []string, name string) (contentlibrary.LoadedSkill, bool, error) {
+	maxBytes, err := contentlibrary.AssetByteLimit(l.globalJadRoot)
+	if err != nil {
+		return contentlibrary.LoadedSkill{}, false, err
+	}
+	return contentlibrary.ReadSkill(ctx, directories, name, maxBytes)
 }
 
 // NewSkillTool creates the read-only bridge from the global root's skill

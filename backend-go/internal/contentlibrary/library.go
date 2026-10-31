@@ -88,7 +88,7 @@ func (l *Library) List(ctx context.Context) (Catalog, error) {
 		{kind: Template, dirs: directories.templates, dst: &catalog.Templates},
 		{kind: Skill, dirs: directories.skills, dst: &catalog.Skills},
 	} {
-		items, err := listKind(ctx, entry.kind, entry.dirs)
+		items, err := listKind(ctx, entry.kind, entry.dirs, directories.maxAssetBytes)
 		if err != nil {
 			return Catalog{}, err
 		}
@@ -120,7 +120,7 @@ func (l *Library) Read(ctx context.Context, kind Kind, id string) (Asset, bool, 
 		if assetID(kind, file.path) != id {
 			continue
 		}
-		asset, err := readAsset(kind, file.root, file.path)
+		asset, err := readAsset(kind, file.root, file.path, directories.maxAssetBytes)
 		if err != nil {
 			return Asset{}, false, err
 		}
@@ -158,7 +158,7 @@ type parsedMarkdown struct {
 	hasDesc     bool
 }
 
-func listKind(ctx context.Context, kind Kind, directories []string) ([]Summary, error) {
+func listKind(ctx context.Context, kind Kind, directories []string, maxBytes int64) ([]Summary, error) {
 	files, err := filesForKind(ctx, kind, directories)
 	if err != nil {
 		return nil, err
@@ -168,7 +168,7 @@ func listKind(ctx context.Context, kind Kind, directories []string) ([]Summary, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		asset, err := readAsset(kind, file.root, file.path)
+		asset, err := readAsset(kind, file.root, file.path, maxBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +299,7 @@ func skillFiles(ctx context.Context, root string) ([]string, error) {
 	return files, nil
 }
 
-func readAsset(kind Kind, root, path string) (*Asset, error) {
+func readAsset(kind Kind, root, path string, maxBytes int64) (*Asset, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if isSkippableFilesystemError(err) {
@@ -307,7 +307,7 @@ func readAsset(kind Kind, root, path string) (*Asset, error) {
 		}
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || info.Size() > maxBytes {
 		return nil, nil
 	}
 	contents, err := os.ReadFile(path)

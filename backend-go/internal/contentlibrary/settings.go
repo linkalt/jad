@@ -16,6 +16,14 @@ import (
 //go:embed library_defaults.json
 var embeddedDefaults []byte
 
+const (
+	// defaultMaxAssetBytes caps one prompt, template or skill file. A larger file is
+	// skipped, so it is never read into memory.
+	defaultMaxAssetBytes int64 = 1 << 20
+	minMaxAssetBytes     int64 = 1024
+	maxMaxAssetBytes     int64 = 8 << 20
+)
+
 // Options identify the global setting.json used by the TypeScript-compatible
 // root library. Values are captured at service construction; setting.json and
 // the library files themselves are re-read for each request.
@@ -34,9 +42,10 @@ type ConfigError struct {
 func (e *ConfigError) Error() string { return e.Message }
 
 type libraryDirectories struct {
-	prompts   []string
-	templates []string
-	skills    []string
+	prompts       []string
+	templates     []string
+	skills        []string
+	maxAssetBytes int64
 }
 
 type libraryDefaults struct {
@@ -115,7 +124,11 @@ func loadDirectories(options Options) (libraryDirectories, error) {
 	if err != nil {
 		return libraryDirectories{}, err
 	}
-	return libraryDirectories{prompts: prompts, templates: templates, skills: skills}, nil
+	maxAssetBytes, err := resolveMaxAssetBytes(configured, settingLabel)
+	if err != nil {
+		return libraryDirectories{}, err
+	}
+	return libraryDirectories{prompts: prompts, templates: templates, skills: skills, maxAssetBytes: maxAssetBytes}, nil
 }
 
 func findLibrarySettingPath(workingDir string, options Options, environment map[string]string) (string, error) {
@@ -182,6 +195,49 @@ func resolveLibraryDirectoryList(
 		resolved = append(resolved, path)
 	}
 	return resolved, nil
+}
+
+// resolveMaxAssetBytes reads libraries.max_asset_bytes, the largest file the library
+// reads. A missing key uses defaultMaxAssetBytes.
+func resolveMaxAssetBytes(configured map[string]json.RawMessage, settingPath string) (int64, error) {
+	raw, exists := configured["max_asset_bytes"]
+	if !exists || strings.TrimSpace(string(raw)) == "null" {
+		return defaultMaxAssetBytes, nil
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil || value < minMaxAssetBytes || value > maxMaxAssetBytes {
+		return 0, configError("%s: libraries.max_asset_bytes must be an integer between %d and %d", configLabel(settingPath), minMaxAssetBytes, maxMaxAssetBytes)
+	}
+	return value, nil
+}
+
+// AssetByteLimit reads libraries.max_asset_bytes from the global root's setting.json
+// for the skill tool, which does not go through loadDirectories. A root without a
+// setting.json uses the default.
+func AssetByteLimit(globalJadRoot string) (int64, error) {
+	root, err := filepath.Abs(globalJadRoot)
+	if err != nil {
+		return 0, fmt.Errorf("resolve global root: %w", err)
+	}
+	settingPath := filepath.Join(root, "setting.json")
+	info, err := os.Stat(settingPath)
+	switch {
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return 0, err
+	case err != nil || !info.Mode().IsRegular():
+		return defaultMaxAssetBytes, nil
+	}
+	setting, err := readLibrarySetting(settingPath)
+	if err != nil {
+		return 0, err
+	}
+	var configured map[string]json.RawMessage
+	if raw, exists := setting["libraries"]; exists {
+		if err := json.Unmarshal(raw, &configured); err != nil || configured == nil {
+			return 0, configError("%s: libraries must be an object", settingPath)
+		}
+	}
+	return resolveMaxAssetBytes(configured, settingPath)
 }
 
 func resolveLibraryPath(base, path string) string {
