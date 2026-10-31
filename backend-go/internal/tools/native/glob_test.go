@@ -422,3 +422,27 @@ func TestExecuteNativeGlobKillDeadlineIsTheSettingsOwn(t *testing.T) {
 		t.Fatalf("kill deadline 1500ms returned after %v, want at least 1.5s", long)
 	}
 }
+
+func TestExecuteNativeGlobSkipsHitsThroughSymlinkedDenyRule(t *testing.T) {
+	binary, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("ripgrep is not installed")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "secret"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGlobFile(t, filepath.Join(real, "secret", "hidden.ts"), "secret\n")
+	writeGlobFile(t, filepath.Join(real, "open.ts"), "open\n")
+	settings := globSettingsForTest(binary, true)
+	settings.Policy.Paths = []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(link, "secret")}}
+
+	out := executeGlobForTest(t, real, settings, map[string]any{"pattern": "*.ts"})
+	if !strings.Contains(out, "open.ts") || strings.Contains(out, "hidden.ts") {
+		t.Fatalf("glob listed a hit under a symlinked deny rule: %s", out)
+	}
+}

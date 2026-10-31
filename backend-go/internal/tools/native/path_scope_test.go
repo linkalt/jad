@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +166,95 @@ func TestPathScopeWorksWhenTheWorkspaceRootIsASymlink(t *testing.T) {
 	}
 	if pathExists(filepath.Join(real, "docs", "a.txt")) || pathExists(filepath.Join(real, "src", "secret", "a.txt")) {
 		t.Fatal("a refused write reached the disk")
+	}
+}
+
+func TestResolveExistingTargetDeniesRuleThroughSymlink(t *testing.T) {
+	real := scopeWorkspace(t)
+	if err := os.WriteFile(filepath.Join(real, "src", "secret", "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(link, "src", "secret")}}}
+	if _, denied := resolveExistingTarget(filepath.Join(real, "src", "secret", "a.txt"), real, policy, "c"); !strings.Contains(denied, "path_denied") {
+		t.Fatalf("a deny rule through a symlink did not refuse the real path: %q", denied)
+	}
+}
+
+// A deny rule written through a symlink must also stop writes and edits into the real directory.
+func TestDenyRuleThroughSymlinkRefusesWritesAndEdits(t *testing.T) {
+	real := scopeWorkspace(t)
+	if err := os.WriteFile(filepath.Join(real, "src", "secret", "a.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	rule := sessionfs.NativePathRule{Action: "deny", Path: filepath.Join(link, "src", "secret")}
+
+	writeSettings := testWriteSettings(real, 1<<20)
+	writeSettings.Policy.Paths = []sessionfs.NativePathRule{rule}
+	write, err := NewWriteTool(writeSettings, NewPathLocks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := scopeRun(t, write, real, nil, map[string]any{"path": "src/secret/new.txt", "content": "no"}); !strings.Contains(out, "path_denied") || pathExists(filepath.Join(real, "src", "secret", "new.txt")) {
+		t.Fatalf("write under a symlinked deny rule: %q", out)
+	}
+
+	editSettings := testEditSettings(real, 1<<20)
+	editSettings.Policy.Paths = []sessionfs.NativePathRule{rule}
+	edit, err := NewEditTool(editSettings, NewPathLocks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := scopeRun(t, edit, real, nil, map[string]any{"path": "src/secret/a.txt", "oldText": "old", "newText": "new"}); !strings.Contains(out, "path_denied") {
+		t.Fatalf("edit under a symlinked deny rule: %q", out)
+	}
+	if data, _ := os.ReadFile(filepath.Join(real, "src", "secret", "a.txt")); string(data) != "old" {
+		t.Fatalf("a refused edit changed the file to %q", data)
+	}
+}
+
+// A cwd under a symlinked deny rule is refused before the bash command runs.
+func TestDenyRuleThroughSymlinkRefusesBashCWD(t *testing.T) {
+	real := scopeWorkspace(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	settings := bashTestSettings(t, real)
+	settings.Policy.Paths = []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(link, "src", "secret")}}
+	if out := executeBashTest(t, real, "bash-cwd", "pwd", "src/secret", settings); !strings.Contains(out, "path_denied") {
+		t.Fatalf("bash cwd under a symlinked deny rule: %s", out)
+	}
+}
+
+// A cwd under a symlinked deny rule is refused before the managed process starts.
+func TestDenyRuleThroughSymlinkRefusesProcessCWD(t *testing.T) {
+	real := scopeWorkspace(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(filepath.Join(real, "processes"))
+	t.Cleanup(func() { _ = manager.Close() })
+	settings := processTestRequest(real, "", 1<<20).Policy
+	settings.StorageDir = filepath.Join(real, "processes")
+	settings.Policy.Paths = []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(link, "src", "secret")}}
+	process, err := NewProcessToolWithAsync(settings, manager, "KEY", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := process.Execute(context.Background(), map[string]any{"command": "pwd", "cwd": "src/secret", "block_ms": json.Number("0")}, tools.ExecutionContext{CallID: "p-cwd", WorkspaceRoot: real})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "path_denied") {
+		t.Fatalf("process cwd under a symlinked deny rule: %s", out)
 	}
 }

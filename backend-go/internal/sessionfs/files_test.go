@@ -185,3 +185,49 @@ func TestPathWithinAcceptsRootAndDescendantsOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectSessionFilesDenyRuleThroughSymlinkedRuleHidesTheRealPath(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "secrets", "key.txt"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultSessionFileListingSettings()
+	settings.MaxDepth = 4
+	policy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(link, "secrets")}}}
+	listing := CollectSessionFiles(real, settings, policy)
+	for _, name := range listing.Files {
+		if name == "secrets/key.txt" {
+			t.Fatalf("listing = %+v, want secrets/key.txt hidden by the symlinked deny rule", listing)
+		}
+	}
+}
+
+func TestCollectSessionFilesRelativeDenyRuleThroughSymlinkedWorkspace(t *testing.T) {
+	real := t.TempDir()
+	jadRoot := filepath.Join(t.TempDir(), "jad")
+	if err := os.Symlink(real, jadRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "secrets", "key.txt"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := defaultSessionFileListingSettings()
+	settings.MaxDepth = 4
+	policy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: resolveNativeRulePath("secrets", jadRoot)}}}
+	listing := CollectSessionFiles(real, settings, policy)
+	for _, name := range listing.Files {
+		if name == "secrets/key.txt" {
+			t.Fatalf("listing = %+v, want secrets/key.txt hidden by the relative deny rule", listing)
+		}
+	}
+}

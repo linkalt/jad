@@ -76,7 +76,7 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 
 func pathPolicyError(target, workspaceRoot string, policy sessionfs.NativePathPolicy, callID string) string {
 	for _, rule := range policy.Paths {
-		if rule.Action == "deny" && sessionfs.PathWithin(rule.Path, target) {
+		if rule.Action == "deny" && (sessionfs.PathWithin(rule.Path, target) || sessionfs.PathWithin(sessionfs.CanonicalRulePath(rule.Path), target)) {
 			return tools.ExecutionError(callID, tools.StatusForbidden, "path_denied", "The requested path is denied by the native tool policy", tools.Information{Key: "path", Value: safeErrorPath(workspaceRoot, target)})
 		}
 	}

@@ -196,9 +196,30 @@ func containedRegularFile(path, workspaceRoot string) (string, bool) {
 	return resolved, true
 }
 
+// CanonicalRulePath resolves symlinks in the longest existing ancestor of path, so a
+// rule written through a symlink matches the real location of the file it covers.
+func CanonicalRulePath(path string) string {
+	clean := filepath.Clean(path)
+	existing := clean
+	rest := ""
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return clean
+		}
+		rest = filepath.Join(filepath.Base(existing), rest)
+		existing = parent
+	}
+}
+
 func allowedByNativeReadPolicy(path, root, resolvedPath, workspaceRoot string, policy NativePathPolicy) bool {
 	for _, rule := range policy.Paths {
-		if rule.Action == "deny" && (PathWithin(rule.Path, path) || PathWithin(rule.Path, resolvedPath)) {
+		canonicalRule := CanonicalRulePath(rule.Path)
+		if rule.Action == "deny" && (PathWithin(rule.Path, path) || PathWithin(rule.Path, resolvedPath) || PathWithin(canonicalRule, path) || PathWithin(canonicalRule, resolvedPath)) {
 			return false
 		}
 	}
