@@ -77,11 +77,23 @@ func ListenUnix(path string, mode os.FileMode) (net.Listener, error) {
 		listener.Close()
 		return nil, fmt.Errorf("server.remote_api.listen_unix: chmod %s: %w", path, err)
 	}
-	if err := os.Rename(staged, path); err != nil {
+	// Link refuses an existing path, so a socket published by another listener in the meantime is
+	// never replaced.
+	if err := os.Link(staged, path); err != nil {
 		listener.Close()
 		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
 	}
-	return &unixListener{Listener: listener, path: path}, nil
+	if err := os.Remove(staged); err != nil {
+		os.Remove(path)
+		listener.Close()
+		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
+	}
+	return &unixListener{Listener: listener, path: path, info: info}, nil
 }
 
 // maxUnixSocketPath is the smallest sun_path limit in use, macOS 104 bytes including the NUL;
@@ -90,16 +102,17 @@ const maxUnixSocketPath = 104
 
 var netListen = net.Listen
 
-// unixListener removes the socket file at its final path when it closes; the inner listener
-// only knows the staging path.
+// unixListener removes the socket file at its final path when it closes, but only if that path
+// still holds the socket it published; the inner listener only knows the staging path.
 type unixListener struct {
 	net.Listener
 	path string
+	info os.FileInfo
 }
 
 func (l *unixListener) Close() error {
 	err := l.Listener.Close()
-	if info, statErr := os.Lstat(l.path); statErr == nil && info.Mode()&os.ModeSocket != 0 {
+	if info, statErr := os.Lstat(l.path); statErr == nil && os.SameFile(info, l.info) {
 		_ = os.Remove(l.path)
 	}
 	return err

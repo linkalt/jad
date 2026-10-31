@@ -67,6 +67,63 @@ func TestListenUnixLeavesNoStagingDirAndCloseRemovesTheSocket(t *testing.T) {
 	}
 }
 
+func TestListenUnixRefusesAPathPublishedWhileItBinds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "jad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "r.sock")
+	original := netListen
+	t.Cleanup(func() { netListen = original })
+	var first net.Listener
+	var firstErr error
+	netListen = func(network, address string) (net.Listener, error) {
+		netListen = original
+		first, firstErr = ListenUnix(path, 0o600)
+		return original(network, address)
+	}
+	second, err := ListenUnix(path, 0o660)
+	if first != nil {
+		defer first.Close()
+	}
+	if firstErr != nil {
+		t.Fatalf("the first listener must be published: %v", firstErr)
+	}
+	if err == nil {
+		second.Close()
+		t.Fatal("a second listen on a path published meanwhile must fail")
+	}
+	if info, _ := os.Stat(path); info == nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the first listener must keep its socket: %v", info)
+	}
+}
+
+func TestListenUnixCloseLeavesAnotherListenersSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("", "jad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "r.sock")
+	old, err := ListenUnix(path, 0o600)
+	if err != nil {
+		t.Skip("unix sockets unavailable: ", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	next, err := ListenUnix(path, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	old.Close()
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("closing the old listener removed the socket of another listener: %v %v", info, err)
+	}
+}
+
 func TestListenUnixRefusesAPathTooLongForItsStagingSocket(t *testing.T) {
 	base, err := os.MkdirTemp("", "jad")
 	if err != nil {
