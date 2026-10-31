@@ -109,15 +109,10 @@ func normalizeNativeBashSettings(
 	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeBashSettings, error) {
 	const section = "tools.native.bash"
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists {
 		return nil, nil
 	}

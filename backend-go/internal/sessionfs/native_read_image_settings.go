@@ -17,15 +17,10 @@ type NativeReadImageSettings struct {
 }
 
 func normalizeNativeReadImageSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath string) (*NativeReadImageSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists || strings.TrimSpace(string(nativeRaw)) == "null" {
 		return nil, nil
 	}

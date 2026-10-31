@@ -44,15 +44,10 @@ func normalizeNativeWriteEditSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir string,
 ) (*NativeWriteSettings, *NativeEditSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists {
 		return nil, nil, nil
 	}

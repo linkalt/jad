@@ -219,15 +219,10 @@ func (s NativeSubagentSettings) Agent(name string) (NativeSubagentAgent, bool) {
 }
 
 func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeSubagentSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists || strings.TrimSpace(string(nativeRaw)) == "null" {
 		return nil, nil
 	}

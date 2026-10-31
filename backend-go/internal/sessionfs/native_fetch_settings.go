@@ -67,15 +67,10 @@ type NativeFetchSettings struct {
 }
 
 func normalizeNativeFetchSettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeFetchSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists {
 		return nil, nil
 	}

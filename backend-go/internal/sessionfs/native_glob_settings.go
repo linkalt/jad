@@ -38,15 +38,10 @@ func normalizeNativeGlobSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath string,
 ) (*NativeGlobSettings, error) {
-	toolsRaw, exists := setting["tools"]
-	if !exists {
-		return nil, nil
-	}
-	toolFields, err := decodeConfigObject(toolsRaw, settingPath+": tools")
+	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
 	}
-	nativeRaw, exists := toolFields["native"]
 	if !exists {
 		return nil, nil
 	}
