@@ -82,6 +82,23 @@ func TestDecodeLimitIsAboutDecodedBytes(t *testing.T) {
 	}
 }
 
+func TestDecodeJudgesOversizedTextBeforeCopyingIt(t *testing.T) {
+	data := encode(t, "png")
+	text := base64.StdEncoding.EncodeToString(data)
+	// Padded with line breaks, the text is far over the limit. Its size is judged from the
+	// text without the breaks, so it is refused without the whole text being copied.
+	padded := strings.Repeat(text[:8]+"\n", 200000)
+	if _, err := Decode(padded, int64(len(data))); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if allocated := testing.AllocsPerRun(1, func() { _, _ = Decode(padded, int64(len(data))) }); allocated != 0 {
+		t.Fatalf("refusing an oversized text made %v allocations, want none", allocated)
+	}
+	if got, err := Decode(" \n"+text+" \r\n", int64(len(data))); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("padded valid input: %v, %d bytes", err, len(got))
+	}
+}
+
 func TestSniffJudgesTheBytesAndNotTheDeclaredType(t *testing.T) {
 	for format, want := range map[string]string{"png": "image/png", "jpeg": "image/jpeg", "gif": "image/gif"} {
 		if mime, err := Sniff(encode(t, format)); err != nil || mime != want {

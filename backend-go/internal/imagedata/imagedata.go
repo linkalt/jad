@@ -34,15 +34,25 @@ func Decode(raw string, maxBytes int64) ([]byte, error) {
 		}
 		encoded = body
 	}
+	// The size is judged from the non-whitespace bytes, counted before the text is copied,
+	// so an oversized text costs no copy.
+	length := 0
+	for i := 0; i < len(encoded); i++ {
+		switch encoded[i] {
+		case '\n', '\r', ' ', '\t':
+		default:
+			length++
+		}
+	}
+	if int64(length)/4*3 > maxBytes+3 {
+		return nil, ErrTooLarge
+	}
 	encoded = strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == ' ' || r == '\t' {
 			return -1
 		}
 		return r
 	}, encoded)
-	if int64(len(encoded))/4*3 > maxBytes+3 {
-		return nil, ErrTooLarge
-	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		data, err = base64.RawStdEncoding.DecodeString(encoded)
