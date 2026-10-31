@@ -106,6 +106,28 @@ func TestNewWritesToFileAppendsAndCreatesDirectory(t *testing.T) {
 	}
 }
 
+func TestNewTightensAnExistingLogFileToPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.log")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, closer, err := New(Settings{File: path}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("an existing 0644 log must become 0600, got %v", info.Mode().Perm())
+	}
+}
+
 func TestNewFailsWhenTheLogFileCannotBeOpened(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {

@@ -4,12 +4,51 @@ package remote
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 var processUID = os.Geteuid
+
+// peerUID reads the owner of the process at the other end of a connected unix socket.
+var peerUID = func(conn *net.UnixConn) (uint32, error) {
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var cred *unix.Ucred
+	var credErr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+	}); err != nil {
+		return 0, err
+	}
+	if credErr != nil {
+		return 0, credErr
+	}
+	return cred.Uid, nil
+}
+
+// checkPeerOwner refuses a connected socket whose peer is owned by neither this user nor root.
+// It runs after the dial, so the peer that answers is checked, not only the path that was dialed.
+func checkPeerOwner(socket string, conn net.Conn) error {
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		return nil
+	}
+	uid, err := peerUID(unixConn)
+	if err != nil {
+		return fmt.Errorf("socket %s: its peer cannot be identified", socket)
+	}
+	if uid != uint32(processUID()) && uid != 0 {
+		return fmt.Errorf("socket %s is answered by another user", socket)
+	}
+	return nil
+}
 
 // checkSocketOwner refuses a socket the bearer token must not be sent to: one owned by neither
 // this user nor root, or one in a directory that group or other users can write to

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -249,6 +250,9 @@ func resolveFrom(base, value string) string {
 	return filepath.Join(base, value)
 }
 
+// tokenFileChecked runs between the checks on a token file and its read; tests replace the path here.
+var tokenFileChecked = func() {}
+
 // Token reads the token from its source. Errors name the source, never a value.
 func (e Entry) Token(environment func(string) string) (string, error) {
 	var token string
@@ -262,7 +266,13 @@ func (e Entry) Token(environment func(string) string) (string, error) {
 			return "", fmt.Errorf("remote %s: environment variable %s is not set", e.Name, e.TokenEnv)
 		}
 	case e.TokenFile != "":
-		info, err := os.Stat(e.TokenFile)
+		// Open once and check the descriptor, so the file that is checked is the file that is read.
+		file, err := os.Open(e.TokenFile)
+		if err != nil {
+			return "", fmt.Errorf("remote %s: token file %s cannot be read", e.Name, e.TokenFile)
+		}
+		defer file.Close()
+		info, err := file.Stat()
 		if err != nil {
 			return "", fmt.Errorf("remote %s: token file %s cannot be read", e.Name, e.TokenFile)
 		}
@@ -272,9 +282,13 @@ func (e Entry) Token(environment func(string) string) (string, error) {
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			return "", fmt.Errorf("remote %s: token file %s must not be readable by group or others (chmod 600)", e.Name, e.TokenFile)
 		}
-		data, err := os.ReadFile(e.TokenFile)
+		tokenFileChecked()
+		data, err := io.ReadAll(io.LimitReader(file, maxTokenFile+1))
 		if err != nil {
 			return "", fmt.Errorf("remote %s: token file %s cannot be read", e.Name, e.TokenFile)
+		}
+		if len(data) > maxTokenFile {
+			return "", fmt.Errorf("remote %s: token file %s must be a regular file under %d bytes", e.Name, e.TokenFile, maxTokenFile)
 		}
 		token = strings.TrimSpace(string(data))
 	default:

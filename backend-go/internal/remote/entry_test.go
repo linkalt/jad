@@ -136,6 +136,28 @@ func TestTokenFileMustBePrivate(t *testing.T) {
 	}
 }
 
+func TestTokenFileIsReadFromTheCheckedFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tok")
+	if err := os.WriteFile(file, []byte(goodToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := tokenFileChecked
+	t.Cleanup(func() { tokenFileChecked = original })
+	tokenFileChecked = func() {
+		// A swap after the check: the path now names a different token, which must not be read.
+		if err := os.Remove(file); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("tok_ffffffffffffffffffffffffffffffff"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token, err := (Entry{Name: "box", TokenFile: file}).Token(nil)
+	if err != nil || token != goodToken {
+		t.Fatalf("token must come from the file that was checked, got %q, %v", token, err)
+	}
+}
+
 func TestListAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {

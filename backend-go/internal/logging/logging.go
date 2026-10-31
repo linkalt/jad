@@ -73,6 +73,11 @@ func New(settings Settings, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("open log file: %w", err)
 		}
+		// OpenFile applies the mode only when it creates the file; an existing log keeps its old mode.
+		if err := file.Chmod(0o600); err != nil {
+			file.Close()
+			return nil, nil, fmt.Errorf("set log file mode: %w", err)
+		}
 		output, closer = file, file
 	}
 	options := &slog.HandlerOptions{Level: slogLevel(level)}

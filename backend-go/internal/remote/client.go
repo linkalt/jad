@@ -105,7 +105,15 @@ func NewClient(entry Entry, options Options) *Client {
 			if err := checkSocketOwner(socket, info); err != nil {
 				return nil, fmt.Errorf("remote %s: %w", entry.Name, err)
 			}
-			return dialer.DialContext(ctx, "unix", socket)
+			conn, err := dialer.DialContext(ctx, "unix", socket)
+			if err != nil {
+				return nil, err
+			}
+			if err := checkPeerOwner(socket, conn); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("remote %s: %w", entry.Name, err)
+			}
+			return conn, nil
 		}
 		base = "http://" + unixHost
 	}

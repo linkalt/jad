@@ -68,6 +68,18 @@ func TestClientUnixSocketOwnerAndDirectoryAreChecked(t *testing.T) {
 		t.Fatalf("a sticky shared directory is fine: %v", err)
 	}
 
+	// The test runs as one user and cannot make a peer owned by another, so the peer credential is
+	// forced to a foreign uid. The socket path itself stays this user's and passes the pre-dial check.
+	peered := shortSocket(t)
+	peeredCalls := serve(peered)
+	originalPeer := peerUID
+	t.Cleanup(func() { peerUID = originalPeer })
+	peerUID = func(*net.UnixConn) (uint32, error) { return uint32(original() + 4242), nil }
+	if err := call(peered); err == nil || !strings.Contains(err.Error(), "answered by another user") || peeredCalls.Load() != 0 {
+		t.Fatalf("a peer that is not this user must be refused after the dial: %v", err)
+	}
+	peerUID = originalPeer
+
 	grouped := shortSocket(t)
 	groupedCalls := serve(grouped)
 	if err := os.Chmod(filepath.Dir(grouped), 0o770); err != nil {
