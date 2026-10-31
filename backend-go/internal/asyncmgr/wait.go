@@ -62,7 +62,7 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 		result, flips := m.popLocked(owner, scope)
 		if len(result.Signals) > 0 || wait <= 0 || result.Pending == 0 {
 			if s := m.owners[owner]; s != nil && (len(result.Signals) > 0 || result.Pending == 0) {
-				result.Dropped, s.dropped = s.dropped, 0
+				result.Dropped = m.takeDroppedLocked(owner, s)
 			}
 			m.mu.Unlock()
 			m.applyWork(pruneWork{flips: flips}, false)
@@ -84,7 +84,7 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 				return WaitResult{}, err
 			}
 			if s := m.owners[owner]; s != nil {
-				result.Dropped, s.dropped = s.dropped, 0
+				result.Dropped = m.takeDroppedLocked(owner, s)
 			}
 			m.mu.Unlock()
 			m.applyWork(pruneWork{flips: flips}, false)
@@ -93,6 +93,17 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 			return WaitResult{}, ctx.Err()
 		}
 	}
+}
+
+// takeDroppedLocked reports the dropped count once and clears it. An owner with no rows
+// left has nothing to keep its entry for, so the entry goes with the count.
+func (m *Manager) takeDroppedLocked(owner string, s *ownerStats) int {
+	dropped := s.dropped
+	s.dropped = 0
+	if s.total == 0 {
+		delete(m.owners, owner)
+	}
+	return dropped
 }
 
 // popLocked takes the ready signals of owner (inside scope when scope is set) within the

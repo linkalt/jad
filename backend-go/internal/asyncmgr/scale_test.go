@@ -209,6 +209,25 @@ func TestUnreadCapOverflowsOldestAndReportsDropped(t *testing.T) {
 	}
 }
 
+func TestOwnerEntryGoesWhenItsLastDroppedCountIsRead(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.UnreadMax, c.WaitMaxSignals = 1, 1 })
+	for _, id := range names("h", 2) {
+		f.start(t, "s1", id)
+		f.finish(t, id, Result{})
+	}
+	f.m.DeleteOwnersWithPrefix("s1", "gone")
+	if _, ok := f.m.owners["s1"]; !ok {
+		t.Fatal("the owner entry must still hold the dropped count until it is read")
+	}
+	res, _ := f.m.Wait(background, "s1", nil, 0)
+	if res.Dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", res.Dropped)
+	}
+	if _, ok := f.m.owners["s1"]; ok {
+		t.Fatal("an owner with no rows and no dropped count left must not keep an entry")
+	}
+}
+
 func TestUnreadTTLExpiresSignalsButKeepsResults(t *testing.T) {
 	f := newFixture(t, nil)
 	f.start(t, "s1", "old")
