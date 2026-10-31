@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -64,4 +65,32 @@ func TestListenUnixLeavesNoStagingDirAndCloseRemovesTheSocket(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("closing must remove the socket: %v", entries)
 	}
+}
+
+func TestListenUnixRefusesAPathTooLongForItsStagingSocket(t *testing.T) {
+	base, err := os.MkdirTemp("", "jad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	dir := filepath.Join(base, strings.Repeat("d", 100-len(base)-len("/")-len("/r.sock")))
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "r.sock")
+	if len(path) != 100 {
+		t.Fatalf("test path is %d bytes", len(path))
+	}
+	if _, err := ListenUnix(path, 0o600); err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("a 100-byte socket path must be refused with a clear error: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("a refused path must leave no staging dir or socket: %v", entries)
+	}
+	short := filepath.Join(base, "r.sock")
+	listener, err := ListenUnix(short, 0o600)
+	if err != nil {
+		t.Skip("unix sockets unavailable: ", err)
+	}
+	listener.Close()
 }

@@ -66,6 +66,9 @@ func ListenUnix(path string, mode os.FileMode) (net.Listener, error) {
 	}
 	defer os.Remove(staging)
 	staged := filepath.Join(staging, "s")
+	if len(staged) >= maxUnixSocketPath {
+		return nil, fmt.Errorf("server.remote_api.listen_unix: %s is too long for a unix socket path; use a shorter path", path)
+	}
 	listener, err := netListen("unix", staged)
 	if err != nil {
 		return nil, fmt.Errorf("server.remote_api.listen_unix: %w", err)
@@ -80,6 +83,10 @@ func ListenUnix(path string, mode os.FileMode) (net.Listener, error) {
 	}
 	return &unixListener{Listener: listener, path: path}, nil
 }
+
+// maxUnixSocketPath is the smallest sun_path limit in use, macOS 104 bytes including the NUL;
+// Linux allows 108.
+const maxUnixSocketPath = 104
 
 var netListen = net.Listen
 
