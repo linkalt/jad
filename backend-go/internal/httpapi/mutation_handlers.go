@@ -76,9 +76,16 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile is already changing"})
 		return
 	}
-	defer h.endMutation(key)
-	unlock := h.lockSession(reference)
-	defer unlock()
+	// The gate is cleared before the locks are given back (see handleSessionCompact).
+	var unlock, processUnlock func()
+	defer func() {
+		h.endMutation(key)
+		if processUnlock != nil {
+			processUnlock()
+		}
+		unlock()
+	}()
+	unlock = h.lockSession(reference)
 	// A run holds the transcript lock until it ends, so the check has to come
 	// before waiting for that lock: after it, the run is over and the reset would
 	// wipe the answer it just wrote. The session lock above serializes this check
@@ -87,12 +94,11 @@ func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, ref
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"})
 		return
 	}
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	processUnlock, err = h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	defer processUnlock()
 	if err := resolved.Session.Reset(r.Context()); err != nil {
 		writeJSONError(w, err)
 		return

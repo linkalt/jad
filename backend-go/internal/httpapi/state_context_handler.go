@@ -45,19 +45,25 @@ func (h *Handler) handleSessionStateContext(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile or transcript is already changing"})
 		return
 	}
-	defer h.endMutation(key)
-	unlock := h.lockSession(reference)
-	defer unlock()
+	// The gate is cleared before the locks are given back (see handleSessionCompact).
+	var unlock, processUnlock func()
+	defer func() {
+		h.endMutation(key)
+		if processUnlock != nil {
+			processUnlock()
+		}
+		unlock()
+	}()
+	unlock = h.lockSession(reference)
 	if h.runIsActive(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot write state context while a run is active"})
 		return
 	}
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	processUnlock, err = h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	defer processUnlock()
 	result, err := resolved.Session.StateContext(r.Context(), prompt, preview)
 	if err != nil {
 		writeJSONError(w, err)

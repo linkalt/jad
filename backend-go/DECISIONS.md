@@ -1196,6 +1196,12 @@ Audit: `audit_findings/p4_merged.md` (M21, M27), `audit_findings/low_unverified_
 - **An owner entry goes once its last dropped count is read (M21).** `Wait` reports `dropped` once and clears it (`takeDroppedLocked`, `wait.go`). If the owner has no rows left, its entry is removed in the same step, so an owner whose rows were deleted no longer keeps a map entry. Before, `forgetLocked` kept the entry while `dropped > 0`, and nothing removed it after the count was read. Test: `TestOwnerEntryGoesWhenItsLastDroppedCountIsRead` (fails with the removal disabled).
 - **Status change: a session the token cannot see answers 404 `no_session` (M27).** `GET /profiles?session=` returns `404 no_session` when the token sees none of the session's profiles, the same answer as a missing session. Before, that case answered `200` with an empty list, so a valid token could tell which sessions exist. A token that sees at least one profile still gets `200` with its filtered list. The 403 for a token without the listing actions is unchanged. This also covers a session that has no profiles at all, which now answers 404 for every token; no in-repo test or client relied on the empty 200 (the `/profiles` callers in `app/remote_api_test.go` use a token that sees profiles). Test: `TestProfilesListIsFilteredByTheToken` (fails with the new branch disabled).
 
+## Maintenance gate order (P3-12)
+
+Audit: `audit_findings/p3_merged.md` (P3-12).
+
+- **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore (`checkpoint_handlers.go`) has the same order and is **not** changed here: it also holds `markRestoring` for the whole restore, so its release needs its own change.
+
 ## Session listing: an unreadable file has no etag (P3-11)
 
 Audit: `audit_findings/p3_merged.md` (P3-11).

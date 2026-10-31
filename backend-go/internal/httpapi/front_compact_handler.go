@@ -32,20 +32,26 @@ func (h *Handler) handleSessionFrontCompact(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile or transcript is already changing"})
 		return
 	}
-	defer h.endMutation(key)
-	unlock := h.lockSession(reference)
-	defer unlock()
+	// The gate is cleared before the locks are given back (see handleSessionCompact).
+	var unlock, processUnlock func()
+	defer func() {
+		h.endMutation(key)
+		if processUnlock != nil {
+			processUnlock()
+		}
+		unlock()
+	}()
+	unlock = h.lockSession(reference)
 	// Checked before waiting for the transcript lock a run holds (see handleSessionReset).
 	if h.runIsActive(key) {
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot front compact a profile while a run is active"})
 		return
 	}
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	processUnlock, err = h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	defer processUnlock()
 	result, err := resolved.Session.FrontCompact(r.Context(), messageID)
 	if err != nil {
 		writeJSONError(w, err)
