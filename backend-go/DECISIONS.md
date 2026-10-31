@@ -1202,6 +1202,10 @@ Audit: `audit_findings/p3_merged.md` (P3-12).
 
 - **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore had the same order and is fixed in its own change (see the checkpoint note below).
 
+## Content cache fallback reads only the cap (P3-16)
+
+- **Fix: the memory fallback reads at most `fallbackMax` bytes of the partial file (P3-16).** `switchToFallbackLocked` used to read the whole partial file, then cap it. It now reads only the prefix the cap keeps (`readStablePrefixLocked`). The kept bytes are the same. Test: `TestFallbackSwitchReadsNoMoreThanTheCap` (measured allocation: 8.4 MB at HEAD for a 100-byte cap; CAUGHT when the bounded read is reverted).
+
 ## Checkpoint restore clears its gate first (P3-12, restore)
 
 - **Fix: checkpoint restore clears its mutation gate and restoring mark before the process lock (P3-12).** The restoring mark (`markRestoring`) still covers the whole restore: it is cleared in the same deferred closure, after `RestoreCheckpoint` returns, first among the releases. A dry run does not set it. Test: `TestCheckpointRestoreClearsItsMutationGateBeforeReleasingTheProcessLock` (fails at HEAD, passes now; a swapped release order is CAUGHT).

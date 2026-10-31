@@ -440,13 +440,22 @@ func (c *runContentCache) rollbackWriteLocked(start int64) {
 }
 
 func (c *runContentCache) readStableLocked() ([]byte, error) {
+	return c.readStablePrefixLocked(c.fileBytes)
+}
+
+// readStablePrefixLocked reads the first limit bytes of the stable partial content, or all of it
+// when it is shorter.
+func (c *runContentCache) readStablePrefixLocked(limit int64) ([]byte, error) {
 	if c.file == nil {
 		return append([]byte(nil), c.memory...), nil
 	}
-	if c.fileBytes == 0 {
+	if limit > c.fileBytes {
+		limit = c.fileBytes
+	}
+	if limit == 0 {
 		return []byte{}, nil
 	}
-	content := make([]byte, c.fileBytes)
+	content := make([]byte, limit)
 	n, err := c.file.ReadAt(content, 0)
 	if err != nil && n != len(content) {
 		return nil, fmt.Errorf("read partial content file: %w", err)
@@ -458,7 +467,8 @@ func (c *runContentCache) readStableLocked() ([]byte, error) {
 }
 
 func (c *runContentCache) switchToFallbackLocked(extra []byte, cause error) {
-	base, readErr := c.readStableLocked()
+	// The fallback keeps at most fallbackMax bytes, so only that prefix of the file is read.
+	base, readErr := c.readStablePrefixLocked(int64(c.fallbackMax))
 	if readErr != nil {
 		c.warnLocked("read partial content for fallback: %v", readErr)
 		base = nil

@@ -3,9 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,29 @@ func failingCache(t *testing.T, fallbackMax int) (*runContentCache, *bytes.Buffe
 	cache.SetPartialPath(filepath.Join(t.TempDir(), "missing", "responses.partial"))
 	t.Cleanup(func() { cache.Close(true) })
 	return cache, &logs
+}
+
+// A switch to the fallback reads no more of the partial file than the cap can keep, so a large
+// partial file does not allocate its whole length in memory first.
+func TestFallbackSwitchReadsNoMoreThanTheCap(t *testing.T) {
+	cache := newRunContentCache(8, serverconfig.DefaultRunContentWriteBatchBytes, time.Millisecond)
+	cache.fallbackMax = 100
+	cache.logger = slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	cache.SetPartialPath(filepath.Join(t.TempDir(), "responses.partial"))
+	t.Cleanup(func() { cache.Close(true) })
+	cache.Append(strings.Repeat("a", 4<<20))
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	cache.switchToFallbackLocked(nil, errors.New("forced"))
+	runtime.ReadMemStats(&after)
+	if got := len(cache.memory); got != 100 {
+		t.Fatalf("memory holds %d bytes, want the cap 100", got)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("the switch allocated %d bytes for a 100 byte cap", allocated)
+	}
 }
 
 func TestFallbackCacheStopsGrowingAtTheCap(t *testing.T) {
