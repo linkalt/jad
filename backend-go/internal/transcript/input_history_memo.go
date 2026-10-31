@@ -64,7 +64,9 @@ type transcriptMemo struct {
 // item bytes are shared with the memo.
 func (s *TurnStore) readTranscriptItemsMemo(memo *transcriptMemo) ([][]byte, error) {
 	var result [][]byte
+	ran := false
 	err := s.journal.withRepairedFile(func(file *os.File, info os.FileInfo) error {
+		ran = true
 		if !memo.matches(s.journal.generation, file, info) {
 			*memo = transcriptMemo{}
 		}
@@ -105,6 +107,10 @@ func (s *TurnStore) readTranscriptItemsMemo(memo *transcriptMemo) ([][]byte, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !ran {
+		// A missing transcript is empty; drop any memo of a transcript that is gone.
+		*memo = transcriptMemo{}
 	}
 	return result, nil
 }

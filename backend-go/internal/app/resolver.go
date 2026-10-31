@@ -956,9 +956,6 @@ func (r *Resolver) buildStore(config sessionfs.SessionConfig, storeOptions trans
 }
 
 func openSharedSession(config sessionfs.SessionConfig, storeOptions transcript.TurnStoreOptions, durability transcript.DurabilityMode) (*sharedSession, error) {
-	if err := os.MkdirAll(filepath.Dir(config.MessagesPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create transcript directory: %w", err)
-	}
 	journal, err := transcript.NewJournal(config.MessagesPath, durability)
 	if err != nil {
 		return nil, fmt.Errorf("create transcript journal: %w", err)

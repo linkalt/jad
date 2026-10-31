@@ -223,7 +223,11 @@ func (j *Journal) RepairTail() (removed int64, result error) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	file, err := os.OpenFile(j.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o666)
+	file, err := os.OpenFile(j.path, os.O_RDWR|os.O_APPEND, 0o666)
+	if errors.Is(err, os.ErrNotExist) {
+		// A missing transcript has no tail to repair, and is not created here.
+		return 0, nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("open transcript for tail repair: %w", err)
 	}
@@ -291,7 +295,11 @@ func (j *Journal) ReadRecordsRange(start, end int64, visit func(offset int64, li
 func (j *Journal) withRepairedFile(fn func(file *os.File, info os.FileInfo) error) (result error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	file, err := os.OpenFile(j.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o666)
+	file, err := os.OpenFile(j.path, os.O_RDWR|os.O_APPEND, 0o666)
+	if errors.Is(err, os.ErrNotExist) {
+		// A missing transcript is read as an empty one, and is not created here.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("open transcript for reading: %w", err)
 	}

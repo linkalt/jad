@@ -266,11 +266,9 @@ func TestRecoverRetainsTurnWithMismatchedFinalHash(t *testing.T) {
 	if _, err := os.Stat(turnDir); err != nil {
 		t.Fatalf("failed recovery removed turn directory: %v", err)
 	}
-	if _, err := os.Stat(journal.path); err != nil {
-		t.Fatal(err)
-	}
+	// A missing journal is not created by recovery; a present one must stay empty.
 	messages, err := os.ReadFile(journal.path)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if len(messages) != 0 {

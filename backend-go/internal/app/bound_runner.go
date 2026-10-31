@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
@@ -33,6 +35,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	defer r.shared.runMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return session.RunResult{}, err
+	}
+	// Listing and reading a session never create its transcript directory; the first
+	// write of a run does, before the input is appended to the transcript.
+	if err := os.MkdirAll(filepath.Dir(r.config.MessagesPath), 0o755); err != nil {
+		return session.RunResult{}, fmt.Errorf("create transcript directory: %w", err)
 	}
 	nextSessionTurn := func() (int64, error) {
 		index, err := scanTranscriptIndex(r.shared, r.config)

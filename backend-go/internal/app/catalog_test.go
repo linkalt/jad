@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,28 @@ import (
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
+
+func TestListingANeverRunSessionCreatesNoMessagesDirectory(t *testing.T) {
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	location, err := sessionfs.Resolve(loaded.Roots, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.ListSessions(context.Background(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(config.MessagesPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("listing created the messages directory: stat err = %v", err)
+	}
+}
 
 func TestConditionalCatalogResponsesSkipTranscriptReads(t *testing.T) {
 	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
