@@ -33,16 +33,6 @@ type usageCacheFile struct {
 	LastResponseKey string             `json:"last_response_key,omitempty"`
 }
 
-// readUsageCache accepts only a checkpoint that still describes the current
-// transcript. A stale, malformed, or platform-incompatible cache is ignored.
-func readUsageCache(config sessionfs.SessionConfig) (webui.UsageSummary, int64, bool) {
-	cache, valid := readUsageCacheState(config)
-	if !valid {
-		return webui.UsageSummary{}, 0, false
-	}
-	return cache.Summary, cache.Transcript.Offset, true
-}
-
 func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) {
 	encoded, err := os.ReadFile(config.UsageCachePath)
 	if err != nil {
@@ -119,12 +109,6 @@ func usageCacheResponseKey(raw json.RawMessage, response map[string]json.RawMess
 	}
 	digest := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(digest[:])
-}
-
-func stringField(raw json.RawMessage) string {
-	var value string
-	_ = json.Unmarshal(raw, &value)
-	return value
 }
 
 func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey string) error {

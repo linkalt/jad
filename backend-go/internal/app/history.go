@@ -315,5 +315,3 @@ func readBackupTail(ctx context.Context, path string, limit int) ([]webui.Transc
 	}
 	return tail, nil
 }
-
-var _ = transcript.TurnStore{}
