@@ -1200,7 +1200,11 @@ Audit: `audit_findings/p4_merged.md` (M21, M27), `audit_findings/low_unverified_
 
 Audit: `audit_findings/p3_merged.md` (P3-12).
 
-- **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore (`checkpoint_handlers.go`) has the same order and is **not** changed here: it also holds `markRestoring` for the whole restore, so its release needs its own change.
+- **Fix: reset, front compact and state context clear their mutation gate before they give the process lock back (P3-12).** Each handler now releases the gate in the same deferred closure as the locks, first, as compaction does, so a start queued behind the action does not find the gate still set. Before, the gate was deferred first and so ran last. The early refusals still clear the gate. Test: `TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock` (fails on all three at HEAD; a swapped order is CAUGHT). Checkpoint restore had the same order and is fixed in its own change (see the checkpoint note below).
+
+## Checkpoint restore clears its gate first (P3-12, restore)
+
+- **Fix: checkpoint restore clears its mutation gate and restoring mark before the process lock (P3-12).** The restoring mark (`markRestoring`) still covers the whole restore: it is cleared in the same deferred closure, after `RestoreCheckpoint` returns, first among the releases. A dry run does not set it. Test: `TestCheckpointRestoreClearsItsMutationGateBeforeReleasingTheProcessLock` (fails at HEAD, passes now; a swapped release order is CAUGHT).
 
 ## Phase 3 batch: library error text and stale or open rows (P3-09, P3-15, P3-07, P3-08)
 

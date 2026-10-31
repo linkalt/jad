@@ -93,9 +93,19 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile is already changing"})
 		return
 	}
-	defer h.endMutation(key)
-	unlock := h.lockSession(reference)
-	defer unlock()
+	// The gate is cleared before the locks are given back (see handleSessionCompact).
+	var unlock, processUnlock, clearRestoring func()
+	defer func() {
+		if clearRestoring != nil {
+			clearRestoring()
+		}
+		h.endMutation(key)
+		if processUnlock != nil {
+			processUnlock()
+		}
+		unlock()
+	}()
+	unlock = h.lockSession(reference)
 	// A run holds the cross-process session lock until it ends, so the run is
 	// checked first: waiting on that lock would delay the refusal until the run
 	// was over, and TypeScript refuses at once.
@@ -109,15 +119,14 @@ func (h *Handler) handleCheckpointRestore(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot restore a checkpoint while a background sub-agent that can change files is running: stop it with the async tool first"})
 		return
 	}
-	processUnlock, err := h.lockSessionProcess(r.Context(), reference, profile, "")
+	processUnlock, err = h.lockSessionProcess(r.Context(), reference, profile, "")
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	defer processUnlock()
 	// A dry run changes nothing, so only a real restore is reported as restoring.
 	if !request.DryRun {
-		defer h.markRestoring(key)()
+		clearRestoring = h.markRestoring(key)
 	}
 	result, err := checkpoints.RestoreCheckpoint(r.Context(), checkpointID, request)
 	if err != nil {

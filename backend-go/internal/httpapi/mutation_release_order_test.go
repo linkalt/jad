@@ -42,6 +42,39 @@ func (r *gateAtRelease) LockSessionSettings(context.Context, string) (func(), er
 	return func() {}, nil
 }
 
+// A checkpoint restore that waits for the process lock must clear its mutation gate before the
+// lock is given back, and keep its restoring mark until the restore ends.
+func TestCheckpointRestoreClearsItsMutationGateBeforeReleasingTheProcessLock(t *testing.T) {
+	base := &fakeMaintenanceResolver{
+		fakeResolver: &fakeResolver{resolved: ResolvedSession{Reference: "canonical", Profile: "dev"}},
+		mutation:     &checkpointMutation{fakeMutation: &fakeMutation{}},
+	}
+	resolver := &gateAtRelease{fakeMaintenanceResolver: base, waiting: make(chan struct{}, 1), release: make(chan struct{})}
+	handler := testHandler(t, resolver, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 4096, RunStateRetention: time.Minute})
+	defer handler.Close()
+	resolver.handler = handler
+
+	finished := make(chan *httptest.ResponseRecorder, 1)
+	go func() { finished <- restoreRequest(handler, `{"mode":"safe"}`) }()
+	select {
+	case <-resolver.waiting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the restore did not wait for the process lock")
+	}
+	close(resolver.release)
+	select {
+	case response := <-finished:
+		if response.Code != http.StatusOK {
+			t.Fatalf("restore status = %d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the restore never finished")
+	}
+	if resolver.held.Load() {
+		t.Fatal("the process lock was released while the mutation gate was still set")
+	}
+}
+
 // A maintenance action that waits for the process lock must clear its mutation gate before it
 // gives the lock back, as compaction does, so a start queued behind it does not find the gate set.
 func TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock(t *testing.T) {
