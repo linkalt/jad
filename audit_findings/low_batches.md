@@ -323,7 +323,7 @@ Listed separately, not batched. Each needs a benchmark or profile before any fix
 - P2B1-14 (p2b1): `ConfigError` text carries absolute server paths to API clients through the catalog and session write validato
 - P2B2-07 (p2b2): The workspace listing walk takes no `context.Context` and the schema maxima are 200× the defaults, so a listin
 - P2B2-09 (p2b2): The session-file listing reads every `<id>.json` in every root in full with no entry or aggregate-byte budget,
-- P2B2-14 (p2b2): `configSafeInteger` runs `big.Rat.SetString` on the whole numeric literal, so a long one costs seconds of CPU 
+- P2B2-14 (p2b2): `configSafeInteger` runs `big.Rat.SetString` on the whole numeric literal, so a long one costs seconds of CPU
 - P5M-17 (p5): The two auth packages are the same ~1.2k lines twice, and the copies already diverge — **open by user decision
 - P6AM-03 (p6a): Structured content passes every number through `float64`: `1e400` fails the whole call, integers above 2^53 ar
 - P6BM-14 (p6b): Every `tool_smith` run re-reads every library header and re-copies every valid function, whether or not the sc
@@ -345,7 +345,7 @@ Listed separately, not batched. Each needs a benchmark or profile before any fix
 - P7B-MRG-24 (p7b): Memory quota scan lists every type directory per write; List/GroupBy hold the store lock across the scan
 - P7B-MRG-25 (p7b): Hook post-edit check hashes the edited file twice with no size bound
 - P7B-MRG-27 (p7b): `request_draft` dedupes object keys with a linear scan (quadratic)
-- P7B-MRG-31 (p7b): Transcript `walk.result` decodes, rewrites (data-URL regex) and status-parses every result line in the range, 
+- P7B-MRG-31 (p7b): Transcript `walk.result` decodes, rewrites (data-URL regex) and status-parses every result line in the range,
 - P8-M-05 (p8): Image writes have no fsync; dedupe checks size only
 - P8-M-06 (p8): Image store mutex covers the first-write directory scan and file I/O (B-C5)
 - P8-M-07 (p8): Commit observer runs while the per-turn mutex is held
