@@ -51,6 +51,9 @@ func writeFileAtomic(path string, data []byte) error {
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 	_, writeErr := temp.Write(data)
+	if writeErr == nil {
+		writeErr = temp.Sync()
+	}
 	closeErr := temp.Close()
 	if writeErr != nil {
 		return writeErr
