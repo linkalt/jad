@@ -576,7 +576,13 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := &native.SubagentMCP{}
-	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r)
+	// One lazy set per prepare: read from the state folder once, and passed to both the native
+	// pass and the MCP pass below. Nil when the profile has no tools.lazy.
+	lazy, err := openLazySet(config, r.logger)
+	if err != nil {
+		return nil, nil, nil, nil, mapSessionError(err)
+	}
+	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
@@ -588,8 +594,11 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
-	mcpTools = native.WithToolEventHooksAll(mcpTools, config.Hooks, config.Model.APIKeyEnv)
-	mcpCatalog, err := tools.NewCatalog(mcpTools)
+	// The parent's copy is gated (its lazy tools only) and hooked; the raw list is kept for the
+	// subagent's toolsets below, so a child gets full, ungated definitions.
+	lazy.Bind(mcpTools)
+	parentMCPTools := native.WithToolEventHooksAll(native.GateLazyTools(mcpTools, lazy), config.Hooks, config.Model.APIKeyEnv)
+	mcpCatalog, err := tools.NewCatalog(parentMCPTools)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}

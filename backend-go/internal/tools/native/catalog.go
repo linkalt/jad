@@ -80,13 +80,13 @@ func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
 // profile_message tool. Without a messenger the tool is not offered.
 func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
-	return BuildCatalogWithAsync(config, locks, manager, taskStore, memoryStore, fetchStore, launcher, mcp, subagentManager, toolsets, messenger, nil)
+	return BuildCatalogWithAsync(config, locks, manager, taskStore, memoryStore, fetchStore, launcher, mcp, subagentManager, toolsets, messenger, nil, nil)
 }
 
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
-func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeAsync == nil {
+func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -100,7 +100,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
 		}
 	}
-	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncHost)
+	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, lazy)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +161,8 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
-		wrapped := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
-		profileMessageTool = &wrapped
+		raw := tool
+		profileMessageTool = &raw
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
 	if config.NativeSubagent != nil {
@@ -192,12 +192,48 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		// of the manifest's text and not replaced by it. The tool's own description is the code's
 		// text plus the list, whose markers depend on which agents may run in the background.
 		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, tool)
 	}
 	if profileMessageTool != nil {
 		loaded = append(loaded, *profileMessageTool)
 	}
+	// load_tool is last, after the subagent tool, so no child catalog gets it: a child's loads
+	// would write the parent's lazy set. It lists the lazy tools bound in lazy, which is nil or
+	// empty when the profile has none; it then lists nothing and loads nothing.
+	if config.NativeLoadTool != nil {
+		definition, err := requireNativeDefinition(config, definitions, "load_tool", loadToolID, loadToolInputSchema)
+		if err != nil {
+			return nil, err
+		}
+		tool, err := NewLoadToolTool(lazy, int(config.ProfileTools.LazyLoadMax))
+		if err != nil {
+			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		tool = WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
+		loaded = append(loaded, tool)
+	}
 	return tools.NewCatalog(loaded)
+}
+
+// gateLazy returns the lazy gate of tool when the set has bound it and not yet gated it, and
+// tool itself otherwise. Exported so the app can gate the MCP tools with the same set.
+func gateLazy(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
+	if lazy == nil {
+		return tool
+	}
+	gated, _ := lazy.Gate(tool)
+	return gated
+}
+
+// GateLazyTools gates the lazy tools of a list with the set, before the event hooks wrap them.
+// Each tool is gated at most once; a tool the set did not bind is returned unchanged.
+func GateLazyTools(list []tools.Tool, lazy *tools.LazySet) []tools.Tool {
+	gated := make([]tools.Tool, len(list))
+	for index, tool := range list {
+		gated[index] = gateLazy(tool, lazy)
+	}
+	return gated
 }
 
 // ToolsetResources gives the stateful stores of a toolset that a sub-agent names, so the
@@ -231,7 +267,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		if resources != nil {
 			manager, taskStore, memoryStore, fetchStore = resources.Resources(derived)
 		}
-		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, asyncHost)
+		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, nil)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}
@@ -242,7 +278,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 
 // buildNativeTools builds every native tool the settings enable except the subagent
 // tool, with the definitions it read and the process manager it used.
-func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncHost *AsyncHost) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
+func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncHost *AsyncHost, lazy *tools.LazySet) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
 	if config.NativeProcess != nil && manager == nil {
 		manager = NewConfiguredProcessManager(*config.NativeProcess)
 	}
@@ -474,6 +510,14 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	// Gating comes after the child catalogs were built from the raw list above, so no child can
+	// call a lazy tool without its own load. Each native tool is gated and then hooked once, here.
+	if lazy != nil {
+		lazy.Bind(loaded)
+		for index, tool := range loaded {
+			loaded[index] = gateLazy(tool, lazy)
+		}
+	}
 	loaded = WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv)
 	toolSmithNested.Bind(loaded, config.ProfileTools.Deny)
 	return loaded, definitions, manager, nil
@@ -521,6 +565,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeTranscripts != nil
 	case "tool_smith":
 		return config.NativeToolSmith != nil
+	case "load_tool":
+		return config.NativeLoadTool != nil
 	default:
 		return false
 	}

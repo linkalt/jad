@@ -437,14 +437,6 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	checkpointRun := checkpoint.NewRun(options.Checkpoint, turnID, sessionTurn)
 	checkpointRun.Start(ctx)
 	defer checkpointRun.Finish()
-	var responseTools []json.RawMessage
-	if options.ToolCatalog != nil {
-		responseTools, err = options.ToolCatalog.ResponseTools()
-		if err != nil {
-			return result, fmt.Errorf("build Responses tool definitions: %w", err)
-		}
-	}
-
 	// One handle per run: later rounds expand only the records appended since
 	// the previous round instead of re-parsing the whole transcript. The handle
 	// that PersistInput read the history with is reused, so the run start does
@@ -460,6 +452,15 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
+		}
+		// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
+		// previous round is listed in this one.
+		var responseTools []json.RawMessage
+		if options.ToolCatalog != nil {
+			responseTools, err = options.ToolCatalog.ResponseTools()
+			if err != nil {
+				return result, fmt.Errorf("build Responses tool definitions: %w", err)
+			}
 		}
 		request, err := r.buildRoundRequest(ctx, trace, inputHistory, options, responseTools)
 		if err != nil {

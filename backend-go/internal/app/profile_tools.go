@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -25,6 +27,9 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 	if err := checkProfileToolEntries(config, "deny", settings.Deny, definitions); err != nil {
 		return nil, nil, err
 	}
+	if err := checkLazyEntriesVisible(config, settings, definitions); err != nil {
+		return nil, nil, err
+	}
 	exposed, hidden, err := registered.Filter(func(definition tools.Definition) bool {
 		return profileToolShown(settings, definition)
 	})
@@ -32,6 +37,43 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 		return nil, nil, err
 	}
 	return exposed, hidden, nil
+}
+
+// openLazySet opens the profile's lazy set for one prepare, from its tools.lazy entries and
+// summary bound. It is nil when the profile has no lazy tools. The set lives in the profile's own
+// state folder, next to its transcript, so a profile_message target with its own tools.lazy never
+// reads or rewrites the caller's loaded set. Lazy tools need a catalog layout: a session without
+// a state folder is a configuration error.
+func openLazySet(config sessionfs.SessionConfig, logger *slog.Logger) (*tools.LazySet, error) {
+	if len(config.ProfileTools.Lazy) == 0 {
+		return nil, nil
+	}
+	if config.StateDir == "" || config.MessagesPath == "" {
+		return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy needs a catalog layout; this session has no state folder", config.SettingPath, config.Profile)}
+	}
+	shown := func(definition tools.Definition) bool { return profileToolShown(config.ProfileTools, definition) }
+	return tools.OpenLazySet(filepath.Dir(config.MessagesPath), config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown, logger)
+}
+
+// checkLazyEntriesVisible refuses a tools.lazy entry that names no tool the profile shows: a
+// lazy tool that is denied, or left out of a non-empty allow list, could never be loaded or
+// called, so the entry is a configuration error and not a tool that is quietly absent.
+func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.ProfileToolSettings, registered []tools.Definition) error {
+	for index, entry := range settings.Lazy {
+		visible := false
+		for _, definition := range registered {
+			if tools.EntryMatches(entry, definition) && profileToolShown(settings, definition) {
+				visible = true
+				break
+			}
+		}
+		if visible {
+			continue
+		}
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows (a denied tool, or one outside allow, cannot be lazy)",
+			config.SettingPath, config.Profile, index, entry)}
+	}
+	return nil
 }
 
 // profileToolShown reports whether the profile's model sees the tool: an allow list

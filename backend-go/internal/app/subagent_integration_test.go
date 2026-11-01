@@ -45,6 +45,9 @@ type subagentProvider struct {
 	// parentFirstCall, when set, is the (tool name, arguments) the parent makes in its
 	// first round instead of starting a subagent.
 	parentFirstCall [2]string
+	// parentSteps, when set, scripts the parent's calls in order: round N makes the Nth step
+	// (the results its history already holds count the rounds), and a text answer follows.
+	parentSteps []subagentStep
 	// childWritesByTask makes each child write its own file, w<N>.txt, where N is the
 	// number in its task ("task number N"), so several children never share a path.
 	childWritesByTask bool
@@ -77,6 +80,11 @@ type subagentProvider struct {
 	childRelease chan struct{}
 }
 
+// subagentStep is one scripted call of the parent's rounds (see parentSteps).
+type subagentStep struct {
+	name, arguments string
+}
+
 type providerRequest struct {
 	Model string
 	Tools []string
@@ -84,6 +92,8 @@ type providerRequest struct {
 	Text  string
 	// Descriptions maps a tool name to the description the model was shown.
 	Descriptions map[string]string
+	// Parameters maps a tool name to the JSON Schema the model was shown in its parameters.
+	Parameters map[string]json.RawMessage
 	// Authorization is the header the client sent, so a test can tell which
 	// credential reached which server.
 	Authorization string
@@ -109,9 +119,10 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization")}
 		for _, tool := range body.Tools {
 			var named struct {
-				Type        string `json:"type"`
-				Name        string `json:"name"`
-				Description string `json:"description"`
+				Type        string          `json:"type"`
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Parameters  json.RawMessage `json:"parameters"`
 			}
 			_ = json.Unmarshal(tool, &named)
 			record.ToolTypes = append(record.ToolTypes, named.Type)
@@ -120,6 +131,10 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 				record.Descriptions = map[string]string{}
 			}
 			record.Descriptions[named.Name] = named.Description
+			if record.Parameters == nil {
+				record.Parameters = map[string]json.RawMessage{}
+			}
+			record.Parameters[named.Name] = named.Parameters
 		}
 		for _, item := range body.Input {
 			record.Text += string(item) + "\n"
@@ -184,6 +199,13 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			// The handoff came back. Let the child go, then collect with the id from it.
 			p.holdReleased.Do(func() { close(p.childHold) })
 			events = functionCallEvents("call-collect", "async", `{"action":"wait","wait_ms":10000}`)
+		case body.Model == "parent-model" && len(p.parentSteps) > 0:
+			if results := strings.Count(record.Text, `"function_call_output"`); results < len(p.parentSteps) {
+				step := p.parentSteps[results]
+				events = functionCallEvents(fmt.Sprintf("call-step-%d", results+1), step.name, step.arguments)
+			} else {
+				events = messageEvents("parent done", 9)
+			}
 		case body.Model == "parent-model" && p.parentFirstCall[0] != "" && !strings.Contains(record.Text, "function_call_output"):
 			events = functionCallEvents("call-parent-first", p.parentFirstCall[0], p.parentFirstCall[1])
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output") && p.parentCalls > 1:
@@ -351,6 +373,8 @@ type mcpFixture struct {
 	calls    *atomic.Int32
 	// image, when set, is returned as an image block beside the text.
 	image []byte
+	// extra names more tools the server offers, each answering like lookup.
+	extra []string
 }
 
 // subagentSampleTool returns the absolute path of one sample native tool definition.
@@ -390,6 +414,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	delete(agentSetting, "__checkpoint")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
+	// __load_tool enables tools.native.load_tool and its definition, which a profile with
+	// tools.lazy needs: the profile is refused at load without it.
+	_, withLoadTool := agentSetting["__load_tool"]
+	delete(agentSetting, "__load_tool")
+	if withLoadTool {
+		definitions = append(definitions, sampleTool("load_tool.json"))
+	}
 	// __toolsets writes extra toolset files (id -> file content) and __session_without
 	// removes tools from the session's own toolset, so a test can give a tool to an
 	// agent's toolset only.
@@ -414,20 +445,22 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	var mcpServerFile map[string]any
 	if mcp != nil {
 		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
-		mcpServer.AddTool(&mcpSDK.Tool{
-			Name:        "lookup",
-			Description: "looks a word up",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}`),
-		}, func(_ context.Context, request *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
-			mcp.calls.Add(1)
-			var arguments map[string]string
-			_ = json.Unmarshal(request.Params.Arguments, &arguments)
-			content := []mcpSDK.Content{&mcpSDK.TextContent{Text: "MCP says " + arguments["word"] + " is 99"}}
-			if mcp.image != nil {
-				content = append(content, &mcpSDK.ImageContent{MIMEType: "image/png", Data: mcp.image})
-			}
-			return &mcpSDK.CallToolResult{Content: content}, nil
-		})
+		for _, name := range append([]string{"lookup"}, mcp.extra...) {
+			mcpServer.AddTool(&mcpSDK.Tool{
+				Name:        name,
+				Description: "looks a word up",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}`),
+			}, func(_ context.Context, request *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
+				mcp.calls.Add(1)
+				var arguments map[string]string
+				_ = json.Unmarshal(request.Params.Arguments, &arguments)
+				content := []mcpSDK.Content{&mcpSDK.TextContent{Text: "MCP says " + arguments["word"] + " is 99"}}
+				if mcp.image != nil {
+					content = append(content, &mcpSDK.ImageContent{MIMEType: "image/png", Data: mcp.image})
+				}
+				return &mcpSDK.CallToolResult{Content: content}, nil
+			})
+		}
 		mcpHTTP := httptest.NewServer(mcpSDK.NewStreamableHTTPHandler(func(*http.Request) *mcpSDK.Server { return mcpServer }, nil))
 		t.Cleanup(mcpHTTP.Close)
 		use := map[string]any{"deny_tools": []string{}}
@@ -463,6 +496,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
 		"subagent": subagent,
 		"async":    map[string]any{},
+	}
+	if withLoadTool {
+		spec.Native["load_tool"] = map[string]any{}
 	}
 	if withWrite {
 		writeTool := map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}}

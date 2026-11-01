@@ -1513,6 +1513,11 @@
               },
               "additionalProperties": false
             },
+            "load_tool": {
+              "type": "object",
+              "description": "Go backend only. Lists the profile's tools.lazy tools (name and one-line summary), or shows the full definitions of the named ones and loads them. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent never gets this tool.",
+              "additionalProperties": false
+            },
             "process": {
               "type": "object",
               "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown. A process gets the same environment allowlist as bash (PATH, HOME, locale and temp variables) plus env_file and env; other server variables are not inherited.",

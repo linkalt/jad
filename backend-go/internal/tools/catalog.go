@@ -108,6 +108,15 @@ type Tool struct {
 	// nil omits the example.
 	ExampleOperation     json.RawMessage
 	RequiresUserDecision bool
+	// Listed, when set, says whether the tool is in the tools array sent to the model right now.
+	// A lazy tool is listed only once it is loaded. Nil means always listed. It does not affect
+	// dispatch: a call by name still reaches the tool.
+	Listed func() bool
+	// Refused, when set and true for a call, skips the argument checks (normalize and schema) so the
+	// call goes straight to the tool, whose own Execute refuses it. The refusal then runs inside the
+	// tool's wrappers, so its event hooks fire like any other call. A lazy tool that is not loaded
+	// refuses every call. Nil never refuses.
+	Refused func(execution ExecutionContext) bool
 	// ReadOnly marks a tool that never changes state and depends on none, so its
 	// calls may run beside other calls of the same response. MayChangeFiles can
 	// still make one call of such a tool count as a change.
@@ -210,13 +219,17 @@ func (c *Catalog) Definitions() []Definition {
 }
 
 // ResponseTools returns the function-tool objects accepted by the Responses
-// API. Native tool definitions are non-strict, as in the TypeScript backend.
+// API, for the tools that are listed now, in the catalog order. Native tool
+// definitions are non-strict, as in the TypeScript backend.
 func (c *Catalog) ResponseTools() ([]json.RawMessage, error) {
 	if c == nil {
 		return []json.RawMessage{}, nil
 	}
 	tools := make([]json.RawMessage, 0, len(c.tools))
 	for _, tool := range c.tools {
+		if tool.Listed != nil && !tool.Listed() {
+			continue
+		}
 		encoded, err := json.Marshal(struct {
 			Type        string          `json:"type"`
 			Name        string          `json:"name"`
@@ -346,6 +359,10 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 	}
 	execution.CallID = callID
 	execution.ToolName = tool.Definition.Name
+	if tool.Refused != nil && tool.Refused(execution) {
+		// The tool's own Execute refuses the call, so no argument is read or checked against the schema.
+		return c.runTool(ctx, callID, tool, map[string]any{}, execution)
+	}
 
 	var rawArguments string
 	if json.Unmarshal(fields["arguments"], &rawArguments) != nil {
@@ -401,7 +418,14 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 			"message": "arguments must be a JSON object",
 		}}, tool.ExampleOperation))
 	}
+	return c.runTool(ctx, callID, tool, object, execution)
+}
 
+// runTool runs a tool whose arguments have passed the checks (or that is refused) and encodes its
+// output as a function_call_output item.
+func (c *Catalog) runTool(ctx context.Context, callID string, tool Tool, object map[string]any, execution ExecutionContext) (json.RawMessage, error) {
+	name := tool.Definition.Name
+	var err error
 	var output json.RawMessage
 	if tool.ExecuteOutput != nil {
 		output, err = executeOutputRecovered(tool, ctx, object, execution)

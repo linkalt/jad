@@ -166,6 +166,7 @@ type SessionConfig struct {
 	NativeToolSmith          *NativeToolSmithSettings
 	NativeTranscript         *NativeTranscriptSettings
 	NativeTranscripts        *NativeTranscriptsSettings
+	NativeLoadTool           *NativeLoadToolSettings
 	// RemotesDir is the remotes folder of the catalog layout (<name>.json entries of other
 	// JAD servers); empty outside the layout.
 	RemotesDir string
@@ -479,6 +480,13 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeLoadTool, err := normalizeNativeLoadToolSettings(setting, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	if err := checkLazyNeedsLoadTool(settingPath, profile, profileTools, nativeLoadTool); err != nil {
+		return SessionConfig{}, err
+	}
 	nativeProcess, err := normalizeNativeProcessSettings(
 		setting,
 		location.Root.GlobalJadRoot,
@@ -620,6 +628,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeToolSmith:          nativeToolSmith,
 		NativeTranscript:         nativeTranscript,
 		NativeTranscripts:        nativeTranscripts,
+		NativeLoadTool:           nativeLoadTool,
 		GlobalJadRoot:            location.Root.GlobalJadRoot,
 		MCPServers:               mcpServers,
 		StateContext:             stateContext,

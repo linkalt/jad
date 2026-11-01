@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.load_tool",
+      "source": "native",
+      "name": "load_tool",
+      "description": "List the lazy tools (name and one-line summary), or show the full definitions of the named lazy tools and load them, in one call. Loading a tool does not enable it; a call to a lazy tool before it is loaded is refused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "Tool names or tools.lazy-style patterns of the lazy tools to show and load, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Omit names to list the lazy tools. Each pattern is limited to lazy tools; the total of matched tools is limited by the profile's tools.lazy_load_max.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
