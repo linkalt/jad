@@ -50,6 +50,8 @@ type profileTurnsEntry struct {
 // Resolver composes the root catalog, on-disk session configuration, transcript
 // stores, and provider clients for the HTTP run routes.
 type Resolver struct {
+	// remoteRuns is the index of the remote run ids this server minted; see remoteRunIndex.
+	remoteRuns *remoteRunIndex
 	// callerRuns tracks the targets each running caller run has compacted; callerRunSeq
 	// hands out the run ids.
 	callerRuns callerRunTargets

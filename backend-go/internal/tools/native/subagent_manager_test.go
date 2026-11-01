@@ -515,3 +515,26 @@ func TestSubagentLauncherPanicTextStaysOutOfTheRunReason(t *testing.T) {
 		t.Fatalf("the panic value reached the result:\n%s", out)
 	}
 }
+
+// A run keep_finished drops is reported to the hook once, with its id, after the manager's lock is
+// released, so the hook may call back into the manager.
+func TestDroppedRunsAreReportedToTheHook(t *testing.T) {
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	var dropped []string
+	manager.SetOnDropped(func(id string) {
+		manager.mu.Lock()
+		manager.mu.Unlock()
+		dropped = append(dropped, id)
+	})
+	manager.mu.Lock()
+	for _, id := range []string{"sub_00000001", "sub_00000002"} {
+		manager.runs[id] = &subagentRun{id: id}
+		manager.finished = append(manager.finished, id)
+	}
+	manager.mu.Unlock()
+	manager.removeDropped([]droppedRun{{id: "sub_00000001"}})
+	if len(dropped) != 1 || dropped[0] != "sub_00000001" {
+		t.Fatalf("the hook was told %v, want the dropped run only", dropped)
+	}
+}

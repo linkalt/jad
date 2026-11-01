@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -244,5 +245,26 @@ func TestQueuedRunIsRefusedAsActiveWhenResumed(t *testing.T) {
 	out := resumeCall(t, catalog, testSessionKey, `{"task":"more","agent":"explore","resume":"`+queued+`"}`)
 	if !strings.Contains(out, "resume_active") {
 		t.Fatalf("a resume of a queued run was not refused as resume_active:\n%s", out)
+	}
+}
+
+// A child may not resume, a remote run included: its call is refused as resume_in_child before the
+// remote branch, so no request reaches the peer.
+func TestRemoteResumeFromAChildIsRefusedBeforeAnyRequest(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth = 3 })
+	ctx := WithRemoteCaller(context.Background(), "remote:peer")
+	out, err := f.tool.Execute(ctx, map[string]any{"task": "more", "agent": remoteAgent, "resume": "peer/rr_0123456789abcdef"},
+		tools.ExecutionContext{CallID: "call_child", AgentDepth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "resume_in_child") {
+		t.Fatalf("a child's remote resume was not refused as resume_in_child:\n%s", out)
+	}
+	if n := len(f.peer.backend.subs); n != 0 {
+		t.Fatalf("the peer received %d sub-agent requests from a child's resume, want none", n)
+	}
+	if f.local.count() != 0 {
+		t.Fatal("a child's remote resume started a local child")
 	}
 }

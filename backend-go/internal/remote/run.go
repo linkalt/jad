@@ -50,6 +50,8 @@ func (v *View) clean() {
 	v.Code = safeText(v.Code, 64)
 	v.Message = safeText(v.Message, 1024)
 	v.Reason = safeText(v.Reason, 128)
+	v.ResumedFrom = safeText(v.ResumedFrom, 64)
+	v.ConfigNote = safeText(v.ConfigNote, 1024)
 }
 
 // Terminal reports whether the run has ended.

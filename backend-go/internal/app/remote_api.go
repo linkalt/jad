@@ -31,10 +31,14 @@ type remoteBackend struct {
 	runs *remoteRunIndex
 }
 
-// remoteRunIndex is the map from the remote run id to the local run it started.
+// remoteRunIndex is the map from the remote run id to the local run it started. The map is
+// bounded by the manager's keep_finished: a run dropped from its manager is forgotten here too.
 type remoteRunIndex struct {
 	mu   sync.Mutex
 	runs map[string]remoteRunRef
+	// byLocal is the remote id of each local run in runs, so a result finds its remote id without
+	// a scan.
+	byLocal map[string]string
 }
 
 // remoteRunRef is the local run a remote run id names, and the session it belongs to.
@@ -46,6 +50,20 @@ func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.runs[remoteID] = ref
+	i.byLocal[ref.local] = remoteID
+}
+
+// forget drops the entry of a local run its manager has dropped; a later resume of its remote id is
+// unknown.
+func (i *remoteRunIndex) forget(local string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	remoteID, ok := i.byLocal[local]
+	if !ok {
+		return
+	}
+	delete(i.byLocal, local)
+	delete(i.runs, remoteID)
 }
 
 // remoteIDOf is the remote id of the local run local, or local itself when this backend did not start it
@@ -53,10 +71,8 @@ func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
 func (i *remoteRunIndex) remoteIDOf(local string) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	for remoteID, ref := range i.runs {
-		if ref.local == local {
-			return remoteID
-		}
+	if remoteID, ok := i.byLocal[local]; ok {
+		return remoteID
 	}
 	return local
 }
@@ -72,7 +88,8 @@ func (i *remoteRunIndex) lookup(remoteID, session string) (remoteRunRef, bool) {
 
 // RemoteBackend returns the backend for the remote API of this resolver.
 func (r *Resolver) RemoteBackend(runTimeout time.Duration) remoteapi.Backend {
-	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: &remoteRunIndex{runs: make(map[string]remoteRunRef)}}
+	r.remoteRuns = &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[string]string)}
+	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: r.remoteRuns}
 }
 
 func (b remoteBackend) location(session string) (sessionfs.Location, error) {
@@ -290,6 +307,10 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	select {
 	case run := <-observed:
 		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)})
+		// keep_finished drops the run from its manager: the remote id goes with it.
+		if manager := b.resolver.sharedSubagentManager(config); manager != nil {
+			manager.SetOnDropped(b.runs.forget)
+		}
 		go func() { <-run.Done(); cancel() }()
 		return &remoteSubagentRun{run: run, runs: b.runs}, nil
 	case output := <-finished:
@@ -380,4 +401,19 @@ func (b remoteBackend) ProfileInfo(ctx context.Context, request remoteapi.Profil
 		return "", err
 	}
 	return native.ProfileInfoText(request.Profile, tokens), nil
+}
+
+// count is how many remote runs the index holds; a test reads it.
+func (i *remoteRunIndex) count() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return len(i.runs)
+}
+
+// entry is the local run and session of a remote id; a test reads it.
+func (i *remoteRunIndex) entry(remoteID string) (remoteRunRef, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	ref, ok := i.runs[remoteID]
+	return ref, ok
 }

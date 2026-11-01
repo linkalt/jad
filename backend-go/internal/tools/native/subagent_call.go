@@ -27,16 +27,18 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		defer s.mu.RUnlock()
 		return renderSubagentList(execution.CallID, s.agents, s.settings.ResultMaxBytes, s.settings)
 	}
+	// A child may not resume, a remote run included: a run it could continue is the session's
+	// own, and the session's owner is the only one that may name it. This is checked before the
+	// remote branch, so a child's remote resume sends no request.
+	resume, _ := arguments["resume"].(string)
+	if resume != "" && execution.AgentDepth > 0 {
+		return refuseResume(execution.CallID, &resumeProblem{"resume_in_child", "A sub-agent cannot resume a run: only the session that owns the run can"})
+	}
 	agent, _ := arguments["agent"].(string)
 	if strings.HasPrefix(agent, remote.Prefix) {
 		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
 	}
-	if resume, _ := arguments["resume"].(string); resume != "" {
-		// A child may not resume: a run it could continue is the session's own, and the
-		// session's owner is the only one that may name it.
-		if execution.AgentDepth > 0 {
-			return refuseResume(execution.CallID, &resumeProblem{"resume_in_child", "A sub-agent cannot resume a run: only the session that owns the run can"})
-		}
+	if resume != "" {
 		return s.startResume(ctx, execution.CallID, resume, task, arguments, execution)
 	}
 	return s.startRun(ctx, execution.CallID, task, arguments, execution)

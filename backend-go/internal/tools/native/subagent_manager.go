@@ -77,6 +77,9 @@ type SubagentManager struct {
 	// removeManifest deletes the manifest of a pruned run; it is a field so a test can
 	// hold the pruner inside the removal. The store sets it.
 	removeManifest func(id string)
+	// onDropped, when set, is told the id of every run keep_finished drops, after mu is
+	// released. The app layer forgets the remote ids of dropped runs with it.
+	onDropped func(id string)
 	// newRunID makes the id of a new run; it is a field so a test can force a collision.
 	newRunID func() (string, error)
 	// now reads the clock for the run times that the lists and the pruning order by; it is a
@@ -190,6 +193,14 @@ func (m *SubagentManager) dropOldestLocked() droppedRun {
 	return dropped
 }
 
+// SetOnDropped makes the manager call fn with the id of each run keep_finished drops, after the
+// manager releases its lock. A later call replaces the earlier one.
+func (m *SubagentManager) SetOnDropped(fn func(id string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDropped = fn
+}
+
 // DeleteTranscriptsUnder makes the manager delete a run's transcript folder when
 // keep_finished drops the run, which is tools.native.subagent.delete_transcripts. Only a
 // folder directly under root is ever deleted. Without it the folders stay and grow.
@@ -207,7 +218,13 @@ func (m *SubagentManager) DeleteTranscriptsUnder(root string) {
 // caller must not hold mu: a manifest removal waits for the store, which a save holds across
 // its fsync. A failure is logged and does not stop the others.
 func (m *SubagentManager) removeDropped(dropped []droppedRun) {
+	m.mu.Lock()
+	onDropped := m.onDropped
+	m.mu.Unlock()
 	for _, run := range dropped {
+		if onDropped != nil {
+			onDropped(run.id)
+		}
 		m.removeManifest(run.id)
 		if run.dir == "" {
 			continue
