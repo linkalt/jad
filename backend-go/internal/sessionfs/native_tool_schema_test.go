@@ -79,7 +79,6 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"decide_systemone keys", "decide_systemone", `{"max_questions":2}`, true},
 		{"decide_systemone unknown", "decide_systemone", `{"nope":1}`, false},
 		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100}`, true},
-		{"profile_message blank system_prompt_path", "profile_message", `{"system_prompt_path":""}`, false},
 		{"profile_message removed approval", "profile_message", `{"approval":"ask"}`, false},
 		{"profile_message unknown", "profile_message", `{"nope":1}`, false},
 		{"profile_message old profiles key", "profile_message", `{"profiles":["a"]}`, false},

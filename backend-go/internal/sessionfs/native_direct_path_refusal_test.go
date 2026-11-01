@@ -207,7 +207,7 @@ func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 			return v != nil, err
 		}},
 		{"profile_message", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeProfileMessageSettings(s, settingPath, "")
+			v, err := normalizeNativeProfileMessageSettings(s, settingPath)
 			return v != nil, err
 		}},
 		{"read_image", func(s map[string]json.RawMessage) (bool, error) {

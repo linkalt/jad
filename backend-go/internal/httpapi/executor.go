@@ -61,7 +61,6 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	toolExecution := tools.ExecutionContext{}
 	run.mu.Lock()
 	toolExecution.RemoteHops = run.hops
-	systemPrompt := run.systemPrompt
 	run.mu.Unlock()
 	if run.canRequestInteraction() && run.interactions != nil {
 		toolExecution.RequestInteraction = run.interactions.Request
@@ -73,7 +72,6 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	defer emitter.discard()
 	result, err := runner.Run(ctx, input, session.RunOptions{
 		TurnID:          run.turnID,
-		SystemPrompt:    systemPrompt,
 		MemoryTrace:     h.memoryTrace,
 		ToolExecution:   toolExecution,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },

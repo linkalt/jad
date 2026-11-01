@@ -2,8 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,11 +10,11 @@ import (
 )
 
 func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
-	absent, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{}`), "setting.json", "")
+	absent, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{}`), "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("absent = %+v, %v; want nil", absent, err)
 	}
-	noTools, err := normalizeNativeProfileMessageSettings(map[string]json.RawMessage{}, "setting.json", "")
+	noTools, err := normalizeNativeProfileMessageSettings(map[string]json.RawMessage{}, "setting.json")
 	if err != nil || noTools != nil {
 		t.Fatalf("no tools = %+v, %v; want nil", noTools, err)
 	}
@@ -38,7 +36,7 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		"max chain set":            {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 4, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json", "")
+			got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
 			if err != nil || got == nil || !reflect.DeepEqual(*got, tc.want) {
 				t.Fatalf("settings = %+v, %v\nwant %+v", got, err, tc.want)
 			}
@@ -90,7 +88,7 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json", "")
+			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}
@@ -126,28 +124,5 @@ func TestLoadSessionConfigProfileMessage(t *testing.T) {
 	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{"deny_profiles": []any{"a", "a"}}}})
 	if _, err = LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "tools.native.profile_message.deny_profiles") {
 		t.Fatalf("duplicate deny_profiles error = %v", err)
-	}
-}
-
-func TestNormalizeNativeProfileMessageSettingsReadsSystemPromptPath(t *testing.T) {
-	cwd := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cwd, "system.md"), []byte("System text."), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"system_prompt_path":"system.md"}}`), "setting.json", cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.SystemPromptPath != filepath.Join(cwd, "system.md") || got.SystemPrompt != "System text." {
-		t.Errorf("SystemPromptPath = %q, SystemPrompt = %q", got.SystemPromptPath, got.SystemPrompt)
-	}
-}
-
-func TestNormalizeNativeProfileMessageSettingsMissingSystemPromptNamesTheKey(t *testing.T) {
-	cwd := t.TempDir()
-	missing := filepath.Join(cwd, "nope.md")
-	_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"system_prompt_path":"nope.md"}}`), "setting.json", cwd)
-	if err == nil || !strings.Contains(err.Error(), "tools.native.profile_message.system_prompt_path[0] could not be read: "+missing) {
-		t.Fatalf("error = %v, want the key and %s", err, missing)
 	}
 }

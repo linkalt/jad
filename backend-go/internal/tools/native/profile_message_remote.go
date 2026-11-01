@@ -42,10 +42,6 @@ func (r remoteSettings) allowed(name string) bool { return slices.Contains(r.nam
 // run the way a local message is followed: an answer within block_ms, else a handle.
 func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext, reference, message string) (string, error) {
 	callID := execution.CallID
-	if p.settings.SystemPromptPath != "" {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "system_prompt_path_remote",
-			"tools.native.profile_message.system_prompt_path cannot be sent to a remote profile: the remote protocol does not carry it. Message a local profile, or remove the key"), nil
-	}
 	if p.remotes.directory == nil || len(p.remotes.names) == 0 {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "remote_unavailable",
 			"This session does not enable remote profiles (tools.native.profile_message.remotes)"), nil

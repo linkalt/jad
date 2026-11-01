@@ -204,37 +204,3 @@ func TestSettingsStampStaysCurrentWhenNothingChanged(t *testing.T) {
 		}
 	}
 }
-
-func TestSettingsStampSeesASystemPromptFileEdit(t *testing.T) {
-	cwd := t.TempDir()
-	document := filepath.Join(cwd, "system.md")
-	writeFileT(t, document, "one")
-	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"subagent": map[string]any{"agents": map[string]any{"a": map[string]any{}}, "system_prompt_path": document}}})
-	backdateTree(t, fixture.Root, cwd)
-
-	config, stamp := stampedLoad(t, fixture)
-	if config.NativeSubagent == nil || config.NativeSubagent.SystemPrompt != "one" {
-		t.Fatalf("system prompt = %+v, want the file read", config.NativeSubagent)
-	}
-	writeFileT(t, document, "two, longer")
-	if stamp.Current() {
-		t.Error("stamp is current after the system prompt file was edited")
-	}
-}
-
-func TestSettingsStampSeesAProfileMessageSystemPromptFileEdit(t *testing.T) {
-	cwd := t.TempDir()
-	document := filepath.Join(cwd, "system.md")
-	writeFileT(t, document, "one")
-	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"profile_message": map[string]any{"system_prompt_path": document}}})
-	backdateTree(t, fixture.Root, cwd)
-
-	config, stamp := stampedLoad(t, fixture)
-	if config.NativeProfileMessage == nil || config.NativeProfileMessage.SystemPrompt != "one" {
-		t.Fatalf("profile_message = %+v, want the file read", config.NativeProfileMessage)
-	}
-	writeFileT(t, document, "two, longer")
-	if stamp.Current() {
-		t.Error("stamp is current after the profile_message system prompt file was edited")
-	}
-}

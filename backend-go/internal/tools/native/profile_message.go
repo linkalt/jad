@@ -146,9 +146,6 @@ type ProfileMessageRequest struct {
 	// block_ms passes), so a message that would wait for a profile that is itself blocked
 	// on the caller is refused as a cycle.
 	Blocking bool
-	// SystemPrompt is the text appended to the target profile's system prompt for this
-	// message; empty means none. A remote target never gets it.
-	SystemPrompt string
 }
 
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
@@ -340,16 +337,15 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments)
 	request := ProfileMessageRequest{
-		Blocking:     !handled || block > 0,
-		OwnerKey:     execution.SessionKey,
-		Session:      session,
-		Target:       target,
-		Message:      message,
-		Compact:      p.settings.Compact == sessionfs.ProfileMessageCompactOn,
-		QueueWait:    time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
-		Timeout:      time.Duration(p.settings.TimeoutMs) * time.Millisecond,
-		MaxQueued:    p.settings.MaxQueued,
-		SystemPrompt: p.settings.SystemPrompt,
+		Blocking:  !handled || block > 0,
+		OwnerKey:  execution.SessionKey,
+		Session:   session,
+		Target:    target,
+		Message:   message,
+		Compact:   p.settings.Compact == sessionfs.ProfileMessageCompactOn,
+		QueueWait: time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
+		Timeout:   time.Duration(p.settings.TimeoutMs) * time.Millisecond,
+		MaxQueued: p.settings.MaxQueued,
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless

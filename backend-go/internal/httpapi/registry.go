@@ -257,9 +257,7 @@ type activeRun struct {
 	// under mu before the run starts, empty for a user run.
 	chain []string
 	// hops is the remote hop count a tool-started run inherits; set under mu before it starts.
-	hops int
-	// systemPrompt is the text a tool-started run appends to its profile's system prompt.
-	systemPrompt        string
+	hops                int
 	cancel              context.CancelFunc
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker
