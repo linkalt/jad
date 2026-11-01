@@ -77,3 +77,23 @@ func TestAgentWithoutAToolsListGetsNoLoadToolFromTheParentPool(t *testing.T) {
 		t.Fatalf("child with no tools list got %v, want read only (load_tool came from the parent pool)", got)
 	}
 }
+
+// A second SetLazy with a load_tool the child's catalog already holds makes NewCatalog reject the
+// duplicate name; SetLazy must return that error rather than leave the child without load_tool.
+func TestSetLazyReturnsTheCatalogErrorForADuplicateLoadTool(t *testing.T) {
+	named := agentNamed("explore")
+	named.Tools, named.HasTools = []string{"read", "load_tool"}, true
+	parentTools := withExecutors(t, readOnlyTool("read"))
+	hook := &SubagentMCP{}
+	if _, err := NewSubagentToolWithMCP(subagentSettings(named), parentTools, &fakeLauncher{}, hook); err != nil {
+		t.Fatalf("NewSubagentToolWithMCP: %v", err)
+	}
+	owned := withExecutors(t, readOnlyTool("load_tool"))[0]
+	if err := hook.SetLazy(nil, &owned); err != nil {
+		t.Fatalf("first SetLazy: %v", err)
+	}
+	err := hook.SetLazy(nil, &owned)
+	if err == nil || !strings.Contains(err.Error(), "duplicate tool name load_tool") {
+		t.Fatalf("second SetLazy error = %v, want duplicate tool name load_tool", err)
+	}
+}
