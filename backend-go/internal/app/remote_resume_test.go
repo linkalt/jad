@@ -6,8 +6,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/remoteapi"
+	"jad/backend-go/internal/tools/native"
 )
 
 // A remote resume of a run another token started is refused as unknown_run, the same code a local
@@ -234,5 +236,180 @@ func TestRunPrunedInItsWindowLeavesNoEntry(t *testing.T) {
 	}
 	if code, _ := body["code"].(string); code != "unknown_run" {
 		t.Fatalf("resume of the pruned remote id: code %q, want unknown_run %v", code, body)
+	}
+}
+
+// A manager that closes takes its remote entries with it: its rr_ ids are unknown and the index holds
+// nothing for it. A run of another manager stays resumable. The index is checked directly as well as
+// through the API.
+func TestClosingAManagerForgetsItsRemoteRuns(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+	started := func(request string) string {
+		status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+			"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "first", "request_id": request})
+		if status != 202 {
+			t.Fatalf("start %s: %d %v", request, status, body)
+		}
+		server.waitDone(t, body["id"].(string))
+		return body["id"].(string)
+	}
+	closed := started("req-close-1")
+	index := server.service.resolver.remoteRuns
+	manager := index.managerOf(t, closed)
+	if got := index.size(); got != 1 {
+		t.Fatalf("the index holds %d entries before the close, want 1", got)
+	}
+	manager.Close()
+	if got := index.size(); got != 0 {
+		t.Fatalf("the index holds %d entries after the close, want 0", got)
+	}
+	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "more", "resume": closed, "request_id": "req-close-2"})
+	if status != 409 {
+		t.Fatalf("resume of a closed manager's run: status %d %v, want 409", status, body)
+	}
+	if code, _ := body["code"].(string); code != "unknown_run" {
+		t.Fatalf("resume of a closed manager's run: code %q, want unknown_run %v", code, body)
+	}
+}
+
+// A start that races with its manager's close leaves no entry: the start is refused as closed, or it
+// completes before the close and is forgotten with it. Either way the index is empty afterwards.
+func TestAStartRacingACloseLeavesNoEntry(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+	// The start runs in its own goroutine and is closed out from here. Its outcome is not checked: the
+	// start may be refused as closed or complete first. Either way no entry may outlive the close.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+			"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "race", "request_id": "req-race-1"})
+	}()
+	index := server.service.resolver.remoteRuns
+	manager := onlySubagentManagerWhenBuilt(t, server.service.resolver)
+	manager.Close()
+	receive(t, "the racing start to return", done)
+	if got := index.size(); got != 0 {
+		t.Fatalf("the index holds %d entries after a racing start and close, want 0", got)
+	}
+}
+
+// A manager's close forgets its own entries and no other manager's: the other manager's run stays
+// in the index and resumable.
+func TestCloseOfOneManagerKeepsAnotherManagersRuns(t *testing.T) {
+	index := newRemoteRunIndex()
+	closing, other := native.NewSubagentManager(), native.NewSubagentManager()
+	defer func() { _ = other.Close() }()
+	index.record("rr_0000000000000001", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder", identity: new(int), manager: closing})
+	index.record("rr_0000000000000002", remoteRunRef{local: "sub_00000002", session: "ref\x00dev/coder", identity: new(int), manager: other})
+	index.forgetManager(closing)
+	if got := index.size(); got != 1 {
+		t.Fatalf("the index holds %d entries, want the other manager's one", got)
+	}
+	if _, ok := index.lookup("rr_0000000000000002", "ref\x00dev/coder"); !ok {
+		t.Fatal("another manager's run is not resumable after the close")
+	}
+}
+
+// managerOf is the manager that holds the run a remote id names. The test fails when the id is unknown.
+func (i *remoteRunIndex) managerOf(t *testing.T, remoteID string) *native.SubagentManager {
+	t.Helper()
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	ref, ok := i.runs[remoteID]
+	if !ok {
+		t.Fatalf("no run for remote id %s", remoteID)
+	}
+	return ref.manager
+}
+
+// onlySubagentManager is the one sub-agent manager the resolver holds; the test fails when there is not
+// exactly one.
+func onlySubagentManager(t *testing.T, r *Resolver) *native.SubagentManager {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.subagentManagers) != 1 {
+		t.Fatalf("the resolver holds %d sub-agent managers, want 1", len(r.subagentManagers))
+	}
+	for _, manager := range r.subagentManagers {
+		return manager
+	}
+	return nil
+}
+
+// onlySubagentManagerWhenBuilt waits until the resolver holds its sub-agent manager, then returns it.
+// A start builds the manager, so a test that races a start with the close calls this first.
+func onlySubagentManagerWhenBuilt(t *testing.T, r *Resolver) *native.SubagentManager {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		count := len(r.subagentManagers)
+		r.mu.Unlock()
+		if count == 1 {
+			return onlySubagentManager(t, r)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the resolver never built its sub-agent manager")
+	return nil
+}
+
+// A start whose manager closes after the run is observed and before it is recorded leaves no entry.
+// The seam pauses the start in that window and the test closes the manager there. The close finds no
+// entry to forget, so the record that follows must be refused by the retention check: a closed manager
+// keeps nothing.
+func TestRunRecordedAfterItsManagerClosesLeavesNoEntry(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var paused atomic.Bool
+	releasePause := sync.OnceFunc(func() { close(release) })
+	afterRemoteObserved = func() {
+		if paused.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+	t.Cleanup(func() { afterRemoteObserved = nil; releasePause() })
+
+	type reply struct {
+		status int
+		body   map[string]any
+	}
+	started := make(chan reply, 1)
+	go func() {
+		status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+			"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "closing", "request_id": "req-closing-1"})
+		started <- reply{status, body}
+	}()
+	receive(t, "the start to reach its window", entered)
+	index := server.service.resolver.remoteRuns
+	if got := index.size(); got != 0 {
+		t.Fatalf("the index holds %d entries in the window, want none yet", got)
+	}
+	onlySubagentManager(t, server.service.resolver).Close()
+
+	releasePause()
+	got := receive(t, "the start to finish", started)
+	if got.status != 202 {
+		t.Fatalf("start: %d %v", got.status, got.body)
+	}
+	remoteRun := got.body["id"].(string)
+	if size := index.size(); size != 0 {
+		t.Fatalf("the index holds %d entries after the start in the closed manager, want 0", size)
+	}
+	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "more", "resume": remoteRun, "request_id": "req-closing-2"})
+	if status != 409 {
+		t.Fatalf("resume of the run recorded across the close: status %d %v, want 409", status, body)
+	}
+	if code, _ := body["code"].(string); code != "unknown_run" {
+		t.Fatalf("resume of the run recorded across the close: code %q, want unknown_run %v", code, body)
 	}
 }

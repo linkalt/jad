@@ -77,9 +77,12 @@ type SubagentManager struct {
 	// removeManifest deletes the manifest of a pruned run; it is a field so a test can
 	// hold the pruner inside the removal. The store sets it.
 	removeManifest func(id string)
-	// onDropped, when set, is told the identity of each run keep_finished drops, after mu is
-	// released. The app layer forgets the remote ids of dropped runs with it.
+	// onDropped, when set, is told the identity of each run keep_finished drops, after mu is released.
+	// The app layer forgets the remote ids of dropped runs with it.
 	onDropped func(identity any)
+	// onClosed, when set, is called once by Close, after mu is released and the manager is marked
+	// closed. The app layer forgets every remote id of the manager with it.
+	onClosed func()
 	// newRunID makes the id of a new run; it is a field so a test can force a collision.
 	newRunID func() (string, error)
 	// now reads the clock for the run times that the lists and the pruning order by; it is a
@@ -195,7 +198,8 @@ func (m *SubagentManager) dropOldestLocked() droppedRun {
 }
 
 // Retains reports whether the manager still keeps the run with this identity. An id can be drawn
-// again once its run is gone, so the identity, not the id, names the run.
+// again once its run is gone, so the identity, not the id, names the run. A closed manager keeps
+// nothing: its runs are being forgotten by its close hook.
 func (m *SubagentManager) Retains(identity any) bool {
 	run, _ := identity.(*subagentRun)
 	if run == nil {
@@ -203,7 +207,7 @@ func (m *SubagentManager) Retains(identity any) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.runs[run.id] == run
+	return !m.closed && m.runs[run.id] == run
 }
 
 // SetOnDropped makes the manager call fn with the identity of each run keep_finished drops, after
@@ -212,6 +216,13 @@ func (m *SubagentManager) SetOnDropped(fn func(identity any)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onDropped = fn
+}
+
+// SetOnClosed makes Close call fn once, after the manager is marked closed and its lock is released.
+func (m *SubagentManager) SetOnClosed(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onClosed = fn
 }
 
 // DeleteTranscriptsUnder makes the manager delete a run's transcript folder when
@@ -1058,7 +1069,12 @@ func (m *SubagentManager) Close() error {
 	}
 	m.mu.Lock()
 	m.closed = true
+	// A start after this point is refused, so the hook sees every run the manager will ever hold.
+	onClosed := m.onClosed
 	m.mu.Unlock()
+	if onClosed != nil {
+		onClosed()
+	}
 	m.cancel()
 	returned := make(chan struct{})
 	go func() {

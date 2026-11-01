@@ -42,6 +42,9 @@ type remoteRunIndex struct {
 	// byID is the remote id of each local run in runs, keyed by its local id, so a resume's source is
 	// found without a scan. An id can be drawn again, so an entry is kept only while its identity is.
 	byID map[string]remoteIDEntry
+	// byManager holds the identities of the runs each manager started through this index, so a
+	// manager that closes forgets only its own entries.
+	byManager map[*native.SubagentManager]map[any]struct{}
 }
 
 // remoteIDEntry is the remote id of a local run and the identity it was recorded under.
@@ -51,15 +54,16 @@ type remoteIDEntry struct {
 }
 
 // remoteRunRef is the local run a remote run id names, and the session it belongs to. identity names
-// the run for as long as its manager keeps it.
+// the run for as long as its manager keeps it, and manager is the manager that holds it.
 type remoteRunRef struct {
 	local, session string
 	identity       any
+	manager        *native.SubagentManager
 }
 
 // newRemoteRunIndex returns an empty index.
 func newRemoteRunIndex() *remoteRunIndex {
-	return &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[any]string), byID: make(map[string]remoteIDEntry)}
+	return &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[any]string), byID: make(map[string]remoteIDEntry), byManager: make(map[*native.SubagentManager]map[any]struct{})}
 }
 
 // record maps a remote id to the local run it started, when the manager still keeps that run. A run
@@ -70,6 +74,10 @@ func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
 	i.runs[remoteID] = ref
 	i.byLocal[ref.identity] = remoteID
 	i.byID[ref.local] = remoteIDEntry{remoteID, ref.identity}
+	if i.byManager[ref.manager] == nil {
+		i.byManager[ref.manager] = make(map[any]struct{})
+	}
+	i.byManager[ref.manager][ref.identity] = struct{}{}
 }
 
 // forget drops the entry of a run its manager has dropped; a later resume of its remote id is unknown.
@@ -80,11 +88,39 @@ func (i *remoteRunIndex) forget(identity any) {
 	if !ok {
 		return
 	}
-	local := i.runs[remoteID].local
+	ref := i.runs[remoteID]
+	i.removeLocked(remoteID, ref, identity)
+}
+
+// forgetManager drops every entry of a manager that closed. Only that manager's identities are visited.
+func (i *remoteRunIndex) forgetManager(manager *native.SubagentManager) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for identity := range i.byManager[manager] {
+		remoteID := i.byLocal[identity]
+		i.removeLocked(remoteID, i.runs[remoteID], identity)
+	}
+}
+
+// size is the number of remote ids the index holds.
+func (i *remoteRunIndex) size() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return len(i.runs)
+}
+
+// removeLocked drops one entry from every map. The caller holds mu.
+func (i *remoteRunIndex) removeLocked(remoteID string, ref remoteRunRef, identity any) {
 	delete(i.byLocal, identity)
 	delete(i.runs, remoteID)
-	if entry, ok := i.byID[local]; ok && entry.identity == identity {
-		delete(i.byID, local)
+	if entry, ok := i.byID[ref.local]; ok && entry.identity == identity {
+		delete(i.byID, ref.local)
+	}
+	if identities := i.byManager[ref.manager]; identities != nil {
+		delete(identities, identity)
+		if len(identities) == 0 {
+			delete(i.byManager, ref.manager)
+		}
 	}
 }
 
@@ -268,8 +304,8 @@ func (r *remoteMessageRun) watch(timeout time.Duration) {
 }
 
 // afterRemoteObserved is a test seam: nil in production, and read only by StartSubagent. A test sets
-// it to pause a remote start after its run is recorded and before the retention check; it may block
-// until the test releases it.
+// it to pause a remote start after its run is observed and before it is recorded; it may block until
+// the test releases it.
 var afterRemoteObserved func()
 
 func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.SubagentRequest) (remoteapi.Run, error) {
@@ -338,14 +374,15 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 		manager := b.resolver.sharedSubagentManager(config)
 		if manager != nil {
 			manager.SetOnDropped(b.runs.forget)
+			manager.SetOnClosed(func() { b.runs.forgetManager(manager) })
+		}
+		if afterRemoteObserved != nil {
+			afterRemoteObserved()
 		}
 		// Record first, then check: a drop that lands before the record is seen by Retains, and one
 		// that lands after it is forgotten by the hook. The index lock is never held across a
 		// manager call, so the two locks never nest.
-		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile), identity: run.Identity()})
-		if afterRemoteObserved != nil {
-			afterRemoteObserved()
-		}
+		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile), identity: run.Identity(), manager: manager})
 		if manager != nil && !manager.Retains(run.Identity()) {
 			b.runs.forget(run.Identity())
 		}
