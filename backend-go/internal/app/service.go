@@ -47,6 +47,7 @@ func NewService(config Config) (*Service, error) {
 		return nil, err
 	}
 	resolver.SetProfileRuns(api.ProfileRuns())
+	resolver.SetRunActive(api.RunActive)
 	service := &Service{Handler: api, api: api, resolver: resolver}
 	if config.RemoteAPI.Enabled {
 		table, err := remoteapi.NewTokenTable(config.RemoteAPI.TokensFile, config.HTTP.Logger, nil)

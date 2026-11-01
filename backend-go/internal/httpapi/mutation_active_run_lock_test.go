@@ -40,7 +40,6 @@ func TestResetAndFrontCompactAreRefusedWhileARunHoldsTheTranscriptLock(t *testin
 		body string
 		want string
 	}{
-		{"reset", "/api/sessions/session-1/reset?profile=dev", "", "cannot reset a profile while a run is active"},
 		{"front compact", "/api/sessions/session-1/front-compact?profile=dev", `{"message_id":"session-user-o0"}`, "cannot front compact a profile while a run is active"},
 	}
 	for _, tc := range cases {

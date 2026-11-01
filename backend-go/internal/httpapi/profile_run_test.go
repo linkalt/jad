@@ -179,10 +179,6 @@ func TestStartProfileRunYieldsToAMutationAndBlocksOne(t *testing.T) {
 	f := newProfileRunFixture(t, 0)
 	run := f.start(t, context.Background())
 	<-f.started
-	response := profileRunRequest(f.handler, http.MethodPost, "/api/sessions/session-1/reset?profile=dev")
-	if response.Code != http.StatusConflict || f.mutation.reset {
-		t.Fatalf("reset during a profile run: status=%d reset=%v body=%s", response.Code, f.mutation.reset, response.Body.String())
-	}
 	close(f.release)
 	awaitProfileRunDone(t, run)
 

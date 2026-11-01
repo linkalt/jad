@@ -186,11 +186,28 @@ func TestQueuedRunStartDoesNotBlockSessionSettings(t *testing.T) {
 	}
 }
 
-// The reset check relies on a registered run being visible whenever the
-// transcript is taken: a reset sent while a start is queued is still refused.
+// A reset sent while a start is queued behind an active run is refused with 409 and does not
+// wait for the queue. The queued start is confirmed in the turn queue with a bounded poll first.
 func TestResetIsRefusedWhileARunIsActiveAndAStartIsQueued(t *testing.T) {
 	f := newQueuedRunFixture(t)
-	response := f.answer("/api/sessions/s/reset?profile=dev", "")
+	key := f.handler.turnKey("s", "dev")
+	deadline := time.Now().Add(5 * time.Second)
+	for f.handler.startTurns.len(key) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the queued start never joined the turn queue")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	finished := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		finished <- f.answer("/api/sessions/s/reset?profile=dev", "")
+	}()
+	var response *httptest.ResponseRecorder
+	select {
+	case response = <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reset waited for the queued start instead of being refused")
+	}
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "cannot reset a profile while a run is active") {
 		t.Fatalf("reset status = %d body=%s", response.Code, response.Body.String())
 	}

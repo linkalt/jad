@@ -57,56 +57,14 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 }
 
 func (h *Handler) handleSessionReset(w http.ResponseWriter, r *http.Request, reference, profile string) {
-	if h.maintenance == nil {
+	reset, ok := h.resolver.(ProfileReset)
+	if !ok {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session reset is unavailable"})
 		return
 	}
-	resolved, err := h.maintenance.ResolveMaintenance(r.Context(), reference, profile)
-	if err != nil {
+	if err := reset.ResetProfile(r.Context(), reference, profile); err != nil {
 		writeJSONError(w, err)
 		return
-	}
-	if resolved.Session == nil {
-		writeJSONError(w, &StatusError{Code: http.StatusInternalServerError, Message: "session maintenance provider is not initialized"})
-		return
-	}
-	key := h.runKey(ResolvedSession{Reference: resolved.Reference, Profile: resolved.Profile})
-	// The gate is taken before the per-session lock (see handleSessionCompact).
-	if !h.beginMutation(key) {
-		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "session profile is already changing"})
-		return
-	}
-	// The gate is cleared before the locks are given back (see handleSessionCompact).
-	var unlock, processUnlock func()
-	defer func() {
-		h.endMutation(key)
-		if processUnlock != nil {
-			processUnlock()
-		}
-		unlock()
-	}()
-	unlock = h.lockSession(reference)
-	// A run holds the transcript lock until it ends, so the check has to come
-	// before waiting for that lock: after it, the run is over and the reset would
-	// wipe the answer it just wrote. The session lock above serializes this check
-	// with a run start, and the mutation gate keeps a new run from beginning.
-	if h.runIsActive(key) {
-		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"})
-		return
-	}
-	processUnlock, err = h.lockSessionProcess(r.Context(), reference, profile, "")
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	if err := resolved.Session.Reset(r.Context()); err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	// The history the handles were started from is gone, so their results have no use
-	// and would only keep costing.
-	if children, ok := h.resolver.(SessionChildren); ok {
-		children.ResetSessionChildren(resolved.Reference, resolved.Profile)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"reset": true})
 }

@@ -16,6 +16,25 @@ type fakeMaintenanceResolver struct {
 	*fakeResolver
 	mutation SessionMutation
 	calls    [][2]string
+	// activeRun reports a run of the profile the reset must be refused for.
+	activeRun func(reference, profile string) bool
+}
+
+// maintenanceFake returns the fake, so a test resolver that embeds it is wired the same way.
+func (r *fakeMaintenanceResolver) maintenanceFake() *fakeMaintenanceResolver { return r }
+
+// ResetProfile is the port the reset route calls. The refusals are the app resolver's (see
+// app/profile_reset.go and its tests); this fake answers the same status and text for a run
+// the test holds, so the route's error mapping is what these tests check.
+func (r *fakeMaintenanceResolver) ResetProfile(ctx context.Context, reference, profile string) error {
+	resolved, err := r.ResolveMaintenance(ctx, reference, profile)
+	if err != nil {
+		return err
+	}
+	if r.activeRun != nil && r.activeRun(resolved.Reference, resolved.Profile) {
+		return &StatusError{Code: http.StatusConflict, Message: "cannot reset a profile while a run is active"}
+	}
+	return resolved.Session.Reset(ctx)
 }
 
 func (r *fakeMaintenanceResolver) ResolveMaintenance(_ context.Context, reference, profile string) (ResolvedMutation, error) {

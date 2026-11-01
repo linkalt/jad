@@ -59,5 +59,5 @@ func (h *Handler) lockSession(reference string) func() {
 			reference = canonical
 		}
 	}
-	return h.sessionLocks.lock(reference)
+	return h.gate.Lock(reference)
 }

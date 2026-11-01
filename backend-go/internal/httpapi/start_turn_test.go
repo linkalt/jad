@@ -256,10 +256,7 @@ func TestStartQueuedBehindACompactionRunsAfterIt(t *testing.T) {
 	}
 	var gateHeldOnRelease atomic.Bool
 	f.resolver.setOnRelease(func() {
-		f.handler.mutationMu.Lock()
-		_, held := f.handler.mutations["canonical\x00dev"]
-		f.handler.mutationMu.Unlock()
-		if held && f.mutation.compacted {
+		if f.handler.gate.Held("canonical\x00dev") && f.mutation.compacted {
 			gateHeldOnRelease.Store(true)
 		}
 	})

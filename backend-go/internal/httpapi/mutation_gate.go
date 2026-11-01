@@ -1,16 +1,18 @@
 package httpapi
 
-func (h *Handler) beginMutation(key string) bool {
-	h.mutationMu.Lock()
-	defer h.mutationMu.Unlock()
-	if h.mutations == nil {
-		h.mutations = make(map[string]struct{})
+import (
+	"jad/backend-go/internal/sessiongate"
+)
+
+// newSessionGate returns the gate the resolver shares, or a private one for a resolver
+// that does not share it.
+func newSessionGate(resolver SessionResolver) *sessiongate.Gate {
+	if shared, ok := resolver.(SessionGater); ok {
+		if gate := shared.SessionGate(); gate != nil {
+			return gate
+		}
 	}
-	if _, exists := h.mutations[key]; exists {
-		return false
-	}
-	h.mutations[key] = struct{}{}
-	return true
+	return &sessiongate.Gate{}
 }
 
 // runIsActive reports whether a run of key is still running.
@@ -19,34 +21,26 @@ func (h *Handler) runIsActive(key string) bool {
 	return run != nil && run.state() == "running"
 }
 
+// RunActive reports whether a run of the session profile is still running. The resolver
+// calls it before a reset, so the refusal is decided in the same registry the run starts in.
+func (h *Handler) RunActive(reference, profile string) bool {
+	return h.runIsActive(h.runKey(ResolvedSession{Reference: reference, Profile: profile}))
+}
+
+func (h *Handler) beginMutation(key string) bool {
+	return h.gate.Begin(key)
+}
+
 func (h *Handler) endMutation(key string) {
-	h.mutationMu.Lock()
-	delete(h.mutations, key)
-	h.mutationMu.Unlock()
+	h.gate.End(key)
 }
 
-// markRestoring records that a real checkpoint restore holds key, and returns
-// the function that clears it. The caller already holds the mutation gate.
 func (h *Handler) markRestoring(key string) func() {
-	h.mutationMu.Lock()
-	if h.restoring == nil {
-		h.restoring = make(map[string]struct{})
-	}
-	h.restoring[key] = struct{}{}
-	h.mutationMu.Unlock()
-	return func() {
-		h.mutationMu.Lock()
-		delete(h.restoring, key)
-		h.mutationMu.Unlock()
-	}
+	return h.gate.MarkRestoring(key)
 }
 
-// isRestoring reports whether a checkpoint restore is in flight for key.
 func (h *Handler) isRestoring(key string) bool {
-	h.mutationMu.Lock()
-	defer h.mutationMu.Unlock()
-	_, exists := h.restoring[key]
-	return exists
+	return h.gate.Restoring(key)
 }
 
 func (h *Handler) beginRun(key, turnID string) (*activeRun, error) {
@@ -54,10 +48,17 @@ func (h *Handler) beginRun(key, turnID string) (*activeRun, error) {
 }
 
 func (h *Handler) beginRunFrom(key, turnID, source, caller string) (*activeRun, error) {
-	h.mutationMu.Lock()
-	defer h.mutationMu.Unlock()
-	if _, exists := h.mutations[key]; exists {
+	var run *activeRun
+	free, err := h.gate.WhileFree(key, func() error {
+		var err error
+		run, err = h.runs.beginFrom(key, turnID, source, caller)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !free {
 		return nil, &StatusError{Code: 409, Message: "session profile or compaction is already changing"}
 	}
-	return h.runs.beginFrom(key, turnID, source, caller)
+	return run, nil
 }

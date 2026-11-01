@@ -15,12 +15,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/memorytrace"
 	"jad/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/sessiongate"
 )
 
 const (
@@ -134,15 +134,8 @@ type Handler struct {
 	runContentWriteBatchBytes int
 	runContentFlushInterval   time.Duration
 	runs                      *runRegistry
-	sessionLocks              keyedLocker
+	gate                      *sessiongate.Gate
 	startTurns                turnQueue
-	mutationMu                sync.Mutex
-	mutations                 map[string]struct{}
-
-	// restoring holds the run keys with a real checkpoint restore in flight, under
-	// mutationMu. A restore also holds `mutations`, which compaction and reset
-	// share, so the checkpoint list cannot tell them apart from that map.
-	restoring map[string]struct{}
 }
 
 // NewHandler validates configuration and builds an HTTP handler. The resolver
@@ -245,6 +238,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	images, _ := resolver.(SessionImages)
 	messageImages, _ := resolver.(MessageImages)
 	maintenance, _ := resolver.(SessionMaintenance)
+	gate := newSessionGate(resolver)
 	trace := config.MemoryTrace
 	if trace == nil {
 		trace = memorytrace.FromEnvironment()
@@ -280,7 +274,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		runContentWriteBatchBytes: config.RunContentWriteBatchBytes,
 		runContentFlushInterval:   config.RunContentFlushInterval,
 		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns),
-		mutations:                 make(map[string]struct{}),
+		gate:                      gate,
 	}, nil
 }
 

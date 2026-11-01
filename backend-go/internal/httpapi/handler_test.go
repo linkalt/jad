@@ -735,6 +735,11 @@ func testHandler(t *testing.T, resolver SessionResolver, config Config) *Handler
 	if err != nil {
 		t.Fatal(err)
 	}
+	if fake, ok := resolver.(interface {
+		maintenanceFake() *fakeMaintenanceResolver
+	}); ok && fake.maintenanceFake().activeRun == nil {
+		fake.maintenanceFake().activeRun = handler.RunActive
+	}
 	return handler
 }
 

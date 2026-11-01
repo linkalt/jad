@@ -26,6 +26,7 @@ import (
 	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessiongate"
 	"jad/backend-go/internal/sessionlock"
 	"jad/backend-go/internal/tools"
 	mcpclient "jad/backend-go/internal/tools/mcp"
@@ -95,6 +96,10 @@ type Resolver struct {
 
 	// profileRuns registers profile_message runs in the HTTP run registry; nil means no tracking.
 	profileRuns atomic.Pointer[httpapi.ProfileRunStarter]
+	// runActive reports whether a run of a session profile is running; set by SetRunActive.
+	runActive atomic.Pointer[func(reference, profile string) bool]
+	// gate is the mutation gate and session locks, shared with the HTTP handler.
+	gate *sessiongate.Gate
 
 	// subagentBuilds holds the managers being built, by storage directory. Building
 	// one reads, rewrites and may delete a lot of files, so it runs outside mu; a
@@ -258,6 +263,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		fetchStores:       make(map[string]*native.FetchStore),
 		storeSessions:     make(map[string]map[string]struct{}),
 		mutationLock:      native.NewPathLocks(),
+		gate:              &sessiongate.Gate{},
 		openStore:         openSharedSession,
 
 		subagentBuilds:               make(map[string]*subagentBuild),

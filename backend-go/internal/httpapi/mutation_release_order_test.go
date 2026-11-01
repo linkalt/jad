@@ -28,10 +28,7 @@ func (r *gateAtRelease) LockSession(ctx context.Context, _, _, _ string) (func()
 	select {
 	case <-r.release:
 		return func() {
-			r.handler.mutationMu.Lock()
-			_, held := r.handler.mutations["canonical\x00dev"]
-			r.handler.mutationMu.Unlock()
-			r.held.Store(held)
+			r.held.Store(r.handler.gate.Held("canonical\x00dev"))
 		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -83,7 +80,6 @@ func TestMaintenanceClearsItsMutationGateBeforeReleasingTheProcessLock(t *testin
 		path string
 		body string
 	}{
-		{"reset", "/api/sessions/session-1/reset?profile=dev", ""},
 		{"front compact", "/api/sessions/session-1/front-compact?profile=dev", `{"message_id":"session-user-o0"}`},
 		{"state context", "/api/sessions/session-1/statecontext?profile=dev", `{"prompt":"p"}`},
 	}

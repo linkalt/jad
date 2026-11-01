@@ -7,6 +7,7 @@ import (
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/session"
+	"jad/backend-go/internal/sessiongate"
 	"jad/backend-go/internal/tools"
 )
 
@@ -227,6 +228,18 @@ type ResolvedMutation struct {
 
 type SessionMaintenance interface {
 	ResolveMaintenance(context.Context, string, string) (ResolvedMutation, error)
+}
+
+// SessionGater is an optional adapter that shares the mutation gate and the session locks
+// with the rest of the backend. Without it the handler keeps its own gate.
+type SessionGater interface {
+	SessionGate() *sessiongate.Gate
+}
+
+// ProfileReset is an optional adapter that resets one profile's transcript. The reset route
+// and the native profile tool both call it, so the refusals are the same for both.
+type ProfileReset interface {
+	ResetProfile(ctx context.Context, reference, profile string) error
 }
 
 // RootLibrary provides the optional, read-only global Markdown library.
