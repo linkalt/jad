@@ -103,7 +103,7 @@ func tokens(t *testing.T, rows string) *TokenTable {
 
 func defaultTable(t *testing.T) *TokenTable {
 	return tokens(t, fmt.Sprintf(`{"tokens":[
- {"id":"build","sha256":%q,"profiles":["main/review/*"],"agents":["main/review/*/explore"],"actions":["message","subagent","status","stop","transcripts"]},
+ {"id":"build","sha256":%q,"profiles":["main/review/*"],"agents":["main/review/*/explore"],"actions":["message","subagent","status","stop","transcripts","profile"]},
  {"id":"readonly","sha256":%q,"profiles":["main/*/*"],"actions":["status"]}]}`, hashOf(secretA), hashOf(secretB)))
 }
 

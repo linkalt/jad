@@ -110,6 +110,20 @@ type TranscriptBackend interface {
 	Transcript(ctx context.Context, request TranscriptRequest) (string, error)
 }
 
+// ProfileRequest asks for a profile's info: Session and Profile name it ("category/name"),
+// MayProfile tells whether the token's globs reach "session/category/profile".
+type ProfileRequest struct {
+	Session    string
+	Profile    string
+	MayProfile func(target string) bool
+}
+
+// ProfileBackend is the optional part of a Backend that serves a profile's info. A remote can
+// ask for info only: compact and reset are not offered here.
+type ProfileBackend interface {
+	ProfileInfo(ctx context.Context, request ProfileRequest) (string, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	Tokens  *TokenTable
@@ -249,6 +263,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleStart(w, r, token, hops, "subagent")
 	case r.Method == http.MethodGet && len(segments) == 1 && (segments[0] == "transcript" || segments[0] == "transcripts"):
 		s.handleTranscript(w, r, token, segments[0])
+	case r.Method == http.MethodGet && len(segments) == 1 && segments[0] == "profile":
+		s.handleProfile(w, r, token)
 	case r.Method == http.MethodGet && len(segments) == 2 && segments[0] == "runs":
 		s.handleRun(w, r, token, segments[1])
 	case r.Method == http.MethodPost && len(segments) == 3 && segments[0] == "runs" && segments[2] == "stop":
@@ -663,6 +679,38 @@ var transcriptKeys = map[string]map[string]string{
 }
 
 const transcriptValueMax = 2048
+
+// handleProfile answers a profile's info. Only session and profile are read; a profile the
+// token's globs do not reach answers like one that does not exist.
+func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, token Token) {
+	backend, ok := s.opts.Backend.(ProfileBackend)
+	if !ok || !token.Allows(ActionProfile) {
+		s.deny(w, token, ActionProfile, "profile")
+		return
+	}
+	for key := range r.URL.Query() {
+		if key != "session" && key != "profile" {
+			writeError(w, http.StatusBadRequest, "bad_request", key+" is not a profile key")
+			return
+		}
+	}
+	session, profile := r.URL.Query().Get("session"), r.URL.Query().Get("profile")
+	if !sessionPattern.MatchString(session) || profile == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "session and profile are required")
+		return
+	}
+	output, err := backend.ProfileInfo(r.Context(), ProfileRequest{Session: session, Profile: profile, MayProfile: token.MayProfile})
+	if err != nil {
+		var refusal *Refusal
+		if errors.As(err, &refusal) {
+			writeError(w, http.StatusBadRequest, refusal.Code, refusal.Message)
+			return
+		}
+		s.backendError(w, token, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": output})
+}
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, token Token, tool string) {
 	backend, ok := s.opts.Backend.(TranscriptBackend)

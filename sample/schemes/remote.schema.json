@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JAD remote entry",
-  "description": "<remotes folder>/<name>.json: another JAD server this one may call with profile_message, subagent, transcript and transcripts. The file name (without .json) is the remote's name, written remote:<name>/... in a tool call. It holds no model, tools or instructions, and never the token itself. A remote is reached over plain http or a unix socket: the bearer token travels in clear text over http, so put that connection behind a VPN or use a unix socket. There is no TLS and no proxy.",
+  "description": "<remotes folder>/<name>.json: another JAD server this one may call with profile_message, subagent, profile (info only), transcript and transcripts. The file name (without .json) is the remote's name, written remote:<name>/... in a tool call. It holds no model, tools or instructions, and never the token itself. A remote is reached over plain http or a unix socket: the bearer token travels in clear text over http, so put that connection behind a VPN or use a unix socket. There is no TLS and no proxy.",
   "type": "object",
   "properties": {
     "schema_version": { "const": 1 },

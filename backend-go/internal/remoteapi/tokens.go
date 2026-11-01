@@ -28,10 +28,13 @@ const (
 	ActionStatus      = "status"
 	ActionStop        = "stop"
 	ActionTranscripts = "transcripts"
+	// ActionProfile lets a token ask for a profile's info (its context tokens). Compact and reset
+	// are not remote actions: a remote never changes a profile.
+	ActionProfile = "profile"
 )
 
 var (
-	allActions     = []string{ActionMessage, ActionSubagent, ActionStatus, ActionStop, ActionTranscripts}
+	allActions     = []string{ActionMessage, ActionSubagent, ActionStatus, ActionStop, ActionTranscripts, ActionProfile}
 	tokenIDRule    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 	sha256HexRe    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	errNoToken     = errors.New("token required")

@@ -9,7 +9,7 @@ import (
 )
 
 func TestInjectedNamesNeverReachTheBackend(t *testing.T) {
-	f := newFixture(t, tokens(t, fmt.Sprintf(`{"tokens":[{"id":"wide","sha256":%q,"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts"]}]}`, hashOf(secretA))), nil)
+	f := newFixture(t, tokens(t, fmt.Sprintf(`{"tokens":[{"id":"wide","sha256":%q,"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts","profile"]}]}`, hashOf(secretA))), nil)
 	bad := []struct{ session, profile string }{
 		{"..", "review/a"}, {"main/../x", "review/a"}, {"main", "../review"}, {"main", "review/../a"}, {"main", "review//a"},
 		{"main", "review/a/extra"}, {"main", "Review/a\n"}, {"main", "review/a\x00"}, {"main", "review/ä"}, {"main", "/review/a"},
