@@ -256,8 +256,8 @@ func (r *remoteMessageRun) watch(timeout time.Duration) {
 }
 
 // afterRemoteObserved is a test seam: nil in production, and read only by StartSubagent. A test sets
-// it to pause a remote start in the window between observing its local run and installing the hook;
-// it may block until the test releases it.
+// it to pause a remote start after its run is recorded and before the retention check; it may block
+// until the test releases it.
 var afterRemoteObserved func()
 
 func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.SubagentRequest) (remoteapi.Run, error) {
@@ -321,18 +321,21 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	}()
 	select {
 	case run := <-observed:
-		if afterRemoteObserved != nil {
-			afterRemoteObserved()
-		}
 		// The hook goes in before the run is recorded, so a prune after this point is forgotten by
 		// the hook.
 		manager := b.resolver.sharedSubagentManager(config)
 		if manager != nil {
 			manager.SetOnDropped(func(local string) { b.runs.forget(manager, local) })
 		}
-		// A run the manager dropped before the hook went in is not recorded: no hook would forget it.
-		if manager == nil || manager.Retains(run.ID()) {
-			b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)}, manager)
+		// Record first, then check: a drop that lands before the record is seen by Retains, and one
+		// that lands after it is forgotten by the hook. The index lock is never held across a
+		// manager call, so the two locks never nest.
+		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)}, manager)
+		if afterRemoteObserved != nil {
+			afterRemoteObserved()
+		}
+		if manager != nil && !manager.Retains(run.ID()) {
+			b.runs.forget(manager, run.ID())
 		}
 		go func() { <-run.Done(); cancel() }()
 		return &remoteSubagentRun{run: run, runs: b.runs, owner: manager}, nil

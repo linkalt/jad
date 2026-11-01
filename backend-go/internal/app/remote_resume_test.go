@@ -173,10 +173,10 @@ func TestForgetOnlyRemovesTheDroppingManagersRun(t *testing.T) {
 	}
 }
 
-// A run pruned in the window between observing it and installing the hook leaves no entry in the index.
-// The seam pauses the first remote start in that window; a second remote run, which keep_finished
-// allows only with the first gone, prunes the first from the test's own goroutine. Without the
-// retention check the paused start would record the pruned run.
+// A run pruned between its record and the retention check leaves no entry in the index. The seam
+// pauses the first remote start there; a second remote run, which keep_finished allows only with the
+// first gone, prunes the first from the test's own goroutine. With the check before the record, the
+// paused start would record the pruned run.
 func TestRunPrunedInItsWindowLeavesNoEntry(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "__subagent_settings": map[string]any{"keep_finished": 1}})
 	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
