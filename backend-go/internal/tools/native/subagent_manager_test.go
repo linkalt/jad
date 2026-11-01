@@ -522,10 +522,10 @@ func TestDroppedRunsAreReportedToTheHook(t *testing.T) {
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
 	var dropped []string
-	manager.SetOnDropped(func(id string) {
+	manager.SetOnDropped(func(identity any) {
 		manager.mu.Lock()
 		manager.mu.Unlock()
-		dropped = append(dropped, id)
+		dropped = append(dropped, identity.(*subagentRun).id)
 	})
 	manager.mu.Lock()
 	for _, id := range []string{"sub_00000001", "sub_00000002"} {
@@ -533,7 +533,7 @@ func TestDroppedRunsAreReportedToTheHook(t *testing.T) {
 		manager.finished = append(manager.finished, id)
 	}
 	manager.mu.Unlock()
-	manager.removeDropped([]droppedRun{{id: "sub_00000001"}})
+	manager.removeDropped([]droppedRun{{id: "sub_00000001", run: manager.runs["sub_00000001"]}})
 	if len(dropped) != 1 || dropped[0] != "sub_00000001" {
 		t.Fatalf("the hook was told %v, want the dropped run only", dropped)
 	}

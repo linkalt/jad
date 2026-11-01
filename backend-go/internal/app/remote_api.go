@@ -36,53 +36,65 @@ type remoteBackend struct {
 type remoteRunIndex struct {
 	mu   sync.Mutex
 	runs map[string]remoteRunRef
-	// byLocal is the remote id of each local run in runs, keyed by the manager that minted the
-	// local id as well: two managers can mint the same id, and a drop from one must not forget
-	// the other's run.
-	byLocal map[remoteLocalKey]string
+	// byLocal is the remote id of each local run in runs, keyed by the run's identity, which is never
+	// drawn again. A local id can be, so a forget keyed by the id could remove a newer run's entry.
+	byLocal map[any]string
+	// byID is the remote id of each local run in runs, keyed by its local id, so a resume's source is
+	// found without a scan. An id can be drawn again, so an entry is kept only while its identity is.
+	byID map[string]remoteIDEntry
 }
 
-// remoteLocalKey names a local run: its id within the manager that owns it.
-type remoteLocalKey struct {
-	owner *native.SubagentManager
-	local string
+// remoteIDEntry is the remote id of a local run and the identity it was recorded under.
+type remoteIDEntry struct {
+	remoteID string
+	identity any
 }
 
-// remoteRunRef is the local run a remote run id names, and the session it belongs to.
+// remoteRunRef is the local run a remote run id names, and the session it belongs to. identity names
+// the run for as long as its manager keeps it.
 type remoteRunRef struct {
 	local, session string
+	identity       any
+}
+
+// newRemoteRunIndex returns an empty index.
+func newRemoteRunIndex() *remoteRunIndex {
+	return &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[any]string), byID: make(map[string]remoteIDEntry)}
 }
 
 // record maps a remote id to the local run it started, when the manager still keeps that run. A run
 // that was dropped before the hook went in is not recorded, so no entry outlives its run.
-func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef, owner *native.SubagentManager) {
+func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.runs[remoteID] = ref
-	i.byLocal[remoteLocalKey{owner, ref.local}] = remoteID
+	i.byLocal[ref.identity] = remoteID
+	i.byID[ref.local] = remoteIDEntry{remoteID, ref.identity}
 }
 
-// forget drops the entry of a local run its manager has dropped; a later resume of its remote id is
-// unknown.
-func (i *remoteRunIndex) forget(owner *native.SubagentManager, local string) {
+// forget drops the entry of a run its manager has dropped; a later resume of its remote id is unknown.
+func (i *remoteRunIndex) forget(identity any) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	key := remoteLocalKey{owner, local}
-	remoteID, ok := i.byLocal[key]
+	remoteID, ok := i.byLocal[identity]
 	if !ok {
 		return
 	}
-	delete(i.byLocal, key)
+	local := i.runs[remoteID].local
+	delete(i.byLocal, identity)
 	delete(i.runs, remoteID)
+	if entry, ok := i.byID[local]; ok && entry.identity == identity {
+		delete(i.byID, local)
+	}
 }
 
 // remoteIDOf is the remote id of the local run local, or local itself when this backend did not start it
 // (a run the server started on its own, or a resume that has no remote name).
-func (i *remoteRunIndex) remoteIDOf(owner *native.SubagentManager, local string) string {
+func (i *remoteRunIndex) remoteIDOf(local string) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if remoteID, ok := i.byLocal[remoteLocalKey{owner, local}]; ok {
-		return remoteID
+	if entry, ok := i.byID[local]; ok {
+		return entry.remoteID
 	}
 	return local
 }
@@ -98,7 +110,7 @@ func (i *remoteRunIndex) lookup(remoteID, session string) (remoteRunRef, bool) {
 
 // RemoteBackend returns the backend for the remote API of this resolver.
 func (r *Resolver) RemoteBackend(runTimeout time.Duration) remoteapi.Backend {
-	r.remoteRuns = &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
+	r.remoteRuns = newRemoteRunIndex()
 	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: r.remoteRuns}
 }
 
@@ -325,20 +337,20 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 		// the hook.
 		manager := b.resolver.sharedSubagentManager(config)
 		if manager != nil {
-			manager.SetOnDropped(func(local string) { b.runs.forget(manager, local) })
+			manager.SetOnDropped(b.runs.forget)
 		}
 		// Record first, then check: a drop that lands before the record is seen by Retains, and one
 		// that lands after it is forgotten by the hook. The index lock is never held across a
 		// manager call, so the two locks never nest.
-		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)}, manager)
+		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile), identity: run.Identity()})
 		if afterRemoteObserved != nil {
 			afterRemoteObserved()
 		}
-		if manager != nil && !manager.Retains(run.ID()) {
-			b.runs.forget(manager, run.ID())
+		if manager != nil && !manager.Retains(run.Identity()) {
+			b.runs.forget(run.Identity())
 		}
 		go func() { <-run.Done(); cancel() }()
-		return &remoteSubagentRun{run: run, runs: b.runs, owner: manager}, nil
+		return &remoteSubagentRun{run: run, runs: b.runs}, nil
 	case output := <-finished:
 		cancel()
 		return nil, subagentStartFailure(output)
@@ -389,8 +401,6 @@ func subagentStartFailure(output json.RawMessage) error {
 type remoteSubagentRun struct {
 	run  *native.ExternalRun
 	runs *remoteRunIndex
-	// owner is the manager the run lives on, which names its local id in runs.
-	owner *native.SubagentManager
 }
 
 func (r *remoteSubagentRun) Done() <-chan struct{} { return r.run.Done() }
@@ -399,7 +409,7 @@ func (r *remoteSubagentRun) Stop(reason string)    { r.run.Stop(reason) }
 func (r *remoteSubagentRun) Result() remoteapi.RunResult {
 	state, text, reason := r.run.Outcome()
 	resumedFrom, configNote := r.run.ResumeFacts()
-	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(r.owner, resumedFrom), ConfigNote: configNote}
+	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(resumedFrom), ConfigNote: configNote}
 	if state == "failed" {
 		result.Code, result.Message = "subagent_failed", reason
 	}

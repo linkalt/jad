@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/remoteapi"
-	"jad/backend-go/internal/tools/native"
 )
 
 // A remote resume of a run another token started is refused as unknown_run, the same code a local
@@ -123,10 +122,8 @@ func TestRemoteResumeOfAnOldRemoteIDIsUnknownAfterARestart(t *testing.T) {
 // The index finds a remote run only in the session and profile it started in: the same id under
 // another session key is not found, so a resume through another profile is unknown.
 func TestRemoteRunIndexFindsARunOnlyInItsSession(t *testing.T) {
-	owner := native.NewSubagentManager()
-	defer func() { _ = owner.Close() }()
-	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
-	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, owner)
+	index := newRemoteRunIndex()
+	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder", identity: new(int)})
 	if ref, ok := index.lookup("rr_0123456789abcdef", "ref\x00dev/coder"); !ok || ref.local != "sub_00000001" {
 		t.Fatalf("the run is not found in its own session: %v %v", ref, ok)
 	}
@@ -138,38 +135,36 @@ func TestRemoteRunIndexFindsARunOnlyInItsSession(t *testing.T) {
 	}
 }
 
-// The index forgets a local run when its manager drops it, from both maps.
+// The index forgets a local run when its manager drops it, from every map.
 func TestRemoteRunIndexForgetsADroppedRun(t *testing.T) {
-	owner := native.NewSubagentManager()
-	defer func() { _ = owner.Close() }()
-	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
-	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, owner)
-	index.forget(owner, "sub_00000001")
+	index := newRemoteRunIndex()
+	identity := new(int)
+	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder", identity: identity})
+	index.forget(identity)
 	if _, ok := index.lookup("rr_0123456789abcdef", "ref\x00dev/coder"); ok {
 		t.Fatal("a dropped run is still found by its remote id")
 	}
-	if got := index.remoteIDOf(owner, "sub_00000001"); got != "sub_00000001" {
+	if got := index.remoteIDOf("sub_00000001"); got != "sub_00000001" {
 		t.Fatalf("a dropped run still has a remote id: %q", got)
 	}
-	if len(index.runs) != 0 || len(index.byLocal) != 0 {
-		t.Fatalf("the index keeps entries for a dropped run: %d, %d", len(index.runs), len(index.byLocal))
+	if len(index.runs) != 0 || len(index.byLocal) != 0 || len(index.byID) != 0 {
+		t.Fatalf("the index keeps entries for a dropped run: %d, %d, %d", len(index.runs), len(index.byLocal), len(index.byID))
 	}
 }
 
-// Two managers can mint the same local run id. A drop from one manager forgets only its own run: the
-// other manager's run, with the same id, keeps its remote entry.
-func TestForgetOnlyRemovesTheDroppingManagersRun(t *testing.T) {
-	older, newer := native.NewSubagentManager(), native.NewSubagentManager()
-	defer func() { _ = older.Close(); _ = newer.Close() }()
-	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
-	index.record("rr_0000000000000001", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, older)
-	index.record("rr_0000000000000002", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/other"}, newer)
-	index.forget(older, "sub_00000001")
+// A local id can be drawn again once its run is pruned. A forget for the pruned run, which arrives
+// after the new run has the same id, must leave the new run's entry: the identity names the run.
+func TestForgetOfAPrunedRunKeepsANewRunWithTheSameLocalID(t *testing.T) {
+	index := newRemoteRunIndex()
+	pruned, reused := new(int), new(int)
+	index.record("rr_0000000000000001", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder", identity: pruned})
+	index.record("rr_0000000000000002", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/other", identity: reused})
+	index.forget(pruned)
 	if _, ok := index.lookup("rr_0000000000000002", "ref\x00dev/other"); !ok {
-		t.Fatal("a drop from one manager removed the other manager's run with the same local id")
+		t.Fatal("a forget for the pruned run removed the new run with the same local id")
 	}
-	if got := index.remoteIDOf(newer, "sub_00000001"); got != "rr_0000000000000002" {
-		t.Fatalf("the newer run lost its remote id: %q", got)
+	if got := index.remoteIDOf("sub_00000001"); got != "rr_0000000000000002" {
+		t.Fatalf("the new run lost its remote id: %q", got)
 	}
 }
 

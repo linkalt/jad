@@ -77,9 +77,9 @@ type SubagentManager struct {
 	// removeManifest deletes the manifest of a pruned run; it is a field so a test can
 	// hold the pruner inside the removal. The store sets it.
 	removeManifest func(id string)
-	// onDropped, when set, is told the id of every run keep_finished drops, after mu is
+	// onDropped, when set, is told the identity of each run keep_finished drops, after mu is
 	// released. The app layer forgets the remote ids of dropped runs with it.
-	onDropped func(id string)
+	onDropped func(identity any)
 	// newRunID makes the id of a new run; it is a field so a test can force a collision.
 	newRunID func() (string, error)
 	// now reads the clock for the run times that the lists and the pruning order by; it is a
@@ -169,6 +169,7 @@ func (m *SubagentManager) recover(keep int) {
 // deleted, its transcript folder. Both are removed by removeDropped after mu is released.
 type droppedRun struct {
 	id  string
+	run *subagentRun
 	dir string
 }
 
@@ -180,7 +181,7 @@ func (m *SubagentManager) dropOldestLocked() droppedRun {
 	m.finished = m.finished[1:]
 	run := m.runs[id]
 	delete(m.runs, id)
-	dropped := droppedRun{id: id}
+	dropped := droppedRun{id: id, run: run}
 	if run == nil {
 		return dropped
 	}
@@ -193,16 +194,21 @@ func (m *SubagentManager) dropOldestLocked() droppedRun {
 	return dropped
 }
 
-// Retains reports whether the manager still keeps the run with this id; a pruned run is gone.
-func (m *SubagentManager) Retains(id string) bool {
+// Retains reports whether the manager still keeps the run with this identity. An id can be drawn
+// again once its run is gone, so the identity, not the id, names the run.
+func (m *SubagentManager) Retains(identity any) bool {
+	run, _ := identity.(*subagentRun)
+	if run == nil {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.runs[id] != nil
+	return m.runs[run.id] == run
 }
 
-// SetOnDropped makes the manager call fn with the id of each run keep_finished drops, after the
-// manager releases its lock. A later call replaces the earlier one.
-func (m *SubagentManager) SetOnDropped(fn func(id string)) {
+// SetOnDropped makes the manager call fn with the identity of each run keep_finished drops, after
+// the manager releases its lock. A later call replaces the earlier one.
+func (m *SubagentManager) SetOnDropped(fn func(identity any)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onDropped = fn
@@ -229,8 +235,8 @@ func (m *SubagentManager) removeDropped(dropped []droppedRun) {
 	onDropped := m.onDropped
 	m.mu.Unlock()
 	for _, run := range dropped {
-		if onDropped != nil {
-			onDropped(run.id)
+		if onDropped != nil && run.run != nil {
+			onDropped(run.run)
 		}
 		m.removeManifest(run.id)
 		if run.dir == "" {

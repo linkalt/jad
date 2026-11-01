@@ -22,6 +22,9 @@ type ExternalRun struct {
 	run *subagentRun
 }
 
+// Identity names the run for as long as the manager can hold it. Unlike ID, it is never drawn again.
+func (e *ExternalRun) Identity() any { return e.run }
+
 // ID is the run's id on this host ("sub_…").
 func (e *ExternalRun) ID() string { return e.run.id }
 
