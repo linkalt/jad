@@ -45,6 +45,24 @@ func TestResumeOfAnUnknownOrOtherOwnersRunIsUnknown(t *testing.T) {
 	}
 }
 
+// A non-string resume is rejected by the schema before the call reaches the code, so it never
+// starts a plain run either.
+func TestResumeMustBeAString(t *testing.T) {
+	root := t.TempDir()
+	launched := 0
+	catalog, _ := persistedCatalog(t, root, &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
+		launched++
+		return SubagentResult{Text: "unreachable"}, nil
+	}}, 10)
+	out := resumeCall(t, catalog, testSessionKey, `{"resume":5,"task":"more"}`)
+	if !strings.Contains(out, "Invalid arguments for subagent") {
+		t.Fatalf("output = %s, want a schema rejection", out)
+	}
+	if launched != 0 {
+		t.Fatalf("launched %d runs, want none", launched)
+	}
+}
+
 // transcribingLauncher is a child that writes a transcript and answers. Its folder is unique to
 // the run, as the real launcher's is, so two runs of one call never share a folder.
 func transcribingLauncher(t *testing.T, root string) *fakeLauncher {
