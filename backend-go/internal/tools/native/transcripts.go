@@ -18,7 +18,7 @@ const transcriptsToolID = "native.transcripts"
 var transcriptsInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "path":{"type":"string","minLength":1,"description":"What to list. Omit it, or use path profile:<category>/<name> (or profile:<session>/<category>/<name>), for the sub-agent runs of one profile; sessions lists the sessions; remote:<name>/session:<id> (or remote:<name>) lists a remote JAD server's sessions, and remote:<name>/profile:<session>/<category>/<name> its runs; only when allow_remote is on. The profiles of a session are listed by the profile tool (action list)."},
+    "path":{"type":"string","minLength":1,"description":"What to list. Use path profile:<category>/<name> (or profile:<session>/<category>/<name>) for the sub-agent runs of one profile; an empty path is refused and points to the profile tool; sessions lists the sessions; remote:<name>/session:<id> (or remote:<name>) lists a remote JAD server's sessions, and remote:<name>/profile:<session>/<category>/<name> its runs; only when allow_remote is on. The profiles of a session are listed by the profile tool (action list)."},
     "filters":{"type":"array","items":{"type":"string"},"description":"Only items whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. For runs the agent name and the parent call id are matched too."},
     "status":{"type":"string","enum":["queued","running","done","failed","timed_out","stopped","lost"],"description":"Only sub-agent runs in this state. Only with a profile: path."},
     "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration."},

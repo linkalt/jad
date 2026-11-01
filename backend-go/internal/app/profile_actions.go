@@ -34,13 +34,14 @@ func (m profileMessenger) ProfileInfo(ctx context.Context, session, profile stri
 }
 
 // CompactProfile implements native.ProfileActions through the same compaction the HTTP route
-// uses (compactTarget), not profile_message's allow_other_profiles gate.
+// uses (Resolver.CompactProfile), not profile_message's allow_other_profiles gate.
 func (m profileMessenger) CompactProfile(ctx context.Context, session, profile string) error {
 	reference, name, err := m.profileTarget(session, profile)
 	if err != nil {
 		return err
 	}
-	return m.resolver.compactTarget(ctx, reference, name)
+	_, err = m.resolver.CompactProfile(ctx, reference, name)
+	return err
 }
 
 // ResetProfile implements native.ProfileActions through ResetProfile, which refuses while a run

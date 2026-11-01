@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 func (h *Handler) handleSessionModelDefault(w http.ResponseWriter, r *http.Request, reference, profile string) {
@@ -80,39 +79,4 @@ func readSettingsObject(w http.ResponseWriter, r *http.Request, maxBytes int64) 
 		return map[string]json.RawMessage{}, nil
 	}
 	return fields, nil
-}
-
-type keyedLocker struct {
-	mu    sync.Mutex
-	locks map[string]*keyedLockEntry
-}
-
-type keyedLockEntry struct {
-	mu   sync.Mutex
-	refs int
-}
-
-func (l *keyedLocker) lock(key string) func() {
-	l.mu.Lock()
-	if l.locks == nil {
-		l.locks = make(map[string]*keyedLockEntry)
-	}
-	entry := l.locks[key]
-	if entry == nil {
-		entry = &keyedLockEntry{}
-		l.locks[key] = entry
-	}
-	entry.refs++
-	l.mu.Unlock()
-
-	entry.mu.Lock()
-	return func() {
-		entry.mu.Unlock()
-		l.mu.Lock()
-		entry.refs--
-		if entry.refs == 0 && l.locks[key] == entry {
-			delete(l.locks, key)
-		}
-		l.mu.Unlock()
-	}
 }

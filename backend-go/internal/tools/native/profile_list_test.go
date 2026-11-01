@@ -284,3 +284,14 @@ func TestProfileListCancelledCallStops(t *testing.T) {
 		t.Fatalf("out = %s, err = %v", out, err)
 	}
 }
+
+// The configured cap bounds one list response even when the call asks for more.
+func TestProfileListLimitIsCappedByTheConfiguration(t *testing.T) {
+	settings := profileTestSettings()
+	settings.MaxEntries = 1
+	f := newProfileFixture(t, settings)
+	out := f.call(t, `{"action":"list","limit":50}`, tools.ExecutionContext{})
+	if !strings.Contains(out, "1 profiles of session demo") || !strings.Contains(out, "cursor") {
+		t.Fatalf("cap:\n%s", out)
+	}
+}

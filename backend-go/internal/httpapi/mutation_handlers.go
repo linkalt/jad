@@ -6,6 +6,15 @@ import (
 )
 
 func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, reference, profile string) {
+	if compact, ok := h.resolver.(ProfileCompact); ok {
+		result, err := compact.CompactProfile(r.Context(), reference, profile)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		writeCompaction(w, result)
+		return
+	}
 	if h.maintenance == nil {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "session compaction is unavailable"})
 		return
@@ -44,6 +53,12 @@ func (h *Handler) handleSessionCompact(w http.ResponseWriter, r *http.Request, r
 		writeJSONError(w, err)
 		return
 	}
+	writeCompaction(w, result)
+}
+
+// writeCompaction answers a compact request with the compaction counts and, when there is one,
+// the usage the compaction reported.
+func writeCompaction(w http.ResponseWriter, result CompactionResponse) {
 	compaction := map[string]any{
 		"compacted":       result.Compacted,
 		"compacted_items": result.CompactedItems,

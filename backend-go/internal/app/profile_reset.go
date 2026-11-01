@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"jad/backend-go/internal/httpapi"
@@ -37,8 +36,8 @@ func (r *Resolver) ResetProfile(ctx context.Context, reference, profile string) 
 	if err != nil {
 		return err
 	}
-	if resolved.Session == nil {
-		return errors.New("session maintenance provider is not initialized")
+	if err := maintenanceReady(resolved); err != nil {
+		return err
 	}
 	key := sessionKey(resolved.Reference, resolved.Profile)
 	// The gate is taken before the per-session lock.
@@ -56,7 +55,7 @@ func (r *Resolver) ResetProfile(ctx context.Context, reference, profile string) 
 			unlock()
 		}
 	}()
-	unlock = r.gate.Lock(reference)
+	unlock = r.gate.Lock(resolved.Reference)
 	// A run holds the transcript lock until it ends, so the check has to come before waiting
 	// for that lock: after it, the run is over and the reset would wipe the answer it just
 	// wrote. The session lock above serializes this check with a run start.
@@ -73,6 +72,15 @@ func (r *Resolver) ResetProfile(ctx context.Context, reference, profile string) 
 	// The history the handles were started from is gone, so their results have no use and
 	// would only keep costing.
 	r.ResetSessionChildren(resolved.Reference, resolved.Profile)
+	return nil
+}
+
+// maintenanceReady is the error for a resolved session that has no maintenance provider. It is
+// the same 500 the HTTP routes answer, so the message is not lost to a generic one.
+func maintenanceReady(resolved httpapi.ResolvedMutation) error {
+	if resolved.Session == nil {
+		return &httpapi.StatusError{Code: http.StatusInternalServerError, Message: "session maintenance provider is not initialized"}
+	}
 	return nil
 }
 

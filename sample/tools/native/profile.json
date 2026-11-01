@@ -22,7 +22,14 @@
               "compact",
               "reset"
             ],
-            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile, and refused while a run of the profile is active."
+            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile. reset is refused while a run of the profile is active; compact waits for a live run to end."
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only profiles whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. Only with action list."
           },
           "limit": {
             "type": "integer",

@@ -183,8 +183,8 @@ func (r *Resolver) compactTarget(ctx context.Context, reference, profile string)
 	if err != nil {
 		return err
 	}
-	if resolved.Session == nil {
-		return errors.New("session maintenance provider is not initialized")
+	if err := maintenanceReady(resolved); err != nil {
+		return err
 	}
 	_, err = resolved.Session.Compact(ctx)
 	return err

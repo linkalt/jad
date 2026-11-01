@@ -50,3 +50,46 @@ func TestResetHoldsTheGateWhileItWaitsForAnotherProcessAndClearsIt(t *testing.T)
 	}
 	release()
 }
+
+// A reset spelled differently from the session's canonical reference takes the in-process
+// session lock under the canonical key, the one a run start and the other maintenance take, so
+// a second maintenance of that session waits for it. local:session-1 and session-1 are one
+// session on a single root.
+func TestResetLocksTheSessionUnderItsCanonicalReference(t *testing.T) {
+	rootSetting := newSharedSessionRoot(t)
+	other := startLockHelper(t, rootSetting, "hold:dev/blue")
+	other.expect(t, "held")
+	resolver, err := resolverForRoot(rootSetting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		finished <- resolver.ResetProfile(context.Background(), "local:session-1", "dev/blue")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !resolver.gate.Held(sessionKey("session-1", "dev/blue")) {
+		if time.Now().After(deadline) {
+			t.Fatal("the reset did not take the gate while it waited for the other process")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	locked := make(chan struct{})
+	go func() {
+		unlock := resolver.gate.Lock("session-1")
+		unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+		other.finish(t)
+		<-finished
+		t.Fatal("a maintenance of the canonical session took the session lock during a reset spelled local:session-1")
+	case <-time.After(100 * time.Millisecond):
+	}
+	other.finish(t)
+	if err := <-finished; err != nil {
+		t.Fatalf("reset after the other process released: %v", err)
+	}
+	<-locked
+}

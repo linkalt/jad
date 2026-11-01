@@ -1470,7 +1470,7 @@
             },
             "transcripts": {
               "type": "object",
-              "description": "Go backend only. Lists what the transcript tool can read, newest first: the profiles of a session, the sessions, or the sub-agent runs of a profile, each with the path to give transcript and the full messages.jsonl path, size and time of last activity. Read-only: it stats files and reads run manifests and never opens a transcript. It has no paths key; a listed file the read path rules deny is left out (tools.native.read.paths). Off unless this key is present. Needs transcripts in tool_definition_paths.",
+              "description": "Go backend only. Lists what the transcript tool can read, newest first: the sessions, or the sub-agent runs of a profile (the profiles of a session are listed by the profile tool), each with the path to give transcript and the full messages.jsonl path, size and time of last activity. Read-only: it stats files and reads run manifests and never opens a transcript. It has no paths key; a listed file the read path rules deny is left out (tools.native.read.paths). Off unless this key is present. Needs transcripts in tool_definition_paths.",
               "properties": {
                 "max_entries": {
                   "type": "integer",
@@ -1515,7 +1515,7 @@
             },
             "profile": {
               "type": "object",
-              "description": "Go backend only. Lists the profiles of a session and what each holds (its context tokens), and compacts or resets one: the actions are the profile tool's list, info, compact and reset. Compact and reset act on the caller's session only through the same maintenance the HTTP routes use; a sub-agent may not use them, and a profile may not act on itself from inside its own run. Off unless this key is present. Needs profile in tool_definition_paths.",
+              "description": "Go backend only. Lists the profiles of a session and what each holds (its context tokens), and compacts or resets one: the actions are the profile tool's list, info, compact and reset. Compact and reset go through the same maintenance the HTTP routes use; reset is refused while a run of the target is active, and compact waits for it to end. A sub-agent may not use them, and a profile may not act on itself from inside its own run. allow_other_sessions and allow_other_profiles limit what the tool reaches outside the caller, for every action. Off unless this key is present. Needs profile in tool_definition_paths.",
               "properties": {
                 "max_entries": {
                   "type": "integer",
@@ -1546,7 +1546,7 @@
                   "default": true,
                   "description": "false refuses the tool to a sub-agent."
                 },
-                "allow_remote": {"type": "boolean", "default": false, "description": "Go backend only. true lets the tool list the transcripts of other JAD servers on the remotes named in remotes (remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<run id>, remote:<name>/session:<id>). Off by default. The remote's own token must also allow transcripts there; the remote shortens the output itself and shows no file path."},
+                "allow_remote": {"type": "boolean", "default": false, "description": "Go backend only. true lets the tool read the info of a profile on the other JAD servers named in remotes (remote:<name>/profile:<session>/<category>/<name>). Off by default. The remote's own token must also allow the profile action there; the remote shows no file path. Compact and reset are never sent to a remote."},
                 "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) the tool may use as remote:<name>/... . Needed with allow_remote, and only then. Each name must have a valid file, checked when the session loads."}
               },
               "additionalProperties": false

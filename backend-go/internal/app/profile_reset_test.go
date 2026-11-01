@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"jad/backend-go/internal/httpapi"
 )
 
 // heldResetFixture is a session with a run whose provider answers only once release is
@@ -151,5 +155,35 @@ func TestResetIsRefusedAtOnceAndDoesNotWaitForTheRun(t *testing.T) {
 	close(f.release)
 	if _, err := io.Copy(io.Discard, run); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The active-run check is made on the resolved reference and profile, so a reset spelled
+// differently from the run is still refused while the run is going, and not only when both
+// spell the session alike.
+func TestResetRejectsAnActiveRunForResolvedProfile(t *testing.T) {
+	f := newHeldResetFixture(t)
+	run := f.startHeldRun()
+	f.awaitRunActive()
+	err := f.service.resolver.ResetProfile(context.Background(), "one", "dev/coder")
+	if err != ErrRunActive {
+		t.Fatalf("reset by the bare id during a run = %v, want ErrRunActive", err)
+	}
+	close(f.release)
+	if _, err := io.Copy(io.Discard, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.resolver.ResetProfile(context.Background(), "local:one", "dev/coder"); err != nil {
+		t.Fatalf("reset after the run ended: %v", err)
+	}
+}
+
+// A resolver whose maintenance has no session answers the specific 500 the HTTP routes answer,
+// not a generic error, so the message is not lost.
+func TestResetWithoutAMaintenanceSessionSaysSo(t *testing.T) {
+	var statusErr *httpapi.StatusError
+	err := maintenanceReady(httpapi.ResolvedMutation{Reference: "session-1", Profile: "dev/coder"})
+	if !errors.As(err, &statusErr) || statusErr.Code != http.StatusInternalServerError || statusErr.Message != "session maintenance provider is not initialized" {
+		t.Fatalf("nil session = %v, want the 500 with the provider message", err)
 	}
 }

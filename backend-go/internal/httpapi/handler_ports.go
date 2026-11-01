@@ -236,6 +236,12 @@ type SessionGater interface {
 	SessionGate() *sessiongate.Gate
 }
 
+// ProfileCompact is an optional adapter that compacts one profile's transcript under the same
+// gate and locks the native profile tool takes. The compact route and the tool both call it.
+type ProfileCompact interface {
+	CompactProfile(ctx context.Context, reference, profile string) (CompactionResponse, error)
+}
+
 // ProfileReset is an optional adapter that resets one profile's transcript. The reset route
 // and the native profile tool both call it, so the refusals are the same for both.
 type ProfileReset interface {

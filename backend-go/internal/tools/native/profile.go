@@ -23,7 +23,8 @@ var profileInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "path":{"type":"string","minLength":1,"description":"What to act on. Omit it for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."},
-    "action":{"type":"string","enum":["list","info","compact","reset"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile, and refused while a run of the profile is active."},
+    "action":{"type":"string","enum":["list","info","compact","reset"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile. reset is refused while a run of the profile is active; compact waits for a live run to end."},
+    "filters":{"type":"array","items":{"type":"string"},"description":"Only profiles whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. Only with action list."},
     "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration. Only with action list."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous list response stopped; use the cursor it gave. Only with action list."}
   },
@@ -119,7 +120,7 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	if strings.HasPrefix(path, remote.Prefix) {
 		return t.executeRemote(ctx, action, path, execution)
 	}
-	if action == "list" && path != "" && !strings.HasPrefix(path, "session:") && path != "sessions" {
+	if action == "list" && path != "" && !strings.HasPrefix(path, "session:") {
 		// list takes a session (session:<id>) or nothing; a profile path lists one profile's info.
 		return t.fail(execution, tools.StatusInvalidInput, "invalid_path", "list takes path session:<id> or no path", tools.Information{Key: "valid", Value: "session:<id>"})
 	}
@@ -143,8 +144,17 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	if session == "" {
 		session = callerSession
 	}
+	if execution.AgentDepth > 0 && !t.settings.AllowChildren {
+		return t.fail(execution, tools.StatusForbidden, "profile_children_denied", "A sub-agent may not use the profile tool: tools.native.profile.allow_children is false")
+	}
 	if (action == "compact" || action == "reset") && execution.AgentDepth > 0 {
 		return t.fail(execution, tools.StatusForbidden, "profile_children_denied", "A sub-agent may not "+action+" a profile")
+	}
+	if session != callerSession && !t.settings.AllowOtherSessions {
+		return t.fail(execution, tools.StatusForbidden, "profile_session_denied", "Another session: tools.native.profile.allow_other_sessions is false")
+	}
+	if action != "list" && profile != callerProfile && !t.settings.AllowOtherProfiles {
+		return t.fail(execution, tools.StatusForbidden, "profile_profile_denied", "Another profile: tools.native.profile.allow_other_profiles is false")
 	}
 	if (action == "compact" || action == "reset") && (session == "" || session == callerSession) && profile == callerProfile {
 		return t.fail(execution, tools.StatusInvalidInput, "profile_self", "A profile may not "+action+" itself from inside its own run: name another profile, or call "+action+" outside a run")
@@ -214,6 +224,12 @@ func (t *profileTool) executeRemote(ctx context.Context, action, path string, ex
 // info reports the context tokens of a profile: the input tokens of its last completed response.
 // Before any response completed there is no usage, which is said, not reported as 0.
 func (t *profileTool) info(ctx context.Context, execution tools.ExecutionContext, session, profile string) string {
+	if t.profiles != nil {
+		target, err := t.profiles.Profile(ctx, execution.SessionKey, session, profile)
+		if err == nil && transcriptDenied(scopedPolicy(t.settings.Policy, execution), target.Files.Messages) {
+			return t.fail(execution, tools.StatusForbidden, "profile_denied", "This profile's transcript is not readable by this tool: tools.native.read.paths denies it")
+		}
+	}
 	tokens, err := t.actions.ProfileInfo(ctx, session, profile)
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "profile_info_failed", err.Error())
