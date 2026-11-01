@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes", "sessions"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes", "sessions", "system_prompt_path"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -63,9 +63,15 @@ type NativeProfileMessageSettings struct {
 	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
 	// first message to it in each run of the caller.
 	Compact string
+	// SystemPromptPath is the absolute file whose text is appended to the target profile's
+	// system prompt for each message sent to a local profile; empty means none. A remote
+	// target cannot take it, so a message to one is refused.
+	SystemPromptPath string
+	// SystemPrompt is the text of SystemPromptPath, read when the settings load.
+	SystemPrompt string
 }
 
-func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
+func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath, cwd string) (*NativeProfileMessageSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
@@ -139,7 +145,26 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
+	systemPromptPath, systemPrompt, err := normalizeProfileMessageSystemPrompt(fields, cwd, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, SystemPromptPath: systemPromptPath, SystemPrompt: systemPrompt}, nil
+}
+
+// normalizeProfileMessageSystemPrompt reads system_prompt_path, if set, the way the subagent
+// key is read: a relative path is taken from the session's cwd and ~ is expanded. A missing or
+// unreadable file fails the settings load and names the key.
+func normalizeProfileMessageSystemPrompt(fields map[string]json.RawMessage, cwd, settingPath, section string) (string, string, error) {
+	document, err := optionalSubagentString(fields, "system_prompt_path", settingPath, section)
+	if err != nil || document == "" {
+		return "", "", err
+	}
+	contents, resolved, err := readPromptDocument(document, 0, section+".system_prompt_path", cwd, settingPath, maxPromptDocumentBytes)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved, contents, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

@@ -463,7 +463,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeProfileMessage, err := normalizeNativeProfileMessageSettings(setting, settingPath)
+	nativeProfileMessage, err := normalizeNativeProfileMessageSettings(setting, settingPath, cwd)
 	if err != nil {
 		return SessionConfig{}, err
 	}

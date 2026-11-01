@@ -185,7 +185,9 @@ type profileMessagePlan struct {
 	maxQueued int
 	blocking  bool
 	hops      int
-	beforeRun func(context.Context)
+	// systemPrompt is the caller's file text for the target run; see ProfileMessageRequest.
+	systemPrompt string
+	beforeRun    func(context.Context)
 	// targetMessages and callerMessages are the transcripts of the target and of the caller.
 	targetMessages, callerMessages string
 }
@@ -197,14 +199,15 @@ func (p *profileMessagePlan) Transcripts() (target, caller string) {
 
 func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.ProfileRunRequest {
 	return httpapi.ProfileRunRequest{
-		Reference: p.reference,
-		Profile:   p.target,
-		Caller:    p.caller,
-		Chain:     p.chain,
-		Message:   p.message,
-		Hops:      p.hops,
-		Wait:      wait,
-		BeforeRun: p.beforeRun,
+		Reference:    p.reference,
+		Profile:      p.target,
+		Caller:       p.caller,
+		Chain:        p.chain,
+		Message:      p.message,
+		Hops:         p.hops,
+		SystemPrompt: p.systemPrompt,
+		Wait:         wait,
+		BeforeRun:    p.beforeRun,
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				run.lastText.Store(text)

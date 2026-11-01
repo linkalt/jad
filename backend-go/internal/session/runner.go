@@ -87,6 +87,9 @@ type HookReport struct {
 
 type RunOptions struct {
 	TurnID string
+	// SystemPrompt is text the caller has already appended to the run's system prompt
+	// (through the configuration it built the runner from); the runner does not use it.
+	SystemPrompt string
 	// OnHookReport receives each run hook report as it happens; nil drops them (they are
 	// always written to the server log).
 	OnHookReport  func(HookReport)

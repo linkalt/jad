@@ -51,7 +51,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "system_prompt_path"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -136,6 +136,11 @@ type NativeSubagentSettings struct {
 	// ConfiguredAgentDirs are all agents_dir directories in configured order, including
 	// those agents_dir_missing_ok skipped: the places a new agent folder can go.
 	ConfiguredAgentDirs []string
+	// SystemPromptPath is the absolute file whose text is appended to every agent's
+	// PromptText, after the agent's own text. Empty means none.
+	SystemPromptPath string
+	// SystemPrompt is the text of SystemPromptPath, read when the settings load.
+	SystemPrompt string
 	// Agents are the configured children: the inline ones in file order, then each
 	// directory's folders in name order.
 	Agents []NativeSubagentAgent
@@ -360,6 +365,12 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		settings.Agents = withSubagentOverrides(settings.Agents, agents, inline)
 	}
 	settings.Agents = withoutDeniedSubagents(settings.Agents, settings.DenyAgents)
+	if settings.SystemPromptPath, settings.SystemPrompt, err = normalizeSubagentSystemPrompt(fields, cwd, settingPath, section); err != nil {
+		return nil, err
+	}
+	for index := range settings.Agents {
+		settings.Agents[index].PromptText = JoinPromptText(settings.Agents[index].PromptText, settings.SystemPrompt)
+	}
 	return settings, nil
 }
 
@@ -526,6 +537,33 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 		return NativeSubagentAgent{}, err
 	}
 	return agent, nil
+}
+
+// normalizeSubagentSystemPrompt reads system_prompt_path, if set, the way a prompt document is
+// read: a relative path is taken from the session's cwd and ~ is expanded. A missing or
+// unreadable file fails the settings load and names the key.
+func normalizeSubagentSystemPrompt(fields map[string]json.RawMessage, cwd, settingPath, section string) (string, string, error) {
+	document, err := optionalSubagentString(fields, "system_prompt_path", settingPath, section)
+	if err != nil || document == "" {
+		return "", "", err
+	}
+	contents, resolved, err := readPromptDocument(document, 0, section+".system_prompt_path", cwd, settingPath, maxPromptDocumentBytes)
+	if err != nil {
+		return "", "", err
+	}
+	return resolved, contents, nil
+}
+
+// JoinPromptText appends text after prompt, joined by a blank line; empty text leaves prompt
+// as it is and an empty prompt becomes the text alone.
+func JoinPromptText(prompt, text string) string {
+	switch {
+	case text == "":
+		return prompt
+	case prompt == "":
+		return text
+	}
+	return prompt + "\n\n" + text
 }
 
 // loadSubagentPrompt reads the agent's prompt_documents the way the session reads its

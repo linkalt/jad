@@ -62,7 +62,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	if options.OnInputAccepted != nil {
 		options.OnInputAccepted(*persisted)
 	}
-	prepared, err := r.resolver.prepareRun(ctx, r.shared, r.config)
+	// The caller's system_prompt_path text is appended for this run only: the stored
+	// configuration keeps the target's own prompt.
+	runConfig := r.config
+	runConfig.Model.PromptText = sessionfs.JoinPromptText(runConfig.Model.PromptText, options.SystemPrompt)
+	prepared, err := r.resolver.prepareRun(ctx, r.shared, runConfig)
 	if err != nil {
 		return session.RunResult{}, err
 	}

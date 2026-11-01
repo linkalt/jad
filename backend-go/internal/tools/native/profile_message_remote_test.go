@@ -340,6 +340,10 @@ func TestRemoteProfileMessageRefusals(t *testing.T) {
 		"malformed reference":                {peerGrant, "remote:peer/reviewer", "bad_remote_reference", nil},
 		"path in the reference":              {peerGrant, "remote:peer/main/review/../etc", "bad_remote_reference", nil},
 		"session with a colon":               {peerGrant, "remote:peer/local:main/review/reviewer", "bad_remote_reference", nil},
+		"system prompt path set": {peerGrant, remoteTarget, "system_prompt_path_remote", func(s *sessionfs.NativeProfileMessageSettings) {
+			s.SystemPromptPath = "/tmp/rules.md"
+			s.SystemPrompt = "Rule."
+		}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -491,3 +495,14 @@ type remoteMessenger struct {
 }
 
 func (m remoteMessenger) RemoteDirectory(dir string) *remote.Directory { return m.hub.Directory(dir) }
+
+func TestRemoteProfileMessageRefusalNamesTheKey(t *testing.T) {
+	f := newRemoteMessageFixture(t, peerGrant, func(s *sessionfs.NativeProfileMessageSettings) {
+		s.SystemPromptPath = "/tmp/rules.md"
+		s.SystemPrompt = "Rule."
+	})
+	out := f.send(t, remoteTarget, 5000, remoteCaller)
+	if !strings.Contains(out, "tools.native.profile_message.system_prompt_path") || !strings.Contains(out, "remote") {
+		t.Fatalf("the refusal does not name the key:\n%s", out)
+	}
+}

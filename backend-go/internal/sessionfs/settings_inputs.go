@@ -45,7 +45,11 @@ func (in *settingsInputs) collect(config SessionConfig) {
 	if config.NativeProcess != nil {
 		in.addFile(config.NativeProcess.EnvFile)
 	}
+	if config.NativeProfileMessage != nil {
+		in.addFile(config.NativeProfileMessage.SystemPromptPath)
+	}
 	if subagent := config.NativeSubagent; subagent != nil {
+		in.addFile(subagent.SystemPromptPath)
 		in.listings = append(in.listings, subagent.ConfiguredAgentDirs...)
 		for _, directory := range subagent.AgentDirs {
 			in.collectAgentFolders(directory)

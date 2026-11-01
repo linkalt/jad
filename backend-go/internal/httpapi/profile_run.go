@@ -23,6 +23,8 @@ type ProfileRunRequest struct {
 	Message string
 	// Hops is the remote hop count of the request that caused this message (0 when none).
 	Hops int
+	// SystemPrompt is text appended to the target profile's system prompt for this run only.
+	SystemPrompt string
 	// Wait queues behind the run that holds the transcript, in the order user messages
 	// queue, instead of failing at once with ErrSessionBusy. WaitLimit bounds that wait;
 	// zero waits until ctx ends. The limit ending while ctx lives is ErrSessionBusy.
@@ -122,6 +124,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	run.supportsInteraction = true
 	run.chain = append([]string(nil), request.Chain...)
 	run.hops = request.Hops
+	run.systemPrompt = request.SystemPrompt
 	run.mu.Unlock()
 	if request.BeforeRun != nil {
 		request.BeforeRun(ctx)
