@@ -24,12 +24,13 @@ var remoteRunHandle = regexp.MustCompile(`rs_[0-9a-f]{8}`)
 const remoteAgent = "remote:peer/main/review/reviewer/explore"
 
 type remoteSubagentFixture struct {
-	peer  *peer
-	hub   *remote.Hub
-	host  *AsyncHost
-	tool  tools.Tool
-	async tools.Tool
-	local *fakeLauncher
+	peer    *peer
+	hub     *remote.Hub
+	host    *AsyncHost
+	tool    tools.Tool
+	async   tools.Tool
+	local   *fakeLauncher
+	manager *SubagentManager
 }
 
 func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs.NativeSubagentSettings)) *remoteSubagentFixture {
@@ -56,7 +57,8 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 		return SubagentResult{Text: "local child"}, nil
 	}}
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolRemotes(settings, parent, nil, local, nil, NewSubagentManager(), nil, host, hub.Directory(p.dir))
+	manager := NewSubagentManager()
+	tool, err := newSubagentToolRemotes(settings, parent, nil, local, nil, manager, nil, host, hub.Directory(p.dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +66,7 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &remoteSubagentFixture{peer: p, hub: hub, host: host, tool: tool, async: async, local: local}
+	return &remoteSubagentFixture{peer: p, hub: hub, host: host, tool: tool, async: async, local: local, manager: manager}
 }
 
 func (f *remoteSubagentFixture) start(t *testing.T, agent string, block int64, execution tools.ExecutionContext) string {
@@ -323,12 +325,102 @@ func TestRemoteSubagentStartHonoursMaxDepth(t *testing.T) {
 	}
 }
 
-func TestRemoteSubagentStartIsNotCountedAgainstTheRunCaps(t *testing.T) {
+func TestRemoteSubagentStartIsRefusedAtTheSessionRunCap(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	nested := remoteCaller
 	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	// The first run stays going: it is the one run the cap of 1 allows.
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
-	if out := f.start(t, remoteAgent, 5000, nested); !strings.Contains(out, "finished") {
-		t.Fatalf("a remote start was refused by a local run cap:\n%s", out)
+	f.start(t, remoteAgent, 0, nested)
+	if out := f.start(t, remoteAgent, 0, nested); !strings.Contains(out, "subagent_limit_reached") {
+		t.Fatalf("a remote start at the session cap was not refused with subagent_limit_reached:\n%s", out)
+	}
+}
+
+func TestRemoteSubagentStartIsRefusedAtTheRootRunCap(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerRoot = 2, 1 })
+	// The top-level run counts under its own id, as a local one does; the cap of 1 then admits
+	// one nested run below it.
+	f.manager.mu.Lock()
+	f.manager.byRoot["sub_00000001"] = 1
+	f.manager.mu.Unlock()
+	nested := remoteCaller
+	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	// The first nested run stays going, so its place stays taken.
+	first := make(chan *peerRun, 1)
+	go func() { first <- f.peer.backend.run(t, 0) }()
+	go func() { f.start(t, remoteAgent, 5000, nested) }()
+	held := <-first
+	if out := f.start(t, remoteAgent, 0, nested); !strings.Contains(out, "subagent_limit_reached") {
+		t.Fatalf("a remote start at the root cap was not refused with subagent_limit_reached:\n%s", out)
+	}
+	held.finish(remoteapi.RunResult{State: "done", Text: "ok"})
+}
+
+func TestRemoteRunReleasesItsCapSlotOnEveryEndPath(t *testing.T) {
+	ends := map[string]remoteapi.RunResult{
+		"completion": {State: "done", Text: "ok"},
+		"failure":    {State: "failed", Code: "profile_failed", Message: "boom"},
+	}
+	for name, end := range ends {
+		t.Run(name, func(t *testing.T) {
+			f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
+			nested := remoteCaller
+			nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+			held := make(chan int, 1)
+			go func() {
+				run := f.peer.backend.run(t, 0)
+				held <- f.manager.sessionRuns(remoteCaller.SessionKey)
+				run.finish(end)
+			}()
+			f.start(t, remoteAgent, 5000, nested)
+			if got := <-held; got != 1 {
+				t.Fatalf("while the remote run was going the session counted %d runs, want 1", got)
+			}
+			if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
+				t.Fatalf("the session still counts %d remote runs after the run ended, want 0", got)
+			}
+		})
+	}
+}
+
+func TestRemoteRunReleasesItsCapSlotOnCancel(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
+	nested := remoteCaller
+	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	ctx, cancel := context.WithCancel(context.Background())
+	held := make(chan *peerRun, 1)
+	go func() { held <- f.peer.backend.run(t, 0) }()
+	go func() {
+		run := <-held
+		cancel()
+		run.finish(remoteapi.RunResult{State: "stopped", Reason: "caller_cancelled"})
+	}()
+	_, _ = f.tool.Execute(ctx, map[string]any{"task": "find the answer", "agent": remoteAgent, "block_ms": json.Number("5000")}, nested)
+	// The place is held until the remote run ends, not until the call returns: poll for the end.
+	deadline := time.Now().Add(5 * time.Second)
+	for f.manager.sessionRuns(remoteCaller.SessionKey) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
+		t.Fatalf("a cancelled remote start still counts %d runs after the remote run ended, want 0", got)
+	}
+}
+
+// A second release of one reservation must not free a place that another run holds: with a cap of
+// two, after the double release one place is still taken.
+func TestReleaseRemoteTwiceDoesNotFreeAnotherRunsPlace(t *testing.T) {
+	manager := NewSubagentManager()
+	first, err := manager.reserveRemote("sub_00000001", remoteCaller.SessionKey, 0, 2, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.reserveRemote("sub_00000002", remoteCaller.SessionKey, 0, 2, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	manager.releaseRemote(first)
+	manager.releaseRemote(first)
+	if got := manager.sessionRuns(remoteCaller.SessionKey); got != 1 {
+		t.Fatalf("a double release left the session at %d runs, want 1 (the other run's place)", got)
 	}
 }

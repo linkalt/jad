@@ -557,6 +557,61 @@ func (m *SubagentManager) freeRunIDLocked() (string, error) {
 // in practice.
 const runIDAttempts = 8
 
+// admitNestedLocked is the gate a nested start passes, local or remote: the depth, then the run
+// caps of its root and its session. The caller holds mu. A start at depth 0 is not nested and
+// never reaches it.
+func (m *SubagentManager) admitNestedLocked(depth, maxDepth, maxPerRoot, maxPerSession int, root, session string) error {
+	if depth+1 > max(maxDepth, 1) {
+		return errSubagentDepth
+	}
+	if (maxPerRoot > 0 && m.byRoot[root]-1 >= maxPerRoot) || (maxPerSession > 0 && m.bySession[session] >= maxPerSession) {
+		return errSubagentRunLimit
+	}
+	return nil
+}
+
+// remoteReservation is one place a remote start takes in the root and session counts for the
+// run's lifetime. It is released once: a second release does nothing.
+type remoteReservation struct {
+	manager       *SubagentManager
+	root, session string
+	releaseOnce   sync.Once
+}
+
+// reserveRemote takes a place in the counts of root and session for a remote run, after the
+// same gate a local nested start passes (admitNestedLocked). The remote run has no local record,
+// slot or queue place: only these counts, which this host's caps read.
+func (m *SubagentManager) reserveRemote(root, session string, maxPerRoot, maxPerSession, depth, maxDepth int) (*remoteReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, errSubagentManagerClosed
+	}
+	if err := m.admitNestedLocked(depth, maxDepth, maxPerRoot, maxPerSession, root, session); err != nil {
+		return nil, err
+	}
+	m.byRoot[root]++
+	m.bySession[session]++
+	return &remoteReservation{manager: m, root: root, session: session}, nil
+}
+
+// releaseRemote gives back a remote run's places. It is safe to call more than once.
+func (m *SubagentManager) releaseRemote(reservation *remoteReservation) {
+	reservation.releaseOnce.Do(func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		countDown(m.byRoot, reservation.root)
+		countDown(m.bySession, reservation.session)
+	})
+}
+
+// sessionRuns is how many runs of session are counted as going, local or remote.
+func (m *SubagentManager) sessionRuns(session string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.bySession[session]
+}
+
 // start registers a run and launches its goroutine. It fails when the manager is
 // closed or when the run would have to wait and the queue is full.
 func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
@@ -576,13 +631,9 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	}
 	nested := spec.depth > 0
 	if nested {
-		if spec.depth+1 > max(spec.maxDepth, 1) {
+		if err := m.admitNestedLocked(spec.depth, spec.maxDepth, spec.maxPerRoot, spec.maxPerSession, root, spec.session); err != nil {
 			m.mu.Unlock()
-			return nil, errSubagentDepth
-		}
-		if (spec.maxPerRoot > 0 && m.byRoot[root]-1 >= spec.maxPerRoot) || (spec.maxPerSession > 0 && m.bySession[spec.session] >= spec.maxPerSession) {
-			m.mu.Unlock()
-			return nil, errSubagentRunLimit
+			return nil, err
 		}
 	}
 	// The slot is taken here, not in the goroutine, so a free slot is never refused

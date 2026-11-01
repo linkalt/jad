@@ -110,7 +110,30 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			return tools.ExecutionError(callID, tools.StatusError, registerErrorCode(err), err.Error()), nil
 		}
 	}
+	// A nested remote start takes its place in the run caps the way a local one does, and gives
+	// it back when the run ends or when no run starts. A top-level start is not nested, so it
+	// takes none.
+	var reservation *remoteReservation
+	if execution.AgentDepth > 0 {
+		reservation, err = s.manager.reserveRemote(execution.RootRun, execution.SessionKey, int(s.settings.MaxRunsPerRoot), int(s.settings.MaxRunsPerSession), execution.AgentDepth, int(s.settings.MaxDepth))
+		if err != nil {
+			if handled {
+				s.async.abandonProfileMessage(id)
+				_, _ = s.async.Manager().Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: boundedReason(err.Error())})
+				s.async.Manager().MarkRead(owner, id)
+			}
+			return refuseRemoteCap(callID, err), nil
+		}
+	}
 	body := map[string]any{"session": target.Session, "profile": target.Profile, "agent": target.Agent, "task": task}
+	// A panic before the run takes the reservation gives it back; once the run has it, the run's
+	// end does.
+	handedOver := false
+	defer func() {
+		if reservation != nil && !handedOver {
+			s.manager.releaseRemote(reservation)
+		}
+	}()
 	run, err := startRemoteRun(ctx, s.remotes.directory, target, "subagents", body, execution.RemoteHops+1, s.remotes.timeout, "agent")
 	if err != nil {
 		if handled {
@@ -122,6 +145,15 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			return "", ctx.Err()
 		}
 		return s.renderRemoteFailure(callID, target, err), nil
+	}
+	if reservation != nil {
+		// The run's end gives the places back on every path: completion, failure, stop, timeout
+		// and cancel all end in run.Done.
+		handedOver = true
+		go func() {
+			<-run.Done()
+			s.manager.releaseRemote(reservation)
+		}()
 	}
 	if !handled {
 		select {
@@ -167,6 +199,15 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			target.String(), id, id),
 		Information: append([]tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}}, s.async.latestInformation(owner, id)...),
 	})
+}
+
+// refuseRemoteCap is the error a nested remote start gets when the run caps or the depth refuse
+// it. The depth keeps its own code; a cap is subagent_limit_reached, as a local start's is.
+func refuseRemoteCap(callID string, err error) string {
+	if errors.Is(err, errSubagentDepth) {
+		return depthExceededError(callID)
+	}
+	return tools.ExecutionError(callID, tools.StatusError, "subagent_limit_reached", err.Error())
 }
 
 func (s *subagentTool) renderRemoteFailure(callID string, target remote.Target, err error) string {
