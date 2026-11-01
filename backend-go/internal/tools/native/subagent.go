@@ -153,7 +153,8 @@ func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[strin
 	if m == nil || m.tool == nil {
 		return nil
 	}
-	return m.tool.bindMCP(mcpTools, toolsetTools)
+	hook := func(tool tools.Tool) tools.Tool { return WithToolEventHooks(tool, m.hooks, m.apiKeyEnv) }
+	return m.tool.bindMCP(mcpTools, toolsetTools, hook)
 }
 
 type subagentTool struct {
@@ -615,7 +616,11 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 // bindMCP builds the catalog of every agent that lists MCP tools. Only the tools an
 // agent names are given; a tool is never added because its server calls it read-only,
 // since that is the server's own claim.
-func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool) error {
+//
+// hookSession wraps a child's copy of a session MCP tool with the owner's hooks. It runs after
+// the lazy gate, because GateFor rebuilds a lazy tool from the set. Toolset tools are not wrapped:
+// the resolver already hooks them with their own profile's hooks.
+func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool, hookSession func(tools.Tool) tools.Tool) error {
 	session := newMCPPool(mcpTools)
 	pools := make(map[string]mcpPool, len(toolsetTools))
 	for id, loadedTools := range toolsetTools {
@@ -631,7 +636,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 		}
 		byID, loadedText := session.byID, session.loadedText
 		where := ""
+		fromToolset := false
 		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
+			fromToolset = true
 			pool := pools[toolsetKey]
 			byID, loadedText = pool.byID, pool.loadedText
 			if byID == nil {
@@ -650,6 +657,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 				// The owning profile's lazy set gates the child's copy: a lazy tool stays off the child's
 				// request until the child loads it. GateFor leaves the set's one-shot gate to the parent.
 				gated, _ := s.lazy.GateFor(tool)
+				if !fromToolset {
+					gated = hookSession(gated)
+				}
 				childTools = append(childTools, gated)
 			}
 		}

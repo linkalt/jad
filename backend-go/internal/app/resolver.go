@@ -600,8 +600,9 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
 	}
-	// The parent's copy is gated (its lazy tools only) and hooked; the raw list is kept for the
-	// subagent's toolsets below, and a child gates its own copy with the same set (bindMCP, GateFor).
+	// The parent's copy is gated (its lazy tools only) and hooked. The subagent's children get the
+	// raw list: each child's session copy is gated with the same set and hooked by the subagent tool
+	// (bindMCP, GateFor), and a toolset's copy is hooked with its own profile's hooks.
 	lazy.Bind(mcpTools)
 	parentMCPTools := native.WithToolEventHooksAll(native.GateLazyTools(mcpTools, lazy), config.Hooks, config.Model.APIKeyEnv)
 	mcpCatalog, err := tools.NewCatalog(parentMCPTools)

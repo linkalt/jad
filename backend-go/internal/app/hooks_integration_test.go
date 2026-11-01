@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -139,4 +140,65 @@ func TestNonBlockingPreToolHookLetsAChildWriteGoAhead(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(f.workspace, "made.txt")); err != nil || string(data) != "by the child" {
 		t.Fatalf("made.txt = %q, %v; a non-blocking hook must not stop the write", data, err)
 	}
+}
+
+// A child's call to a session MCP tool fires the session's tool-event hooks once each. The matcher
+// names only the MCP tool, so the parent's own subagent call cannot fire them.
+func TestToolEventHooksRunForAChildsSessionMCPCall(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "events")
+	calls := &atomic.Int32{}
+	hooks := map[string]any{"enabled": true,
+		"pre_tool":  []any{map[string]any{"name": "pre", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo pre >> " + marker}}},
+		"post_tool": []any{map[string]any{"name": "post", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo post >> " + marker}}},
+	}
+	f := buildChildMCPHookFixture(t, hooks, calls)
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the MCP server ran %d times, want 1", calls.Load())
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("no hook ran for the child's MCP call: %v", err)
+	}
+	if got := string(data); got != "pre\npost\n" {
+		t.Fatalf("hook events = %q, want one pre_tool then one post_tool", got)
+	}
+}
+
+// A blocking pre_tool command stops a child's session MCP call: the server never runs, and the
+// model's next request carries the blocked result.
+func TestBlockingPreToolHookStopsAChildsSessionMCPCall(t *testing.T) {
+	calls := &atomic.Int32{}
+	f := buildChildMCPHookFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
+		map[string]any{"name": "freeze", "match": "mcp:fixture:lookup", "blocking": true, "argv": []string{"sh", "-c", "echo mcp-is-frozen; exit 1"}},
+	}}, calls)
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("the MCP server ran %d times although a blocking pre_tool hook failed", calls.Load())
+	}
+	child := f.provider.forModel("child-model")
+	if len(child) < 2 {
+		t.Fatalf("child made %d requests", len(child))
+	}
+	history := child[len(child)-1].Text
+	for _, want := range []string{"blocked_by_hook", "hook: freeze", "mcp-is-frozen"} {
+		if !strings.Contains(history, want) {
+			t.Errorf("the child's history lacks %q:\n%s", want, history)
+		}
+	}
+}
+
+// buildChildMCPHookFixture is a child that lists one session MCP tool, which the child calls first.
+func buildChildMCPHookFixture(t *testing.T, hooks map[string]any, calls *atomic.Int32) subagentFixture {
+	t.Helper()
+	profileTools := map[string]any{"allow": []string{"subagent", "read", "mcp:fixture:lookup"}}
+	session := profileSession(profileTools)
+	session["hooks"] = hooks
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": session}, false, nil, &mcpFixture{calls: calls})
+	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
+	return f
 }

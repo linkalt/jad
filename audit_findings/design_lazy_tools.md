@@ -53,8 +53,11 @@ loaded it; after a load it is present with its real schema, from the next reques
   owner's gate on its native lazy tools too: a child's call to an unloaded one is refused with
   `tool_not_loaded`. The gate is one set for the owner and its children, so a load by either clears it.
 - MCP lazy tools: `buildRegisteredCatalog` binds the MCP tools to the same set, gates the lazy ones,
-  then applies `WithToolEventHooksAll`. The raw MCP list goes to `SubagentMCP.BindToolsets`, which gates
-  each child's copy with the same set (`GateFor`), so a child's lazy MCP tool is refused until loaded.
+  then applies `WithToolEventHooksAll`. The raw MCP list goes to `SubagentMCP.BindToolsets`. For each
+  child, a session MCP tool is gated with the same set (`GateFor`) and then hooked with the owner's
+  hooks (`WithToolEventHooks`), so a child's lazy MCP tool is refused until loaded and its call fires
+  the owner's pre_tool and post_tool once. A toolset's MCP tool is not hooked again there: the resolver
+  already hooked it with its own profile's hooks.
 - `Bind` skips a tool already bound and `Gate` skips a tool already gated, so no tool is wrapped
   twice.
 - The stub design is reversed. A lazy tool is no longer sent to the model as a summary with a
@@ -142,6 +145,8 @@ loaded it; after a load it is present with its real schema, from the next reques
 - A child's own `profile_message` and nested `subagent` calls fire the owner's pre_tool hook once each,
   as the parent's calls do (`NewSubagentMCP` takes the owner's hooks, and the subagent tool hooks its nested copy when built;
   the child pool holds the hooked `profile_message` copy).
+- A child's session MCP call fires the owner's pre_tool and post_tool once each, and a blocking pre_tool
+  stops it (`SubagentMCP.BindToolsets` hooks each child's session copy after the gate).
 - A denied tool stays out of the tools array; a lazy entry that the profile hides is a config error.
 - A child of a parent with lazy MCP tools gates its copy with the owner's set: an unloaded lazy MCP tool
   is refused with `tool_not_loaded`, and the server does not run.
