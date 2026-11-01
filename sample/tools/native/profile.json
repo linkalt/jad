@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.profile",
+      "source": "native",
+      "name": "profile",
+      "description": "Work on profiles of your session: list them (action list, path session:<id> for another session), show what a profile holds with its context tokens (action info), compact its transcript (action compact) or reset it (action reset). compact and reset are for a profile other than your own, outside a run; a sub-agent may not use them.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What to act on. Omit it for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "info",
+              "compact",
+              "reset"
+            ],
+            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile, and refused while a run of the profile is active."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Most items in this response; capped by the configuration. Only with action list."
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Continue where the previous list response stopped; use the cursor it gave. Only with action list."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

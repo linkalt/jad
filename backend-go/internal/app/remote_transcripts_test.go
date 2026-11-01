@@ -95,19 +95,14 @@ func TestRemoteTranscriptsListAndReadWithoutPathsOrTokens(t *testing.T) {
 	file := writeRemoteTranscript(t, server, "dev/coder", remoteTranscriptJSONL)
 	readers := startRemoteReaders(t, server, true, "peer")
 
-	listed := readers.run(t, readers.transcripts, map[string]any{"path": "remote:peer/session:demo"})
-	if !strings.Contains(listed, "profile dev/coder") || !strings.Contains(listed, "path remote:peer/profile:demo/dev/coder") {
-		t.Fatalf("listing:\n%s", listed)
-	}
-	for _, leak := range []string{file, filepath.Dir(file), server.f.workspace, "messages.jsonl", e2eToken, "| file "} {
-		if strings.Contains(listed, leak) {
-			t.Fatalf("the listing leaks %q:\n%s", leak, listed)
-		}
+	// The profiles of a session are listed by the profile tool; transcripts only redirects there.
+	if moved := readers.run(t, readers.transcripts, map[string]any{"path": "remote:peer/session:demo"}); !strings.Contains(moved, "profiles_moved") {
+		t.Fatalf("a profile listing is redirected:\n%s", moved)
 	}
 
 	again := readers.run(t, readers.transcripts, map[string]any{"path": "remote:peer"})
-	if !strings.Contains(again, "remote:peer/profile:demo/dev/coder") {
-		t.Fatalf("remote:<name> alone lists the default session:\n%s", again)
+	if strings.Contains(again, file) || strings.Contains(again, "messages.jsonl") || strings.Contains(again, e2eToken) {
+		t.Fatalf("remote:<name> leaks:\n%s", again)
 	}
 
 	read := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:demo/dev/coder"})

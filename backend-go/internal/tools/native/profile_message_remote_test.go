@@ -61,10 +61,20 @@ type peerBackend struct {
 	mu       sync.Mutex
 	messages []remoteapi.MessageRequest
 	subs     []remoteapi.SubagentRequest
+	infos    []remoteapi.ProfileRequest
 	runs     []*peerRun
 	err      error
 	// onSubagentStart runs after the peer accepted a sub-agent run, before it answers.
 	onSubagentStart func()
+}
+
+// ProfileInfo records the request and answers the info text of a profile with 42 tokens.
+func (b *peerBackend) ProfileInfo(_ context.Context, r remoteapi.ProfileRequest) (string, error) {
+	b.mu.Lock()
+	b.infos = append(b.infos, r)
+	b.mu.Unlock()
+	tokens := int64(42)
+	return ProfileInfoText(r.Profile, &tokens), nil
 }
 
 func (b *peerBackend) Profiles(context.Context, string) ([]string, error) {
@@ -170,7 +180,7 @@ func startPeer(t *testing.T, grant string) *peer {
 	return &peer{backend: backend, server: server, api: api, handler: handler, dir: dir}
 }
 
-const peerGrant = `"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts"]`
+const peerGrant = `"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts","profile"]`
 
 type remoteMessageFixture struct {
 	peer    *peer

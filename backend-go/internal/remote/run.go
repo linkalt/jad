@@ -176,6 +176,21 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// ProfileInfo asks the remote for a profile's info (its context tokens) and returns the rendered
+// text. It is the only profile action a remote takes: compaction and reset are not sent, so a
+// remote can never change a profile. The read is retried.
+func (c *Client) ProfileInfo(ctx context.Context, session, profile string, hops int) (string, error) {
+	var answer struct {
+		Output string `json:"output"`
+	}
+	query := url.Values{"session": {session}, "profile": {profile}}
+	path := apiPrefix + "profile?" + query.Encode()
+	if err := c.Do(ctx, Request{Method: http.MethodGet, Path: path, Hops: hops, Retry: true}, &answer); err != nil {
+		return "", err
+	}
+	return answer.Output, nil
+}
+
 // ReadTranscript asks the remote to run its transcript or transcripts tool (tool is one of the
 // two) with query as the tool's input, and returns the rendered result. Reads are retried.
 func (c *Client) ReadTranscript(ctx context.Context, tool string, query url.Values, hops int) (string, error) {

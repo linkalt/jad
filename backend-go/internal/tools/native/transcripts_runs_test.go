@@ -302,7 +302,11 @@ func TestTranscriptsListedPathsResolveInTheTranscriptTool(t *testing.T) {
 		path, _, _ := strings.Cut(rest, " ")
 		return path
 	}
-	runPath, profilePath := pathOf(out, "sub_aaaaaaaa"), pathOf(f.calls(t, nil, `{}`), "profile dev/reviewer")
+	profileTool, err := NewProfileTool(profileTestSettings(), TranscriptFiles{}, uniqueProfiles{f.profiles}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPath, profilePath := pathOf(out, "sub_aaaaaaaa"), pathOf(callTranscripts(t, profileTool, `{"action":"list"}`, tools.ExecutionContext{SessionKey: runOwn}), "profile dev/reviewer")
 	if runPath != "subagent:sub_aaaaaaaa" || profilePath != "profile:demo/dev/reviewer" {
 		t.Fatalf("paths = %q, %q", runPath, profilePath)
 	}

@@ -52,7 +52,7 @@ func (t *transcriptsTool) list(ctx context.Context, request transcriptsRequest, 
 	case "sessions":
 		listing, failure = t.listSessions(ctx, request, execution)
 	case "profiles":
-		listing, failure = t.listProfiles(ctx, request, execution)
+		return t.fail(execution, tools.StatusInvalidInput, "profiles_moved", "The profiles of a session are listed by the profile tool: use action list there, with path session:<id> for another session.")
 	default:
 		listing, failure = t.listRuns(ctx, request, execution)
 	}
@@ -156,91 +156,6 @@ func (t *transcriptsTool) listSessions(ctx context.Context, request transcriptsR
 		listing.notes = append(listing.notes, "only your session: tools.native.transcripts.allow_other_sessions is false")
 	}
 	return listing, ""
-}
-
-func (t *transcriptsTool) listProfiles(ctx context.Context, request transcriptsRequest, execution tools.ExecutionContext) (transcriptsListing, string) {
-	callerSession, callerProfile, _ := strings.Cut(execution.SessionKey, "\x00")
-	session := request.level.session
-	if session == "" {
-		session = callerSession
-	}
-	listing := transcriptsListing{what: "profiles of session " + session}
-	var names []string
-	if t.profiles != nil {
-		var sessions []string
-		if names, sessions = t.profiles.Candidates(ctx, execution.SessionKey, request.level.session); names == nil && request.level.session != "" && !containsName(sessions, request.level.session) {
-			if !t.settings.AllowOtherSessions {
-				sessions = nil
-			}
-			return listing, t.notFound(execution, "no_such_session", "No session "+request.level.session, request.level.session, sessions)
-		}
-	} else if request.level.session == "" || request.level.session == callerSession {
-		names = []string{callerProfile}
-	}
-	var candidates []string
-	for _, name := range names {
-		if !t.settings.AllowOtherProfiles && name != callerProfile {
-			continue
-		}
-		if matchesFilters(request.filters, strings.ToLower(name), "") {
-			candidates = append(candidates, name)
-		}
-	}
-	if len(candidates) > int(t.settings.ScanMaxEntries) {
-		return listing, t.tooMany(execution, len(candidates))
-	}
-	if !t.settings.AllowOtherProfiles {
-		listing.notes = append(listing.notes, "only your profile: tools.native.transcripts.allow_other_profiles is false")
-	}
-	for _, name := range candidates {
-		if err := ctx.Err(); err != nil {
-			return listing, t.contextFailure(execution, err)
-		}
-		files, canonicalSession, canonicalProfile := t.own, callerSession, callerProfile
-		if t.profiles != nil {
-			target, err := t.profiles.Profile(ctx, execution.SessionKey, request.level.session, name)
-			if err != nil {
-				listing.skipped++
-				continue
-			}
-			files, canonicalSession, canonicalProfile = target.Files, target.Session, target.Profile
-			if (canonicalSession != callerSession || canonicalProfile != callerProfile) && t.fileDenied(files.Messages, execution) {
-				listing.hidden++
-				continue
-			}
-		}
-		listing.what = "profiles of session " + canonicalSession
-		listing.items = append(listing.items, t.profileItem(canonicalProfile, "profile:"+canonicalSession+"/"+canonicalProfile, files, canonicalSession == callerSession && canonicalProfile == callerProfile))
-	}
-	return listing, ""
-}
-
-// profileItem formats one profile: when its transcript last changed, how large it is and
-// whether a compaction backup exists, then the path for transcript and the file.
-func (t *transcriptsTool) profileItem(name, path string, files TranscriptFiles, own bool) transcriptsItem {
-	label := "profile " + name
-	if own {
-		label += " (yours)"
-	}
-	file := statTranscriptsFile(files.Messages)
-	item := transcriptsItem{key: name}
-	switch {
-	case file.unreadable:
-		item.line = label + " | unreadable: messages.jsonl is not a regular file inside its folder"
-		return item
-	case !file.exists:
-		item.line = label + " | no transcript yet | path " + path + t.fileField(files.Messages)
-		return item
-	}
-	item.activity = file.modified.UnixNano()
-	backup := "no"
-	if files.Backup != "" {
-		if info := statTranscriptsFile(files.Backup); info.exists && !info.unreadable {
-			backup = "yes"
-		}
-	}
-	item.line = fmt.Sprintf("%s | active %s | %d bytes | backup %s | path %s%s", label, transcriptsTime(file.modified), file.size, backup, path, t.fileField(files.Messages))
-	return item
 }
 
 // page orders the items newest first and cuts the page after the cursor.

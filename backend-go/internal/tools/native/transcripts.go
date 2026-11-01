@@ -18,7 +18,7 @@ const transcriptsToolID = "native.transcripts"
 var transcriptsInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "path":{"type":"string","minLength":1,"description":"What to list. Omit it for the profiles of your session. sessions lists the sessions; session:<id> lists the profiles of that session; profile:<category>/<name> (or profile:<session>/<category>/<name>) lists that profile's sub-agent runs. remote:<name>/session:<id> (or remote:<name> for its default_session) lists a remote JAD server, and remote:<name>/profile:<session>/<category>/<name> its runs; only when allow_remote is on."},
+    "path":{"type":"string","minLength":1,"description":"What to list. Omit it, or use path profile:<category>/<name> (or profile:<session>/<category>/<name>), for the sub-agent runs of one profile; sessions lists the sessions; remote:<name>/session:<id> (or remote:<name>) lists a remote JAD server's sessions, and remote:<name>/profile:<session>/<category>/<name> its runs; only when allow_remote is on. The profiles of a session are listed by the profile tool (action list)."},
     "filters":{"type":"array","items":{"type":"string"},"description":"Only items whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. For runs the agent name and the parent call id are matched too."},
     "status":{"type":"string","enum":["queued","running","done","failed","timed_out","stopped","lost"],"description":"Only sub-agent runs in this state. Only with a profile: path."},
     "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration."},
@@ -27,7 +27,7 @@ var transcriptsInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const transcriptsDescription = "List what the transcript tool can read, newest first (path remote:<name>/session:<id> lists a remote JAD server when remote reading is on): the profiles of your session (or sessions with path sessions, session:<id>), or the sub-agent runs of one profile (path profile:<category>/<name>). Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page."
+const transcriptsDescription = "List the sub-agent runs of a profile, newest first, and the sessions (path sessions) (path remote:<name>/session:<id> lists a remote JAD server when remote reading is on). The profiles of a session are listed by the profile tool. Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page."
 
 // transcriptsKinds are the forms of path, as the error for a bad one lists them.
 const transcriptsKinds = "sessions, session:<id>, profile:<category>/<name>, profile:<session>/<category>/<name>"
