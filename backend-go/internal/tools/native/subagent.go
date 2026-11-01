@@ -22,12 +22,13 @@ var subagentInputSchema = json.RawMessage(`{
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
+    "resume":{"type":"string","description":"Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent marked [can change files; runs to its end] ignores it and runs to its end."}
   },
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends."
+const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session from its transcript as a new run (the old one is not changed; the result says resumed_from). [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
@@ -46,6 +47,9 @@ type SubagentRequest struct {
 	// soon as the launcher has created it, so the manager knows where the child's work
 	// is even if the server dies before the child ends.
 	OnTranscript func(dir string)
+	// Seed, when set, is the transcript of the run this one resumes: the launcher copies it
+	// into the new run's own folder before it opens the journal, and never writes to it.
+	Seed string
 }
 
 // SubagentResult is what a finished child run reports.
@@ -734,11 +738,11 @@ func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.
 	return matched, nil
 }
 
-// normalizeSubagentArguments treats a blank agent, id or task as absent, so a model
+// normalizeSubagentArguments treats a blank agent, resume or task as absent, so a model
 // that sends an empty string for "the default" is not rejected, and a blank task as a
 // request for the agent list. A negative block is no block.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
-	for _, key := range []string{"task", "agent"} {
+	for _, key := range []string{"task", "agent", "resume"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue

@@ -983,8 +983,10 @@ func TestSubagentDescriptionTierFollowsTheNumberOfAgentsAtTheDefaultBudget(t *te
 	if strings.Contains(d, "Searches one area") || !strings.Contains(d, "\nAgents: agent-000, agent-001, ") || !strings.Contains(d, "agent-099. Call without a task") {
 		t.Fatalf("100 agents did not fall back to names:\n%s", d)
 	}
-	if len(d) > 1800 {
-		t.Fatalf("100 agents cost %d bytes of description, expected about 1 KB of names", len(d))
+	// The description carries the shared text (about 750 bytes, including the resume sentence) plus
+	// the names, so 2 KB is the bound for the names tier.
+	if len(d) > 2048 {
+		t.Fatalf("100 agents cost %d bytes of description, expected about 2 KB of names", len(d))
 	}
 	// 600 names do not fit in 4096 either: a count and the way to ask.
 	d = descriptionFor(600)

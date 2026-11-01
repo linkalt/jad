@@ -5,7 +5,7 @@
       "id": "native.subagent",
       "source": "native",
       "name": "subagent",
-      "description": "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.",
+      "description": "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session from its transcript as a new run (the old one is not changed; the result says resumed_from). [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -17,6 +17,10 @@
           "agent": {
             "type": "string",
             "description": "Agent name. Optional when only one is configured."
+          },
+          "resume": {
+            "type": "string",
+            "description": "Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."
           },
           "block_ms": {
             "type": "integer",

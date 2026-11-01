@@ -43,6 +43,9 @@ func changedInformation(run subagentRunView) []tools.Information {
 	if run.note != "" {
 		information = append(information, tools.Information{Key: "background_note", Value: run.note})
 	}
+	if run.configNote != "" {
+		information = append(information, tools.Information{Key: "config_note", Value: run.configNote})
+	}
 	if run.processesStopped > 0 {
 		information = append(information, tools.Information{Key: "stopped_processes", Value: run.processesStopped})
 	}

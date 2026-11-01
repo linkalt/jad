@@ -27,8 +27,20 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		defer s.mu.RUnlock()
 		return renderSubagentList(execution.CallID, s.agents, s.settings.ResultMaxBytes, s.settings)
 	}
-	if agent, _ := arguments["agent"].(string); strings.HasPrefix(agent, remote.Prefix) {
+	agent, _ := arguments["agent"].(string)
+	if strings.HasPrefix(agent, remote.Prefix) {
+		if _, ok := arguments["resume"]; ok {
+			return refuseResume(execution.CallID, &resumeProblem{"resume_remote", "resume cannot continue a run on a remote agent: name a local agent"})
+		}
 		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
+	}
+	if resume, _ := arguments["resume"].(string); resume != "" {
+		// A child may not resume: a run it could continue is the session's own, and the
+		// session's owner is the only one that may name it.
+		if execution.AgentDepth > 0 {
+			return refuseResume(execution.CallID, &resumeProblem{"resume_in_child", "A sub-agent cannot resume a run: only the session that owns the run can"})
+		}
+		return s.startResume(ctx, execution.CallID, resume, task, arguments, execution)
 	}
 	return s.startRun(ctx, execution.CallID, task, arguments, execution)
 }
@@ -54,6 +66,14 @@ func childExecutionContext(execution tools.ExecutionContext, agent sessionfs.Nat
 }
 
 func (s *subagentTool) startRun(ctx context.Context, callID, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+	return s.startRunFrom(ctx, callID, task, arguments, execution, resumeStart{})
+}
+
+// startRunFrom starts a run; a resume passes the run it continues in from.
+func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, arguments map[string]any, execution tools.ExecutionContext, from resumeStart) (string, error) {
+	if from.from != "" {
+		arguments = withAgent(arguments, from.agent)
+	}
 	agent, problem := s.selectAgent(arguments)
 	if problem != "" {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_agent", problem,
@@ -89,7 +109,15 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 	if observe == nil && s.async != nil && (!changes || background) && canHandle {
 		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task))
 	}
+	config, err := subagentFingerprint(agent.config, agent.catalog)
+	if err != nil {
+		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "The agent definition could not be fingerprinted: "+err.Error()), nil
+	}
 	run, err := s.manager.start(subagentStart{
+		config:         config,
+		resumedFrom:    from.from,
+		resumedConfig:  from.config,
+		seed:           from.seed,
 		async:          handle,
 		asyncHost:      s.async,
 		childAsync:     agent.hasNativeTool(asyncToolID),
@@ -105,6 +133,7 @@ func (s *subagentTool) startRun(ctx context.Context, callID, task string, argume
 		maxPerSession:  int(s.settings.MaxRunsPerSession),
 		changes:        changes,
 		note:           note,
+		configNote:     configNoteFor(from, config),
 		writerReserved: background,
 		request: SubagentRequest{
 			Agent:     agent.config,
@@ -237,6 +266,9 @@ func partialInformation(information []tools.Information, run subagentRunView) []
 func withTranscript(information []tools.Information, run subagentRunView, after ...tools.Information) []tools.Information {
 	if run.dir != "" {
 		information = append(information, tools.Information{Key: "transcript", Value: filepath.Join(run.dir, "messages.jsonl")})
+	}
+	if run.resumedFrom != "" {
+		information = append(information, tools.Information{Key: "resumed_from", Value: run.resumedFrom})
 	}
 	return append(information, after...)
 }

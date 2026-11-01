@@ -49,6 +49,15 @@ type subagentManifest struct {
 	Files        []subagentFileChange `json:"files,omitempty"`
 	FilesOmitted int                  `json:"files_omitted,omitempty"`
 	Tracked      bool                 `json:"tracked,omitempty"`
+	// Config is the fingerprint of the agent definition the run started with; see
+	// subagentFingerprint. Absent in a manifest written before it existed, and then no
+	// config note is made.
+	Config string `json:"config,omitempty"`
+	// ResumedFrom is the run this one was resumed from; empty for a run that was not.
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	// ResumedConfig is the source run's fingerprint at the time of the resume; the config note
+	// is rebuilt from it and Config after a restart. Empty when the source had none.
+	ResumedConfig string `json:"resumed_config,omitempty"`
 	// Server is the process that last wrote the manifest. A manifest without it comes
 	// from a version that did not record one and is treated as owned by no live server.
 	Server *serverIdentity `json:"server,omitempty"`

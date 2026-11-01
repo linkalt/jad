@@ -272,6 +272,14 @@ type subagentRun struct {
 	countedWriter bool
 	// note says why a writer that could have been handed off was not; it rides on the result.
 	note string
+	// configNote says the agent definition changed since a resumed run's source; see configChangedNote.
+	configNote string
+	// config is the agent definition's fingerprint, written into the manifest; see subagentFingerprint.
+	config string
+	// resumedFrom is the run this one continues from; empty for a run that does not.
+	resumedFrom string
+	// resumedConfig is the source's fingerprint; see subagentStore's ResumedConfig.
+	resumedConfig string
 	// tracked is set when the run lists its changed files (changes and a non-zero
 	// changed_files_max); without it the result says nothing about files.
 	tracked bool
@@ -298,6 +306,8 @@ type subagentRunView struct {
 	filesOmitted                   int
 	tracked                        bool
 	note                           string
+	configNote                     string
+	resumedFrom                    string
 	processesStopped               int
 	dir                            string
 	timeoutMS                      int64
@@ -312,7 +322,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -366,7 +376,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Session: r.session, Root: r.root, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig,
 	}
 }
 
@@ -383,7 +393,8 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
 		cancel: cancel, ctx: ctx, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
-		store: store, restored: true,
+		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, resumedConfig: manifest.ResumedConfig,
+		configNote: configNoteFor(resumeStart{from: manifest.ResumedFrom, config: manifest.ResumedConfig}, manifest.Config),
 	}
 }
 
@@ -465,6 +476,16 @@ type subagentStart struct {
 	writerReserved bool
 	// note is carried on the run's result; see subagentRun.note.
 	note string
+	// configNote says the agent definition changed since a resumed run's source; see configChangedNote.
+	configNote string
+	// config is the agent definition's fingerprint; see subagentRun.config.
+	config string
+	// resumedFrom is the run this one continues from; see subagentRun.resumedFrom.
+	resumedFrom string
+	// resumedConfig is the source's fingerprint; see subagentRun.resumedConfig.
+	resumedConfig string
+	// seed is the source transcript the run's folder starts from; see SubagentRequest.Seed.
+	seed string
 }
 
 // reserveWriter takes one of owner's background writer places and reports whether there
@@ -619,6 +640,10 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		changes:       spec.changes,
 		resultMax:     spec.resultMax,
 		note:          spec.note,
+		configNote:    spec.configNote,
+		config:        spec.config,
+		resumedFrom:   spec.resumedFrom,
+		resumedConfig: spec.resumedConfig,
 		startedAt:     m.now(),
 		countedWriter: spec.writerReserved,
 		cancel:        cancel,
@@ -631,6 +656,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	}
 	// The run id is the owner of every process the child starts, so the child sees only
 	// its own and the run's end can stop them.
+	spec.request.Seed = spec.seed
 	spec.request.Execution.ProcessOwner = id
 	spec.request.Execution.AgentDepth = spec.depth + 1
 	spec.request.Execution.RootRun = root

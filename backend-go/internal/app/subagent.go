@@ -206,6 +206,13 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, "", fmt.Errorf("create sub-agent directory: %w", err)
 	}
+	// A resumed run starts from a copy of its source transcript. The copy is made into this
+	// run's own folder before the journal opens it, and the source is only read.
+	if request.Seed != "" {
+		if err := copyFileExclusive(request.Seed, filepath.Join(directory, "messages.jsonl")); err != nil {
+			return nil, "", fmt.Errorf("copy the transcript of the resumed run: %w", err)
+		}
+	}
 	journal, err := transcript.NewJournal(filepath.Join(directory, "messages.jsonl"), transcript.DurabilityMode(config.Persistence.Durability))
 	if err != nil {
 		return nil, "", fmt.Errorf("create sub-agent transcript: %w", err)
@@ -220,4 +227,22 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 		return nil, "", fmt.Errorf("create sub-agent turn store: %w", err)
 	}
 	return store, directory, nil
+}
+
+// copyFileExclusive copies src to dst, creating dst and failing if it already exists. The
+// source is read only, and a copy never overwrites a file of another run.
+func copyFileExclusive(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
