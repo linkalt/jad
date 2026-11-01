@@ -97,6 +97,10 @@ func TestRunnerExecutesValidatedToolAndContinuesNextProviderRound(t *testing.T) 
 		if len(request.Tools) != 1 {
 			t.Fatalf("round %d tools = %d, want 1", index+1, len(request.Tools))
 		}
+		// Both rounds send the same bytes: the array is rebuilt per round from the same catalog.
+		if got, want := string(request.Tools[0]), `{"type":"function","name":"lookup","description":"Look up one query.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false},"strict":false}`; got != want {
+			t.Fatalf("round %d tools bytes\n got: %s\nwant: %s", index+1, got, want)
+		}
 		if index == 1 {
 			var toolOutput struct {
 				Type   string `json:"type"`

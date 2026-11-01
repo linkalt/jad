@@ -606,6 +606,19 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	// A child gates its MCP tools with the owning profile's set and gets the owner's load_tool when
+	// the owner enables it. Both come from the owner's config, so a child reads the same state folder.
+	var childLoadTool *tools.Tool
+	if lazy != nil && config.NativeLoadTool != nil {
+		tool, err := native.ChildLoadTool(config, lazy)
+		if err != nil {
+			return nil, nil, nil, nil, mapSessionError(err)
+		}
+		childLoadTool = &tool
+	}
+	if err := subagentMCP.SetLazy(lazy, childLoadTool); err != nil {
+		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
+	}
 	// The subagent tool was built with the native catalog, before the MCP tools existed.
 	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
 		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})

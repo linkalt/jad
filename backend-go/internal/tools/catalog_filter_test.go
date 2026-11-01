@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -83,4 +84,38 @@ func TestCatalogFilterOfNothingKeptIsAnEmptyCatalog(t *testing.T) {
 	if got, rest, err := none.Filter(func(Definition) bool { return true }); got != nil || len(rest) != 0 || err != nil {
 		t.Errorf("nil catalog Filter = %v, %v, %v", got, rest, err)
 	}
+}
+
+// A profile with no tools.lazy and no load_tool sends exactly these bytes: the same
+// definitions in catalog order, each in the fixed response shape. A change to the order, the
+// shape, or the Listed rule for a non-lazy tool shows up here.
+func TestNonLazyCatalogSendsItsToolsInCatalogOrderAsExactBytes(t *testing.T) {
+	base := testTool(t)
+	catalog := newTestCatalog(t,
+		namedTool(t, base, "native.a", "a"),
+		namedTool(t, base, "native.b", "b"),
+		namedTool(t, base, "native.c", "c"),
+	)
+	response, err := catalog.ResponseTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := `{"type":"object","properties":{"command":{"type":"string","minLength":1}},"required":["command"],"additionalProperties":false}`
+	want := `[` +
+		`{"type":"function","name":"a","description":"Echo one string.","parameters":` + schema + `,"strict":false},` +
+		`{"type":"function","name":"b","description":"Echo one string.","parameters":` + schema + `,"strict":false},` +
+		`{"type":"function","name":"c","description":"Echo one string.","parameters":` + schema + `,"strict":false}` +
+		`]`
+	got := `[` + strings.Join(rawStrings(response), ",") + `]`
+	if got != want {
+		t.Fatalf("ResponseTools() bytes\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func rawStrings(raw []json.RawMessage) []string {
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, string(item))
+	}
+	return out
 }

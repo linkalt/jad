@@ -378,14 +378,37 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 	}
 }
 
-// A child built from a parent with lazy MCP tools gets the full, ungated definition: no
-// tool_not_loaded, and the real schema. The child's call with no "word" is rejected by the real
-// schema as validation_failed; a gate that did not check the real schema would have accepted it.
-func TestChildOfAParentWithLazyToolsGetsTheFullMCPTool(t *testing.T) {
+// A child of a profile with tools.lazy gates its lazy MCP tools with the owning profile's set: its
+// call before a load is refused as tool_not_loaded, and the MCP server never runs.
+func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
 	profileTools := map[string]any{"allow": []string{"subagent", "read", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	f.provider.childFirstCall = [2]string{name, `{}`}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	child := f.provider.forModel("child-model")
+	if len(child) < 2 {
+		t.Fatalf("child made %d requests", len(child))
+	}
+	history := child[len(child)-1].Text
+	if !strings.Contains(history, "tool_not_loaded") {
+		t.Errorf("the child's call to the unloaded lazy tool was not refused:\n%s", history)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("the MCP server ran for an unloaded lazy tool (%d calls)", calls.Load())
+	}
+}
+
+// A child of a profile with no tools.lazy gets the full, ungated definition: no tool_not_loaded,
+// and the real schema. The child's call with no "word" is rejected by the real schema as
+// validation_failed; a gate that did not check the real schema would have accepted it.
+func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	calls := &atomic.Int32{}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{name, `{}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)

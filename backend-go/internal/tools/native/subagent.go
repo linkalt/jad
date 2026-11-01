@@ -121,6 +121,21 @@ func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
 	return m.BindToolsets(mcpTools, nil)
 }
 
+// SetLazy gives the owning profile's lazy set to the children: each child's MCP tools in that set are gated
+// with it. loadTool is the child's load_tool, built by the owner from the same set and manifest; nil
+// when the owner enables no load_tool. A child gets it only when its tools list names it.
+func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
+	if m == nil || m.tool == nil {
+		return nil
+	}
+	m.tool.lazy = lazy
+	m.tool.loadTool = loadTool
+	if loadTool != nil {
+		return m.tool.addLoadToolToNestingAgents()
+	}
+	return nil
+}
+
 // BindToolsets is Bind plus the MCP tools loaded for each toolset an agent names, by
 // toolset ID. An agent with a toolset resolves its mcp: entries against that toolset's
 // tools only, never the session's.
@@ -146,6 +161,10 @@ type subagentTool struct {
 	async *AsyncHost
 	// remotes is the other JAD servers a call may start an agent on; empty offers none.
 	remotes remoteAgentSettings
+	// lazy is the owning profile's lazy set and loadTool its load_tool, both given by SubagentMCP.SetLazy;
+	// nil when the owner has no tools.lazy or no load_tool.
+	lazy     *tools.LazySet
+	loadTool *tools.Tool
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -337,6 +356,28 @@ func (s *subagentTool) addSelfToNestingAgents() error {
 	return nil
 }
 
+// addLoadToolToNestingAgents gives load_tool to the agents whose tools list names it. A child with
+// MCP tools gets it in bindMCP, which builds its catalog from nativeTools; a child without any gets
+// its catalog rebuilt here.
+func (s *subagentTool) addLoadToolToNestingAgents() error {
+	for index := range s.agents {
+		agent := &s.agents[index]
+		if !containsName(agent.config.Tools, sessionfs.LoadToolName) {
+			continue
+		}
+		agent.nativeTools = append(agent.nativeTools, *s.loadTool)
+		if len(agent.mcpIDs) > 0 {
+			continue
+		}
+		catalog, err := tools.NewCatalog(agent.nativeTools)
+		if err != nil {
+			return err
+		}
+		agent.catalog = catalog
+	}
+	return nil
+}
+
 // withoutDeniedTools drops from an agent's tools list every entry the profile's
 // tools.deny covers, so a denied tool cannot be reached through a child. An agent
 // without a tools list is returned as it is: its default set is filtered when built.
@@ -508,10 +549,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 	}
 	sort.Strings(available)
 	const kind = "native tool"
-	// async, tool_smith, subagent and profile_message are opt-in: a child gets them only when its tools list names them.
+	// async, tool_smith, subagent, profile_message and load_tool are opt-in: a child gets them only when its tools list names them.
 	chosen := make([]tools.Tool, 0, len(readOnly))
 	for _, tool := range readOnly {
-		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID {
+		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID && tool.Definition.ID != loadToolID {
 			chosen = append(chosen, tool)
 		}
 	}
@@ -525,6 +566,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 			}
 			if name == "subagent" {
 				// The tool being built; the caller adds it to this agent's catalog.
+				continue
+			}
+			// load_tool is offered by addLoadToolToNestingAgents, once the owning profile's set is known.
+			if name == sessionfs.LoadToolName {
 				continue
 			}
 			if _, exists := byName[name]; !exists {
@@ -588,7 +633,10 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 			}
 			if _, done := added[tool.Definition.ID]; !done {
 				added[tool.Definition.ID] = struct{}{}
-				childTools = append(childTools, tool)
+				// The owning profile's lazy set gates the child's copy: a lazy tool stays off the child's
+				// request until the child loads it. GateFor leaves the set's one-shot gate to the parent.
+				gated, _ := s.lazy.GateFor(tool)
+				childTools = append(childTools, gated)
 			}
 		}
 		for _, id := range agent.mcpIDs {

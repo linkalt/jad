@@ -148,6 +148,16 @@ func (s *LazySet) Gate(tool Tool) (Tool, bool) {
 		return tool, false
 	}
 	s.gated[tool.Definition.ID] = true
+	return s.GateFor(tool)
+}
+
+// GateFor returns a fresh lazy gate of a tool the set has bound, and false for any other tool. It
+// does not mark the tool as gated, so any number of catalogs can gate their own copies of one lazy
+// tool, all reading this set. Gate keeps its one-shot contract for the owning catalog.
+func (s *LazySet) GateFor(tool Tool) (Tool, bool) {
+	if s == nil || !s.bindings[tool.Definition.ID] {
+		return tool, false
+	}
 	for _, entry := range s.bound {
 		if entry.Tool.Definition.ID == tool.Definition.ID {
 			return WithLazyGate(entry, s), true
