@@ -391,3 +391,33 @@ func TestResponseToolsListsALazyToolOnlyOnceLoaded(t *testing.T) {
 		t.Fatal("the set did not record the load")
 	}
 }
+
+// A refused call hands the gate's own wrappers the arguments the model sent, so a pre_tool
+// command sees them. The arguments are not checked against the real schema.
+func TestRefusedCallPassesItsRealArgumentsToTheWrappers(t *testing.T) {
+	set := openSet(t, t.TempDir(), []string{"read"}, 256)
+	real := lazyTool(t, "native.read", "native", "read")
+	real.Definition.InputSchema = json.RawMessage(`{"type":"object","required":["path"]}`)
+	set.Bind([]Tool{real})
+	var seen map[string]any
+	gated, ok := set.Gate(real)
+	if !ok {
+		t.Fatal("the set did not gate the lazy tool")
+	}
+	wrapped := gated
+	wrapped.Execute = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (string, error) {
+		seen = arguments
+		return gated.Execute(ctx, arguments, execution)
+	}
+	catalog, err := NewCatalog([]Tool{wrapped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := json.RawMessage(`{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"notes.txt\"}"}`)
+	if _, err := catalog.ExecuteFunctionCall(context.Background(), call, ExecutionContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if seen["path"] != "notes.txt" {
+		t.Fatalf("the wrapper saw %v for a refused call, want the call's arguments {path: notes.txt}", seen)
+	}
+}

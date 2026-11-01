@@ -9,6 +9,7 @@ import (
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tools/native"
 )
 
 // applyProfileTools narrows the registered tools to what the selected profile's model
@@ -28,6 +29,9 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 		return nil, nil, err
 	}
 	if err := checkLazyEntriesVisible(config, settings, definitions); err != nil {
+		return nil, nil, err
+	}
+	if err := checkLazyLoadToolShown(config, settings, definitions); err != nil {
 		return nil, nil, err
 	}
 	exposed, hidden, err := registered.Filter(func(definition tools.Definition) bool {
@@ -55,14 +59,32 @@ func openLazySet(config sessionfs.SessionConfig, logger *slog.Logger) (*tools.La
 	return tools.OpenLazySet(filepath.Dir(config.MessagesPath), config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown, logger)
 }
 
-// checkLazyEntriesVisible refuses a tools.lazy entry that names no tool the profile shows: a
-// lazy tool that is denied, or left out of a non-empty allow list, could never be loaded or
-// called, so the entry is a configuration error and not a tool that is quietly absent.
+// checkLazyLoadToolShown refuses a profile whose tools.lazy is set while its allow or deny hides
+// load_tool. The lazy tools would then have no way to load, so the profile is refused rather than run
+// with them unreachable. A profile with no lazy tools is not checked.
+func checkLazyLoadToolShown(config sessionfs.SessionConfig, settings sessionfs.ProfileToolSettings, registered []tools.Definition) error {
+	if len(settings.Lazy) == 0 {
+		return nil
+	}
+	for _, definition := range registered {
+		if definition.Name != sessionfs.LoadToolName || definition.Source != "native" || profileToolShown(settings, definition) {
+			continue
+		}
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools hides %q, but tools.lazy lists %d tool(s) that only %q can load: allow %q, or remove tools.lazy",
+			config.SettingPath, config.Profile, sessionfs.LoadToolName, len(settings.Lazy), sessionfs.LoadToolName, sessionfs.LoadToolName)}
+	}
+	return nil
+}
+
+// checkLazyEntriesVisible refuses a tools.lazy entry that names no tool the lazy pass can bind and
+// the profile shows: a lazy tool that is denied, or left out of a non-empty allow list, could never
+// be loaded or called, and a tool the pass never binds would stay in the array. Either way the entry
+// is a configuration error and not a tool that is quietly absent or quietly ignored.
 func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.ProfileToolSettings, registered []tools.Definition) error {
 	for index, entry := range settings.Lazy {
 		visible := false
 		for _, definition := range registered {
-			if tools.EntryMatches(entry, definition) && profileToolShown(settings, definition) {
+			if tools.EntryMatches(entry, definition) && !native.NotLazyBindable(definition) && profileToolShown(settings, definition) {
 				visible = true
 				break
 			}
@@ -70,7 +92,7 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 		if visible {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows (a denied tool, or one outside allow, cannot be lazy)",
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows that can be lazy (a denied tool, one outside allow, or one of subagent, profile_message, transcript, transcripts, profile and load_tool cannot be lazy)",
 			config.SettingPath, config.Profile, index, entry)}
 	}
 	return nil

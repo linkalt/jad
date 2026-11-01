@@ -360,8 +360,9 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 	execution.CallID = callID
 	execution.ToolName = tool.Definition.Name
 	if tool.Refused != nil && tool.Refused(execution) {
-		// The tool's own Execute refuses the call, so no argument is read or checked against the schema.
-		return c.runTool(ctx, callID, tool, map[string]any{}, execution)
+		// The tool's own Execute refuses the call, so the arguments are not checked against the schema.
+		// The wrappers still see what the model sent, so a pre_tool command reports the real call.
+		return c.runTool(ctx, callID, tool, refusedCallArguments(fields["arguments"]), execution)
 	}
 
 	var rawArguments string
@@ -516,4 +517,22 @@ func encodeFunctionCallOutputValue(callID string, output json.RawMessage) (json.
 
 func jsonschemaDecode(raw []byte) (any, error) {
 	return jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+}
+
+// refusedCallArguments decodes the arguments of a refused call for its wrappers. Arguments that
+// are not a JSON object of a JSON string give an empty map, and they are never validated.
+func refusedCallArguments(raw json.RawMessage) map[string]any {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return map[string]any{}
+	}
+	decoded, err := jsonschemaDecode([]byte(text))
+	if err != nil {
+		return map[string]any{}
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	return object
 }

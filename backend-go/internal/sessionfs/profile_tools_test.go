@@ -392,3 +392,49 @@ func TestProfileToolsLazyEntriesUseTheAllowSyntax(t *testing.T) {
 		}
 	}
 }
+
+// The lazy entries are refused for load_tool, so the schema refuses it too: its pattern is the
+// allow and deny pattern without load_tool. allow and deny still take it.
+func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/profile.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Tools struct {
+				Properties map[string]struct {
+					Items struct {
+						Pattern string `json:"pattern"`
+					} `json:"items"`
+				} `json:"properties"`
+			} `json:"tools"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema.Properties.Tools.Properties
+	lazy := regexp.MustCompile(properties["lazy"].Items.Pattern)
+	allow := regexp.MustCompile(properties["allow"].Items.Pattern)
+	if lazy.MatchString(LoadToolName) {
+		t.Errorf("the schema's lazy pattern admits %q, which the loader refuses as a lazy entry", LoadToolName)
+	}
+	if !allow.MatchString(LoadToolName) {
+		t.Errorf("the schema's allow pattern refuses %q, which the loader accepts", LoadToolName)
+	}
+	for _, entry := range []string{"read", "bash", "mcp:docs:search", "mcp:docs:*"} {
+		if !lazy.MatchString(entry) {
+			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts", entry)
+		}
+	}
+}
+
+// A tools block with lazy and neither allow nor deny is refused by the loader, as the schema's
+// anyOf refuses it: the block must say which tools it shows.
+func TestLazyOnlyToolsBlockIsRefusedLikeTheSchema(t *testing.T) {
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"lazy": []any{"bash"}}}, map[string]any{"load_tool": map[string]any{}})
+	if err == nil || !strings.Contains(err.Error(), "needs allow or deny") {
+		t.Fatalf("err = %v, want the loader to refuse a lazy-only tools block", err)
+	}
+}

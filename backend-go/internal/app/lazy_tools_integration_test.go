@@ -350,6 +350,52 @@ func TestRefusedLazyMCPCallFiresItsHookOnce(t *testing.T) {
 // A lazy entry the profile does not show is a configuration error: a denied lazy tool could
 // never be loaded or called, so it is refused rather than quietly absent. The check runs on
 // the registered definitions, so it is tested on them directly.
+// A profile with tools.lazy whose allow or deny hides load_tool could never load a lazy tool, and the
+// profile would run with the lazy tools unreachable. The profile is refused, and the error names load_tool.
+func TestLazyProfileWhoseAllowHidesLoadToolIsAConfigError(t *testing.T) {
+	registered := []tools.Definition{
+		{ID: "native.read", Source: "native", Name: "read"},
+		{ID: "native.load_tool", Source: "native", Name: "load_tool"},
+	}
+	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
+	for name, settings := range map[string]sessionfs.ProfileToolSettings{
+		"allow omits it": {Restricted: true, HasAllow: true, Allow: []string{"read"}, Lazy: []string{"read"}},
+		"deny names it":  {Restricted: true, Deny: []string{"load_tool"}, Lazy: []string{"read"}},
+	} {
+		err := checkLazyLoadToolShown(config, settings, registered)
+		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.lazy") {
+			t.Errorf("%s: err = %v, want the refusal naming tools.lazy and load_tool", name, err)
+		}
+	}
+	shown := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "load_tool"}, Lazy: []string{"read"}}
+	if err := checkLazyLoadToolShown(config, shown, registered); err != nil {
+		t.Errorf("allow that shows load_tool: %v", err)
+	}
+	none := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read"}}
+	if err := checkLazyLoadToolShown(config, none, registered); err != nil {
+		t.Errorf("no tools.lazy: %v", err)
+	}
+}
+
+// A lazy entry the lazy pass can never bind is a configuration error too. The subagent, profile_message,
+// transcript and profile tools are added after the pass, so a lazy entry that names one would be
+// accepted and do nothing: the tool would stay in the array.
+func TestLazyEntryNamingAToolTheLazyPassCannotBindIsAConfigError(t *testing.T) {
+	registered := []tools.Definition{
+		{ID: "native.read", Source: "native", Name: "read"},
+		{ID: "native.subagent", Source: "native", Name: "subagent"},
+		{ID: "native.profile_message", Source: "native", Name: "profile_message"},
+	}
+	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
+	for _, name := range []string{"subagent", "profile_message"} {
+		settings := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
+		err := checkLazyEntriesVisible(config, settings, registered)
+		if err == nil || !strings.Contains(err.Error(), `tools.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "cannot be lazy") {
+			t.Errorf("%s: err = %v, want the lazy-entry refusal naming it", name, err)
+		}
+	}
+}
+
 func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 	registered := []tools.Definition{
 		{ID: "native.read", Source: "native", Name: "read"},
@@ -383,7 +429,7 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
-	profileTools := map[string]any{"allow": []string{"subagent", "read", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{name, `{}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
@@ -672,7 +718,7 @@ func TestLazyPatternOverTheLimitOnALargeServerLoadsNothing(t *testing.T) {
 // lazy tools for the parent, whose state file is never written.
 func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
 	calls := &atomic.Int32{}
-	profileTools := map[string]any{"allow": []string{"subagent", "read", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{"load_tool", `{"names":["mcp:fixture:*"]}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {

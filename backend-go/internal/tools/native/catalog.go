@@ -179,8 +179,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
-		raw := tool
-		profileMessageTool = &raw
+		profileMessageTool = &tool
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
 	if config.NativeSubagent != nil {
@@ -210,13 +209,13 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		// of the manifest's text and not replaced by it. The tool's own description is the code's
 		// text plus the list, whose markers depend on which agents may run in the background.
 		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, tool)
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if profileMessageTool != nil {
-		loaded = append(loaded, *profileMessageTool)
+		loaded = append(loaded, WithToolEventHooks(*profileMessageTool, config.Hooks, config.Model.APIKeyEnv))
 	}
-	// load_tool is last, after the subagent tool, so no child catalog gets it: a child's loads
-	// would write the parent's lazy set. It lists the lazy tools bound in lazy, which is nil or
+	// load_tool is last, after the subagent tool, so it is not in the child pool: a child gets it only
+	// through SetLazy, from the owner, so its loads write the owner's lazy set. It lists the lazy tools bound in lazy, which is nil or
 	// empty when the profile has none; it then lists nothing and loads nothing.
 	if config.NativeLoadTool != nil {
 		definition, err := requireNativeDefinition(config, definitions, "load_tool", loadToolID, loadToolInputSchema)
@@ -242,6 +241,20 @@ func gateLazy(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
 	}
 	gated, _ := lazy.Gate(tool)
 	return gated
+}
+
+// NotLazyBindable reports whether a native tool is added after the lazy pass, so a tools.lazy entry
+// can never bind it. The pass binds the tools buildNativeTools builds; the transcript, profile,
+// subagent, profile_message and load_tool tools are appended later, and an entry naming one is refused.
+func NotLazyBindable(definition tools.Definition) bool {
+	if definition.Source != "native" {
+		return false
+	}
+	switch definition.ID {
+	case transcriptToolID, transcriptsToolID, profileToolID, subagentToolID, profileMessageToolID, loadToolID:
+		return true
+	}
+	return false
 }
 
 // GateLazyTools gates the lazy tools of a list with the set, before the event hooks wrap them.
@@ -528,8 +541,8 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	// Gating comes after the child catalogs were built from the raw list above, so no child can
-	// call a lazy tool without its own load. Each native tool is gated and then hooked once, here.
+	// Each native tool is gated and then hooked once, here. A child catalog is built from this gated list
+	// (childPool), so a child gets the owner's gate, and a lazy tool is refused to it until the owner's set has loaded it.
 	if lazy != nil {
 		lazy.Bind(loaded)
 		for index, tool := range loaded {

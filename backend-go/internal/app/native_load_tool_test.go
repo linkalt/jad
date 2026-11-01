@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"net/http"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -30,14 +31,29 @@ func sessionToolNames(t *testing.T, f subagentFixture) []string {
 	return names
 }
 
-// load_tool is not added by the app: a profile without tools.native.load_tool has no load_tool,
-// even though it has lazy tools and so has a lazy set.
+// load_tool is not added by the app: a profile without tools.native.load_tool has no load_tool. Its
+// tools.lazy is refused at load for the missing key, so the profile never runs without load_tool.
 func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(map[string]any{"allow": []string{"read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"read"}})}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
+	status, body := f.sessionTools(t)
+	if status == http.StatusOK {
+		t.Fatalf("a profile with tools.lazy and no load_tool key was not refused: %s", body)
+	}
+	if !strings.Contains(body, "tools.native.load_tool is not enabled") {
+		t.Fatalf("refusal = %s, want the missing load_tool key named", body)
+	}
+}
+
+// A profile whose allow omits load_tool is refused when it has lazy tools: load_tool is the only way to
+// load them, and the profile would otherwise run with them unreachable.
+func TestLoadToolHiddenByAllowRefusesALazyProfile(t *testing.T) {
 	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "lazy": []string{"read"}}, nil, nil)
-	for _, name := range sessionToolNames(t, f) {
-		if name == "load_tool" {
-			t.Fatal("load_tool is listed without tools.native.load_tool")
-		}
+	status, body := f.sessionTools(t)
+	if status == http.StatusOK {
+		t.Fatalf("a lazy profile whose allow hides load_tool was not refused: %s", body)
+	}
+	if !strings.Contains(body, `hides \"load_tool\"`) {
+		t.Fatalf("refusal = %s, want it to name the hidden load_tool", body)
 	}
 }
 
