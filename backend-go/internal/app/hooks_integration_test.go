@@ -202,3 +202,32 @@ func buildChildMCPHookFixture(t *testing.T, hooks map[string]any, calls *atomic.
 	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
 	return f
 }
+
+// A child's refused call to an unloaded lazy session MCP tool fires the owner's pre_tool and
+// post_tool once each, and the server never runs.
+func TestRefusedLazyCallFiresAChildsHooksOnce(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "events")
+	calls := &atomic.Int32{}
+	name := mcpToolNameFor("fixture", "lookup")
+	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+	session := profileSession(profileTools)
+	session["hooks"] = map[string]any{"enabled": true,
+		"pre_tool":  []any{map[string]any{"name": "pre", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo pre >> " + marker}}},
+		"post_tool": []any{map[string]any{"name": "post", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo post >> " + marker}}},
+	}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": session, "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	f.provider.childFirstCall = [2]string{name, `{}`}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("the MCP server ran %d times for an unloaded lazy tool", calls.Load())
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("no hook ran for the refused call: %v", err)
+	}
+	if got := string(data); got != "pre\npost\n" {
+		t.Fatalf("hook events = %q, want one pre_tool then one post_tool", got)
+	}
+}

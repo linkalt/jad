@@ -617,10 +617,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 // agent names are given; a tool is never added because its server calls it read-only,
 // since that is the server's own claim.
 //
-// hookSession wraps a child's copy of a session MCP tool with the owner's hooks. It runs after
+// hook wraps a child's copy of a session MCP tool with the owner's hooks. It runs after
 // the lazy gate, because GateFor rebuilds a lazy tool from the set. Toolset tools are not wrapped:
 // the resolver already hooks them with their own profile's hooks.
-func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool, hookSession func(tools.Tool) tools.Tool) error {
+func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool, hook func(tools.Tool) tools.Tool) error {
 	session := newMCPPool(mcpTools)
 	pools := make(map[string]mcpPool, len(toolsetTools))
 	for id, loadedTools := range toolsetTools {
@@ -658,7 +658,7 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 				// request until the child loads it. GateFor leaves the set's one-shot gate to the parent.
 				gated, _ := s.lazy.GateFor(tool)
 				if !fromToolset {
-					gated = hookSession(gated)
+					gated = hook(gated)
 				}
 				childTools = append(childTools, gated)
 			}
