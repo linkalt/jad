@@ -150,7 +150,22 @@ loaded it; after a load it is present with its real schema, from the next reques
 - No dispatcher: a lazy tool is called by its own name.
 - No next-round expansion beyond the next request: a load is listed from the next request, not in the
   round that made it.
-- Subagent and profile_message children do not inherit lazy. A profile_message target runs with its
-  own state folder (`<state>/<session>/<category>/<name>`) and its own `tools.lazy`. Its loads go to
-  its own `lazy_tools.json`, and the caller's loads go to the caller's file; a target without
-  `tools.lazy` gets no `load_tool` and no file. Tested by the profile_message lazy tests.
+- A subagent child (parent-profile and remote) uses its owning profile's `tools.lazy` set and state
+  folder: its MCP tools are gated with that set, and its loads go to the owning profile's `lazy_tools.json`.
+  `load_tool` reaches a child only when the owning profile enables `tools.native.load_tool` and the
+  agent's tools list names it; an owner without `tools.lazy` gives its children no gating and no `load_tool`.
+- A profile_message target runs with its own state folder (`<state>/<session>/<category>/<name>`) and its
+  own `tools.lazy`. Its loads go to its own `lazy_tools.json`, and the caller's loads go to the caller's
+  file; a target without `tools.lazy` gets no `load_tool` and no file. Tested by the profile_message lazy tests.
+
+## Verification limits
+
+- Accepted verification exception: the resolver maps a child `load_tool` catalog error to a
+  `ConfigError` with the settings path (`internal/app/resolver.go`, the `SetLazy` call in
+  `buildRegisteredCatalog`).
+- No test reaches that mapping. No config input produces the error, and the resolver's `SetLazy`
+  cannot see a duplicate because `newSubagentToolRemotes` rebinds the hook first
+  (`internal/tools/native/catalog.go:187`, `internal/tools/native/subagent.go:304`).
+- The error is covered at the `SetLazy` boundary by `TestSetLazyReturnsTheCatalogErrorForADuplicateLoadTool`.
+  The wrap itself is verified by reading only.
+- Accepted by the user as a verification exception.
