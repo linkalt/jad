@@ -127,7 +127,7 @@ func (s *remoteServer) waitDone(t *testing.T, id string) map[string]any {
 	return nil
 }
 
-const fullGrant = `"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts"]`
+const fullGrant = `"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts","profile"]`
 
 func TestRemoteAPIMessageRunsTheTargetProfileAndReturnsItsAnswer(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})

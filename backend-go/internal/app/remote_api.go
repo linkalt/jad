@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -293,4 +294,29 @@ func (r *remoteSubagentRun) Result() remoteapi.RunResult {
 		result.Code, result.Message = "subagent_failed", reason
 	}
 	return result
+}
+
+// ProfileInfo implements remoteapi.ProfileBackend: the context tokens of one profile, for a token
+// whose globs reach it. A profile outside the globs answers like one that does not exist, and the
+// read is the local one (profile_actions.go), so a remote never compacts or resets.
+func (b remoteBackend) ProfileInfo(ctx context.Context, request remoteapi.ProfileRequest) (string, error) {
+	if !request.MayProfile(request.Session + "/" + request.Profile) {
+		return "", remoteapi.ErrUnknownTarget
+	}
+	location, err := b.location(request.Session)
+	if err != nil {
+		return "", err
+	}
+	info, err := sessionfs.ReadLayoutProfileInfo(location)
+	if err != nil {
+		return "", err
+	}
+	if !slices.Contains(info.Profiles, request.Profile) {
+		return "", remoteapi.ErrUnknownTarget
+	}
+	tokens, err := profileMessenger{resolver: b.resolver}.ProfileInfo(ctx, request.Session, request.Profile)
+	if err != nil {
+		return "", err
+	}
+	return native.ProfileInfoText(request.Profile, tokens), nil
 }
