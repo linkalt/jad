@@ -36,9 +36,16 @@ type remoteBackend struct {
 type remoteRunIndex struct {
 	mu   sync.Mutex
 	runs map[string]remoteRunRef
-	// byLocal is the remote id of each local run in runs, so a result finds its remote id without
-	// a scan.
-	byLocal map[string]string
+	// byLocal is the remote id of each local run in runs, keyed by the manager that minted the
+	// local id as well: two managers can mint the same id, and a drop from one must not forget
+	// the other's run.
+	byLocal map[remoteLocalKey]string
+}
+
+// remoteLocalKey names a local run: its id within the manager that owns it.
+type remoteLocalKey struct {
+	owner *native.SubagentManager
+	local string
 }
 
 // remoteRunRef is the local run a remote run id names, and the session it belongs to.
@@ -46,32 +53,35 @@ type remoteRunRef struct {
 	local, session string
 }
 
-func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
+// record maps a remote id to the local run it started, when the manager still keeps that run. A run
+// that was dropped before the hook went in is not recorded, so no entry outlives its run.
+func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef, owner *native.SubagentManager) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.runs[remoteID] = ref
-	i.byLocal[ref.local] = remoteID
+	i.byLocal[remoteLocalKey{owner, ref.local}] = remoteID
 }
 
 // forget drops the entry of a local run its manager has dropped; a later resume of its remote id is
 // unknown.
-func (i *remoteRunIndex) forget(local string) {
+func (i *remoteRunIndex) forget(owner *native.SubagentManager, local string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	remoteID, ok := i.byLocal[local]
+	key := remoteLocalKey{owner, local}
+	remoteID, ok := i.byLocal[key]
 	if !ok {
 		return
 	}
-	delete(i.byLocal, local)
+	delete(i.byLocal, key)
 	delete(i.runs, remoteID)
 }
 
 // remoteIDOf is the remote id of the local run local, or local itself when this backend did not start it
 // (a run the server started on its own, or a resume that has no remote name).
-func (i *remoteRunIndex) remoteIDOf(local string) string {
+func (i *remoteRunIndex) remoteIDOf(owner *native.SubagentManager, local string) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if remoteID, ok := i.byLocal[local]; ok {
+	if remoteID, ok := i.byLocal[remoteLocalKey{owner, local}]; ok {
 		return remoteID
 	}
 	return local
@@ -88,7 +98,7 @@ func (i *remoteRunIndex) lookup(remoteID, session string) (remoteRunRef, bool) {
 
 // RemoteBackend returns the backend for the remote API of this resolver.
 func (r *Resolver) RemoteBackend(runTimeout time.Duration) remoteapi.Backend {
-	r.remoteRuns = &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[string]string)}
+	r.remoteRuns = &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
 	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: r.remoteRuns}
 }
 
@@ -245,6 +255,11 @@ func (r *remoteMessageRun) watch(timeout time.Duration) {
 	close(r.done)
 }
 
+// afterRemoteObserved is a test seam: nil in production, and read only by StartSubagent. A test sets
+// it to pause a remote start in the window between observing its local run and installing the hook;
+// it may block until the test releases it.
+var afterRemoteObserved func()
+
 func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.SubagentRequest) (remoteapi.Run, error) {
 	resolved, err := b.resolveProfile(ctx, request.Session, request.Profile)
 	if err != nil {
@@ -306,13 +321,21 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	}()
 	select {
 	case run := <-observed:
-		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)})
-		// keep_finished drops the run from its manager: the remote id goes with it.
-		if manager := b.resolver.sharedSubagentManager(config); manager != nil {
-			manager.SetOnDropped(b.runs.forget)
+		if afterRemoteObserved != nil {
+			afterRemoteObserved()
+		}
+		// The hook goes in before the run is recorded, so a prune after this point is forgotten by
+		// the hook.
+		manager := b.resolver.sharedSubagentManager(config)
+		if manager != nil {
+			manager.SetOnDropped(func(local string) { b.runs.forget(manager, local) })
+		}
+		// A run the manager dropped before the hook went in is not recorded: no hook would forget it.
+		if manager == nil || manager.Retains(run.ID()) {
+			b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)}, manager)
 		}
 		go func() { <-run.Done(); cancel() }()
-		return &remoteSubagentRun{run: run, runs: b.runs}, nil
+		return &remoteSubagentRun{run: run, runs: b.runs, owner: manager}, nil
 	case output := <-finished:
 		cancel()
 		return nil, subagentStartFailure(output)
@@ -363,6 +386,8 @@ func subagentStartFailure(output json.RawMessage) error {
 type remoteSubagentRun struct {
 	run  *native.ExternalRun
 	runs *remoteRunIndex
+	// owner is the manager the run lives on, which names its local id in runs.
+	owner *native.SubagentManager
 }
 
 func (r *remoteSubagentRun) Done() <-chan struct{} { return r.run.Done() }
@@ -371,7 +396,7 @@ func (r *remoteSubagentRun) Stop(reason string)    { r.run.Stop(reason) }
 func (r *remoteSubagentRun) Result() remoteapi.RunResult {
 	state, text, reason := r.run.Outcome()
 	resumedFrom, configNote := r.run.ResumeFacts()
-	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(resumedFrom), ConfigNote: configNote}
+	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(r.owner, resumedFrom), ConfigNote: configNote}
 	if state == "failed" {
 		result.Code, result.Message = "subagent_failed", reason
 	}

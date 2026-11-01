@@ -1,9 +1,14 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"jad/backend-go/internal/remoteapi"
+	"jad/backend-go/internal/tools/native"
 )
 
 // A remote resume of a run another token started is refused as unknown_run, the same code a local
@@ -118,8 +123,10 @@ func TestRemoteResumeOfAnOldRemoteIDIsUnknownAfterARestart(t *testing.T) {
 // The index finds a remote run only in the session and profile it started in: the same id under
 // another session key is not found, so a resume through another profile is unknown.
 func TestRemoteRunIndexFindsARunOnlyInItsSession(t *testing.T) {
-	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[string]string)}
-	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"})
+	owner := native.NewSubagentManager()
+	defer func() { _ = owner.Close() }()
+	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
+	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, owner)
 	if ref, ok := index.lookup("rr_0123456789abcdef", "ref\x00dev/coder"); !ok || ref.local != "sub_00000001" {
 		t.Fatalf("the run is not found in its own session: %v %v", ref, ok)
 	}
@@ -131,45 +138,17 @@ func TestRemoteRunIndexFindsARunOnlyInItsSession(t *testing.T) {
 	}
 }
 
-// keep_finished drops a remote run from its manager, and its rr_ id goes with it: a resume of the
-// dropped id is unknown_run, and the index keeps no entry for a run the manager no longer has.
-func TestRemoteRunIDIsForgottenWhenItsRunIsPruned(t *testing.T) {
-	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts.", "__subagent_settings": map[string]any{"keep_finished": 1}})
-	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
-
-	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
-		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "first", "request_id": "req-prune-1"})
-	if status != 202 {
-		t.Fatalf("start: %d %v", status, body)
-	}
-	remoteID := body["id"].(string)
-	server.waitDone(t, remoteID)
-	status, body = server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
-		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "second", "request_id": "req-prune-2"})
-	if status != 202 {
-		t.Fatalf("second start: %d %v", status, body)
-	}
-	server.waitDone(t, body["id"].(string))
-
-	status, body = server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
-		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "more", "resume": remoteID, "request_id": "req-prune-3"})
-	if status != 409 {
-		t.Fatalf("resume of a pruned remote id: status %d %v, want 409", status, body)
-	}
-	if code, _ := body["code"].(string); code != "unknown_run" {
-		t.Fatalf("resume of a pruned remote id: code %q, want unknown_run %v", code, body)
-	}
-}
-
-// The index forgets a local run when the manager drops it, from both maps.
+// The index forgets a local run when its manager drops it, from both maps.
 func TestRemoteRunIndexForgetsADroppedRun(t *testing.T) {
-	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[string]string)}
-	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"})
-	index.forget("sub_00000001")
+	owner := native.NewSubagentManager()
+	defer func() { _ = owner.Close() }()
+	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
+	index.record("rr_0123456789abcdef", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, owner)
+	index.forget(owner, "sub_00000001")
 	if _, ok := index.lookup("rr_0123456789abcdef", "ref\x00dev/coder"); ok {
 		t.Fatal("a dropped run is still found by its remote id")
 	}
-	if got := index.remoteIDOf("sub_00000001"); got != "sub_00000001" {
+	if got := index.remoteIDOf(owner, "sub_00000001"); got != "sub_00000001" {
 		t.Fatalf("a dropped run still has a remote id: %q", got)
 	}
 	if len(index.runs) != 0 || len(index.byLocal) != 0 {
@@ -177,39 +156,88 @@ func TestRemoteRunIndexForgetsADroppedRun(t *testing.T) {
 	}
 }
 
-// A pruned remote run leaves the index with its rr_ entry and its local entry. The index is the
-// resolver's own, so the test reads the one the server uses.
-func TestPrunedRemoteRunLeavesTheIndex(t *testing.T) {
-	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts.", "__subagent_settings": map[string]any{"keep_finished": 1}})
+// Two managers can mint the same local run id. A drop from one manager forgets only its own run: the
+// other manager's run, with the same id, keeps its remote entry.
+func TestForgetOnlyRemovesTheDroppingManagersRun(t *testing.T) {
+	older, newer := native.NewSubagentManager(), native.NewSubagentManager()
+	defer func() { _ = older.Close(); _ = newer.Close() }()
+	index := &remoteRunIndex{runs: make(map[string]remoteRunRef), byLocal: make(map[remoteLocalKey]string)}
+	index.record("rr_0000000000000001", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/coder"}, older)
+	index.record("rr_0000000000000002", remoteRunRef{local: "sub_00000001", session: "ref\x00dev/other"}, newer)
+	index.forget(older, "sub_00000001")
+	if _, ok := index.lookup("rr_0000000000000002", "ref\x00dev/other"); !ok {
+		t.Fatal("a drop from one manager removed the other manager's run with the same local id")
+	}
+	if got := index.remoteIDOf(newer, "sub_00000001"); got != "rr_0000000000000002" {
+		t.Fatalf("the newer run lost its remote id: %q", got)
+	}
+}
+
+// A run pruned in the window between observing it and installing the hook leaves no entry in the index.
+// The seam pauses the first remote start in that window; a second remote run, which keep_finished
+// allows only with the first gone, prunes the first from the test's own goroutine. Without the
+// retention check the paused start would record the pruned run.
+func TestRunPrunedInItsWindowLeavesNoEntry(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "__subagent_settings": map[string]any{"keep_finished": 1}})
 	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var paused atomic.Bool
+	releasePause := sync.OnceFunc(func() { close(release) })
+	afterRemoteObserved = func() {
+		if paused.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+	t.Cleanup(func() { afterRemoteObserved = nil; releasePause() })
+
+	type reply struct {
+		status int
+		body   map[string]any
+	}
+	first := make(chan reply, 1)
+	go func() {
+		status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+			"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "first", "request_id": "req-window-1"})
+		first <- reply{status, body}
+	}()
+	receive(t, "the first start to reach its window", entered)
+	local := waitForManifestState(t, f, "done")
+
 	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
-		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "first", "request_id": "req-index-1"})
-	if status != 202 {
-		t.Fatalf("start: %d %v", status, body)
-	}
-	pruned := body["id"].(string)
-	server.waitDone(t, pruned)
-	index := server.service.resolver.remoteRuns
-	if got := index.count(); got != 1 {
-		t.Fatalf("the index holds %d runs before the prune, want 1", got)
-	}
-	ref, ok := index.entry(pruned)
-	if !ok {
-		t.Fatal("the run is not in the index before the prune")
-	}
-	status, body = server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
-		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "second", "request_id": "req-index-2"})
+		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "second", "request_id": "req-window-2"})
 	if status != 202 {
 		t.Fatalf("second start: %d %v", status, body)
 	}
 	server.waitDone(t, body["id"].(string))
-	if got := index.count(); got != 1 {
-		t.Fatalf("the index holds %d runs after the prune, want 1 (the second run only)", got)
+	if _, err := os.Stat(filepath.Join(f.toolDir, ".subagents", ".runs", local+".json")); !os.IsNotExist(err) {
+		t.Fatalf("the first run was not pruned in its window: %v", err)
 	}
-	if _, ok := index.lookup(pruned, ref.session); ok {
-		t.Fatal("the pruned run's rr_ entry is still in the index")
+
+	releasePause()
+	got := receive(t, "the first start to finish", first)
+	if got.status != 202 {
+		t.Fatalf("first start: %d %v", got.status, got.body)
 	}
-	if got := index.remoteIDOf(pruned); got != pruned {
-		t.Fatalf("the pruned run's local entry is still in the index: %q", got)
+	remoteRun := got.body["id"].(string)
+
+	index := server.service.resolver.remoteRuns
+	index.mu.Lock()
+	_, stale := index.runs[remoteRun]
+	entries, locals := len(index.runs), len(index.byLocal)
+	index.mu.Unlock()
+	if stale || entries != 1 || locals != 1 {
+		t.Fatalf("the index after the pruned start: holds %v for %s, %d remote entries and %d local, want only the second run's", stale, remoteRun, entries, locals)
+	}
+
+	status, body = server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "more", "resume": remoteRun, "request_id": "req-window-3"})
+	if status != 409 {
+		t.Fatalf("resume of the pruned remote id: status %d %v, want 409", status, body)
+	}
+	if code, _ := body["code"].(string); code != "unknown_run" {
+		t.Fatalf("resume of the pruned remote id: code %q, want unknown_run %v", code, body)
 	}
 }

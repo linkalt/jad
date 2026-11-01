@@ -193,6 +193,13 @@ func (m *SubagentManager) dropOldestLocked() droppedRun {
 	return dropped
 }
 
+// Retains reports whether the manager still keeps the run with this id; a pruned run is gone.
+func (m *SubagentManager) Retains(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.runs[id] != nil
+}
+
 // SetOnDropped makes the manager call fn with the id of each run keep_finished drops, after the
 // manager releases its lock. A later call replaces the earlier one.
 func (m *SubagentManager) SetOnDropped(fn func(id string)) {
