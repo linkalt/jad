@@ -16,7 +16,7 @@ Companion to `design_tool_smith.md` (revised; see its "Revision notes"). Sources
 7. No nested calls in `messages.jsonl`.
 8. Ideas taken from harness2 (design section 16): one-message validation of function files, short index with bodies on demand, visible truncation marker with a floor, name whitelist plus escape check; no silent drops, no hard-coded limits.
 9. Every limit is a `tools.native.tool_smith.*` key with default, schema in `sample/schemes/`, config test and `backend-go/DECISIONS.md` entry.
-10. (User-accepted after the spike.) `ReadOnly: true`, `MayChangeFiles` true only for calls containing `run`, plus an explicit `tool_smith` exclusion in `childToolPools` (`native/subagent.go:162-170`) so sub-agents never get it. *Correction (2026-11-01): stale; a child gets `tool_smith` when its agent names it in `tools` (`subagent.go` ~567, ~592).*
+10. (User-accepted after the spike.) `ReadOnly: true`, `MayChangeFiles` true only for calls containing `run`, plus an explicit `tool_smith` exclusion in `childToolPools` (`native/subagent.go:162-170`) so sub-agents never get it. *Correction (2026-11-01): stale; a child gets `tool_smith` only when its agent names it in `tools`: the default child pool filters it out, and the opt-in check at `subagent.go` ~570 admits it when listed.*
 11. Own bash-style `Child` settings block like `exec` (`native_exec_settings.go`); no dependency on `tools.native.bash`.
 12. v1 oversized return value: cut at `result_max_bytes` with a visible truncated marker; no spill (exec spill covers streams only).
 13. Bridge channel: Unix socket in a private temp dir, path and token via env vars; no extra fd.
