@@ -203,3 +203,15 @@ func TestProfileSubAgentListOfAProfilePathIsRefused(t *testing.T) {
 		t.Fatalf("list of sessions = %s", out)
 	}
 }
+
+// A sub-agent with allow_children off is refused before the remote branch, so it reads no remote
+// profile either: the refusal is the children one, not the remote one.
+func TestProfileChildrenSwitchRefusesARemoteInfoWhenOff(t *testing.T) {
+	settings := profileTestSettings()
+	settings.AllowChildren = false
+	settings.AllowRemote = true
+	out := callTranscripts(t, newProfileActionsTool(t, settings, &fakeProfileActions{}), `{"action":"info","path":"remote:peer/profile:main/review/reviewer"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1})
+	if !strings.Contains(out, "profile_children_denied") {
+		t.Fatalf("remote info from a sub-agent with allow_children off = %s", out)
+	}
+}
