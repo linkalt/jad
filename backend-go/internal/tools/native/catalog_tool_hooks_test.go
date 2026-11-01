@@ -121,3 +121,155 @@ func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
 		t.Fatalf("the child's read of an unloaded lazy tool was not refused: %s", childRead)
 	}
 }
+
+// NotLazyBindable names exactly the native tools the lazy pass never binds. Each refused name is
+// refused, and an ordinary native tool and the extension decide_systemone are not.
+func TestNotLazyBindableRefusesExactlyTheToolsAddedAfterTheLazyPass(t *testing.T) {
+	for _, id := range []string{transcriptToolID, transcriptsToolID, profileToolID, subagentToolID, profileMessageToolID, loadToolID} {
+		if !NotLazyBindable(tools.Definition{ID: id, Source: "native"}) {
+			t.Errorf("%s is added after the lazy pass but NotLazyBindable accepts it", id)
+		}
+	}
+	for _, definition := range []tools.Definition{
+		{ID: readToolID, Source: "native", Name: "read"},
+		{ID: bashToolID, Source: "native", Name: "bash"},
+		{ID: "decide_systemone", Source: "extension", Name: "decide_systemone"},
+		{ID: "mcp:docs:search", Source: "mcp", Name: "search"},
+	} {
+		if NotLazyBindable(definition) {
+			t.Errorf("%s is bound by the lazy pass but NotLazyBindable refuses it", definition.ID)
+		}
+	}
+}
+
+// A child that lists profile_message and subagent gets the owner's pre_tool hook on each of them, so
+// a call the child makes fires it once, as the parent's call does. The child's copies are not wrapped twice.
+func TestPreToolHookFiresForACallMadeByAChild(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "fires")
+	pre := eventHook("log", "*", "echo fired >> "+marker)
+	childAgent := agentNamed("explore")
+	childAgent.Tools, childAgent.HasTools = []string{"read", "profile_message", "subagent"}, true
+	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
+	config := sessionfs.SessionConfig{
+		SettingPath:          filepath.Join(t.TempDir(), "setting.json"),
+		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
+		NativeRead:           &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		NativeSubagent:       &subagent,
+		NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024},
+		Profile:              "main",
+		Profiles:             []string{"main", "reviewer"},
+		Hooks:                eventSettings([]sessionfs.ToolEventHook{pre}, nil),
+	}
+	launcher := &fakeLauncher{}
+	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
+	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, launcher, nil, nil, nil, messenger)
+	if err != nil {
+		t.Fatalf("BuildCatalogWithMessenger: %v", err)
+	}
+	executeNamedCall(t, catalog, "subagent", `{"task":"x","agent":"explore"}`)
+	if len(launcher.requests) != 1 {
+		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
+	}
+	childCatalog := launcher.requests[0].Tools
+	executeNamedCall(t, childCatalog, "profile_message", `{"profile":"reviewer","message":"hi"}`)
+	if got := countLines(t, marker); got != 2 {
+		t.Fatalf("pre_tool fired %d times after the parent's subagent and the child's profile_message, want 2", got)
+	}
+	executeNamedCall(t, childCatalog, "subagent", `{"task":"y","agent":"explore"}`)
+	if len(launcher.requests) != 2 {
+		t.Fatalf("launcher ran %d times, want 2 (the child's nested subagent)", len(launcher.requests))
+	}
+	if got := countLines(t, marker); got != 3 {
+		t.Fatalf("pre_tool fired %d times after the child's nested subagent, want 3", got)
+	}
+}
+
+// A refused lazy call never runs the real tool, and its post_tool hook still fires once: the refusal
+// is a normal result, so the hook sees it like any other call.
+func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "post")
+	post := eventHook("log", "*", "echo fired >> "+marker)
+	set, err := tools.OpenLazySet(t.TempDir(), []string{"read"}, 256, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	real := tools.Tool{
+		Definition: tools.Definition{ID: readToolID, Source: "native", Name: "read", Description: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Validator:  validator,
+		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
+			ran++
+			return "the secret", nil
+		},
+	}
+	set.Bind([]tools.Tool{real})
+	gated, ok := set.Gate(real)
+	if !ok {
+		t.Fatal("the set did not gate the lazy tool")
+	}
+	hooked := WithToolEventHooks(gated, eventSettings(nil, []sessionfs.ToolEventHook{post}), "")
+	catalog, err := tools.NewCatalog([]tools.Tool{hooked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := executeNamedCall(t, catalog, "read", `{"path":"notes.txt"}`)
+	if !strings.Contains(output, "tool_not_loaded") {
+		t.Fatalf("output = %s, want the refusal", output)
+	}
+	if ran != 0 {
+		t.Fatalf("the real tool ran %d times for a refused call, want 0", ran)
+	}
+	if got := countLines(t, marker); got != 1 {
+		t.Fatalf("post_tool fired %d times for a refused call, want 1", got)
+	}
+}
+
+// The nested copy is hooked when the subagent tool is built, so a child catalog that is bound and given
+// the owner's lazy set afterwards still fires the hook. There is no later call that can leave it raw.
+func TestNestedCopyIsHookedBeforeAnyBindOrLazySet(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "fires")
+	pre := eventHook("log", "*", "echo fired >> "+marker)
+	childAgent := agentNamed("explore")
+	childAgent.Tools, childAgent.HasTools = []string{"read", "subagent"}, true
+	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
+	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTool := readOnlyTool("read")
+	readTool.Validator = validator
+	readTool.Execute = func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "ok", nil }
+	mcp := NewSubagentMCP(eventSettings([]sessionfs.ToolEventHook{pre}, nil), "")
+	launcher := &fakeLauncher{}
+	parent, err := newSubagentTool(subagent, []tools.Tool{readTool}, nil, launcher, mcp, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.BindToolsets(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	set, err := tools.OpenLazySet(t.TempDir(), nil, 256, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.SetLazy(set, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The catalog wraps the parent's copy once, as BuildCatalogWithAsync does.
+	catalog, err := tools.NewCatalog([]tools.Tool{WithToolEventHooks(parent, mcp.hooks, mcp.apiKeyEnv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeNamedCall(t, catalog, "subagent", `{"task":"x","agent":"explore"}`)
+	if len(launcher.requests) != 1 {
+		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
+	}
+	executeNamedCall(t, launcher.requests[0].Tools, "subagent", `{"task":"y","agent":"explore"}`)
+	if got := countLines(t, marker); got != 2 {
+		t.Fatalf("pre_tool fired %d times for the parent's and the nested subagent call, want 2", got)
+	}
+}

@@ -423,9 +423,15 @@ func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
 	if !allow.MatchString(LoadToolName) {
 		t.Errorf("the schema's allow pattern refuses %q, which the loader accepts", LoadToolName)
 	}
-	for _, entry := range []string{"read", "bash", "mcp:docs:search", "mcp:docs:*"} {
+	for _, entry := range []string{"read", "bash", "decide_systemone", "mcp:docs:search", "mcp:docs:*"} {
 		if !lazy.MatchString(entry) {
 			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts", entry)
+		}
+	}
+	// The lazy pass never binds these, so the loader refuses them as lazy entries (checkLazyEntriesVisible).
+	for _, entry := range []string{"subagent", "profile_message", "transcript", "transcripts", "profile"} {
+		if lazy.MatchString(entry) {
+			t.Errorf("the schema's lazy pattern admits %q, which the lazy pass cannot bind", entry)
 		}
 	}
 }

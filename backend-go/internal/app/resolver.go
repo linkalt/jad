@@ -581,7 +581,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
 	fetchStore := r.sharedFetchStore(config)
-	subagentMCP := &native.SubagentMCP{}
+	subagentMCP := native.NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
 	// One lazy set per prepare: read from the state folder once, and passed to both the native
 	// pass and the MCP pass below. Nil when the profile has no tools.lazy.
 	lazy, err := openLazySet(config, r.logger)

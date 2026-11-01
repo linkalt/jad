@@ -113,6 +113,16 @@ const mcpToolIDPrefix = "mcp:"
 // the MCP tools reach it afterwards, once, through Bind.
 type SubagentMCP struct {
 	tool *subagentTool
+	// hooks are the owning profile's pre_tool and post_tool hooks. The subagent tool hands
+	// its nested copy to each child with them, so a nested call fires them as the parent's does.
+	hooks     sessionfs.HooksSettings
+	apiKeyEnv string
+}
+
+// NewSubagentMCP is the handle for a session whose subagent tool is built with the owning
+// profile's hooks. Every nested copy is hooked from the start, so no child catalog ever holds the raw one.
+func NewSubagentMCP(hooks sessionfs.HooksSettings, apiKeyEnv string) *SubagentMCP {
+	return &SubagentMCP{hooks: hooks, apiKeyEnv: apiKeyEnv}
 }
 
 // Bind gives each agent that lists MCP tools its catalog. It fails when a listed tool
@@ -324,7 +334,11 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			return runtime.execute(ctx, arguments, execution)
 		},
 	}
+	// The nested copy is hooked here, once, so every child catalog built from it fires the owner's hooks.
 	runtime.self = self
+	if mcp != nil {
+		runtime.self = WithToolEventHooks(self, mcp.hooks, mcp.apiKeyEnv)
+	}
 	if err := runtime.addSelfToNestingAgents(); err != nil {
 		return tools.Tool{}, err
 	}

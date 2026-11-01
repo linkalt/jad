@@ -179,7 +179,8 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
-		profileMessageTool = &tool
+		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
+		profileMessageTool = &hooked
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
 	if config.NativeSubagent != nil {
@@ -201,6 +202,10 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		if err != nil {
 			return nil, err
 		}
+		// A caller without MCP wiring still gets the nested hooks, so the handle is never nil here.
+		if mcp == nil {
+			mcp = NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
+		}
 		tool, err := newSubagentToolRemotes(subagentSettings, childPool, agentToolsets, launcher, mcp, subagentManager, manager, asyncHost, subagentRemotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
@@ -212,7 +217,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if profileMessageTool != nil {
-		loaded = append(loaded, WithToolEventHooks(*profileMessageTool, config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, *profileMessageTool)
 	}
 	// load_tool is last, after the subagent tool, so it is not in the child pool: a child gets it only
 	// through SetLazy, from the owner, so its loads write the owner's lazy set. It lists the lazy tools bound in lazy, which is nil or

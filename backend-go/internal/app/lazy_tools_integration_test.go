@@ -375,6 +375,15 @@ func TestLazyProfileWhoseAllowHidesLoadToolIsAConfigError(t *testing.T) {
 	if err := checkLazyLoadToolShown(config, none, registered); err != nil {
 		t.Errorf("no tools.lazy: %v", err)
 	}
+	// A deny that names another tool, or a deny-only list, leaves load_tool shown, so the profile loads.
+	for name, valid := range map[string]sessionfs.ProfileToolSettings{
+		"deny names another tool": {Restricted: true, Deny: []string{"mcp:fixture:hidden"}, Lazy: []string{"read"}},
+		"allow with a wildcard":   {Restricted: true, HasAllow: true, Allow: []string{"read", "mcp:fixture:*", "load_tool"}, Lazy: []string{"read"}},
+	} {
+		if err := checkLazyLoadToolShown(config, valid, registered); err != nil {
+			t.Errorf("%s: a valid profile was refused: %v", name, err)
+		}
+	}
 }
 
 // A lazy entry the lazy pass can never bind is a configuration error too. The subagent, profile_message,

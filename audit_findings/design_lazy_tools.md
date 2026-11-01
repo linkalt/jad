@@ -53,8 +53,8 @@ loaded it; after a load it is present with its real schema, from the next reques
   owner's gate on its native lazy tools too: a child's call to an unloaded one is refused with
   `tool_not_loaded`. The gate is one set for the owner and its children, so a load by either clears it.
 - MCP lazy tools: `buildRegisteredCatalog` binds the MCP tools to the same set, gates the lazy ones,
-  then applies `WithToolEventHooksAll`. The raw MCP list still goes to `SubagentMCP.BindToolsets`, so
-  children get full, ungated MCP definitions.
+  then applies `WithToolEventHooksAll`. The raw MCP list goes to `SubagentMCP.BindToolsets`, which gates
+  each child's copy with the same set (`GateFor`), so a child's lazy MCP tool is refused until loaded.
 - `Bind` skips a tool already bound and `Gate` skips a tool already gated, so no tool is wrapped
   twice.
 - The stub design is reversed. A lazy tool is no longer sent to the model as a summary with a
@@ -137,9 +137,14 @@ loaded it; after a load it is present with its real schema, from the next reques
 - A call by name to an unloaded lazy tool (for example a name in history after a restart) gets
   `tool_not_loaded`.
 - A restart over the same state folder restores the loaded set.
-- Each refused or loaded call fires its pre_tool hook exactly once.
+- Each refused or loaded call fires its pre_tool hook exactly once, and a refused call also fires its
+  post_tool hook. A refused call never runs the real tool.
+- A child's own `profile_message` and nested `subagent` calls fire the owner's pre_tool hook once each,
+  as the parent's calls do (`NewSubagentMCP` takes the owner's hooks, and the subagent tool hooks its nested copy when built;
+  the child pool holds the hooked `profile_message` copy).
 - A denied tool stays out of the tools array; a lazy entry that the profile hides is a config error.
-- A child of a parent with lazy MCP tools calls the real schema (ungated).
+- A child of a parent with lazy MCP tools gates its copy with the owner's set: an unloaded lazy MCP tool
+  is refused with `tool_not_loaded`, and the server does not run.
 - A subagent child calls `load_tool` only when its owner has `tools.native.load_tool` and `tools.lazy`
   and the agent's tools list names it; its loads go to the owner's `lazy_tools.json`. A child of an owner
   without `tools.lazy` gets no `load_tool`, and its call is refused as `unknown_tool`.
