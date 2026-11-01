@@ -201,6 +201,10 @@ func (r *remoteRun) Queued() bool             { return false }
 func (r *remoteRun) Started() <-chan struct{} { return r.start }
 func (r *remoteRun) Done() <-chan struct{}    { return r.done }
 
+// Reference is the remote run as "<name>/rr_…", the form remote_run names it by. It is set when
+// the run starts, so it is the same while the run goes and after it ends.
+func (r *remoteRun) Reference() string { return r.target.Remote + "/" + r.id }
+
 func (r *remoteRun) Outcome() ProfileMessageOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()

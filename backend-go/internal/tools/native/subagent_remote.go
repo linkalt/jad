@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -89,6 +90,14 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "bad_remote_reference", err.Error()), nil
 	}
+	resume, hasResume := arguments["resume"].(string)
+	if hasResume && resume != "" {
+		remoteRun, problem := remoteResumeReference(resume, name)
+		if problem != "" {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "bad_resume", problem), nil
+		}
+		arguments = withResume(arguments, remoteRun)
+	}
 	entry, err := s.remotes.directory.Entry(name)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "remote_unavailable", remoteProblem(name, err)), nil
@@ -126,6 +135,9 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		}
 	}
 	body := map[string]any{"session": target.Session, "profile": target.Profile, "agent": target.Agent, "task": task}
+	if resume, _ := arguments["resume"].(string); resume != "" {
+		body["resume"] = resume
+	}
 	// A panic before the run takes the reservation gives it back; once the run has it, the run's
 	// end does.
 	handedOver := false
@@ -162,7 +174,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			run.Stop("caller_cancelled")
 			return "", ctx.Err()
 		}
-		return s.renderRemoteOutcome(callID, target, run.Outcome())
+		return s.renderRemoteOutcome(callID, target, run.Reference(), run.Outcome())
 	}
 	if reason := s.async.setProfileMessageRun(id, run); reason != "" {
 		run.Stop(reason)
@@ -181,7 +193,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	select {
 	case <-ended:
 		s.async.Manager().MarkRead(owner, id)
-		return s.renderRemoteOutcome(callID, target, run.Outcome())
+		return s.renderRemoteOutcome(callID, target, run.Reference(), run.Outcome())
 	case <-timer.C:
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -189,7 +201,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	select {
 	case <-ended:
 		s.async.Manager().MarkRead(owner, id)
-		return s.renderRemoteOutcome(callID, target, run.Outcome())
+		return s.renderRemoteOutcome(callID, target, run.Reference(), run.Outcome())
 	default:
 	}
 	return tools.RenderToolResult(tools.ResultOptions{
@@ -197,8 +209,35 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		Status: tools.StatusOK,
 		Summary: fmt.Sprintf("Agent %s is still running (run %s). Do not start the task again: use the async tool with id %s to wait for the answer (action wait), look at it (status) or cancel it (stop)",
 			target.String(), id, id),
-		Information: append([]tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}}, s.async.latestInformation(owner, id)...),
+		Information: append(append([]tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}}, remoteRunInformation(run.Reference())...), s.async.latestInformation(owner, id)...),
 	})
+}
+
+// remoteRunReference is the form remote_run and the resume argument take: "<name>/rr_…", the
+// remote's own run id (16 lowercase hex digits).
+var remoteRunReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}/rr_[0-9a-f]{16}$`)
+
+// remoteResumeReference reads the resume argument of a remote call: "<name>/rr_…", the form
+// remote_run shows, where name is the remote the call names. It returns the id the serving host
+// knows the run by ("rr_…"), or the problem with the expected form. Nothing is sent before this.
+func remoteResumeReference(resume, name string) (id, problem string) {
+	expected := "the resume of a remote run is <name>/rr_… where name is the remote this agent is on (" + name + "), for example " + name + "/rr_0123456789abcdef"
+	remoteName, runID, found := strings.Cut(resume, "/")
+	if !found || remoteName != name || !remoteRunReference.MatchString(name+"/"+runID) {
+		return "", expected
+	}
+	return runID, ""
+}
+
+// withResume returns the call's arguments with resume set to the id the serving host knows,
+// so the body carries rr_… and the remote name is not sent twice.
+func withResume(arguments map[string]any, id string) map[string]any {
+	copied := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		copied[key] = value
+	}
+	copied["resume"] = id
+	return copied
 }
 
 // refuseRemoteCap is the error a nested remote start gets when the run caps or the depth refuse
@@ -208,6 +247,16 @@ func refuseRemoteCap(callID string, err error) string {
 		return depthExceededError(callID)
 	}
 	return tools.ExecutionError(callID, tools.StatusError, "subagent_limit_reached", err.Error())
+}
+
+// remoteRunInformation names the remote run a result is about, as "<name>/rr_…" under remote_run
+// (design_remote.md 3.1). It is empty when no run was created: a refused or failed start has no
+// trace, and a run's trace is set on every outcome of a run that existed.
+func remoteRunInformation(reference string) []tools.Information {
+	if reference == "" {
+		return nil
+	}
+	return []tools.Information{{Key: "remote_run", Value: reference}}
 }
 
 func (s *subagentTool) renderRemoteFailure(callID string, target remote.Target, err error) string {
@@ -244,7 +293,7 @@ func remoteSubagentFailure(target remote.Target, err error, timeout time.Duratio
 	return "subagent_failed", fmt.Sprintf("Agent %s failed", reference)
 }
 
-func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, outcome ProfileMessageOutcome) (string, error) {
+func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, reference string, outcome ProfileMessageOutcome) (string, error) {
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), s.settings.ResultMaxBytes)
 	if outcome.Err != nil {
 		if errors.Is(outcome.Err, ErrProfileStopped) && text != "" {
@@ -257,7 +306,7 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 		}
 		return s.renderRemoteFailure(callID, target, outcome.Err), nil
 	}
-	information := []tools.Information{{Key: "agent", Value: target.String()}}
+	information := append([]tools.Information{{Key: "agent", Value: target.String()}}, remoteRunInformation(reference)...)
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}

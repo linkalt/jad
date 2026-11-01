@@ -65,8 +65,14 @@ type MessageRequest struct {
 // the context (tools, agent list, working directory) the agent runs in.
 type SubagentRequest struct {
 	Session, Profile, Agent, Task string
-	Caller                        string
-	Hops                          int
+	// Resume is the run a new run continues from: the remote's own id for it ("rr_…"), or ""
+	// for none. The backend checks it against the caller.
+	Resume string
+	// RunID is the id this server minted for the run ("rr_…"). The backend keeps it with the
+	// run it starts, so a later resume that names it can find that run.
+	RunID  string
+	Caller string
+	Hops   int
 }
 
 // RunResult is how a run ended.
@@ -77,6 +83,10 @@ type RunResult struct {
 	Code    string
 	Message string
 	Reason  string
+	// ResumedFrom is the run this one continues from, and ConfigNote the config note of a
+	// resume; both are empty when they do not apply.
+	ResumedFrom string
+	ConfigNote  string
 }
 
 // Run is a started piece of work. Result is valid after Done closes. Stop does not wait.
@@ -338,6 +348,7 @@ type startBody struct {
 	Agent     string `json:"agent"`
 	Message   string `json:"message"`
 	Task      string `json:"task"`
+	Resume    string `json:"resume"`
 	RequestID string `json:"request_id"`
 }
 
@@ -373,9 +384,9 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 	}
 	valid := sessionPattern.MatchString(body.Session) && requestIDPattern.MatchString(body.RequestID) && strings.TrimSpace(text) != "" && validTarget(target)
 	if kind == "subagent" {
-		valid = valid && namePattern.MatchString(body.Agent)
+		valid = valid && namePattern.MatchString(body.Agent) && (body.Resume == "" || runIDPattern.MatchString(body.Resume))
 	} else {
-		valid = valid && body.Agent == "" && body.Task == ""
+		valid = valid && body.Agent == "" && body.Task == "" && body.Resume == ""
 	}
 	if !valid {
 		writeError(w, http.StatusBadRequest, "bad_request", "session, request_id (8 to 64 letters, digits, '_' or '-'), a category/name profile, an agent name (subagents only) and the text are required")
@@ -392,11 +403,11 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		return
 	}
 	key := token.ID + "\x00" + body.RequestID
-	fingerprint := sha256.Sum256([]byte(strings.Join([]string{kind, body.Session, target, body.Agent, text}, "\x00")))
-	entry, status := s.begin(r.Context(), token, key, kind, fingerprint, func(ctx context.Context) (Run, error) {
+	fingerprint := sha256.Sum256([]byte(strings.Join([]string{kind, body.Session, target, body.Agent, text, body.Resume}, "\x00")))
+	entry, status := s.begin(r.Context(), token, key, kind, fingerprint, func(ctx context.Context, id string) (Run, error) {
 		caller := "remote:" + token.ID
 		if kind == "subagent" {
-			return s.opts.Backend.StartSubagent(ctx, SubagentRequest{Session: body.Session, Profile: target, Agent: body.Agent, Task: text, Caller: caller, Hops: hops})
+			return s.opts.Backend.StartSubagent(ctx, SubagentRequest{Session: body.Session, Profile: target, Agent: body.Agent, Task: text, Resume: body.Resume, RunID: id, Caller: caller, Hops: hops})
 		}
 		return s.opts.Backend.SendMessage(ctx, MessageRequest{Session: body.Session, Profile: target, Message: text, Caller: caller, Hops: hops})
 	})
@@ -415,7 +426,7 @@ type beginStatus struct {
 // begin starts the run once per (token, request id): a repeat gets the same run back, so a
 // retried send never starts the work twice. The start runs outside the lock; a repeat that
 // arrives meanwhile waits for it.
-func (s *Server) begin(ctx context.Context, token Token, key, kind string, fingerprint [sha256.Size]byte, start func(context.Context) (Run, error)) (*runEntry, beginStatus) {
+func (s *Server) begin(ctx context.Context, token Token, key, kind string, fingerprint [sha256.Size]byte, start func(context.Context, string) (Run, error)) (*runEntry, beginStatus) {
 	s.mu.Lock()
 	s.sweepLocked()
 	if s.closed {
@@ -459,7 +470,7 @@ func (s *Server) begin(ctx context.Context, token Token, key, kind string, finge
 	s.requests[key] = entry.id
 	s.mu.Unlock()
 
-	run, err := start(ctx)
+	run, err := start(ctx, entry.id)
 	s.mu.Lock()
 	if err != nil {
 		entry.startErr = err
@@ -619,6 +630,9 @@ type runView struct {
 	Code      string `json:"code,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// ResumedFrom and ConfigNote are set for a run that resumed another, and only then.
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	ConfigNote  string `json:"config_note,omitempty"`
 }
 
 func (s *Server) view(entry *runEntry, withText bool) runView {
@@ -627,6 +641,7 @@ func (s *Server) view(entry *runEntry, withText bool) runView {
 	case <-entry.run.Done():
 		result := entry.run.Result()
 		view.State, view.Code, view.Message, view.Reason = result.State, result.Code, safe(result.Message, 1024), safe(result.Reason, 128)
+		view.ResumedFrom, view.ConfigNote = result.ResumedFrom, result.ConfigNote
 		view.Text, view.Cut = cutUTF8(result.Text, s.opts.ResultMaxBytes)
 		s.mu.Lock()
 		ended := entry.ended

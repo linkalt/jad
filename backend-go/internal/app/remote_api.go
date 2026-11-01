@@ -25,11 +25,54 @@ import (
 type remoteBackend struct {
 	resolver   *Resolver
 	runTimeout time.Duration
+	// runs maps the remote run ids of the sub-agent runs this backend started ("rr_…") to the
+	// local runs ("sub_…"). It lives in memory with the backend, so a restarted server does not
+	// know the runs of the one before (see DECISIONS.md, remote resume).
+	runs *remoteRunIndex
+}
+
+// remoteRunIndex is the map from the remote run id to the local run it started.
+type remoteRunIndex struct {
+	mu   sync.Mutex
+	runs map[string]remoteRunRef
+}
+
+// remoteRunRef is the local run a remote run id names, and the session it belongs to.
+type remoteRunRef struct {
+	local, session string
+}
+
+func (i *remoteRunIndex) record(remoteID string, ref remoteRunRef) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.runs[remoteID] = ref
+}
+
+// remoteIDOf is the remote id of the local run local, or local itself when this backend did not start it
+// (a run the server started on its own, or a resume that has no remote name).
+func (i *remoteRunIndex) remoteIDOf(local string) string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for remoteID, ref := range i.runs {
+		if ref.local == local {
+			return remoteID
+		}
+	}
+	return local
+}
+
+// lookup is the run a remote id names, only when the run belongs to session: the same id sent to
+// another session or profile is not found.
+func (i *remoteRunIndex) lookup(remoteID, session string) (remoteRunRef, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	ref, ok := i.runs[remoteID]
+	return ref, ok && ref.session == session
 }
 
 // RemoteBackend returns the backend for the remote API of this resolver.
 func (r *Resolver) RemoteBackend(runTimeout time.Duration) remoteapi.Backend {
-	return remoteBackend{resolver: r, runTimeout: runTimeout}
+	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: &remoteRunIndex{runs: make(map[string]remoteRunRef)}}
 }
 
 func (b remoteBackend) location(session string) (sessionfs.Location, error) {
@@ -212,13 +255,26 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	if err != nil {
 		return nil, err
 	}
-	arguments, _ := json.Marshal(map[string]any{"task": request.Task, "agent": request.Agent})
+	values := map[string]any{"task": request.Task, "agent": request.Agent}
+	if request.Resume != "" {
+		// The remote run id names a local run this backend started; the local resume checks
+		// that the caller owns it. A run another session started is unknown, as it is locally.
+		ref, ok := b.runs.lookup(request.Resume, sessionKey(resolved.Reference, resolved.Profile))
+		if !ok {
+			return nil, &remoteapi.Refusal{Code: "unknown_run", Message: "No sub-agent run " + request.Resume + " in this session"}
+		}
+		values["resume"] = ref.local
+	}
+	arguments, _ := json.Marshal(values)
 	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "remote_" + request.Agent, "name": "subagent", "arguments": string(arguments)})
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	observed := make(chan *native.ExternalRun, 1)
 	finished := make(chan json.RawMessage, 1)
 	runCtx = native.WithExternalRun(runCtx, func(run *native.ExternalRun) { observed <- run })
+	// The caller is the token the request authenticated as (handleStart sets it), never a value
+	// from the body; the resume branch reads it and nothing else does.
+	runCtx = native.WithRemoteCaller(runCtx, request.Caller)
 	execution := tools.ExecutionContext{
 		WorkspaceRoot: config.WorkingDir,
 		SessionDir:    config.StateDir,
@@ -233,8 +289,9 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	}()
 	select {
 	case run := <-observed:
+		b.runs.record(request.RunID, remoteRunRef{local: run.ID(), session: sessionKey(resolved.Reference, resolved.Profile)})
 		go func() { <-run.Done(); cancel() }()
-		return &remoteSubagentRun{run: run}, nil
+		return &remoteSubagentRun{run: run, runs: b.runs}, nil
 	case output := <-finished:
 		cancel()
 		return nil, subagentStartFailure(output)
@@ -282,14 +339,18 @@ func subagentStartFailure(output json.RawMessage) error {
 	return &remoteapi.Refusal{Code: code, Message: "the sub-agent could not be started (" + code + ")"}
 }
 
-type remoteSubagentRun struct{ run *native.ExternalRun }
+type remoteSubagentRun struct {
+	run  *native.ExternalRun
+	runs *remoteRunIndex
+}
 
 func (r *remoteSubagentRun) Done() <-chan struct{} { return r.run.Done() }
 func (r *remoteSubagentRun) Stop(reason string)    { r.run.Stop(reason) }
 
 func (r *remoteSubagentRun) Result() remoteapi.RunResult {
 	state, text, reason := r.run.Outcome()
-	result := remoteapi.RunResult{State: state, Text: text, Reason: reason}
+	resumedFrom, configNote := r.run.ResumeFacts()
+	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(resumedFrom), ConfigNote: configNote}
 	if state == "failed" {
 		result.Code, result.Message = "subagent_failed", reason
 	}

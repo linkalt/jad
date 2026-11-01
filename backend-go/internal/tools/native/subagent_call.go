@@ -29,9 +29,6 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 	}
 	agent, _ := arguments["agent"].(string)
 	if strings.HasPrefix(agent, remote.Prefix) {
-		if _, ok := arguments["resume"]; ok {
-			return refuseResume(execution.CallID, &resumeProblem{"resume_remote", "resume cannot continue a run on a remote agent: name a local agent"})
-		}
 		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
 	}
 	if resume, _ := arguments["resume"].(string); resume != "" {
@@ -116,6 +113,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	run, err := s.manager.start(subagentStart{
 		config:         config,
 		resumedFrom:    from.from,
+		caller:         remoteCallerOf(ctx),
 		resumedConfig:  from.config,
 		seed:           from.seed,
 		async:          handle,

@@ -424,3 +424,60 @@ func TestReleaseRemoteTwiceDoesNotFreeAnotherRunsPlace(t *testing.T) {
 		t.Fatalf("a double release left the session at %d runs, want 1 (the other run's place)", got)
 	}
 }
+
+// The inline result and the async result name their remote run the same way: remote_run is
+// "<name>/rr_…", and it names the run the call started (the remote's own id for it, which the
+// peer hands out). The async handle stays the run key on both.
+func TestRemoteInlineAndAsyncNameTheRemoteRunTheSameWay(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "inline answer"}) }()
+	inline := f.start(t, remoteAgent, 5000, remoteCaller)
+
+	go func() { f.peer.backend.run(t, 1).finish(remoteapi.RunResult{State: "done", Text: "async answer"}) }()
+	started := f.start(t, remoteAgent, 0, remoteCaller)
+	for _, out := range []string{inline, started} {
+		if ref := informationValue(out, "remote_run"); !regexp.MustCompile(`^peer/rr_[0-9a-f]{16}$`).MatchString(ref) {
+			t.Fatalf("remote_run is %q, want peer/rr_<16 hex>:\n%s", ref, out)
+		}
+	}
+	if informationValue(started, "run") == "" {
+		t.Fatalf("the async result lost its run key:\n%s", started)
+	}
+}
+
+// informationValue is the value of one information key of a rendered result, or "".
+func informationValue(out, key string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), key+": "); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+// A remote resume names the source as "<name>/rr_…", the form remote_run shows. A value of another
+// form, or one that names another remote than the agent's, is refused before any request, with the
+// expected form in the message.
+func TestRemoteResumeRejectsAWrongFormBeforeAnyRequest(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	for name, resume := range map[string]string{
+		"no name":      "rr_0123456789abcdef",
+		"other name":   "other/rr_0123456789abcdef",
+		"local id":     "sub_00000001",
+		"no rr prefix": "peer/0123456789abcdef",
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(f.peer.backend.subs)
+			out, err := f.tool.Execute(context.Background(), map[string]any{"task": "more", "agent": remoteAgent, "resume": resume}, remoteCaller)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "peer/rr_") {
+				t.Fatalf("the refusal does not name the expected form peer/rr_…:\n%s", out)
+			}
+			if len(f.peer.backend.subs) != before {
+				t.Fatalf("a request reached the peer for resume %q", resume)
+			}
+		})
+	}
+}

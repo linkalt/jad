@@ -278,6 +278,9 @@ type subagentRun struct {
 	config string
 	// resumedFrom is the run this one continues from; empty for a run that does not.
 	resumedFrom string
+	// caller is the remote caller the run was started for ("remote:<token id>"); "" for a
+	// local run. A remote resume may use only a run whose caller is its own.
+	caller string
 	// resumedConfig is the source's fingerprint; see subagentStore's ResumedConfig.
 	resumedConfig string
 	// tracked is set when the run lists its changed files (changes and a non-zero
@@ -376,7 +379,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Session: r.session, Root: r.root, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig, Caller: r.caller,
 	}
 }
 
@@ -393,7 +396,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
 		cancel: cancel, ctx: ctx, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
-		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, resumedConfig: manifest.ResumedConfig,
+		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, resumedConfig: manifest.ResumedConfig, caller: manifest.Caller,
 		configNote: configNoteFor(resumeStart{from: manifest.ResumedFrom, config: manifest.ResumedConfig}, manifest.Config),
 	}
 }
@@ -482,6 +485,8 @@ type subagentStart struct {
 	config string
 	// resumedFrom is the run this one continues from; see subagentRun.resumedFrom.
 	resumedFrom string
+	// caller is the remote caller of the run; see subagentRun.caller.
+	caller string
 	// resumedConfig is the source's fingerprint; see subagentRun.resumedConfig.
 	resumedConfig string
 	// seed is the source transcript the run's folder starts from; see SubagentRequest.Seed.
@@ -694,6 +699,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		configNote:    spec.configNote,
 		config:        spec.config,
 		resumedFrom:   spec.resumedFrom,
+		caller:        spec.caller,
 		resumedConfig: spec.resumedConfig,
 		startedAt:     m.now(),
 		countedWriter: spec.writerReserved,

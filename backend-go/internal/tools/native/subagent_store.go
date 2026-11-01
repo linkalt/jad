@@ -58,6 +58,9 @@ type subagentManifest struct {
 	// ResumedConfig is the source run's fingerprint at the time of the resume; the config note
 	// is rebuilt from it and Config after a restart. Empty when the source had none.
 	ResumedConfig string `json:"resumed_config,omitempty"`
+	// Caller is the remote caller the run was started for; empty for a local run. A remote
+	// resume after a restart still checks it.
+	Caller string `json:"caller,omitempty"`
 	// Server is the process that last wrote the manifest. A manifest without it comes
 	// from a version that did not record one and is treated as owned by no live server.
 	Server *serverIdentity `json:"server,omitempty"`

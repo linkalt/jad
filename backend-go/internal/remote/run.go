@@ -37,6 +37,9 @@ type View struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Reason    string `json:"reason"`
+	// ResumedFrom and ConfigNote are set for a run that resumed another, and only then.
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	ConfigNote  string `json:"config_note,omitempty"`
 }
 
 // clean bounds the remote's short texts and strips control characters: they reach the

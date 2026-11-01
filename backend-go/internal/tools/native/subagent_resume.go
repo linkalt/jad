@@ -28,10 +28,13 @@ type resumeProblem struct {
 }
 
 // checkResumeSource looks up the run to resume and refuses the ones a resume may not continue.
-// A run another session started is reported as unknown, so an id cannot be probed.
-func (s *subagentTool) checkResumeSource(id, owner, agent string) (resumeSource, *resumeProblem) {
+// A run another session started is reported as unknown, so an id cannot be probed. A local
+// resume (caller "") must be the session's own run; a remote resume (caller "remote:<token id>")
+// must be a run that the same token started, and a local run has no caller so it is never
+// resumed remotely.
+func (s *subagentTool) checkResumeSource(id, owner, caller, agent string) (resumeSource, *resumeProblem) {
 	run := s.manager.byID(id)
-	if run == nil || run.owner != owner {
+	if run == nil || !resumeMayUse(run, owner, caller) {
 		return resumeSource{}, &resumeProblem{"unknown_run", fmt.Sprintf("No sub-agent run %s in this session", id)}
 	}
 	view := run.view()
@@ -51,6 +54,15 @@ func (s *subagentTool) checkResumeSource(id, owner, agent string) (resumeSource,
 	return resumeSource{run: run, view: view, dir: view.dir, agent: view.agent}, nil
 }
 
+// resumeMayUse is the identity check of a resume: the owner for a local call, the caller for a
+// remote one.
+func resumeMayUse(run *subagentRun, owner, caller string) bool {
+	if caller == "" {
+		return run.owner == owner && run.caller == ""
+	}
+	return run.caller == caller
+}
+
 // checkResumeTranscript reads the source transcript and refuses one that is gone or whose last
 // tool call was never answered: a child started from it would begin with an open call.
 func checkResumeTranscript(id string, source resumeSource) (string, *resumeProblem) {
@@ -65,11 +77,14 @@ func checkResumeTranscript(id string, source resumeSource) (string, *resumeProbl
 	return path, nil
 }
 
-// startResume starts a new run that continues from a finished run of the session. The source run
-// and its folder are not changed: the new run gets its own id and a copy of the transcript.
+// startResume starts a new run that continues from a finished run. The source run and its folder
+// are not changed: the new run gets its own id and a copy of the transcript. A local call and a
+// remote one (the caller on its context, see WithRemoteCaller) share this core; only the identity
+// check differs, and the new run records the caller it was started for.
 func (s *subagentTool) startResume(ctx context.Context, callID, id, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+	caller := remoteCallerOf(ctx)
 	agentName, _ := arguments["agent"].(string)
-	source, problem := s.checkResumeSource(id, execution.SessionKey, agentName)
+	source, problem := s.checkResumeSource(id, execution.SessionKey, caller, agentName)
 	if problem != nil {
 		return refuseResume(callID, problem)
 	}

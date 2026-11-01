@@ -214,16 +214,6 @@ func TestResumeRefusesALostRun(t *testing.T) {
 	}
 }
 
-func TestResumeIsRefusedForARemoteAgent(t *testing.T) {
-	root := t.TempDir()
-	catalog, manager := persistedCatalog(t, root, transcribingLauncher(t, root), 10)
-	id := finishedSource(t, catalog, manager, testSessionKey)
-	got := resumeCall(t, catalog, testSessionKey, `{"resume":"`+id+`","task":"more","agent":"remote:other/explore"}`)
-	if !strings.Contains(got, "resume_remote") {
-		t.Fatalf("a remote agent with resume was not refused:\n%s", got)
-	}
-}
-
 func TestResumedTranscriptSurvivesPruningTheSource(t *testing.T) {
 	root := t.TempDir()
 	// keep is 2: the resumed run and the newest other run stay; the source is the oldest and is pruned.

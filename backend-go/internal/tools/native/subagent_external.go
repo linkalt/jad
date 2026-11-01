@@ -22,6 +22,9 @@ type ExternalRun struct {
 	run *subagentRun
 }
 
+// ID is the run's id on this host ("sub_…").
+func (e *ExternalRun) ID() string { return e.run.id }
+
 // Done closes when the run has ended.
 func (e *ExternalRun) Done() <-chan struct{} { return e.run.done }
 
@@ -33,4 +36,11 @@ func (e *ExternalRun) Stop(reason string) { e.run.stopWith(reason) }
 func (e *ExternalRun) Outcome() (state, text, reason string) {
 	view := e.run.view()
 	return view.state, view.result.Text, view.reason
+}
+
+// ResumeFacts is the run's resume facts: the run it continues from ("" for none) and the config
+// note of a resume ("" when there is none).
+func (e *ExternalRun) ResumeFacts() (resumedFrom, configNote string) {
+	view := e.run.view()
+	return view.resumedFrom, view.configNote
 }
