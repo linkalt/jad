@@ -65,7 +65,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },
@@ -73,7 +73,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },
@@ -82,7 +82,7 @@
           "description": "Tools the model sees by name and one-line summary only; load_tool returns a tool's full definition, and a call to a lazy tool before that is refused with tool_not_loaded. Same entries as allow; each must be a tool the profile sees. load_tool itself cannot be lazy. Needs tools.native.load_tool, or the profile is refused at load. Needs a catalog layout (a session without one is a configuration error). Lazy tools are not handed to sub-agents or profile_message children.",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },

@@ -1513,6 +1513,44 @@
               },
               "additionalProperties": false
             },
+            "profile": {
+              "type": "object",
+              "description": "Go backend only. Lists the profiles of a session and what each holds (its context tokens), and compacts or resets one: the actions are the profile tool's list, info, compact and reset. Compact and reset act on the caller's session only through the same maintenance the HTTP routes use; a sub-agent may not use them, and a profile may not act on itself from inside its own run. Off unless this key is present. Needs profile in tool_definition_paths.",
+              "properties": {
+                "max_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500,
+                  "default": 50,
+                  "description": "Most items in one list response; a call's limit may only lower it."
+                },
+                "scan_max_entries": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 50000,
+                  "default": 2000,
+                  "description": "Most candidate profiles one list call examines; a listing with more fails and asks for filters. Not below max_entries."
+                },
+                "allow_other_sessions": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false lists and acts on only the calling session."
+                },
+                "allow_other_profiles": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false lists and acts on only the calling profile."
+                },
+                "allow_children": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false refuses the tool to a sub-agent."
+                },
+                "allow_remote": {"type": "boolean", "default": false, "description": "Go backend only. true lets the tool list the transcripts of other JAD servers on the remotes named in remotes (remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<run id>, remote:<name>/session:<id>). Off by default. The remote's own token must also allow transcripts there; the remote shortens the output itself and shows no file path."},
+                "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) the tool may use as remote:<name>/... . Needed with allow_remote, and only then. Each name must have a valid file, checked when the session loads."}
+              },
+              "additionalProperties": false
+            },
             "load_tool": {
               "type": "object",
               "description": "Go backend only. Lists the profile's tools.lazy tools (name and one-line summary), or shows the full definitions of the named ones and loads them. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent never gets this tool.",

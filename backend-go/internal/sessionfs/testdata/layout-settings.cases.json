@@ -173,7 +173,7 @@
   "native": {
    "unrelated": {}
   },
-  "error": "tools.native.unrelated is not supported; supported keys are async, bash, edit, exec, fetch, glob, grep, memory, process, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
+  "error": "tools.native.unrelated is not supported; supported keys are async, bash, edit, exec, fetch, glob, grep, memory, process, profile, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
  },
  {
   "name": "checkpoint all keys",
