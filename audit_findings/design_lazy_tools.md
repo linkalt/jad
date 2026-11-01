@@ -142,7 +142,7 @@ loaded it; after a load it is present with its real schema, from the next reques
 - A restart over the same state folder restores the loaded set.
 - Each refused or loaded call fires its pre_tool hook exactly once, and a refused call also fires its
   post_tool hook. A refused call never runs the real tool. A child's refused call to an unloaded lazy session
-  MCP tool fires both once (`TestRefusedLazyCallFiresAChildsHooksOnce`).
+  MCP tool fires both once (`TestRefusedLazyCallFiresAChildHooksOnce`).
 - A child's own `profile_message` and nested `subagent` calls fire the owner's pre_tool hook once each,
   as the parent's calls do (`NewSubagentMCP` takes the owner's hooks, and the subagent tool hooks its nested copy when built;
   the child pool holds the hooked `profile_message` copy).

@@ -205,7 +205,7 @@ func buildChildMCPHookFixture(t *testing.T, hooks map[string]any, calls *atomic.
 
 // A child's refused call to an unloaded lazy session MCP tool fires the owner's pre_tool and
 // post_tool once each, and the server never runs.
-func TestRefusedLazyCallFiresAChildsHooksOnce(t *testing.T) {
+func TestRefusedLazyCallFiresAChildHooksOnce(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "events")
 	calls := &atomic.Int32{}
 	name := mcpToolNameFor("fixture", "lookup")
