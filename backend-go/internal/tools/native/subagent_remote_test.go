@@ -481,3 +481,21 @@ func TestRemoteResumeRejectsAWrongFormBeforeAnyRequest(t *testing.T) {
 		})
 	}
 }
+
+// A remote resume's result names its source and its config note, as a local resume's does: the
+// peer's view carries both, the client decodes them from the wire, and the caller's result shows them.
+func TestRemoteResumeResultNamesItsSourceAndConfigNote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	go func() {
+		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "the answer is 42", ResumedFrom: "rr_0123456789abcdef", ConfigNote: "the agent changed since the source run"})
+	}()
+	out, err := f.tool.Execute(context.Background(), map[string]any{"task": "more", "agent": remoteAgent, "resume": "peer/rr_0123456789abcdef", "block_ms": json.Number("5000")}, remoteCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"resumed_from: rr_0123456789abcdef", "config_note: the agent changed since the source run"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the remote resume result lacks %q:\n%s", want, out)
+		}
+	}
+}

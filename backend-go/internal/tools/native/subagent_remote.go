@@ -307,6 +307,12 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 		return s.renderRemoteFailure(callID, target, outcome.Err), nil
 	}
 	information := append([]tools.Information{{Key: "agent", Value: target.String()}}, remoteRunInformation(reference)...)
+	if outcome.ResumedFrom != "" {
+		information = append(information, tools.Information{Key: "resumed_from", Value: outcome.ResumedFrom})
+	}
+	if outcome.ConfigNote != "" {
+		information = append(information, tools.Information{Key: "config_note", Value: outcome.ConfigNote})
+	}
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}

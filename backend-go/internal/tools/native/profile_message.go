@@ -151,12 +151,15 @@ type ProfileMessageRequest struct {
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
 // last text it wrote when it did not finish. Err is nil for an answer; otherwise one of the
 // ErrProfile* values, a *ProfileFailedError or a *ProfileBusyError. Reason says who ended a
-// stopped message. Trace points at the turn in the target's transcript.
+// stopped message. Trace points at the turn in the target's transcript. ResumedFrom and
+// ConfigNote are set by a remote sub-agent resume and only then (see the remote view).
 type ProfileMessageOutcome struct {
-	Text   string
-	Err    error
-	Reason string
-	Trace  string
+	Text        string
+	Err         error
+	Reason      string
+	Trace       string
+	ResumedFrom string
+	ConfigNote  string
 }
 
 // ProfileMessageRun is a message in flight. It outlives the call that started it: only Stop

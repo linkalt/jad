@@ -262,7 +262,7 @@ func (r *remoteRun) conclude(hubCtx, ctx context.Context, view remote.View, err 
 	reason, stopRequested := r.stopped()
 	switch {
 	case err == nil:
-		outcome := ProfileMessageOutcome{Text: view.Text, Reason: view.Reason, Trace: trace}
+		outcome := ProfileMessageOutcome{Text: view.Text, Reason: view.Reason, Trace: trace, ResumedFrom: view.ResumedFrom, ConfigNote: view.ConfigNote}
 		switch view.State {
 		case "done":
 			if strings.TrimSpace(view.Text) == "" {
