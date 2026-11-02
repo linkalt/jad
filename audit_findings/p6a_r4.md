@@ -72,6 +72,7 @@ Reviewed all 17 scoped non-test Go files plus the requested context/prior-art ma
 - **Suggested fix:** Enforce a response/frame byte ceiling at the HTTP/stdio transport boundary and avoid copying or expanding content until it is within the processing budget.
 
 ### P6A-R4-04 — MCP tool discovery ignores paginated tools/list cursors
+- **Status:** Closed (already implemented). `collectToolPages` in `backend-go/internal/tools/mcp/manager.go:89-120` follows `NextCursor` until empty, refuses a repeated cursor, and enforces `max_tools`. `go test ./internal/tools/mcp/ -count=1` passed (reviewer-run on d6ff00e, exit 0).
 - **Severity:** Medium
 - **Lens:** A — correctness
 - **Evidence:** [read] `backend-go/internal/tools/mcp/manager.go:38-45` issues one `c.session.ListTools(ctx, nil)` request. `loadServer` at `manager.go:192-215` passes only that response's `listed.Tools` to `toolsFromList`; there is no cursor loop or subsequent list request.
