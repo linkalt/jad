@@ -259,9 +259,22 @@ func remoteRunInformation(reference string) []tools.Information {
 	return []tools.Information{{Key: "remote_run", Value: reference}}
 }
 
-func (s *subagentTool) renderRemoteFailure(callID string, target remote.Target, err error) string {
+// remoteResumeInformation names the run a remote resume continued and carries its config note, as
+// a local resumed run does. It is empty for a run that did not resume another.
+func remoteResumeInformation(resumedFrom, configNote string) []tools.Information {
+	var information []tools.Information
+	if resumedFrom != "" {
+		information = append(information, tools.Information{Key: "resumed_from", Value: resumedFrom})
+	}
+	if configNote != "" {
+		information = append(information, tools.Information{Key: "config_note", Value: configNote})
+	}
+	return information
+}
+
+func (s *subagentTool) renderRemoteFailure(callID string, target remote.Target, err error, information ...tools.Information) string {
 	code, message := remoteSubagentFailure(target, err, s.remotes.timeout)
-	return tools.ExecutionError(callID, tools.StatusError, code, message)
+	return tools.ExecutionError(callID, tools.StatusError, code, message, information...)
 }
 
 // remoteSubagentFailure names a remote sub-agent that did not end in an answer.
@@ -300,19 +313,14 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 			return tools.RenderToolResult(tools.ResultOptions{
 				ID: callID, Status: tools.StatusOK,
 				Summary:     fmt.Sprintf("Agent %s was stopped%s", target.String(), stopReasonNote(subagentRunView{reason: outcome.Reason})),
-				Information: []tools.Information{{Key: "partial", Value: true}},
+				Information: append([]tools.Information{{Key: "partial", Value: true}}, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...),
 				Content:     &tools.Content{Encoding: "utf8", Text: text},
 			})
 		}
-		return s.renderRemoteFailure(callID, target, outcome.Err), nil
+		return s.renderRemoteFailure(callID, target, outcome.Err, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...), nil
 	}
 	information := append([]tools.Information{{Key: "agent", Value: target.String()}}, remoteRunInformation(reference)...)
-	if outcome.ResumedFrom != "" {
-		information = append(information, tools.Information{Key: "resumed_from", Value: outcome.ResumedFrom})
-	}
-	if outcome.ConfigNote != "" {
-		information = append(information, tools.Information{Key: "config_note", Value: outcome.ConfigNote})
-	}
+	information = append(information, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...)
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
@@ -327,7 +335,7 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 // remoteAsyncResult maps how a remote sub-agent ended to the unified async result.
 func (s *subagentTool) remoteAsyncResult(target remote.Target, outcome ProfileMessageOutcome) asyncmgr.Result {
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), s.settings.ResultMaxBytes)
-	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut, Bytes: int64(len(text)), Reason: outcome.Reason}
+	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut, Bytes: int64(len(text)), Reason: outcome.Reason, ResumedFrom: outcome.ResumedFrom, ConfigNote: outcome.ConfigNote}
 	if outcome.Err == nil {
 		result.State, result.OK = asyncmgr.StateDone, true
 		return result

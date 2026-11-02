@@ -411,6 +411,8 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 		// Entries render the detail, so the summary stays a short form instead of a second copy.
 		rec.Summary, _ = cutUTF8(rec.Summary, shortSummaryBytes)
 	}
+	rec.ResumedFrom, _ = cutUTF8(res.ResumedFrom, refMaxBytes)
+	rec.ConfigNote, _ = cutUTF8(res.ConfigNote, configNoteMaxBytes)
 	rec.Trace, _ = cutUTF8(res.Trace, refMaxBytes)
 	rec.Cut = rec.Cut || res.Cut
 	rec.Bytes = res.Bytes

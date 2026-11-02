@@ -333,3 +333,34 @@ func TestResumeWithMatchingOrMissingFingerprintMakesNoConfigNote(t *testing.T) {
 		t.Fatalf("a source without a fingerprint made a config note: %q", got)
 	}
 }
+
+func TestResumedLocalRunAsyncWaitNamesItsSourceAndConfigNote(t *testing.T) {
+	root := t.TempDir()
+	host := newTestAsyncHost(t)
+	settings := subagentSettings(agentNamed("explore"))
+	settings.StorageDir = root
+	settings.PersistRuns = true
+	settings.KeepFinished = 10
+	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
+	t.Cleanup(func() { _ = manager.Close() })
+	parent := withExecutors(t, readOnlyTool("read"))
+	tool, err := newSubagentToolAsync(settings, parent, nil, transcribingLauncher(t, root), nil, manager, nil, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := catalogWithAsync(t, host, parent, tool)
+	source := finishedSource(t, catalog, manager, testSessionKey)
+	// The source was written under another agent definition, so the resume carries a config note.
+	manager.byID(source).config = "an older definition"
+	out := resumeCall(t, catalog, testSessionKey, `{"resume":"`+source+`","task":"more","block_ms":0}`)
+	resumed := runIDOf(t, out)
+	waited := asyncWait(t, catalog)
+	if !strings.Contains(waited, resumed) {
+		t.Fatalf("the async wait does not report the resumed run %s:\n%s", resumed, waited)
+	}
+	for _, want := range []string{`"resumed_from":"` + source + `"`, `"config_note":"The agent definition changed`} {
+		if !strings.Contains(waited, want) {
+			t.Fatalf("the async wait of a resumed local run lacks %s:\n%s", want, waited)
+		}
+	}
+}

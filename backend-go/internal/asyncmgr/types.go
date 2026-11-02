@@ -50,7 +50,9 @@ const (
 	refMaxBytes    = 512
 	codeMaxBytes   = 64
 	reasonMaxBytes = 128
-	recordVersion  = 1
+	// configNoteMaxBytes matches the remote view bound of a config note (remote/run.go).
+	configNoteMaxBytes = 1024
+	recordVersion      = 1
 )
 
 var (
@@ -95,7 +97,10 @@ type Entry struct {
 	Cut     bool   `json:"cut,omitempty"`
 	Bytes   int64  `json:"bytes,omitempty"`
 	Ref     string `json:"ref,omitempty"`
-	T       string `json:"t"`
+	// ResumedFrom and ConfigNote are set for a remote run that resumed another, and only then.
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	ConfigNote  string `json:"config_note,omitempty"`
+	T           string `json:"t"`
 }
 
 // ListItem is a list entry: a summary only, never output.
@@ -134,6 +139,9 @@ type Record struct {
 	SrcCut bool   `json:"src_cut,omitempty"`
 	Bytes  int64  `json:"bytes,omitempty"`
 	Ref    string `json:"ref,omitempty"`
+	// ResumedFrom and ConfigNote are kept from the result for the entry; see Entry.
+	ResumedFrom string `json:"resumed_from,omitempty"`
+	ConfigNote  string `json:"config_note,omitempty"`
 	// Detail is the longer result text a driver keeps in the record itself (up to
 	// status_summary_max_bytes), shown by status when the driver has no live detail.
 	Detail    string `json:"detail,omitempty"`
@@ -184,6 +192,9 @@ type Result struct {
 	Ref   string
 	// Detail is the full result text kept in the record, cut to status_summary_max_bytes.
 	Detail string
+	// ResumedFrom and ConfigNote tell a resumed remote run apart from a fresh one.
+	ResumedFrom string
+	ConfigNote  string
 	// Trace is a driver reference for later inspection; it stays out of every entry.
 	Trace string
 }

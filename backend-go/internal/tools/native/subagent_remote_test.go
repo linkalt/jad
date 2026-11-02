@@ -499,3 +499,56 @@ func TestRemoteResumeResultNamesItsSourceAndConfigNote(t *testing.T) {
 		}
 	}
 }
+
+// resumeRemote starts a resume of the remote run rr_0123456789abcdef with block_ms as given.
+func (f *remoteSubagentFixture) resumeRemote(t *testing.T, block int64) string {
+	t.Helper()
+	out, err := f.tool.Execute(context.Background(), map[string]any{"task": "more", "agent": remoteAgent, "resume": "peer/rr_0123456789abcdef", "block_ms": json.Number(fmt.Sprint(block))}, remoteCaller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestRemoteResumeStoppedResultNamesItsSourceAndConfigNote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	go func() {
+		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "stopped", Reason: "caller_cancelled", Text: "partial", ResumedFrom: "rr_0123456789abcdef", ConfigNote: "the agent changed since the source run"})
+	}()
+	out := f.resumeRemote(t, 5000)
+	for _, want := range []string{"was stopped", "resumed_from: rr_0123456789abcdef", "config_note: the agent changed since the source run"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the stopped remote resume result lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRemoteResumeFailedResultNamesItsSourceAndConfigNote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	go func() {
+		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "failed", Code: "profile_failed", Message: "boom", ResumedFrom: "rr_0123456789abcdef", ConfigNote: "the agent changed since the source run"})
+	}()
+	out := f.resumeRemote(t, 5000)
+	for _, want := range []string{"subagent_failed", "resumed_from: rr_0123456789abcdef", "config_note: the agent changed since the source run"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the failed remote resume result lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRemoteResumeAsyncWaitNamesItsSourceAndConfigNote(t *testing.T) {
+	f := newRemoteSubagentFixture(t, peerGrant, nil)
+	id := remoteRunHandle.FindString(f.resumeRemote(t, 0))
+	if id == "" {
+		t.Fatal("the resume did not become a handle")
+	}
+	go func() {
+		f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "the answer is 42", ResumedFrom: "rr_0123456789abcdef", ConfigNote: "the agent changed since the source run"})
+	}()
+	waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")})
+	for _, want := range []string{`"resumed_from":"rr_0123456789abcdef"`, `"config_note":"the agent changed since the source run"`} {
+		if !strings.Contains(waited, want) {
+			t.Fatalf("the async wait of a remote resume lacks %s:\n%s", want, waited)
+		}
+	}
+}

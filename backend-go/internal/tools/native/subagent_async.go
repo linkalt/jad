@@ -66,7 +66,7 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 
 func subagentAsyncOutcome(run subagentRunView) asyncmgr.Result {
 	text := strings.TrimSpace(run.result.Text)
-	result := asyncmgr.Result{Reason: run.reason, Summary: text, Bytes: int64(len(text)), Cut: run.cut}
+	result := asyncmgr.Result{Reason: run.reason, Summary: text, Bytes: int64(len(text)), Cut: run.cut, ResumedFrom: run.resumedFrom, ConfigNote: run.configNote}
 	switch run.state {
 	case subagentRunDone:
 		result.State, result.OK = asyncmgr.StateDone, true

@@ -10,7 +10,7 @@ const shortSummaryBytes = 96
 
 func entryOf(rec Record, summaryLimit, detailLimit int) Entry {
 	e := Entry{ID: rec.ID, Kind: rec.Kind, State: rec.State, OK: rec.OK, Code: rec.Code, Reason: rec.Reason,
-		Label: rec.Label, Cut: rec.Cut, Bytes: rec.Bytes, Ref: rec.Ref}
+		Label: rec.Label, Cut: rec.Cut, Bytes: rec.Bytes, Ref: rec.Ref, ResumedFrom: rec.ResumedFrom, ConfigNote: rec.ConfigNote}
 	e.Summary, e.Cut = cutUTF8(rec.Summary, summaryLimit)
 	e.Cut = e.Cut || rec.Cut
 	if rec.Detail != "" {
