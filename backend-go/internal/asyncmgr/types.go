@@ -95,9 +95,10 @@ type Entry struct {
 	Reason  string `json:"reason,omitempty"`
 	Label   string `json:"label,omitempty"`
 	Summary string `json:"summary,omitempty"`
-	Cut     bool   `json:"cut,omitempty"`
-	Bytes   int64  `json:"bytes,omitempty"`
-	Ref     string `json:"ref,omitempty"`
+	// Cut says the summary was shortened, or a resume field was dropped, to fit the response budget.
+	Cut   bool   `json:"cut,omitempty"`
+	Bytes int64  `json:"bytes,omitempty"`
+	Ref   string `json:"ref,omitempty"`
 	// ResumedFrom and ConfigNote are set for a remote run that resumed another, and only then.
 	ResumedFrom string `json:"resumed_from,omitempty"`
 	ConfigNote  string `json:"config_note,omitempty"`

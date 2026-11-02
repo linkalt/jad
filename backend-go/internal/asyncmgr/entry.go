@@ -44,11 +44,11 @@ func encodedSize(v any) int {
 // config note before the resumed_from reference, since they are informational; then only the
 // summary shrinks, never the id and state fields. A summary that cannot be made to fit is dropped.
 func fitEntry(e Entry, budget int) Entry {
-	if encodedSize(e) > budget {
-		e.ConfigNote = ""
+	if encodedSize(e) > budget && e.ConfigNote != "" {
+		e.ConfigNote, e.Cut = "", true
 	}
-	if encodedSize(e) > budget {
-		e.ResumedFrom = ""
+	if encodedSize(e) > budget && e.ResumedFrom != "" {
+		e.ResumedFrom, e.Cut = "", true
 	}
 	for encodedSize(e) > budget && e.Summary != "" {
 		excess := encodedSize(e) - budget
