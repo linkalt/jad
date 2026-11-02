@@ -136,8 +136,8 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	callerSession, callerProfile, hasCaller := strings.Cut(execution.SessionKey, "\x00")
 	if path == "self" {
 		// self is the caller's own profile; it is mapped after the list gate, so list refuses it above.
-		if !hasCaller || callerProfile == "" {
-			return t.fail(execution, tools.StatusForbidden, "profile_caller_unknown", "The caller's own profile is not known here: self needs a session")
+		if !hasCaller || callerSession == "" || callerProfile == "" {
+			return t.fail(execution, tools.StatusForbidden, "profile_caller_unknown", "The caller's own profile is not known here: self needs a session and a profile")
 		}
 		path = ""
 	}
