@@ -16,6 +16,12 @@ const (
 	bashReadChunkSize  = 32 * 1024
 )
 
+// Seams for tests: the production values create real pipes and real interpreter processes.
+var (
+	newBashPipe    = os.Pipe
+	newBashCommand = newInterpreterCommand
+)
+
 type bashSpillOutcome struct {
 	path         string
 	writtenBytes int64
@@ -87,11 +93,11 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		return result
 	}
 
-	stdoutReader, stdoutWriter, err := os.Pipe()
+	stdoutReader, stdoutWriter, err := newBashPipe()
 	if err != nil {
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
-	stderrReader, stderrWriter, err := os.Pipe()
+	stderrReader, stderrWriter, err := newBashPipe()
 	if err != nil {
 		_ = stdoutReader.Close()
 		_ = stdoutWriter.Close()
@@ -105,7 +111,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		_ = stderrWriter.Close()
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
-	command := newInterpreterCommand(request.file, resolvedFile, request.args...)
+	command := newBashCommand(request.file, resolvedFile, request.args...)
 	command.Dir = request.cwd
 	command.Env = request.environment
 	command.Stdout = stdoutWriter
@@ -114,7 +120,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	// keeps the read end open and never reads it.
 	var stdinReader, stdinWriter *os.File
 	if request.stdin != "" {
-		reader, writer, err := os.Pipe()
+		reader, writer, err := newBashPipe()
 		if err != nil {
 			_ = stdoutReader.Close()
 			_ = stdoutWriter.Close()
