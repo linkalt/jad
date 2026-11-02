@@ -159,6 +159,18 @@ func TestProfileSelfWithoutACallerIsRefusedBeforeThePort(t *testing.T) {
 	}
 }
 
+// A session key with a NUL but no profile part names no profile, so self is refused the same way.
+func TestProfileSelfWithoutAProfileIsRefusedBeforeThePort(t *testing.T) {
+	actions := &fakeProfileActions{}
+	out := callTranscripts(t, newProfileActionsTool(t, profileTestSettings(), actions), `{"action":"info","path":"self"}`, tools.ExecutionContext{SessionKey: "demo\x00"})
+	if !strings.Contains(out, "profile_caller_unknown") {
+		t.Fatalf("self with session key demo NUL = %s, calls %v", out, actions.calls)
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("self with an empty profile part reached the port: %v", actions.calls)
+	}
+}
+
 func TestProfileListOfSelfIsInvalidPath(t *testing.T) {
 	out := callTranscripts(t, newProfileActionsTool(t, profileTestSettings(), &fakeProfileActions{}), `{"action":"list","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller})
 	if !strings.Contains(out, "invalid_path") || strings.Contains(out, "profiles of session") {

@@ -41,7 +41,7 @@ func TestProfileSchemaNamesSelfInBothCopies(t *testing.T) {
 		if err := json.Unmarshal(schema, &parsed); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(parsed.Properties.Path.Description, "self") {
+		if !strings.Contains(parsed.Properties.Path.Description, "Omit it, or give self, for your own profile.") {
 			t.Errorf("the %s path description does not name self: %q", name, parsed.Properties.Path.Description)
 		}
 	}
