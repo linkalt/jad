@@ -1307,3 +1307,22 @@ Audit: step-2 impact pass on `a7ad56b`. Range 384-438 is unchanged; `remote_api_
 - **Deferred: seam A, one async-state publisher per manager (`httpapi/async_state.go`).** Measured with `TestScaleAsyncStateLoad` (`33caf30`) and `TestScaleAsyncPublish` (`3586902`, `JAD_SCALE_MEASURE=1`). At N=1000 the shared publisher's publish p99 is 129.6 ms, against 1.21 ms for the per-run loop. Stop condition hit, so seam A is deferred. The copied resolver read (`internal/app/resolver.go:1163-1197`) is an adapter, not the real method, and the two arms are not timed the same way (1 ms polling for per-run, publish-time stamp for shared). At N=100 the shared arm published 71 of 100 samples, so its tail is understated. The tail is not attributed to the serial drain: no drain-wait figure was recorded. No race run was done, and the load was 10 changes per session, not sustained. Revisit only with a design that publishes at most once per interval per session, a like-for-like timing method, and a publish p99 at N=1000 no worse than per-run.
 - **B-01 reopened goal, not met.** Goal: at N=1000 profile runs, with no remote runs, the goroutine total measured by `TestScaleRunLayerGoroutines` is at most N+10 (1,010). Baseline: 202/1002/2002 at N=100/500/1000, with profile drivers and async watchers each equal to N, from the `a9828ca` run. No saved output for that run is kept, so the baseline is not independently re-run here. Reason: the only accepted seam that removes the per-run async watcher, seam A, is deferred on its stop condition (`3586902`). Seam B (`OnEnd` on `ProfileRunRequest`) is deferred, not accepted, pending a remote measurement that is itself blocked: the remote follower ceiling at N=32 is unconfirmed, and the remote watcher is in package `app`. Seams D2, site 5, site E, site C, `remoteapi/server.go:490`, D3 and the default `max_concurrent_runs` were not accepted for this goal. Reopen only with a new goal that names the seams accepted.
 - Superseded in part: seam B is implemented in `c21d26e` and `cc43f1f`, see the seam B bullet above. The N+10 goal is still not met.
+
+## Remote message held peak at N=1000: measured watcher saving (test-only, not a bound)
+
+Measured with `TestScaleRemoteMessageHeldPeak/n=1000` (gated by `JAD_SCALE_MEASURE=1`), with one
+`runtime.Stack(all)` dump taken at the peak. The count is the goroutine headers in that dump. Three
+runs per side, all passed:
+
+- before `c21d26e`: 4433, 4468, 4438 (4.43, 4.46, 4.43 per run).
+- after `83a3581`: 3780, 3768, 3760 (3.77, 3.76, 3.75 per run).
+
+The per-run drop is 653, 700 and 678 in total (before minus after). The named watcher closures
+(`app.(*remoteMessageRun).watch`) account for 685, 692 and 686 of the before count, and go to 0 after.
+The rest is small growth in net/http, poll and remoteapi.
+
+Caveats: one test shape, a fake provider, one machine, and three runs per side. This is not a
+production number. The 5.5 per-run bound is asserted at N=100, 500 and 1000, but at N=1000 both sides
+pass it (4.43 before, 3.75 after), so it does not separate them there. It is a regression bound at N=500,
+not a bound on the saving. The profile-only goal (`1,010` at N=1000, baseline `2,002`) is not affected
+by this change.
