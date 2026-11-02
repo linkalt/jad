@@ -77,6 +77,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.MaxRunTokens = r.config.MaxRunTokens
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
 	options.ToolCallScheduling = r.config.ToolCallScheduling
+	options.LeafBudget = r.resolver.leafBudget
 	if r.config.Checkpoint.Enabled {
 		options.Checkpoint = checkpoint.ForSession(r.config, r.resolver.logger)
 	}

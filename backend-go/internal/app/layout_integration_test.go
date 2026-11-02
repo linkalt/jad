@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // layoutFixture is a session in the catalog layout (setting.json with catalogs, a
@@ -49,6 +50,13 @@ func newLayoutFixture(t *testing.T) *layoutFixture {
 
 // newLayoutFixtureWithServer is newLayoutFixture with extra keys in the root setting's server object.
 func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixture {
+	t.Helper()
+	return newLayoutFixtureWithBudget(t, server, nil)
+}
+
+// newLayoutFixtureWithBudget is newLayoutFixtureWithServer with the budget of leaf tool calls
+// the service's runs share. Nil keeps the process budget; a test passes a budget of one.
+func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *tools.LeafBudget) *layoutFixture {
 	t.Helper()
 	f := &layoutFixture{root: t.TempDir(), cwd: t.TempDir(), server: server}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +126,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
 	}
 	toolDefinitions := make([]string, 0, 2)
-	for _, name := range []string{"write", "profile_message"} {
+	for _, name := range []string{"write", "profile_message", "async", "read"} {
 		definition, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
 		if err != nil {
 			t.Fatal(err)
@@ -147,7 +155,7 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	service, err := NewService(config)
+	service, err := newServiceForLayout(config, budget)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -427,4 +435,12 @@ func TestSessionVersionChangesWithAProfileName(t *testing.T) {
 		}
 		seen[version] = label
 	}
+}
+
+// newServiceForLayout is NewService, or newServiceWithBudget when a test passes a budget.
+func newServiceForLayout(config Config, budget *tools.LeafBudget) (*Service, error) {
+	if budget == nil {
+		return NewService(config)
+	}
+	return newServiceWithBudget(config, budget)
 }

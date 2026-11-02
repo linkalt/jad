@@ -1,6 +1,9 @@
 package session
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"runtime"
 	"sort"
@@ -8,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"jad/backend-go/internal/tools"
 )
 
 // scaleSample is one timed observation: at is the offset from the start of the run,
@@ -101,6 +106,8 @@ func scalePeakGoroutines(samples []scaleSample) int {
 func TestScaleToolBatchFanOut(t *testing.T) {
 	scaleSkipUnlessMeasured(t)
 	const callsPerRun = 64
+	// The process budget, as production builds it: every run of the process shares it.
+	budget := tools.NewLeafBudget(tools.LeafBudgetSize)
 	var baselineLatency, baselineGoroutines float64
 	for index, runs := range []int{100, 500, 1000} {
 		idle := runtime.NumGoroutine()
@@ -117,7 +124,7 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 				defer group.Done()
 				var started atomic.Int64
 				calls := make([]int, callsPerRun)
-				err := runToolBatch(calls, callsPerRun,
+				err := runToolBatchLeaves(budget, calls, callsPerRun, func(int) bool { return true },
 					func(int) (int, error) {
 						current := active.Add(1)
 						for {
@@ -143,7 +150,9 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 				}
 			}()
 		}
-		want := int64(runs * callsPerRun)
+		// The process budget caps the leaves that run at once, so a run of many batches
+		// settles at the budget, not at every call: wait for that peak.
+		want := int64(min(runs*callsPerRun, tools.LeafBudgetSize))
 		deadline := time.Now().Add(30 * time.Second)
 		for active.Load() < want && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
@@ -153,7 +162,7 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 		group.Wait()
 		samples := stopWatch()
 		if got := peakActive.Load(); got != want {
-			t.Fatalf("N=%d: %d of %d calls were executing together before the deadline", runs, got, want)
+			t.Fatalf("N=%d: %d calls were executing together, want %d (the budget)", runs, got, want)
 		}
 
 		p50 := scalePercentile(fanout, 50)
@@ -167,5 +176,76 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 			runs, p50, p99, peakGoroutines, idle, peakActive.Load(), saturatedAt.Round(time.Millisecond),
 			scaleOverText(scaleFirstAbove(fanout, 2*baselineLatency), index == 0),
 			scaleOverText(scaleFirstAbove(samples, 2*baselineGoroutines), index == 0))
+	}
+}
+
+// TestScaleToolBatchFanOutThroughExecuteToolRound is TestScaleToolBatchFanOut through the
+// production path: each run's response goes through executeToolRound, with a catalog whose
+// one tool is a leaf, and the process budget. It reports the peak goroutines, the peak
+// concurrent calls and the time until the peak is reached. It has no per-run fanout
+// percentiles: the calls do not report their own start, so those are not measured here.
+func TestScaleToolBatchFanOutThroughExecuteToolRound(t *testing.T) {
+	scaleSkipUnlessMeasured(t)
+	const callsPerRun = 64
+	budget := tools.NewLeafBudget(tools.LeafBudgetSize)
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false}`)
+	validator, err := tools.CompileSchema(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, runs := range []int{100, 500, 1000} {
+		release := make(chan struct{})
+		var active, peakActive atomic.Int64
+		catalog, err := tools.NewCatalog([]tools.Tool{{
+			Definition: tools.Definition{ID: "native.leaf", Source: "native", Name: "leaf", Description: "Leaf.", InputSchema: schema},
+			Validator:  validator,
+			LeafBudget: true,
+			Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
+				current := active.Add(1)
+				for {
+					peak := peakActive.Load()
+					if current <= peak || peakActive.CompareAndSwap(peak, current) {
+						break
+					}
+				}
+				<-release
+				active.Add(-1)
+				return "done", nil
+			},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls := make([]json.RawMessage, callsPerRun)
+		for call := range calls {
+			calls[call] = json.RawMessage(fmt.Sprintf(`{"type":"function_call","call_id":"c%d","name":"leaf","arguments":"{}"}`, call))
+		}
+		idle := runtime.NumGoroutine()
+		start := time.Now()
+		stopWatch := scaleWatchGoroutines(start)
+		var group sync.WaitGroup
+		for range runs {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				if _, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, callsPerRun, "", budget, nil); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		want := int64(min(runs*callsPerRun, tools.LeafBudgetSize))
+		deadline := time.Now().Add(30 * time.Second)
+		for active.Load() < want && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		saturatedAt := time.Since(start)
+		close(release)
+		group.Wait()
+		samples := stopWatch()
+		if got := peakActive.Load(); got != want {
+			t.Fatalf("N=%d: %d calls were executing together, want %d (the budget)", runs, got, want)
+		}
+		t.Logf("scale-tool-batch-round N=%d peak_goroutines=%d idle_goroutines=%d peak_concurrent_calls=%d saturated_at=%s",
+			runs, scalePeakGoroutines(samples), idle, peakActive.Load(), saturatedAt.Round(time.Millisecond))
 	}
 }

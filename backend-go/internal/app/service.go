@@ -10,6 +10,7 @@ import (
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/remoteapi"
+	"jad/backend-go/internal/tools"
 )
 
 // Service owns the HTTP adapter and filesystem resolver for one server
@@ -33,11 +34,17 @@ type Service struct {
 // NewService wires validated runtime configuration into the injectable HTTP
 // handler and filesystem-backed session resolver.
 func NewService(config Config) (*Service, error) {
+	return newServiceWithBudget(config, tools.NewLeafBudget(tools.LeafBudgetSize))
+}
+
+// newServiceWithBudget is NewService with the budget of leaf tool calls the service's
+// runs share. Production passes the one process budget; a test passes a smaller one.
+func newServiceWithBudget(config Config, budget *tools.LeafBudget) (*Service, error) {
 	resolver, err := NewResolver(config.Roots, config.Environment, CatalogConfig{
 		SnapshotTurns:      config.HTTP.SnapshotTurns,
 		MaxPageTurns:       config.HTTP.MaxPageTurns,
 		MaxInlinePartBytes: config.HTTP.MaxInlinePartBytes,
-	}, WithLogger(config.HTTP.Logger))
+	}, WithLogger(config.HTTP.Logger), withLeafBudget(budget))
 	if err != nil {
 		return nil, err
 	}

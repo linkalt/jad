@@ -93,6 +93,7 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		MaxRunTokens:         request.Agent.MaxRunTokens,
 		MaxParallelToolCalls: int(l.parent.MaxParallelToolCalls),
 		ToolCallScheduling:   l.parent.ToolCallScheduling,
+		LeafBudget:           l.resolver.leafBudget,
 		StateContext:         stateContext,
 		AutomaticCompaction:  l.compactionFor(request.Agent),
 		CompactHistory:       compactWhileWorking(store),

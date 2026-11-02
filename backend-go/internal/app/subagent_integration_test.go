@@ -22,6 +22,7 @@ import (
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/tools"
 )
 
 // subagentProvider is a fake Responses endpoint. It tells the parent run and the child
@@ -412,6 +413,10 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
 	delete(agentSetting, "__checkpoint")
+	// __leaf_budget, when set, replaces the process budget with one of that size, so a test
+	// can run the nested leaf calls through a budget of one.
+	leafBudgetSize, withLeafBudget := agentSetting["__leaf_budget"].(int)
+	delete(agentSetting, "__leaf_budget")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
 	// __load_tool enables tools.native.load_tool and its definition, which a profile with
@@ -574,7 +579,12 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	start := func(t *testing.T) string {
 		t.Helper()
 		var err error
-		if service, err = NewService(config); err != nil {
+		if withLeafBudget {
+			service, err = newServiceWithBudget(config, tools.NewLeafBudget(leafBudgetSize))
+		} else {
+			service, err = NewService(config)
+		}
+		if err != nil {
 			t.Fatalf("NewService() error = %v", err)
 		}
 		api = httptest.NewServer(service.Handler)

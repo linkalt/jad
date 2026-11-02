@@ -56,6 +56,7 @@ func NewBashTool(settings sessionfs.NativeBashSettings, apiKeyEnv string) (tools
 		Validator:          validator,
 		ExampleOperation:   json.RawMessage(`{"command":"npm test"}`),
 		NormalizeArguments: normalizeBashArguments,
+		LeafBudget:         true,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeNativeBash(ctx, arguments, settings, apiKeyEnv, execution), nil
 		},

@@ -175,7 +175,7 @@ func TestRunnerDefersEveryCoBatchedCallUntilUserDecisionIsResolved(t *testing.T)
 		json.RawMessage(`{"type":"function_call","call_id":"call-decision","name":"request_draft","arguments":"{}"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"call-after","name":"lookup","arguments":"{}"}`),
 	}
-	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 8, "", nil)
+	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 8, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestExecuteToolRoundRefusesRepeatedCallID(t *testing.T) {
 		json.RawMessage(`{"type":"function_call","call_id":"dup","name":"lookup","arguments":"{}"}`),
 	}
 	var published []string
-	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 1, "", func(output json.RawMessage) {
+	round, err := executeToolRound(context.Background(), catalog, calls, tools.ExecutionContext{}, 1, "", nil, func(output json.RawMessage) {
 		published = append(published, functionCallID(output))
 	})
 	if err != nil {

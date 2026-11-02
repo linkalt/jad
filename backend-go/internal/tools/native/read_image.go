@@ -59,6 +59,7 @@ func NewReadImageTool(settings sessionfs.NativeReadImageSettings, store *imagest
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"path":"screenshot.png"}`),
 		NormalizeArguments: normalizeReadImageArguments,
+		LeafBudget:         true,
 		ExecuteOutput: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
 			return executeNativeReadImage(arguments, settings, store, execution)
 		},

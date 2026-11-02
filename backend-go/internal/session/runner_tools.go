@@ -208,7 +208,7 @@ type toolRound struct {
 // to publish are serialized. Placeholder outputs are not published here: the
 // caller publishes them after the round is persisted, together with anything
 // else that is still unpublished.
-func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext, limit int, scheduling string, publish func(json.RawMessage)) (toolRound, error) {
+func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.RawMessage, execution tools.ExecutionContext, limit int, scheduling string, budget *tools.LeafBudget, publish func(json.RawMessage)) (toolRound, error) {
 	round := toolRound{Published: make(map[string]struct{}, len(calls))}
 	decisionIndex := -1
 	for index, call := range calls {
@@ -249,7 +249,7 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 
 	var mu sync.Mutex
 	concurrency := toolBatchConcurrency(toExecute, limit, scheduling, catalog.ChangesState)
-	batchErr := runToolBatch(toExecute, concurrency,
+	batchErr := runToolBatchLeaves(budget, toExecute, concurrency, catalog.IsLeafCall,
 		func(call json.RawMessage) (json.RawMessage, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err

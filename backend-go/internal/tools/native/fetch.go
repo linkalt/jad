@@ -138,6 +138,7 @@ func newFetchTool(settings sessionfs.NativeFetchSettings, store *FetchStore, res
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"url":"https://example.com"}`),
 		NormalizeArguments: normalizeFetchArguments,
+		LeafBudget:         true,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeNativeFetch(ctx, arguments, settings, store, resolver, requester, execution)
 		},

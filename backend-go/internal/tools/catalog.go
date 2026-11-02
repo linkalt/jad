@@ -121,6 +121,10 @@ type Tool struct {
 	// calls may run beside other calls of the same response. MayChangeFiles can
 	// still make one call of such a tool count as a change.
 	ReadOnly bool
+	// LeafBudget marks a tool whose call is a leaf: it runs its own work, never waits on
+	// another tool call or run, and never calls runToolBatch. Its calls take a slot of the
+	// process-wide leaf budget (see session.runToolBatch). Otherwise the call runs inline with no slot.
+	LeafBudget bool
 	// MayChangeFiles, when set, decides per call whether a call of this tool can
 	// change files, for a tool whose effect depends on its arguments (the subagent
 	// tool, whose agent may or may not be allowed to write). A true answer makes the
@@ -286,6 +290,21 @@ func (c *Catalog) ChangesState(call json.RawMessage) bool {
 		return false
 	}
 	return !tool.ReadOnly || c.CallMayChangeFiles(call)
+}
+
+// IsLeafCall reports whether a call runs under the leaf budget: its tool opts in with
+// LeafBudget. An unknown name runs nothing, so it is not a leaf.
+func (c *Catalog) IsLeafCall(call json.RawMessage) bool {
+	if c == nil {
+		return false
+	}
+	var fields struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return false
+	}
+	return c.byName[fields.Name].LeafBudget
 }
 
 // CallMayChangeFiles reports whether a call to a tool that decides per call (see

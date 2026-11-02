@@ -59,7 +59,7 @@ func runChainedResponse(t *testing.T, limit int, scheduling string) orderingOutc
 	}
 	var order []string
 	round, err := executeToolRound(context.Background(), catalog, calls,
-		tools.ExecutionContext{WorkspaceRoot: workspace, SessionDir: workspace}, limit, scheduling,
+		tools.ExecutionContext{WorkspaceRoot: workspace, SessionDir: workspace}, limit, scheduling, nil,
 		func(output json.RawMessage) { order = append(order, functionCallID(output)) })
 	if err != nil {
 		t.Fatal(err)

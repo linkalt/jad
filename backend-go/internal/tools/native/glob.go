@@ -190,6 +190,7 @@ func NewGlobTool(settings sessionfs.NativeGlobSettings) (tools.Tool, error) {
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"pattern":"*.test.ts"}`),
 		NormalizeArguments: normalizeGlobArguments,
+		LeafBudget:         true,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeNativeGlob(ctx, arguments, settings, execution), nil
 		},

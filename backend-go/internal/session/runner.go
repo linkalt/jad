@@ -135,6 +135,9 @@ type RunOptions struct {
 	// "concurrent"; see toolBatchConcurrency. An empty value runs concurrently, so
 	// a caller that builds RunOptions by hand keeps the old behaviour.
 	ToolCallScheduling string
+	// LeafBudget is the process-wide budget of leaf tool calls shared by every run; nil
+	// runs the leaf calls of a response without one, as a caller that builds RunOptions by hand gets.
+	LeafBudget *tools.LeafBudget
 	// PersistedInput is set when PersistInput already stored the user input, so
 	// Run must not normalize, repair or append it again. A caller does this when
 	// work that can fail (reading the model file, connecting tool servers,
@@ -650,7 +653,7 @@ func (r *Runner) executeToolCalls(ctx context.Context, trace memorytrace.Handle,
 	}
 	// A result is published the moment its call settles; the ids published
 	// here are skipped by the pass after persistence below.
-	toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, options.ToolCallScheduling, func(output json.RawMessage) {
+	toolRun, executionErr := executeToolRound(ctx, options.ToolCatalog, calls, toolExecution, options.MaxParallelToolCalls, options.ToolCallScheduling, options.LeafBudget, func(output json.RawMessage) {
 		if options.OnToolResult != nil {
 			options.OnToolResult(output)
 		}

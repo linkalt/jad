@@ -47,6 +47,7 @@ func NewWriteTool(settings sessionfs.NativeWriteSettings, locks *PathLocks) (too
 		Validator:          validator,
 		ExampleOperation:   json.RawMessage(`{"path":"example.txt","content":"..."}`),
 		NormalizeArguments: normalizeWriteArguments,
+		LeafBudget:         true,
 		Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeWrite(arguments, settings, locks, execution)
 		},

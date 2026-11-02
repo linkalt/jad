@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"sync"
+
+	"jad/backend-go/internal/tools"
 )
 
 // toolBatchPanic is a panic recovered on a batch worker. Its text is generic,
@@ -38,10 +40,33 @@ func toolBatchConcurrency[Call any](calls []Call, limit int, scheduling string, 
 }
 
 // runToolBatch runs the calls of one provider response with bounded
+// concurrency. Every call is a leaf: see runToolBatchLeaves.
+func runToolBatch[Call, Output any](
+	calls []Call,
+	limit int,
+	execute func(Call) (Output, error),
+	onFinished func(Call, Output) error,
+	shouldStop func() bool,
+) error {
+	return runToolBatchLeaves(nil, calls, limit, func(Call) bool { return true }, execute, onFinished, shouldStop)
+}
+
+// runToolBatchLeaves runs the calls of one provider response with bounded
 // concurrency. A model that returns several function calls in one response
 // expects them to run in parallel, and each finished call is reported through
 // onFinished as soon as it settles, so a client sees every result when it
 // exists instead of waiting for the slowest call of the batch.
+//
+// A leaf call (leaf reports true) runs on its own goroutine and holds one token of
+// the process-wide leaf budget from the moment its goroutine starts until it
+// settles. A call that is not a leaf runs on the goroutine that runs the batch, with
+// no token and no goroutine of its own.
+//
+// Deadlock argument: a token holder is a leaf, and a leaf never calls
+// runToolBatch, so it waits on nothing that needs a token. Every call that holds a
+// token therefore settles and gives the token back. A call that is not a leaf holds
+// no token while it waits, so the leaves it starts can always get one. No cycle of
+// waits through the budget is possible.
 //
 // Failure policy matches sequential execution: after the first returned error
 // (from execute or from onFinished), or once shouldStop reports true, no
@@ -50,9 +75,11 @@ func toolBatchConcurrency[Call any](calls []Call, limit int, scheduling string, 
 // every result that did complete.
 //
 // A limit below one runs the calls strictly one after another.
-func runToolBatch[Call, Output any](
+func runToolBatchLeaves[Call, Output any](
+	budget *tools.LeafBudget,
 	calls []Call,
 	limit int,
+	leaf func(Call) bool,
 	execute func(Call) (Output, error),
 	onFinished func(Call, Output) error,
 	shouldStop func() bool,
@@ -65,22 +92,9 @@ func runToolBatch[Call, Output any](
 	}
 	var (
 		mu       sync.Mutex
-		next     int
 		firstErr error
 		wg       sync.WaitGroup
 	)
-	// claim hands out the next call, or reports that the worker should stop.
-	claim := func() (Call, bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		var zero Call
-		if firstErr != nil || next >= len(calls) || shouldStop() {
-			return zero, false
-		}
-		call := calls[next]
-		next++
-		return call, true
-	}
 	fail := func(err error) {
 		mu.Lock()
 		if firstErr == nil {
@@ -88,8 +102,13 @@ func runToolBatch[Call, Output any](
 		}
 		mu.Unlock()
 	}
-	// A panic in execute or onFinished runs on this worker goroutine, where
-	// nothing above can recover it; it would end the process. It becomes the
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
+	// A panic in execute or onFinished runs on the goroutine that runs the call,
+	// where nothing above can recover it; it would end the process. It becomes the
 	// call's error instead.
 	runOne := func(call Call) (err error) {
 		defer func() {
@@ -103,22 +122,32 @@ func runToolBatch[Call, Output any](
 		}
 		return err
 	}
-	worker := func() {
-		defer wg.Done()
-		for {
-			call, ok := claim()
-			if !ok {
-				return
-			}
+	// slots bounds the calls of this batch in flight at once; the budget bounds the
+	// leaves of every batch in the process.
+	slots := make(chan struct{}, limit)
+	for _, call := range calls {
+		slots <- struct{}{}
+		if failed() || shouldStop() {
+			<-slots
+			break
+		}
+		isLeaf := leaf(call)
+		if isLeaf {
+			budget.Acquire()
+		}
+		wg.Add(1)
+		go func(call Call, isLeaf bool) {
+			defer wg.Done()
+			defer func() {
+				if isLeaf {
+					budget.Release()
+				}
+				<-slots
+			}()
 			if err := runOne(call); err != nil {
 				fail(err)
 			}
-		}
-	}
-	workers := min(limit, len(calls))
-	wg.Add(workers)
-	for range workers {
-		go worker()
+		}(call, isLeaf)
 	}
 	wg.Wait()
 	return firstErr

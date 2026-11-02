@@ -81,6 +81,9 @@ type Resolver struct {
 	// tools.native.process.storage_dir may be shared by several sessions.
 	processSessions  map[string]map[string]struct{}
 	subagentManagers map[string]*native.SubagentManager
+	// leafBudget is the process-wide budget of leaf tool calls, shared by every run this
+	// resolver starts, so the bound holds across sessions and sub-agents.
+	leafBudget *tools.LeafBudget
 	// asyncHosts holds one async manager per tool storage folder (its .async folder).
 	asyncHosts    map[string]*native.AsyncHost
 	asyncBuilds   map[string]chan struct{}
@@ -247,6 +250,9 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 	for _, option := range options {
 		option(&resolverOptions)
 	}
+	if resolverOptions.leafBudget == nil {
+		resolverOptions.leafBudget = tools.NewLeafBudget(tools.LeafBudgetSize)
+	}
 	return &Resolver{
 		logger:            resolverOptions.logger,
 		roots:             copyRoots,
@@ -258,6 +264,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		processSessions:   make(map[string]map[string]struct{}),
 		remotes:           remote.NewHub(func(name string) string { return copyEnvironment[name] }),
 		subagentManagers:  make(map[string]*native.SubagentManager),
+		leafBudget:        resolverOptions.leafBudget,
 		asyncHosts:        make(map[string]*native.AsyncHost),
 		asyncBuilds:       make(map[string]chan struct{}),
 		openAsyncHost:     native.NewAsyncHost,

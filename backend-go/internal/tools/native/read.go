@@ -53,6 +53,7 @@ func NewReadTool(settings sessionfs.NativeReadSettings) (tools.Tool, error) {
 		ReadOnly:           true,
 		ExampleOperation:   json.RawMessage(`{"path":"."}`),
 		NormalizeArguments: normalizeReadArguments,
+		LeafBudget:         true,
 		Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeRead(arguments, settings, execution)
 		},

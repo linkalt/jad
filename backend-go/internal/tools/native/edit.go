@@ -47,6 +47,7 @@ func NewEditTool(settings sessionfs.NativeEditSettings, locks *PathLocks) (tools
 		},
 		Validator:        validator,
 		ExampleOperation: json.RawMessage(`{"path":"example.txt","oldText":"before","newText":"after"}`),
+		LeafBudget:       true,
 		Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeEdit(arguments, settings, locks, execution)
 		},
