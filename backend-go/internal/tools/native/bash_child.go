@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -157,15 +157,12 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		}(stdinWriter, request.stdin)
 	}
 
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go readBashPipe(stdoutReader, bashStdout, request, &readers)
-	go readBashPipe(stderrReader, bashStderr, request, &readers)
+	// Both readers are started below, after the command started, so the count is always 2.
+	var readersLeft atomic.Int32
+	readersLeft.Store(2)
 	readersDone := make(chan struct{})
-	go func() {
-		readers.Wait()
-		close(readersDone)
-	}()
+	go readBashPipe(stdoutReader, bashStdout, request, &readersLeft, readersDone)
+	go readBashPipe(stderrReader, bashStderr, request, &readersLeft, readersDone)
 	if groups := childGroupsFrom(ctx); groups != nil && request.sweepAtRunEnd {
 		pid := command.Process.Pid
 		defer groups.add(pid, request.killGrace)
@@ -288,8 +285,13 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	return result
 }
 
-func readBashPipe(reader *os.File, stream bashStream, request bashChildRequest, readers *sync.WaitGroup) {
-	defer readers.Done()
+// The last reader to exit closes readersDone; the counter is what makes that happen once.
+func readBashPipe(reader *os.File, stream bashStream, request bashChildRequest, readersLeft *atomic.Int32, readersDone chan struct{}) {
+	defer func() {
+		if readersLeft.Add(-1) == 0 {
+			close(readersDone)
+		}
+	}()
 	defer reader.Close()
 	buffer := make([]byte, bashReadChunkSize)
 	for {
