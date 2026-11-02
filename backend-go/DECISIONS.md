@@ -1326,3 +1326,16 @@ production number. The 5.5 per-run bound is asserted at N=100, 500 and 1000, but
 pass it (4.43 before, 3.75 after), so it does not separate them there. It is a regression bound at N=500,
 not a bound on the saving. The profile-only goal (`1,010` at N=1000, baseline `2,002`) is not affected
 by this change.
+
+## Run-layer baseline reproduced: 202 / 1002 / 2002 (test-only, not a reduction)
+
+Command: `JAD_SCALE_MEASURE=1 go test -count=1 -run TestScaleRunLayerGoroutines -v ./internal/httpapi/`,
+exit 0. One invocation runs N=100, 500 and 1000 in turn. Each N reports its group counts and idle=2.
+
+- N=100: profile_driver=100, async_watcher=100, total=202.
+- N=500: profile_driver=500, async_watcher=500, total=1002.
+- N=1000: profile_driver=1000, async_watcher=1000, total=2002.
+
+The six groups http_driver, remote_message_watcher, remote_subagent_start, remote_subagent_end,
+attach_waiter and pump are not_measured in this test. The 1,010 goal is still open and NOT MET.
+This entry records a reproduced baseline, not a reduction.
