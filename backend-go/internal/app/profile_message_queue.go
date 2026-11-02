@@ -494,13 +494,24 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 	if r.ctx.Err() != nil {
 		run.Stop()
 	}
+	if r.queued {
+		go func() {
+			<-run.Done()
+			r.finish(r.conclude(run))
+		}()
+		return
+	}
+	// A non-queued message has no watch goroutine of its own: this one stops the target run
+	// when the message's context ends, as watch does, and records the outcome once it has ended.
 	go func() {
-		<-run.Done()
+		select {
+		case <-run.Done():
+		case <-r.ctx.Done():
+			run.Stop()
+			<-run.Done()
+		}
 		r.finish(r.conclude(run))
 	}()
-	if !r.queued {
-		go r.watch()
-	}
 }
 
 // conclude turns the end of the target run into the message's outcome. Whatever final text
