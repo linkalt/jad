@@ -23,6 +23,22 @@ func (s *TurnStore) ReadRecordsRange(start, end int64, visit func(offset int64, 
 	return s.journal.ReadRecordsRange(start, end, visit)
 }
 
+// ReadRecordsSnapshot is ReadRecordsRange without holding the journal lock during the
+// read. It returns ErrTranscriptChanged when the transcript was replaced or rewritten
+// during the read; the caller must discard what it visited and may retry.
+func (s *TurnStore) ReadRecordsSnapshot(start, end int64, visit func(offset int64, line []byte) error) error {
+	if s == nil || s.journal == nil {
+		return errors.New("turn store is not initialized")
+	}
+	s.mu.Lock()
+	recovering := s.recovering
+	s.mu.Unlock()
+	if recovering {
+		return errors.New("turn store recovery is in progress")
+	}
+	return s.journal.ReadRecordsSnapshot(start, end, visit)
+}
+
 // ReadCompleteRecordsRange reads LF-terminated records without repairing an
 // incomplete final record, returning the next offset that was fully consumed.
 func (s *TurnStore) ReadCompleteRecordsRange(start, end int64, visit func(offset int64, line []byte) error) (int64, error) {

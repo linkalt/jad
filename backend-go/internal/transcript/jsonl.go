@@ -289,6 +289,114 @@ func (j *Journal) ReadRecordsRange(start, end int64, visit func(offset int64, li
 	})
 }
 
+// ErrTranscriptChanged reports that the transcript was replaced or rewritten while a
+// snapshot read ran, so the records visited by that read must be discarded.
+var ErrTranscriptChanged = errors.New("transcript changed during snapshot read")
+
+// ReadRecordsSnapshot visits the complete records in [start, end) of the transcript as it
+// was when the call took the journal lock. The lock is held only to repair the tail and
+// to take the snapshot, so appends made during the read wait for at most that repair. The
+// read stops at the last newline before the snapshot end, so it never visits a torn record.
+// If the file was replaced or rewritten before the read finished, the records visited are
+// stale and ErrTranscriptChanged is returned; the caller must discard them. Use this only
+// when the visitor can start over.
+func (j *Journal) ReadRecordsSnapshot(start, end int64, visit func(offset int64, line []byte) error) (result error) {
+	if j == nil {
+		return errors.New("transcript journal is not initialized")
+	}
+	if visit == nil {
+		return errors.New("transcript record visitor is required")
+	}
+	if start < 0 || end < start {
+		return errors.New("transcript record range is invalid")
+	}
+	snapshotEnd, snapshot, identity, generation, err := j.takeSnapshot()
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return nil
+	}
+	defer func() {
+		if closeErr := snapshot.Close(); result == nil && closeErr != nil {
+			result = fmt.Errorf("close transcript after snapshot read: %w", closeErr)
+		}
+	}()
+	limit := end
+	if limit > snapshotEnd {
+		limit = snapshotEnd
+	}
+	if start > limit {
+		return nil
+	}
+	if start > 0 {
+		var previous [1]byte
+		if n, readErr := snapshot.ReadAt(previous[:], start-1); readErr != nil || n != 1 || previous[0] != '\n' {
+			return errors.New("transcript range start is not a record boundary")
+		}
+	}
+	if err := visitRecords(snapshot, start, limit, visit); err != nil {
+		return err
+	}
+	return j.checkSnapshot(identity, generation)
+}
+
+// takeSnapshot repairs the tail under the lock, then returns a read-only handle together
+// with the file identity, size and generation the snapshot was taken at. The handle is nil
+// when the transcript does not exist.
+func (j *Journal) takeSnapshot() (size int64, file *os.File, identity os.FileInfo, generation uint64, result error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	writable, err := os.OpenFile(j.path, os.O_RDWR|os.O_APPEND, 0o666)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil, nil, j.generation, nil
+	}
+	if err != nil {
+		return 0, nil, nil, 0, fmt.Errorf("open transcript for snapshot: %w", err)
+	}
+	defer func() {
+		if closeErr := writable.Close(); result == nil && closeErr != nil {
+			result = fmt.Errorf("close transcript after snapshot repair: %w", closeErr)
+		}
+	}()
+	if _, err := repairTrailingPartialLine(writable); err != nil {
+		return 0, nil, nil, 0, fmt.Errorf("repair transcript tail before snapshot: %w", err)
+	}
+	info, err := writable.Stat()
+	if err != nil {
+		return 0, nil, nil, 0, fmt.Errorf("stat transcript before snapshot: %w", err)
+	}
+	reader, err := os.Open(j.path)
+	if err != nil {
+		return 0, nil, nil, 0, fmt.Errorf("open transcript snapshot for reading: %w", err)
+	}
+	snapshotInfo, err := reader.Stat()
+	if err != nil || !os.SameFile(info, snapshotInfo) {
+		_ = reader.Close()
+		if err == nil {
+			err = ErrTranscriptChanged
+		}
+		return 0, nil, nil, 0, fmt.Errorf("stat transcript snapshot: %w", err)
+	}
+	return info.Size(), reader, info, j.generation, nil
+}
+
+// checkSnapshot reports ErrTranscriptChanged when the transcript was rewritten, replaced or
+// removed since takeSnapshot. Appends only write past the snapshot end, so they do not
+// invalidate it.
+func (j *Journal) checkSnapshot(identity os.FileInfo, generation uint64) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.generation != generation {
+		return ErrTranscriptChanged
+	}
+	current, err := os.Stat(j.path)
+	if err != nil || !os.SameFile(identity, current) {
+		return ErrTranscriptChanged
+	}
+	return nil
+}
+
 // withRepairedFile runs fn while holding the journal lock, on the transcript
 // opened for reading after any incomplete final record was removed. info
 // describes the repaired file. fn must not call other Journal methods.

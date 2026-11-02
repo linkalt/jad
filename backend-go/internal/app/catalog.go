@@ -501,6 +501,10 @@ func cursorForOffset(starts []int64, offset int64) int64 {
 	return starts[turn-1]
 }
 
+// scanSnapshotRead reads the usage records of a scan. Tests replace it to force the
+// retry on ErrTranscriptChanged; production always uses the snapshot read.
+var scanSnapshotRead = (*transcript.TurnStore).ReadRecordsSnapshot
+
 func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) (transcriptIndex, error) {
 	if shared == nil || shared.store == nil {
 		return transcriptIndex{}, errors.New("shared transcript store is not initialized")
@@ -519,80 +523,96 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 	index := transcriptIndex{starts: starts}
 	usageCache, cacheValid := readUsageCacheState(config)
 	usageOffset := int64(0)
-	lastResponseKey := ""
-	var turnCount, maxTurn int64
 	if cacheValid {
-		index.usage = usageCache.Summary
 		usageOffset = usageCache.Transcript.Offset
-		lastResponseKey = usageCache.LastResponseKey
-		turnCount = index.usage.TurnCount
-		maxTurn = turnCount
 	}
-	seenBatches := make(map[string]struct{})
-	seenResponses := make(map[string]struct{})
-	seenUsageKeys := make(map[string]struct{})
-	scanThrough := usageOffset
-	err = store.ReadRecordsRange(usageOffset, 1<<63-1, func(offset int64, line []byte) error {
-		scanThrough = offset + int64(len(line)) + 1
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(line, &fields); err != nil || fields == nil {
-			return fmt.Errorf("transcript record at byte %d is not a JSON object", offset)
+	// The usage visitor accumulates into index, so a retry after a changed snapshot starts
+	// from the cached summary again.
+	var lastResponseKey string
+	var turnCount, maxTurn int64
+	var scanThrough int64
+	scanAttempt := func() error {
+		index.usage = webui.UsageSummary{}
+		lastResponseKey = ""
+		turnCount, maxTurn = 0, 0
+		if cacheValid {
+			index.usage = usageCache.Summary
+			lastResponseKey = usageCache.LastResponseKey
+			turnCount = index.usage.TurnCount
+			maxTurn = turnCount
 		}
-		var role string
-		_ = json.Unmarshal(fields["role"], &role)
-		if role == "user" {
-			var batchID string
-			if raw, ok := fields[transcript.SessionInputBatchIDField]; ok && json.Unmarshal(raw, &batchID) == nil && batchID != "" {
-				if _, seen := seenBatches[batchID]; !seen {
-					seenBatches[batchID] = struct{}{}
+		seenBatches := make(map[string]struct{})
+		seenResponses := make(map[string]struct{})
+		seenUsageKeys := make(map[string]struct{})
+		scanThrough = usageOffset
+		return scanSnapshotRead(store, usageOffset, 1<<63-1, func(offset int64, line []byte) error {
+			scanThrough = offset + int64(len(line)) + 1
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(line, &fields); err != nil || fields == nil {
+				return fmt.Errorf("transcript record at byte %d is not a JSON object", offset)
+			}
+			var role string
+			_ = json.Unmarshal(fields["role"], &role)
+			if role == "user" {
+				var batchID string
+				if raw, ok := fields[transcript.SessionInputBatchIDField]; ok && json.Unmarshal(raw, &batchID) == nil && batchID != "" {
+					if _, seen := seenBatches[batchID]; !seen {
+						seenBatches[batchID] = struct{}{}
+						turnCount++
+					}
+				} else {
 					turnCount++
 				}
-			} else {
-				turnCount++
 			}
-		}
-		var recordType string
-		_ = json.Unmarshal(fields["type"], &recordType)
-		if recordType != "response.completed" {
+			var recordType string
+			_ = json.Unmarshal(fields["type"], &recordType)
+			if recordType != "response.completed" {
+				return nil
+			}
+			var response map[string]json.RawMessage
+			if json.Unmarshal(fields["response"], &response) != nil {
+				response = nil
+			}
+			responseKey := usageCacheResponseKey(line, response)
+			if responseKey != "" {
+				if responseKey == lastResponseKey {
+					return nil
+				}
+				if _, seen := seenUsageKeys[responseKey]; seen {
+					return nil
+				}
+				seenUsageKeys[responseKey] = struct{}{}
+				lastResponseKey = responseKey
+			}
+			var sessionTurn int64
+			hasTurn := false
+			if raw, ok := fields["session_turn"]; ok {
+				if err := json.Unmarshal(raw, &sessionTurn); err != nil || sessionTurn < 1 {
+					return fmt.Errorf("session_turn at byte %d must be a positive integer", offset)
+				}
+				hasTurn = true
+				if sessionTurn > maxTurn {
+					maxTurn = sessionTurn
+				}
+			}
+			if !hasTurn && turnCount == 0 {
+				turnCount = 1
+			}
+			if turnCount > index.usage.TurnCount {
+				index.usage.TurnCount = turnCount
+			}
+			if err := webui.AddCompletedRecord(&index.usage, line, fields, response, seenResponses); err != nil {
+				return fmt.Errorf("accumulate usage at byte %d: %w", offset, err)
+			}
 			return nil
-		}
-		var response map[string]json.RawMessage
-		if json.Unmarshal(fields["response"], &response) != nil {
-			response = nil
-		}
-		responseKey := usageCacheResponseKey(line, response)
-		if responseKey != "" {
-			if responseKey == lastResponseKey {
-				return nil
-			}
-			if _, seen := seenUsageKeys[responseKey]; seen {
-				return nil
-			}
-			seenUsageKeys[responseKey] = struct{}{}
-			lastResponseKey = responseKey
-		}
-		var sessionTurn int64
-		hasTurn := false
-		if raw, ok := fields["session_turn"]; ok {
-			if err := json.Unmarshal(raw, &sessionTurn); err != nil || sessionTurn < 1 {
-				return fmt.Errorf("session_turn at byte %d must be a positive integer", offset)
-			}
-			hasTurn = true
-			if sessionTurn > maxTurn {
-				maxTurn = sessionTurn
-			}
-		}
-		if !hasTurn && turnCount == 0 {
-			turnCount = 1
-		}
-		if turnCount > index.usage.TurnCount {
-			index.usage.TurnCount = turnCount
-		}
-		if err := webui.AddCompletedRecord(&index.usage, line, fields, response, seenResponses); err != nil {
-			return fmt.Errorf("accumulate usage at byte %d: %w", offset, err)
-		}
-		return nil
-	})
+		})
+	}
+	// One retry: a snapshot read that raced a rewrite is discarded and rebuilt from the
+	// cached summary. A second change is reported to the caller.
+	err = scanAttempt()
+	if errors.Is(err, transcript.ErrTranscriptChanged) {
+		err = scanAttempt()
+	}
 	if err != nil {
 		return transcriptIndex{}, err
 	}
