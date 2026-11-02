@@ -135,6 +135,9 @@ type ProfileMessageRequest struct {
 	// Compact asks for the target's transcript to be compacted before the run, once per
 	// caller run and target.
 	Compact bool
+	// CompactAfter is the input tokens above which Compact compacts: only when the target's
+	// last completed response had more than this many. Zero compacts any target with usage.
+	CompactAfter int64
 	// QueueWait is the longest the message may wait for a busy target; zero sets no limit
 	// beyond Timeout. Timeout bounds the whole life of the message, queue time included.
 	QueueWait time.Duration
@@ -340,15 +343,16 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments)
 	request := ProfileMessageRequest{
-		Blocking:  !handled || block > 0,
-		OwnerKey:  execution.SessionKey,
-		Session:   session,
-		Target:    target,
-		Message:   message,
-		Compact:   p.settings.Compact == sessionfs.ProfileMessageCompactOn,
-		QueueWait: time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
-		Timeout:   time.Duration(p.settings.TimeoutMs) * time.Millisecond,
-		MaxQueued: p.settings.MaxQueued,
+		Blocking:     !handled || block > 0,
+		OwnerKey:     execution.SessionKey,
+		Session:      session,
+		Target:       target,
+		Message:      message,
+		Compact:      p.settings.Compact == sessionfs.ProfileMessageCompactOn,
+		CompactAfter: p.settings.CompactAfter,
+		QueueWait:    time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
+		Timeout:      time.Duration(p.settings.TimeoutMs) * time.Millisecond,
+		MaxQueued:    p.settings.MaxQueued,
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless

@@ -146,6 +146,15 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 			if callerRun != 0 && !m.resolver.callerRuns.claim(callerRun, plan.key) {
 				return
 			}
+			// The same usage ProfileInfo reports: the target's last completed response.
+			tokens, err := m.ProfileInfo(ctx, plan.reference, plan.target)
+			if err != nil {
+				m.resolver.logger.Warn("profile_message usage read failed; not compacting", "session", plan.reference, "profile", plan.target, "error", err)
+				return
+			}
+			if tokens == nil || *tokens <= request.CompactAfter {
+				return
+			}
 			compactTarget := m.resolver.compactProfile
 			if compactTarget == nil {
 				compactTarget = m.resolver.compactTarget

@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "max_chain", "max_queued_per_profile", "remotes", "sessions"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -63,6 +63,9 @@ type NativeProfileMessageSettings struct {
 	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
 	// first message to it in each run of the caller.
 	Compact string
+	// CompactAfter is the input tokens above which a compaction runs: the target's last
+	// completed response must have more. Zero (default) compacts any target with usage.
+	CompactAfter int64
 }
 
 func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
@@ -131,6 +134,10 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
 		}
 	}
+	compactAfter, err := configuredInteger(fields, "compact_after", 0, 0, maxSafeInteger, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
 	remotes, err := normalizeRemoteNames(fields["remotes"], settingPath, section)
 	if err != nil {
 		return nil, err
@@ -139,7 +146,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact}, nil
+	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

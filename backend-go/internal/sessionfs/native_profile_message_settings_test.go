@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		"busy wait equals timeout": {`{"profile_message":{"timeout_ms":9,"busy_wait_ms":9}}`, NativeProfileMessageSettings{TimeoutMs: 9, BusyWaitMs: 9, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 		"empty deny":               {`{"profile_message":{"deny_profiles":[]}}`, NativeProfileMessageSettings{DenyProfiles: []string{}, TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 		"compact on":               {`{"profile_message":{"compact":"on"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOn}},
+		"compact after set":        {`{"profile_message":{"compact":"on","compact_after":5000}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOn, CompactAfter: 5000}},
 		"compact off":              {`{"profile_message":{"compact":"off"}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 4, Compact: ProfileMessageCompactOff}},
 		"queue cap set":            {`{"profile_message":{"max_queued_per_profile":9}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 9, Compact: ProfileMessageCompactOff}},
 		"queue cap zero":           {`{"profile_message":{"max_queued_per_profile":0}}`, NativeProfileMessageSettings{TimeoutMs: 600000, ResultMaxBytes: 16384, MaxChain: 2, MaxQueued: 0, Compact: ProfileMessageCompactOff}},
@@ -76,6 +78,9 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 		"compact ask":            {`{"profile_message":{"compact":"ask"}}`, `compact must be "off" or "on"`},
 		"compact bool":           {`{"profile_message":{"compact":true}}`, `compact must be "off" or "on"`},
 		"compact case":           {`{"profile_message":{"compact":"ON"}}`, `compact must be "off" or "on"`},
+		"compact after negative": {`{"profile_message":{"compact_after":-1}}`, "compact_after must be a safe integer between 0"},
+		"compact after text":     {`{"profile_message":{"compact_after":"5"}}`, "compact_after must be a safe integer between 0"},
+		"compact after huge":     {`{"profile_message":{"compact_after":9007199254740992}}`, "compact_after must be a safe integer between 0"},
 		"queue cap negative":     {`{"profile_message":{"max_queued_per_profile":-1}}`, "max_queued_per_profile"},
 		"queue cap huge":         {`{"profile_message":{"max_queued_per_profile":257}}`, "max_queued_per_profile"},
 		"queue cap text":         {`{"profile_message":{"max_queued_per_profile":"4"}}`, "max_queued_per_profile"},
@@ -124,5 +129,43 @@ func TestLoadSessionConfigProfileMessage(t *testing.T) {
 	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{"deny_profiles": []any{"a", "a"}}}})
 	if _, err = LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "tools.native.profile_message.deny_profiles") {
 		t.Fatalf("duplicate deny_profiles error = %v", err)
+	}
+}
+
+// compact_after is config only: setting.schema.json must describe it as the loader reads it.
+func TestProfileMessageCompactAfterSchemaMatchesTheLoader(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Tools struct {
+				Properties struct {
+					Native struct {
+						Properties struct {
+							ProfileMessage struct {
+								Properties map[string]struct {
+									Type    json.RawMessage `json:"type"`
+									Default json.RawMessage `json:"default"`
+									Minimum *int64          `json:"minimum"`
+									Maximum *int64          `json:"maximum"`
+								} `json:"properties"`
+							} `json:"profile_message"`
+						} `json:"properties"`
+					} `json:"native"`
+				} `json:"properties"`
+			} `json:"tools"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	field, ok := schema.Properties.Tools.Properties.Native.Properties.ProfileMessage.Properties["compact_after"]
+	if !ok {
+		t.Fatal("setting.schema.json has no tools.native.profile_message.compact_after")
+	}
+	if string(field.Type) != `"integer"` || string(field.Default) != "0" || field.Minimum == nil || *field.Minimum != 0 || field.Maximum == nil || *field.Maximum != maxSafeInteger {
+		t.Fatalf("schema compact_after = %+v, want integer, default 0, minimum 0, maximum %d", field, maxSafeInteger)
 	}
 }

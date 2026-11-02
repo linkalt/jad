@@ -857,8 +857,12 @@ func countCompactions(f *layoutFixture) *[]string {
 
 func TestProfileMessageCompactsOncePerCallerRunAndTarget(t *testing.T) {
 	f := newLayoutFixture(t)
+	f.usage = compactUsageJSON
 	calls := countCompactions(f)
 	messenger := profileMessenger{resolver: f.service.resolver}
+	if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
+		t.Fatal(err)
+	}
 	send := func(run uint64, target string, compact bool) {
 		t.Helper()
 		if _, err := messenger.Message(callerRunContext(t, f, run), profileMessageOwner, target, "hi", 0, compact); err != nil {
@@ -882,10 +886,18 @@ func TestProfileMessageCompactsOncePerCallerRunAndTarget(t *testing.T) {
 
 func TestProfileMessageCompactsEachTargetOnce(t *testing.T) {
 	f := newLayoutFixture(t)
+	f.usage = compactUsageJSON
 	calls := countCompactions(f)
 	messenger := profileMessenger{resolver: f.service.resolver}
 	reviewerCaller := context.WithValue(context.Background(), callerMessagesPathKey{}, boundRunnerOf(t, f, "review/reviewer").config.MessagesPath)
 	reviewerCaller = context.WithValue(reviewerCaller, callerRunKey{}, uint64(1001))
+	// Seed a completed response in each target, so both have usage to compact on.
+	if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := messenger.Message(reviewerCaller, "local:demo\x00review/reviewer", "dev/coder", "seed", 0, false); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "hi", 0, true); err != nil {
 			t.Fatal(err)
@@ -921,6 +933,7 @@ func TestCallerRunTargetsForgetDropsTheEntry(t *testing.T) {
 
 func TestProfileMessageRealCompactionRunsBeforeTheTargetRun(t *testing.T) {
 	f := newLayoutFixture(t)
+	f.usage = compactUsageJSON
 	f.captureBodies = true
 	messenger := profileMessenger{resolver: f.service.resolver}
 	for _, text := range []string{"alpha question", "beta question"} {
@@ -941,7 +954,15 @@ func TestProfileMessageRealCompactionRunsBeforeTheTargetRun(t *testing.T) {
 
 func TestProfileMessageCompactionHoldsTheTargetAgainstAUserSend(t *testing.T) {
 	f := newLayoutFixture(t)
+	f.usage = compactUsageJSON
 	f.captureBodies = true
+	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	// The seed's own request is not part of the compaction window the test checks.
+	f.mu.Lock()
+	f.bodies = nil
+	f.mu.Unlock()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var compactions atomic.Int32
 	f.service.resolver.compactProfile = func(context.Context, string, string) error {

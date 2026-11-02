@@ -15,6 +15,11 @@ func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message
 	if queueWait > 0 {
 		request.MaxQueued = 1
 	}
+	return m.send(ctx, request)
+}
+
+// send is Message for a request the caller built, so a test can set fields Message does not take.
+func (m profileMessenger) send(ctx context.Context, request native.ProfileMessageRequest) (string, error) {
 	plan, err := m.Prepare(ctx, request)
 	if err != nil {
 		return "", err

@@ -233,6 +233,20 @@ func TestProfileMessageToolIsNotReadOnlyAndListsProfiles(t *testing.T) {
 	}
 }
 
+// compact_after is config only: the model never sees it, so neither schema may carry it.
+func TestProfileMessageModelSchemaHasNoCompactAfter(t *testing.T) {
+	if strings.Contains(string(profileMessageInputSchema), "compact_after") {
+		t.Fatal("the in-code profile_message schema exposes compact_after to the model")
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "compact_after") {
+		t.Fatal("sample/tools/native/profile_message.json exposes compact_after to the model")
+	}
+}
+
 func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testing.T) {
 	manifest := filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")
 	data, err := os.ReadFile(manifest)
