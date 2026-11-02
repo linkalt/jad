@@ -295,6 +295,9 @@ type activeRun struct {
 	// liveImages holds the decoded inline images of the run's tool results by call id,
 	// served by the live image route. Guarded by mu.
 	liveImages map[string][]SessionImage
+
+	// onEnd is a profile run's OnEnd hook, taken once by callOnEnd. Guarded by mu.
+	onEnd func(*ProfileRun)
 }
 
 type runRegistry struct {

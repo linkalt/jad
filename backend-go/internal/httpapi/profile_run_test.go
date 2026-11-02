@@ -362,3 +362,102 @@ func TestStartProfileRunPanicBeforeLaunchFailsTheRunAndReleasesTheTranscript(t *
 	}
 	release()
 }
+
+// onEndRecorder records each OnEnd call. Its hook calls Status and checks the transcript lock
+// is free, so a hook that runs under that lock, or that deadlocks on the run's mutex, fails.
+type onEndRecorder struct {
+	t     *testing.T
+	f     *profileRunFixture
+	calls chan string
+}
+
+func newOnEndRecorder(t *testing.T, f *profileRunFixture) *onEndRecorder {
+	return &onEndRecorder{t: t, f: f, calls: make(chan string, 8)}
+}
+
+func (r *onEndRecorder) hook(run *ProfileRun) {
+	status := run.Status()
+	release, err := r.f.resolver.TryLockSession(context.Background(), "canonical", "dev", "")
+	if err != nil {
+		r.t.Errorf("the transcript was held inside OnEnd: %v", err)
+	} else {
+		release()
+	}
+	r.calls <- status
+}
+
+// awaitOnEnd waits for one hook call and fails if a second call arrives shortly after.
+func (r *onEndRecorder) awaitOnEnd(t *testing.T, want string) {
+	t.Helper()
+	select {
+	case got := <-r.calls:
+		if got != want {
+			t.Fatalf("OnEnd saw status %q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnEnd did not run")
+	}
+	select {
+	case got := <-r.calls:
+		t.Fatalf("OnEnd ran twice; second status %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestProfileRunOnEndFiresOnceAfterCompletion(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	recorder := newOnEndRecorder(t, f)
+	run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-f.started
+	close(f.release)
+	awaitProfileRunDone(t, run)
+	recorder.awaitOnEnd(t, "completed")
+}
+
+func TestProfileRunOnEndFiresOnceAfterFailure(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	recorder := newOnEndRecorder(t, f)
+	failing := runnerFunc(func(context.Context, json.RawMessage, session.RunOptions) (session.RunResult, error) {
+		return session.RunResult{}, errors.New("provider down")
+	})
+	f.resolver.fakeResolver.resolved.Runner = failing
+	run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook})
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitProfileRunDone(t, run)
+	recorder.awaitOnEnd(t, "failed")
+}
+
+func TestProfileRunOnEndFiresOnceAfterAbort(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	recorder := newOnEndRecorder(t, f)
+	run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-f.started
+	run.Stop()
+	awaitProfileRunDone(t, run)
+	recorder.awaitOnEnd(t, "aborted")
+}
+
+func TestProfileRunOnEndFiresOnceWhenTheStartFails(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	recorder := newOnEndRecorder(t, f)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the BeforeRun panic did not propagate")
+			}
+		}()
+		_, _ = f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{
+			Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook,
+			BeforeRun: func(context.Context) { panic("before run failed") },
+		})
+	}()
+	recorder.awaitOnEnd(t, "failed")
+}

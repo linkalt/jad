@@ -33,6 +33,8 @@ type ProfileRunRequest struct {
 	// BeforeRun, when set, runs once the transcript is held and the run is registered,
 	// before the target run begins, so nothing can take the transcript in between.
 	BeforeRun func(ctx context.Context)
+	// OnEnd runs once the run has ended and the transcript is released, also when the start fails.
+	OnEnd func(*ProfileRun)
 }
 
 // ProfileRunStarter starts a run of a profile for a tool, the way a user's message
@@ -110,18 +112,20 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 		return nil, err
 	}
 	run := started.run
+	handle := &ProfileRun{run: run}
 	launched := false
 	defer func() {
 		if !launched {
 			run.finish("failed", failureEvents("The run failed before it started."))
 			started.processUnlock()
+			run.callOnEnd(handle)
 		}
 	}()
-	handle := &ProfileRun{run: run}
 	run.mu.Lock()
 	run.supportsInteraction = true
 	run.chain = append([]string(nil), request.Chain...)
 	run.hops = request.Hops
+	run.onEnd = request.OnEnd
 	run.mu.Unlock()
 	if request.BeforeRun != nil {
 		request.BeforeRun(ctx)
@@ -131,6 +135,8 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	h.attachContentCache(run)
 	launched = true
 	go func() {
+		// Deferred calls run last in, first out: the transcript lock is released before OnEnd runs.
+		defer run.callOnEnd(handle)
 		defer started.processUnlock()
 		h.executeRun(run, started.resolved.Runner, input)
 	}()
@@ -153,6 +159,21 @@ func (s profileRunStarter) RunningProfileRunChain(reference, profile string) ([]
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	return append([]string(nil), run.chain...), true
+}
+
+// callOnEnd runs the run's OnEnd hook once the run has ended. Each caller runs it after it has
+// released the transcript lock, so the hook never runs under that lock. The hook is taken, so
+// it runs at most once.
+func (r *activeRun) callOnEnd(handle *ProfileRun) {
+	r.mu.Lock()
+	if r.status == "running" || r.onEnd == nil {
+		r.mu.Unlock()
+		return
+	}
+	onEnd := r.onEnd
+	r.onEnd = nil
+	r.mu.Unlock()
+	onEnd(handle)
 }
 
 // acquireProfileRun queues for the transcript like a user message, for at most WaitLimit
