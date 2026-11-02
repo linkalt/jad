@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,5 +82,29 @@ func TestProfileMessageMissingTargetTranscriptDoesNotCompactOrFailTheMessage(t *
 	defer f.mu.Unlock()
 	if len(*calls) != 0 || len(f.bodies) != 1 {
 		t.Fatalf("compactions %v, provider bodies %d", *calls, len(f.bodies))
+	}
+}
+
+func TestProfileMessageUsageReadErrorSkipsCompactionAndSendsTheMessage(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.captureBodies = true
+	var logs lockedBuffer
+	f.service.resolver.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.service.resolver.profileUsage = func(context.Context, string, string) (*int64, error) {
+		return nil, errors.New("usage unreadable")
+	}
+	calls := countCompactions(f)
+	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true}
+	answer, err := profileMessenger{resolver: f.service.resolver}.send(callerRunContext(t, f, 1), request)
+	if err != nil || !strings.Contains(answer, "ok") {
+		t.Fatalf("answer %q, error %v; want the message sent", answer, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(*calls) != 0 || len(f.bodies) != 1 || !strings.Contains(f.bodies[0], "hi") {
+		t.Fatalf("compactions %v, provider bodies %d", *calls, len(f.bodies))
+	}
+	if !strings.Contains(logs.String(), "profile_message usage read failed; not compacting") {
+		t.Fatalf("read error not logged: %s", logs.String())
 	}
 }

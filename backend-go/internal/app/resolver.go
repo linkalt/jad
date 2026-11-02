@@ -60,11 +60,13 @@ type Resolver struct {
 	callerRunSeq  atomic.Uint64
 	// compactProfile replaces compactTarget in tests.
 	compactProfile func(ctx context.Context, reference, profile string) error
-	logger         *slog.Logger
-	skipped        skippedSessions
-	roots          []sessionfs.Root
-	environment    map[string]string
-	catalog        CatalogConfig
+	// profileUsage replaces profileMessenger.ProfileInfo in tests.
+	profileUsage func(ctx context.Context, session, profile string) (*int64, error)
+	logger       *slog.Logger
+	skipped      skippedSessions
+	roots        []sessionfs.Root
+	environment  map[string]string
+	catalog      CatalogConfig
 
 	mu                sync.Mutex
 	settingsMu        sync.Mutex
