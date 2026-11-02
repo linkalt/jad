@@ -57,10 +57,9 @@ func runToolBatch[Call, Output any](
 // onFinished as soon as it settles, so a client sees every result when it
 // exists instead of waiting for the slowest call of the batch.
 //
-// A leaf call (leaf reports true) runs on its own goroutine and holds one token of
-// the process-wide leaf budget from the moment its goroutine starts until it
-// settles. A call that is not a leaf runs on the goroutine that runs the batch, with
-// no token and no goroutine of its own.
+// Every call runs on its own goroutine. A leaf call (leaf reports true) also holds
+// one token of the process-wide leaf budget from the moment its goroutine starts
+// until it settles. A call that is not a leaf holds no token while it waits.
 //
 // Deadlock argument: a token holder is a leaf, and a leaf never calls
 // runToolBatch, so it waits on nothing that needs a token. Every call that holds a
