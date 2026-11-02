@@ -218,6 +218,7 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 				run.lastText.Store(text)
 			}
 		},
+		OnEnd: run.ended,
 	})
 	if errors.Is(err, httpapi.ErrSessionBusy) {
 		return nil, remoteapi.ErrBusy
@@ -225,12 +226,11 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 	if err != nil {
 		return nil, err
 	}
-	run.started = started
 	timeout := b.runTimeout
 	if timeout <= 0 {
 		timeout = time.Hour
 	}
-	go run.watch(timeout)
+	run.arm(started, timeout)
 	return run, nil
 }
 
@@ -240,10 +240,12 @@ type remoteMessageRun struct {
 	lastText atomic.Value
 	done     chan struct{}
 
-	mu     sync.Mutex
-	reason string
-	timed  bool
-	result remoteapi.RunResult
+	mu       sync.Mutex
+	reason   string
+	timed    bool
+	finished bool
+	timer    *time.Timer
+	result   remoteapi.RunResult
 }
 
 func (r *remoteMessageRun) Done() <-chan struct{} { return r.done }
@@ -263,27 +265,47 @@ func (r *remoteMessageRun) Stop(reason string) {
 	r.started.Stop()
 }
 
-func (r *remoteMessageRun) watch(timeout time.Duration) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-r.started.Done():
-	case <-timer.C:
-		r.mu.Lock()
-		r.timed = true
-		r.mu.Unlock()
-		r.started.Stop()
-		<-r.started.Done()
-	}
-	partial, _ := r.lastText.Load().(string)
+// arm starts the run's timeout. It runs after StartProfileRun returns, so a run that ends first
+// is already finished here and needs no timer.
+func (r *remoteMessageRun) arm(started *httpapi.ProfileRun, timeout time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	result := remoteapi.RunResult{Reason: r.reason}
+	r.started = started
+	if !r.finished {
+		r.timer = time.AfterFunc(timeout, r.expire)
+	}
+}
+
+// expire is the timeout. It is a no-op once the run has ended: the timer is stopped on end, and
+// the finished flag covers a callback that already started.
+func (r *remoteMessageRun) expire() {
+	r.mu.Lock()
+	if r.finished {
+		r.mu.Unlock()
+		return
+	}
+	r.timed = true
+	r.mu.Unlock()
+	r.started.Stop()
+}
+
+// ended is the run's OnEnd hook. httpapi calls it after the run has ended and its transcript lock
+// is released, once. It computes the result and closes done.
+func (r *remoteMessageRun) ended(started *httpapi.ProfileRun) {
+	r.mu.Lock()
+	r.finished = true
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	timed, reason := r.timed, r.reason
+	r.mu.Unlock()
+	partial, _ := r.lastText.Load().(string)
+	result := remoteapi.RunResult{Reason: reason}
 	switch {
-	case r.timed:
+	case timed:
 		result.State, result.Text = "timed_out", partial
-	case r.started.Status() == "completed":
-		answer := native.SubagentAnswerText(r.started.Final())
+	case started.Status() == "completed":
+		answer := native.SubagentAnswerText(started.Final())
 		if strings.TrimSpace(answer) == "" {
 			answer = partial
 		}
@@ -291,15 +313,17 @@ func (r *remoteMessageRun) watch(timeout time.Duration) {
 		if strings.TrimSpace(answer) == "" {
 			result.State, result.Code, result.Message = "failed", "profile_no_answer", "the profile finished without an answer"
 		}
-	case r.started.Status() == "aborted":
+	case started.Status() == "aborted":
 		result.State, result.Text = "stopped", partial
 		if result.Reason == "" {
 			result.Reason = "target_stopped"
 		}
 	default:
-		result.State, result.Text, result.Code, result.Message = "failed", partial, "profile_failed", r.started.Failure()
+		result.State, result.Text, result.Code, result.Message = "failed", partial, "profile_failed", started.Failure()
 	}
+	r.mu.Lock()
 	r.result = result
+	r.mu.Unlock()
 	close(r.done)
 }
 
