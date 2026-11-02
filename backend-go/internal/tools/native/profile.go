@@ -22,7 +22,7 @@ const profileToolID = "native.profile"
 var profileInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "path":{"type":"string","minLength":1,"description":"What to act on. Omit it for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."},
+    "path":{"type":"string","minLength":1,"description":"What to act on. Omit it, or give self, for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."},
     "action":{"type":"string","enum":["list","info","compact","reset"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile. reset is refused while a run of the profile is active; compact waits for a live run to end."},
     "filters":{"type":"array","items":{"type":"string"},"description":"Only profiles whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. Only with action list."},
     "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration. Only with action list."},
@@ -133,6 +133,14 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 		limit = int(min(value, t.settings.MaxEntries))
 	}
 	cursor := stringArgument(arguments, "cursor")
+	callerSession, callerProfile, hasCaller := strings.Cut(execution.SessionKey, "\x00")
+	if path == "self" {
+		// self is the caller's own profile; it is mapped after the list gate, so list refuses it above.
+		if !hasCaller {
+			return t.fail(execution, tools.StatusForbidden, "profile_caller_unknown", "The caller's own profile is not known here: self needs a session")
+		}
+		path = ""
+	}
 	session, profile, ok := parseProfilePath(path)
 	if action == "list" && strings.HasPrefix(path, "session:") {
 		session, profile, ok = strings.TrimPrefix(path, "session:"), "", true
@@ -140,7 +148,6 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	if !ok {
 		return t.fail(execution, tools.StatusInvalidInput, "invalid_path", "path is not a form this tool accepts", tools.Information{Key: "valid", Value: "profile:<category>/<name>, profile:<session>/<category>/<name>"})
 	}
-	callerSession, callerProfile, _ := strings.Cut(execution.SessionKey, "\x00")
 	if profile == "" {
 		profile = callerProfile
 	}

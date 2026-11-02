@@ -85,6 +85,87 @@ func TestProfileSelfTargetIsRefusedAndTellsTheCaller(t *testing.T) {
 	}
 }
 
+// self is the caller's own profile, read from the session key: the same profile as no path.
+func TestProfileSelfInfoReadsTheCallerProfile(t *testing.T) {
+	tokens := int64(7)
+	actions := &fakeProfileActions{tokens: &tokens}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	out := callTranscripts(t, tool, `{"action":"info","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller})
+	if !strings.Contains(out, "context tokens: 7") || strings.Join(actions.calls, " | ") != "info demo dev/coder" {
+		t.Fatalf("info of self = %s, calls %v", out, actions.calls)
+	}
+}
+
+func TestProfileSelfCompactAndResetAreProfileSelf(t *testing.T) {
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	for _, action := range []string{"compact", "reset"} {
+		out := callTranscripts(t, tool, `{"action":"`+action+`","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller})
+		if !strings.Contains(out, "profile_self") {
+			t.Fatalf("%s of self = %s", action, out)
+		}
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a self action reached the port: %v", actions.calls)
+	}
+}
+
+func TestProfileSubAgentSelfFollowsAllowChildren(t *testing.T) {
+	tokens := int64(7)
+	actions := &fakeProfileActions{tokens: &tokens}
+	out := callTranscripts(t, newProfileActionsTool(t, profileTestSettings(), actions), `{"action":"info","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1})
+	if !strings.Contains(out, "context tokens: 7") || strings.Join(actions.calls, " | ") != "info demo dev/coder" {
+		t.Fatalf("sub-agent info of self with allow_children on = %s, calls %v", out, actions.calls)
+	}
+	out = callTranscripts(t, newProfileActionsTool(t, profileTestSettings(), actions), `{"action":"compact","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1})
+	if !strings.Contains(out, "profile_children_denied") || len(actions.calls) != 1 {
+		t.Fatalf("sub-agent compact of self = %s, calls %v", out, actions.calls)
+	}
+	settings := profileTestSettings()
+	settings.AllowChildren = false
+	actions = &fakeProfileActions{tokens: &tokens}
+	out = callTranscripts(t, newProfileActionsTool(t, settings, actions), `{"action":"info","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1})
+	if !strings.Contains(out, "profile_children_denied") || len(actions.calls) != 0 {
+		t.Fatalf("sub-agent info of self with allow_children off = %s, calls %v", out, actions.calls)
+	}
+}
+
+func TestProfileSelfNeedsNoOtherSessionOrProfileSwitch(t *testing.T) {
+	tokens := int64(7)
+	actions := &fakeProfileActions{tokens: &tokens}
+	settings := profileTestSettings()
+	settings.AllowOtherSessions = false
+	settings.AllowOtherProfiles = false
+	out := callTranscripts(t, newProfileActionsTool(t, settings, actions), `{"action":"info","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller})
+	if !strings.Contains(out, "context tokens: 7") || strings.Join(actions.calls, " | ") != "info demo dev/coder" {
+		t.Fatalf("info of self with the other switches off = %s, calls %v", out, actions.calls)
+	}
+}
+
+// Without a caller there is no own profile to act on, so self is refused before the port.
+func TestProfileSelfWithoutACallerIsRefusedBeforeThePort(t *testing.T) {
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	for _, key := range []string{"", "demo"} {
+		for _, arguments := range []string{`{"action":"info","path":"self"}`, `{"action":"compact","path":"self"}`, `{"action":"reset","path":"self"}`} {
+			out := callTranscripts(t, tool, arguments, tools.ExecutionContext{SessionKey: key})
+			if !strings.Contains(out, "profile_caller_unknown") {
+				t.Fatalf("self with session key %q: %s = %s", key, arguments, out)
+			}
+		}
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a self action without a caller reached the port: %v", actions.calls)
+	}
+}
+
+func TestProfileListOfSelfIsInvalidPath(t *testing.T) {
+	out := callTranscripts(t, newProfileActionsTool(t, profileTestSettings(), &fakeProfileActions{}), `{"action":"list","path":"self"}`, tools.ExecutionContext{SessionKey: listCaller})
+	if !strings.Contains(out, "invalid_path") || strings.Contains(out, "profiles of session") {
+		t.Fatalf("list of self = %s", out)
+	}
+}
+
 func TestProfileResetWhileActiveIsReportedNotHidden(t *testing.T) {
 	actions := &fakeProfileActions{failErr: errors.New("cannot reset a profile while a run is active")}
 	tool := newProfileActionsTool(t, profileTestSettings(), actions)
