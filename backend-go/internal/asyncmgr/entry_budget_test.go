@@ -13,10 +13,11 @@ func TestWorstCaseEntryWithBothResumeFieldsFitsWaitAndStatus(t *testing.T) {
 		c.ResponseMaxBytes = 512 + EntryOverheadBytes
 	})
 	budget := int(f.m.cfg.ResponseMaxBytes) - envelopeBytes
+	summary := strings.Repeat("s", 64)
 	f.start(t, "s1", "a")
 	f.finish(t, "a", Result{
 		Code: strings.Repeat("c", codeMaxBytes), Reason: strings.Repeat("r", reasonMaxBytes),
-		Summary: strings.Repeat("s", 512), Ref: strings.Repeat("f", refMaxBytes),
+		Summary: summary, Ref: strings.Repeat("f", refMaxBytes),
 		ResumedFrom: strings.Repeat("p", refMaxBytes), ConfigNote: strings.Repeat("n", ConfigNoteMaxBytes),
 	})
 
@@ -31,8 +32,8 @@ func TestWorstCaseEntryWithBothResumeFieldsFitsWaitAndStatus(t *testing.T) {
 	if size := encodedSize(wait.Signals[0]); size > budget {
 		t.Fatalf("wait entry = %d bytes, want at most %d", size, budget)
 	}
-	if e := wait.Signals[0]; e.ConfigNote != "" || e.ResumedFrom != "" || !e.Cut {
-		t.Fatalf("wait entry kept config_note=%d resumed_from=%d cut=%v; want both dropped and cut", len(e.ConfigNote), len(e.ResumedFrom), e.Cut)
+	if e := wait.Signals[0]; e.ConfigNote != "" || e.ResumedFrom != "" || e.Summary != summary || !e.Cut {
+		t.Fatalf("wait entry kept config_note=%d resumed_from=%d summary=%d cut=%v; want both dropped, summary whole, cut", len(e.ConfigNote), len(e.ResumedFrom), len(e.Summary), e.Cut)
 	}
 }
 
