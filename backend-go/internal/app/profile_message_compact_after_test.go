@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"jad/backend-go/internal/tools/native"
@@ -62,5 +63,21 @@ func TestProfileMessageCompactAfterIsStrictlyGreater(t *testing.T) {
 func TestProfileMessageCompactOnWithoutUsageDoesNotCompact(t *testing.T) {
 	if compactAfterTarget(t, nil, true, 0) {
 		t.Fatal("compacted a target with no completed response")
+	}
+}
+
+func TestProfileMessageMissingTargetTranscriptDoesNotCompactOrFailTheMessage(t *testing.T) {
+	f := newLayoutFixture(t)
+	f.captureBodies = true
+	calls := countCompactions(f)
+	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true}
+	answer, err := profileMessenger{resolver: f.service.resolver}.send(callerRunContext(t, f, 1), request)
+	if err != nil || !strings.Contains(answer, "ok") {
+		t.Fatalf("answer %q, error %v; want the message sent", answer, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(*calls) != 0 || len(f.bodies) != 1 {
+		t.Fatalf("compactions %v, provider bodies %d", *calls, len(f.bodies))
 	}
 }
