@@ -89,3 +89,16 @@ func requireTargetReadTheNotes(t *testing.T, f *layoutFixture) {
 	}
 	t.Fatal("the target's read of notes.txt never reached the target: its leaf did not run")
 }
+
+// TestDeadlockProfileMessageHandledFinishesWithBudgetOne: the parent's async tool is enabled, so
+// the message is a handle and the target runs in the background with the budget at one.
+// The parent's call takes no token that the target needs: with block_ms 0 it returns the handle
+// at once, and the target's read is the only leaf that waits for the budget. Setting LeafBudget
+// on profile_message therefore does not deadlock this path, so this test is a completion check
+// only; the structural guard in internal/tools/native is what keeps the wrapper off the budget.
+func TestDeadlockProfileMessageHandledFinishesWithBudgetOne(t *testing.T) {
+	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"read":{},"async":{}},"mcp":{}}`)
+	targetReadsThenAnswers(f, map[string]any{"profile": "review/reviewer", "message": "first", "block_ms": 0})
+	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "handle")
+	requireTargetReadTheNotes(t, f)
+}
