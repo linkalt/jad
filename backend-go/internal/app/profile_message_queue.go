@@ -313,6 +313,8 @@ type profileMessageRun struct {
 	finished     bool
 	outcome      native.ProfileMessageOutcome
 	queueTimer   *time.Timer
+	// stopWatch unregisters the callback that reacts to the context ending while the message waits.
+	stopWatch func() bool
 }
 
 func newProfileMessageRun(plan *profileMessagePlan) *profileMessageRun {
@@ -336,12 +338,12 @@ func (r *profileMessageRun) discard() {
 // beginQueued starts the watchers of a message that waits: the queue wait limit and the
 // goroutine that reacts to a stop or the timeout.
 func (r *profileMessageRun) beginQueued() {
+	r.mu.Lock()
 	if r.plan.queueWait > 0 {
-		r.mu.Lock()
 		r.queueTimer = time.AfterFunc(r.plan.queueWait, r.expireQueue)
-		r.mu.Unlock()
 	}
-	go r.watch()
+	r.stopWatch = context.AfterFunc(r.ctx, r.onCtxDone)
+	r.mu.Unlock()
 }
 
 // BeginWait records that one more call is blocked on this message until the returned
@@ -396,13 +398,9 @@ func (r *profileMessageRun) Stop(reason string) {
 	r.cancel()
 }
 
-// watch reacts to a stop or the timeout while the message has not finished.
-func (r *profileMessageRun) watch() {
-	select {
-	case <-r.doneC:
-		return
-	case <-r.ctx.Done():
-	}
+// onCtxDone reacts to a stop or the timeout while the message waits for its target. Once the
+// message is attached, attach watches the run instead.
+func (r *profileMessageRun) onCtxDone() {
 	select {
 	case <-r.doneC:
 		return
@@ -494,15 +492,8 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 	if r.ctx.Err() != nil {
 		run.Stop()
 	}
-	if r.queued {
-		go func() {
-			<-run.Done()
-			r.finish(r.conclude(run))
-		}()
-		return
-	}
-	// A non-queued message has no watch goroutine of its own: this one stops the target run
-	// when the message's context ends, as watch does, and records the outcome once it has ended.
+	// This goroutine is the message's one watch once it is attached: it stops the target run
+	// when the message's context ends, and records the outcome once the run has ended.
 	go func() {
 		select {
 		case <-run.Done():
@@ -555,8 +546,12 @@ func (r *profileMessageRun) finish(outcome native.ProfileMessageOutcome) {
 	if r.queueTimer != nil {
 		r.queueTimer.Stop()
 	}
+	stopWatch := r.stopWatch
 	r.mu.Unlock()
 	close(r.doneC)
+	if stopWatch != nil {
+		stopWatch()
+	}
 	r.startCancel()
 	r.cancel()
 }
