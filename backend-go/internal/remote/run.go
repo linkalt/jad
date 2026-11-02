@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	"jad/backend-go/internal/asyncmgr"
 )
 
 const (
@@ -51,7 +53,7 @@ func (v *View) clean() {
 	v.Message = safeText(v.Message, 1024)
 	v.Reason = safeText(v.Reason, 128)
 	v.ResumedFrom = safeText(v.ResumedFrom, 64)
-	v.ConfigNote = safeText(v.ConfigNote, 1024)
+	v.ConfigNote = safeText(v.ConfigNote, asyncmgr.ConfigNoteMaxBytes)
 }
 
 // Terminal reports whether the run has ended.

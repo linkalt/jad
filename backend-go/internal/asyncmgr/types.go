@@ -50,10 +50,11 @@ const (
 	refMaxBytes    = 512
 	codeMaxBytes   = 64
 	reasonMaxBytes = 128
-	// configNoteMaxBytes matches the remote view bound of a config note (remote/run.go).
-	configNoteMaxBytes = 1024
-	recordVersion      = 1
+	recordVersion  = 1
 )
+
+// ConfigNoteMaxBytes bounds a config note from a resumed remote run; remote views use it too.
+const ConfigNoteMaxBytes = 1024
 
 var (
 	ErrUnknownHandle = errors.New("unknown_handle")

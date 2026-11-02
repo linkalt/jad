@@ -40,9 +40,16 @@ func encodedSize(v any) int {
 	return len(data)
 }
 
-// fitEntry shortens only the summary of an entry that alone exceeds budget, never the
-// id and state fields. A summary that cannot be made to fit is dropped.
+// fitEntry makes an entry that alone exceeds budget fit it. The resume fields go first, the
+// config note before the resumed_from reference, since they are informational; then only the
+// summary shrinks, never the id and state fields. A summary that cannot be made to fit is dropped.
 func fitEntry(e Entry, budget int) Entry {
+	if encodedSize(e) > budget {
+		e.ConfigNote = ""
+	}
+	if encodedSize(e) > budget {
+		e.ResumedFrom = ""
+	}
 	for encodedSize(e) > budget && e.Summary != "" {
 		excess := encodedSize(e) - budget
 		keep := len(e.Summary) - excess - 1
