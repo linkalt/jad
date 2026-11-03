@@ -352,7 +352,8 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 		if !isJSONObject(item) {
 			return nil, fmt.Errorf("history item %d must be a JSON object", index)
 		}
-		input = append(input, cloneRaw(item))
+		// Not copied: json.Marshal below only reads the item.
+		input = append(input, item)
 	}
 	if err := appendBlocks(len(history)); err != nil {
 		return nil, err
@@ -386,11 +387,47 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 		requestFields["tools"] = encodedTools
 	}
 
-	request, err := json.Marshal(requestFields)
+	request, err := encodeRequestFields(requestFields, "input")
 	if err != nil {
 		return nil, fmt.Errorf("serialize Responses request: %w", err)
 	}
 	return request, nil
+}
+
+// encodeRequestFields writes fields as json.Marshal writes a map[string]json.RawMessage
+// (keys sorted, every value compacted with HTML escaping), except the value of encoded, which
+// json.Marshal already produced and so is written as is: compacting it again would only
+// re-scan the whole history to produce the same bytes.
+func encodeRequestFields(fields map[string]json.RawMessage, encoded string) ([]byte, error) {
+	keys := make([]string, 0, len(fields))
+	size := 2
+	for key, value := range fields {
+		keys = append(keys, key)
+		size += len(key) + len(value) + 4
+	}
+	sort.Strings(keys)
+	out := bytes.NewBuffer(make([]byte, 0, size))
+	out.WriteByte('{')
+	for index, key := range keys {
+		if index > 0 {
+			out.WriteByte(',')
+		}
+		name, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		out.Write(name)
+		out.WriteByte(':')
+		value := fields[key]
+		if key != encoded {
+			if value, err = json.Marshal(value); err != nil {
+				return nil, err
+			}
+		}
+		out.Write(value)
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
 }
 
 // Run appends user input, rebuilds history from messages.jsonl, and streams
