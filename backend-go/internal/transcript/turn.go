@@ -73,8 +73,8 @@ type TurnManifest struct {
 	CanonicalLineSHA256 string `json:"canonical_line_sha256,omitempty"`
 }
 
-// CommitResult reports the committed line hash and whether it was already in
-// the transcript.
+// CommitResult reports the committed line hash and whether the transcript
+// already ended with that line, so nothing was appended.
 type CommitResult struct {
 	LineHash       string `json:"line_hash"`
 	Bytes          int64  `json:"bytes"`
@@ -327,7 +327,9 @@ func (t *ResponseTurn) PartialContentPath() string {
 }
 
 // Commit validates the terminal event and staged indexes, writes a canonical
-// response.completed line, then appends it idempotently to messages.jsonl.
+// response.completed line, then appends it to messages.jsonl unless the
+// transcript already ends with the same line (an identical response committed
+// just before). Recovery checks the whole file instead; see duplicateCheck.
 func (t *ResponseTurn) Commit(event []byte) (CommitResult, error) {
 	return t.CommitWithObserver(event, nil)
 }
@@ -393,7 +395,7 @@ func (t *ResponseTurn) CommitWithObserver(event []byte, observer func(CommitResu
 		return CommitResult{}, fmt.Errorf("persist canonical line hash: %w", err)
 	}
 
-	inserted, err := t.store.journal.appendFileIfAbsent(finalPath)
+	inserted, err := t.store.journal.appendFileUnlessLast(finalPath)
 	if err != nil {
 		return CommitResult{}, fmt.Errorf("append response line: %w", err)
 	}

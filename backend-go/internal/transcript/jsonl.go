@@ -37,9 +37,6 @@ type Journal struct {
 	// reset, front compaction). Readers that cache parsed content use it to
 	// drop that cache; it is only read and written while mu is held.
 	generation uint64
-	// index remembers the line hashes of the transcript for idempotent appends;
-	// guarded by mu.
-	index *lineIndex
 	// dirSyncHook replaces syncDirectory in tests.
 	dirSyncHook func(path string) error
 	// appendWriteHook replaces the batch write of AppendAt in tests.
@@ -579,7 +576,35 @@ func (j *Journal) containsHashText(hashText string) (bool, error) {
 	return containsLineHash(file, target)
 }
 
-func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result error) {
+// duplicateCheck says where appendRenderedLine looks for a copy of the line that is
+// already in the transcript. Neither check keeps anything in memory after the call.
+type duplicateCheck int
+
+const (
+	// duplicateAtEnd skips the append when the transcript already ends with the line. A
+	// live commit appends once per turn (the turn leaves "streaming" before the append and
+	// cannot commit again), so the only copy it can meet is an identical response committed
+	// just before it. It reads the line's own length from the end of the file.
+	duplicateAtEnd duplicateCheck = iota
+	// duplicateAnywhere skips the append when any line of the transcript is the line. It
+	// serves recovery: an append that landed before a crash may have been followed by
+	// other writes. It streams the whole file once.
+	duplicateAnywhere
+)
+
+// appendFileUnlessLast appends the rendered line at sourcePath unless the transcript
+// already ends with it; see duplicateAtEnd.
+func (j *Journal) appendFileUnlessLast(sourcePath string) (bool, error) {
+	return j.appendRenderedLine(sourcePath, duplicateAtEnd)
+}
+
+// appendFileIfAbsent appends the rendered line at sourcePath unless any line of the
+// transcript is identical; see duplicateAnywhere.
+func (j *Journal) appendFileIfAbsent(sourcePath string) (bool, error) {
+	return j.appendRenderedLine(sourcePath, duplicateAnywhere)
+}
+
+func (j *Journal) appendRenderedLine(sourcePath string, check duplicateCheck) (inserted bool, result error) {
 	if j == nil {
 		return false, errors.New("transcript journal is not initialized")
 	}
@@ -606,14 +631,17 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 	if lastByte[0] != '\n' {
 		return false, errors.New("rendered transcript line is not newline-terminated")
 	}
-	digest := sha256.New()
-	if _, err := io.CopyBuffer(digest, source, make([]byte, 64*1024)); err != nil {
-		return false, fmt.Errorf("hash rendered transcript line: %w", err)
-	}
+	buffer := make([]byte, 64*1024)
 	var targetHash [sha256.Size]byte
-	copy(targetHash[:], digest.Sum(nil))
-	if _, err := source.Seek(0, io.SeekStart); err != nil {
-		return false, fmt.Errorf("rewind rendered transcript line: %w", err)
+	if check == duplicateAnywhere {
+		digest := sha256.New()
+		if _, err := io.CopyBuffer(digest, source, buffer); err != nil {
+			return false, fmt.Errorf("hash rendered transcript line: %w", err)
+		}
+		digest.Sum(targetHash[:0])
+		if _, err := source.Seek(0, io.SeekStart); err != nil {
+			return false, fmt.Errorf("rewind rendered transcript line: %w", err)
+		}
 	}
 
 	j.mu.Lock()
@@ -630,22 +658,23 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 	if _, err := repairTrailingPartialLine(transcript); err != nil {
 		return false, fmt.Errorf("repair transcript tail: %w", err)
 	}
-	present, err := j.containsLine(transcript, targetHash)
+	transcriptInfo, err := transcript.Stat()
+	if err != nil {
+		return false, fmt.Errorf("stat transcript: %w", err)
+	}
+	var present bool
+	if check == duplicateAnywhere {
+		present, err = containsLineHash(transcript, targetHash)
+	} else {
+		present, err = endsWithLine(transcript, transcriptInfo.Size(), source, info.Size(), buffer)
+	}
 	if err != nil {
 		return false, fmt.Errorf("check transcript duplicate: %w", err)
 	}
 	if present {
 		return false, nil
 	}
-	created := false
-	if j.durability != DurabilityProcess {
-		transcriptInfo, err := transcript.Stat()
-		if err != nil {
-			return false, fmt.Errorf("stat transcript: %w", err)
-		}
-		created = transcriptInfo.Size() == 0
-	}
-	buffer := make([]byte, 64*1024)
+	created := transcriptInfo.Size() == 0
 	for {
 		readCount, readErr := source.Read(buffer)
 		if readCount > 0 {
@@ -669,6 +698,44 @@ func (j *Journal) appendFileIfAbsent(sourcePath string) (inserted bool, result e
 				return false, fmt.Errorf("sync transcript directory: %w", err)
 			}
 		}
+	}
+	return true, nil
+}
+
+// endsWithLine reports whether the transcript of size bytes ends with the length bytes of
+// source as one whole line. It compares through buffer with ReadAt, so neither file's
+// offset moves.
+func endsWithLine(transcript *os.File, size int64, source *os.File, length int64, buffer []byte) (bool, error) {
+	if length > size {
+		return false, nil
+	}
+	start := size - length
+	if start > 0 {
+		var before [1]byte
+		if _, err := transcript.ReadAt(before[:], start-1); err != nil {
+			return false, err
+		}
+		if before[0] != '\n' {
+			return false, nil
+		}
+	}
+	half := len(buffer) / 2
+	want, got := buffer[:half], buffer[half:2*half]
+	for offset := int64(0); offset < length; {
+		count := int64(half)
+		if remaining := length - offset; remaining < count {
+			count = remaining
+		}
+		if _, err := source.ReadAt(want[:count], offset); err != nil {
+			return false, err
+		}
+		if _, err := transcript.ReadAt(got[:count], start+offset); err != nil {
+			return false, err
+		}
+		if !bytes.Equal(want[:count], got[:count]) {
+			return false, nil
+		}
+		offset += count
 	}
 	return true, nil
 }

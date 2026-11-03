@@ -34,7 +34,7 @@ func readTranscript(t *testing.T, journal *Journal) string {
 	return string(data)
 }
 
-func newIndexTestJournal(t *testing.T) (*Journal, string) {
+func newAppendTestJournal(t *testing.T) (*Journal, string) {
 	t.Helper()
 	dir := t.TempDir()
 	journal, err := NewJournal(filepath.Join(dir, "messages.jsonl"), DurabilityProcess)
@@ -47,16 +47,13 @@ func newIndexTestJournal(t *testing.T) (*Journal, string) {
 const lineA = `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"A"}]}`
 const lineB = `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"B"}]}`
 
-func TestAppendFileIfAbsentUsesIndexAndStaysIdempotent(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+func TestAppendFileIfAbsentStaysIdempotent(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
 	a := renderedLine(t, dir, "a.jsonl", lineA)
 	b := renderedLine(t, dir, "b.jsonl", lineB)
 
 	if !appendRendered(t, journal, a) || !appendRendered(t, journal, b) {
 		t.Fatal("first appends must insert")
-	}
-	if journal.index == nil {
-		t.Fatal("index was not kept after the commit scan")
 	}
 	if appendRendered(t, journal, a) || appendRendered(t, journal, b) {
 		t.Fatal("repeated appends must report already present")
@@ -67,7 +64,7 @@ func TestAppendFileIfAbsentUsesIndexAndStaysIdempotent(t *testing.T) {
 }
 
 func TestAppendFileIfAbsentSeesRecordsAppendedByJournalAppend(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+	journal, dir := newAppendTestJournal(t)
 	if !appendRendered(t, journal, renderedLine(t, dir, "a.jsonl", lineA)) {
 		t.Fatal("first append must insert")
 	}
@@ -75,15 +72,15 @@ func TestAppendFileIfAbsentSeesRecordsAppendedByJournalAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if appendRendered(t, journal, renderedLine(t, dir, "b.jsonl", lineB)) {
-		t.Fatal("a line written by Append after the index was built must be found")
+		t.Fatal("a line written by Append must be found")
 	}
 	if got, want := readTranscript(t, journal), lineA+"\n"+lineB+"\n"; got != want {
 		t.Fatalf("transcript = %q, want %q", got, want)
 	}
 }
 
-func TestAppendFileIfAbsentDropsIndexWhenFileIsRewrittenThroughJournal(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+func TestAppendFileIfAbsentSeesAFileRewrittenThroughJournal(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
 	a := renderedLine(t, dir, "a.jsonl", lineA)
 	if !appendRendered(t, journal, a) {
 		t.Fatal("first append must insert")
@@ -99,8 +96,8 @@ func TestAppendFileIfAbsentDropsIndexWhenFileIsRewrittenThroughJournal(t *testin
 	}
 }
 
-func TestAppendFileIfAbsentDropsIndexAfterFrontCompaction(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+func TestAppendFileIfAbsentSeesFrontCompaction(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
 	a := renderedLine(t, dir, "a.jsonl", lineA)
 	b := renderedLine(t, dir, "b.jsonl", lineB)
 	if !appendRendered(t, journal, a) || !appendRendered(t, journal, b) {
@@ -121,7 +118,7 @@ func TestAppendFileIfAbsentDropsIndexAfterFrontCompaction(t *testing.T) {
 	}
 }
 
-func TestAppendFileIfAbsentRebuildsWhenFileIsReplacedOrShrunkOutsideJournal(t *testing.T) {
+func TestAppendFileIfAbsentSeesAFileReplacedOrShrunkOutsideJournal(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(t *testing.T, journal *Journal, dir string)
@@ -148,7 +145,7 @@ func TestAppendFileIfAbsentRebuildsWhenFileIsReplacedOrShrunkOutsideJournal(t *t
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			journal, dir := newIndexTestJournal(t)
+			journal, dir := newAppendTestJournal(t)
 			a := renderedLine(t, dir, "a.jsonl", lineA)
 			if !appendRendered(t, journal, a) {
 				t.Fatal("first append must insert")
@@ -164,8 +161,8 @@ func TestAppendFileIfAbsentRebuildsWhenFileIsReplacedOrShrunkOutsideJournal(t *t
 	}
 }
 
-func TestAppendFileIfAbsentRepairsPartialTailBeforeIndexing(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+func TestAppendFileIfAbsentRepairsPartialTailBeforeChecking(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
 	a := renderedLine(t, dir, "a.jsonl", lineA)
 	b := renderedLine(t, dir, "b.jsonl", lineB)
 	if !appendRendered(t, journal, a) {
@@ -192,8 +189,8 @@ func TestAppendFileIfAbsentRepairsPartialTailBeforeIndexing(t *testing.T) {
 	}
 }
 
-func TestAppendFileIfAbsentIndexesLinesLongerThanReaderBuffer(t *testing.T) {
-	journal, dir := newIndexTestJournal(t)
+func TestAppendFileIfAbsentFindsLinesLongerThanReaderBuffer(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
 	long := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + strings.Repeat("x", 200_000) + `"}]}`
 	path := renderedLine(t, dir, "long.jsonl", long)
 	if !appendRendered(t, journal, path) {
@@ -201,5 +198,85 @@ func TestAppendFileIfAbsentIndexesLinesLongerThanReaderBuffer(t *testing.T) {
 	}
 	if appendRendered(t, journal, path) {
 		t.Fatal("a long line must be found by its hash")
+	}
+}
+
+func appendUnlessLast(t *testing.T, journal *Journal, path string) bool {
+	t.Helper()
+	inserted, err := journal.appendFileUnlessLast(path)
+	if err != nil {
+		t.Fatalf("appendFileUnlessLast(%s): %v", path, err)
+	}
+	return inserted
+}
+
+// TestAppendFileUnlessLastSkipsOnlyAnIdenticalLastLine pins the live-commit check: it
+// compares the line with the end of the transcript only, as one whole line.
+func TestAppendFileUnlessLastSkipsOnlyAnIdenticalLastLine(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
+	a := renderedLine(t, dir, "a.jsonl", lineA)
+	b := renderedLine(t, dir, "b.jsonl", lineB)
+	if !appendUnlessLast(t, journal, a) {
+		t.Fatal("the first line of an empty transcript must be appended")
+	}
+	if appendUnlessLast(t, journal, a) {
+		t.Fatal("a line identical to the last line must not be appended again")
+	}
+	if !appendUnlessLast(t, journal, b) || !appendUnlessLast(t, journal, a) {
+		t.Fatal("a line that is not the last line must be appended")
+	}
+	if got, want := readTranscript(t, journal), lineA+"\n"+lineB+"\n"+lineA+"\n"; got != want {
+		t.Fatalf("transcript = %q, want %q", got, want)
+	}
+}
+
+func TestAppendFileUnlessLastComparesWholeLines(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
+	tail := `{"text":"B"}`
+	if err := journal.Append([]byte(`{"x":1,"text":"B"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The last line ends with the same bytes, but it is a longer line.
+	if err := os.WriteFile(filepath.Join(dir, "suffix.jsonl"), []byte(`1,"text":"B"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !appendUnlessLast(t, journal, filepath.Join(dir, "suffix.jsonl")) {
+		t.Fatal("the end of a longer last line is not the same line")
+	}
+	long := `{"type":"message","content":"` + strings.Repeat("y", 300_000) + `"}`
+	path := renderedLine(t, dir, "long.jsonl", long)
+	if !appendUnlessLast(t, journal, path) || appendUnlessLast(t, journal, path) {
+		t.Fatal("a line longer than the compare buffer must be appended once")
+	}
+	other := renderedLine(t, dir, "other.jsonl", strings.Replace(long, "yyy\"", "yyz\"", 1))
+	if !appendUnlessLast(t, journal, other) {
+		t.Fatal("a long line that differs in its last chunk must be appended")
+	}
+	if !appendUnlessLast(t, journal, renderedLine(t, dir, "tail.jsonl", tail)) {
+		t.Fatal("a short line after a long one must be appended")
+	}
+}
+
+func TestAppendFileUnlessLastRepairsPartialTailBeforeComparing(t *testing.T) {
+	journal, dir := newAppendTestJournal(t)
+	a := renderedLine(t, dir, "a.jsonl", lineA)
+	if !appendUnlessLast(t, journal, a) {
+		t.Fatal("first append must insert")
+	}
+	file, err := os.OpenFile(journal.path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"type":"partial`); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if appendUnlessLast(t, journal, a) {
+		t.Fatal("after the partial tail is cut, the last line is the same line")
+	}
+	if got, want := readTranscript(t, journal), lineA+"\n"; got != want {
+		t.Fatalf("transcript = %q, want %q", got, want)
 	}
 }

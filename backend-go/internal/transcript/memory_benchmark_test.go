@@ -1,7 +1,6 @@
 package transcript
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,12 +131,14 @@ func BenchmarkHistoryReadMemory(b *testing.B) {
 	}
 }
 
-// BenchmarkLineIndexMemory is the heap the journal's duplicate-line index keeps per line of
-// messages.jsonl once a commit has built it (it lives as long as the session store does).
-func BenchmarkLineIndexMemory(b *testing.B) {
+// BenchmarkCommitHeldMemory is the heap a session store keeps after its first response
+// commit on a transcript of distinct lines; the store lives as long as the session is cached.
+func BenchmarkCommitHeldMemory(b *testing.B) {
 	for _, lines := range []int{5000, 20000} {
 		b.Run(fmt.Sprintf("%d-lines", lines), func(b *testing.B) {
-			journal, err := NewJournal(filepath.Join(b.TempDir(), "messages.jsonl"), DurabilityProcess)
+			root := b.TempDir()
+			path := filepath.Join(root, "messages.jsonl")
+			journal, err := NewJournal(path, DurabilityProcess)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -151,25 +152,31 @@ func BenchmarkLineIndexMemory(b *testing.B) {
 					batch = batch[:0]
 				}
 			}
-			file, err := os.Open(journal.path)
-			if err != nil {
-				b.Fatal(err)
-			}
-			defer file.Close()
+			item := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
 			for iteration := 0; iteration < b.N; iteration++ {
-				journal.mu.Lock()
-				journal.index = nil
-				journal.mu.Unlock()
-				base := transcriptHeap()
-				journal.mu.Lock()
-				_, err := journal.containsLine(file, sha256.Sum256([]byte("absent")))
-				indexed := len(journal.index.hashes)
-				journal.mu.Unlock()
+				journal, err := NewJournal(path, DurabilityProcess)
 				if err != nil {
 					b.Fatal(err)
 				}
+				store, err := NewTurnStore(journal, filepath.Join(root, "staging"), TurnStoreOptions{MaxItemBytes: 1 << 20})
+				if err != nil {
+					b.Fatal(err)
+				}
+				base := transcriptHeap()
+				turn, err := store.BeginTurn(fmt.Sprintf("turn-%d", iteration))
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := turn.StageOutputItem(outputItemEvent(0, item)); err != nil {
+					b.Fatal(err)
+				}
+				completed := []byte(fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_%d","status":"completed","output":[%s]}}`, iteration, item))
+				if _, err := turn.Commit(completed); err != nil {
+					b.Fatal(err)
+				}
 				held := transcriptHeap()
-				b.ReportMetric(float64(int64(held)-int64(base))/float64(indexed), "index-B/line")
+				b.ReportMetric(float64(int64(held)-int64(base))/float64(lines), "held-B/line")
+				runtime.KeepAlive(store)
 			}
 		})
 	}
