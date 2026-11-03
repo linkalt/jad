@@ -164,6 +164,9 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		handedOver = true
 		go func() {
 			<-run.Done()
+			if beforeRemoteBackgroundRelease != nil {
+				beforeRemoteBackgroundRelease()
+			}
 			s.manager.releaseRemote(reservation)
 		}()
 	}
@@ -190,6 +193,9 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		<-run.Done()
 		if reservation != nil {
 			s.manager.releaseRemote(reservation)
+		}
+		if beforeRemoteAsyncComplete != nil {
+			beforeRemoteAsyncComplete()
 		}
 		outcome := run.Outcome()
 		s.async.dropProfileMessageRun(id)
@@ -220,6 +226,15 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		Information: append(append([]tools.Information{{Key: "run", Value: id}, {Key: "state", Value: "running"}}, remoteRunInformation(run.Reference())...), s.async.latestInformation(owner, id)...),
 	})
 }
+
+// beforeRemoteBackgroundRelease and beforeRemoteAsyncComplete are test seams: nil in production. A
+// test sets one to hold a remote run's release or completion at that point, to read the state the
+// caller would see there. The background release is the one that runs when the run ends with no
+// reply waiting on it; the completion runs once the async handle is about to complete.
+var (
+	beforeRemoteBackgroundRelease func()
+	beforeRemoteAsyncComplete     func()
+)
 
 // remoteRunReference is the form remote_run and the resume argument take: "<name>/rr_…", the
 // remote's own run id (16 lowercase hex digits).

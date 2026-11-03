@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -568,31 +569,74 @@ func newSyncRemoteTool(t *testing.T, f *remoteSubagentFixture) tools.Tool {
 	return tool
 }
 
-// The sync reply must come after the place is given back: the count is read at the reply, with
-// no polling, while the background release is held by remoteReleaseGate in the mutant.
+// The sync reply must come after the early release: the background release is held at its seam,
+// so the place can only have been given back by the reply path, and the count is read at the reply.
 func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
+	held := make(chan struct{})
+	release := make(chan struct{})
+	beforeRemoteBackgroundRelease = func() {
+		close(held)
+		<-release
+	}
+	t.Cleanup(func() { beforeRemoteBackgroundRelease = nil })
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	f.tool = newSyncRemoteTool(t, f)
 	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", SessionKey: remoteCaller.SessionKey}
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	f.start(t, remoteAgent, 0, nested)
+	defer close(release)
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the background release did not reach its seam")
+	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
 		t.Fatalf("the sync reply came back while the session still counts %d remote runs, want 0", got)
 	}
 }
 
-// The async completion gives the place back before the handle completes: wait returns only after
-// Complete, so the count is read then, with no polling.
+// The async completion gives the place back before the handle completes: the background release is
+// held, so only the completion can free the place, and the completion is held at its seam before
+// Complete. The count is read while the handle is pending.
 func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T) {
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	backgroundHeld := make(chan struct{})
+	beforeRemoteAsyncComplete = func() {
+		close(held)
+		<-release
+	}
+	beforeRemoteBackgroundRelease = func() {
+		close(backgroundHeld)
+		<-release
+	}
+	t.Cleanup(func() {
+		letGo()
+		select {
+		case <-backgroundHeld:
+		case <-time.After(5 * time.Second):
+		}
+		beforeRemoteAsyncComplete = nil
+		beforeRemoteBackgroundRelease = nil
+	})
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	nested := remoteCaller
 	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
 	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, nested))
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "found it"}) }()
-	if waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")}); !strings.Contains(waited, "found it") {
-		t.Fatalf("wait:\n%s", waited)
+	defer letGo()
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the async completion did not reach its seam")
 	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
-		t.Fatalf("the handle completed while the session still counts %d remote runs, want 0", got)
+		t.Fatalf("the handle is pending while the session still counts %d remote runs, want 0", got)
+	}
+	letGo()
+	if waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")}); !strings.Contains(waited, "found it") {
+		t.Fatalf("wait:\n%s", waited)
 	}
 }
