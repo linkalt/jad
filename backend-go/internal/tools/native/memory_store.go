@@ -473,7 +473,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				break
 			}
 			scannedBytes += int64(len(text))
-			value, parseErr := parseStoredMemoryJSON([]byte(text))
+			value, parseErr := parseStoredMemoryJSON(text)
 			if parseErr != nil || value.kind != memoryObject {
 				position = ref
 				if len(warnings) < 8 {
@@ -486,7 +486,8 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				position = ref
 				continue
 			}
-			candidate := MemoryItem{Ref: ref, ETag: memoryETag([]byte(text)), Data: data, value: value, rawText: []byte(text)}
+			// text is this record's own buffer and nothing writes to it, so the item keeps it.
+			candidate := MemoryItem{Ref: ref, ETag: memoryETag(text), Data: data, value: value, rawText: text}
 			if int64(len(items)) >= limit {
 				stopped = true
 				break
@@ -745,17 +746,17 @@ func (s *MemoryStore) load(recordType, ref string) (MemoryItem, error) {
 	return MemoryItem{Ref: ref, ETag: memoryETag(text), Data: memoryGoMap(value), value: value, rawText: append([]byte(nil), text...)}, nil
 }
 
-func (s *MemoryStore) readRecordText(recordType, name string) (string, error) {
+// readRecordText returns a record's bytes in a buffer of their own, which the caller may keep.
+func (s *MemoryStore) readRecordText(recordType, name string) ([]byte, error) {
 	path := filepath.Join(s.root, recordType, name)
 	info, err := os.Lstat(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("not a regular memory record")
+		return nil, errors.New("not a regular memory record")
 	}
-	text, err := os.ReadFile(path)
-	return string(text), err
+	return os.ReadFile(path)
 }
 
 func (s *MemoryStore) atomicWrite(path string, data []byte) error {

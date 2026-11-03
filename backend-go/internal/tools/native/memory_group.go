@@ -53,7 +53,7 @@ func (s *MemoryStore) GroupBy(recordType string, filter map[string]any, excludeA
 				break
 			}
 			scannedBytes += int64(len(text))
-			value, parseErr := parseMemoryJSON([]byte(text))
+			value, parseErr := parseMemoryJSON(text)
 			if parseErr != nil || value.kind != memoryObject {
 				continue
 			}
