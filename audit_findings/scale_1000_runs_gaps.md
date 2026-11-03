@@ -39,6 +39,214 @@ Scope: the commits whose hunks were checked directly are described by their cite
 | 65202d4 | audit: correct the A28 row (maps are keyed by storage folder, not session) | no cited row (no cited file in this commit) |
 | 9858032 | audit: note the commits that changed rows' cited code since dc32287 | no cited row (no cited file in this commit) |
 
+## Impact-trace loop, block 1 (newest first, commits 1-5)
+
+Method: `git show --name-only` per commit. No commit in this block touches a backend file (`backend-go/`), so no hunk was mapped to a cited row and no status is affected. The range `dc32287..HEAD` holds 32 commits, not the 30 in the request; blocks 2-7 cover the rest. 701f1dd, afe4206 and 7faccb5 were not in the table above and are added here.
+
+| # | Commit | Changed files | Backend hunk range | Cited row moved or changed | Status change |
+|---|---|---|---|---|---|
+| 1 | 701f1dd | audit_findings/scale_1000_runs_gaps.md | none | no cited row | none |
+| 2 | afe4206 | audit_findings/scale_1000_runs_gaps.md | none | no cited row | none |
+| 3 | 7faccb5 | EXECUTOR.md, MASTER.md, audit_findings/p6a_r4.md | none | no cited row | none |
+| 4 | 9858032 | audit_findings/scale_1000_runs_gaps.md | none | no cited row | none |
+| 5 | 65202d4 | audit_findings/scale_1000_runs_gaps.md | none | no cited row | none |
+
+## Impact-trace loop, block 2 (commits 6-10, newest first)
+
+Method: `git show --name-only` per commit; `git show -U0` for backend hunks; cited lines read with `git show <parent or HEAD>:<path>`. No cited row changed. No cite was edited. No status changed.
+
+| # | Commit | Backend hunks (new side) | Cited rows affected | Cited-line movement | Verdict check | Status change |
+|---|---|---|---|---|---|---|
+| 6 | 783b849 | `backend-go/DECISIONS.md` 1329-1341 (+13) | none (no row cites DECISIONS.md) | none | n/a | none |
+| 7 | 648d46a | `internal/app/remote_message_timer_test.go` 1-47 (new file) | none (no row cites this file) | none | n/a | none |
+| 8 | f17923b | `backend-go/DECISIONS.md` 1310-1328 (+19) | none | none | n/a | none |
+| 9 | 83a3581 | `backend-go/DECISIONS.md` 1298 (changed), 1309 (+1) | none | none | n/a | none |
+| 10 | cc43f1f | `internal/app/remote_api.go` new 221 (+1), 228 (deleted line, no new side), 233 (changed), 243-248 (+2), 268-283 (+8), 285 (changed), 287-294 (+8), 296-303 (+6), 305, 307-308, 316, 322, 324, 326 (+1 each); `internal/app/remote_message_held_test.go` 1-289 (new file) | A34 (rows 116, 73, 72, 34 and the A34 note at line 87) | `:36-48` (parent and HEAD: same text, lines 36-48), `:84-103` (same text), `:114-122` (same text) — all above the first hunk, so unmoved. `:401` parent 377 → HEAD 401 (+24, `SetOnClosed`). `:411` parent 387 → HEAD 411 (+24, `b.runs.forget`) | Index removal is unchanged: `forget`, `forgetManager`, `SetOnDropped`, `SetOnClosed` and all `delete(...)` sites are identical at parent and HEAD. `cc43f1f` changes only the finish path (`watch` → `arm`/`ended`). The old `watch` never called `forget` either, so the A34 mechanism (removal only on manager drop or close) still holds | none |
+
+**Cite changes in this block:** none. The A34 cites `remote_api.go:36-48`, `:84-103`, `:114-122`, `:401`, `:411` match the file text at HEAD 7faccb5 or HEAD, as listed above.
+
+**Re-check of existing notes that cite these files:**
+- A34 commit-table row (cc43f1f): still right. The hunk range 221-326 is the full set; no hunk is after `:401`, so the +24 shift is consistent.
+- A34 rows 116 and 73, and the A34 notes at lines 72 and 87: still right.
+- A34 minor note (line 177, "I did not confirm every remote run path reaches `forget`"): still open. This block did not resolve it, so it stays open.
+
+**Open items from this block:** none that change a status. The B-rows that cite `DECISIONS.md` text were not present in the doc, so no cited line in `DECISIONS.md` was affected.
+## Impact-trace loop, block 3 (commits 11-15, newest first)
+
+Commit list (`git log --format='%h %s' dc32287..HEAD`, entries after cc43f1f): c21d26e, b7b5f4b, 3586902, ba7b6ca, 971d13d. Method: `git show --name-only`, then `git show -U0` for backend hunks. Cited lines read with `git show <parent or HEAD>:<path>`. No cite was edited. No status changed.
+
+| # | Commit | Backend hunks (new side) | Cited rows touched | Cite movement | Status change |
+|---|---|---|---|---|---|
+| 11 | c21d26e | `internal/httpapi/profile_run.go` new 36-37, 115, 121, 128, 138-139, 164-178 (+15); old 120 deleted (no new-side line, `-120 +123,0`); `internal/httpapi/profile_run_test.go` new 365-463 (+99, new test); `internal/httpapi/registry.go` new 298-300 (+3, `onEnd` field) | C-21 (`registry.go:621-657`, `:639-642`, `:661-677`), C-22 (`registry.go:356`), C-24 (`registry.go:694-704`, `:298-300`) | Shift +3 for all three rows (text checked identical at parent and HEAD: parent 618-680 = HEAD 621-683; parent 688-704 = HEAD 691-707; parent 350-358 = HEAD 353-361). The `-297,0 +298,3` hunk is the only one above these cites. `profile_run.go` is not cited by any row | none |
+| 12 | b7b5f4b | `backend-go/DECISIONS.md` new 1307-1308 (+2) | none (no row cites DECISIONS.md) | none | none |
+| 13 | 3586902 | `internal/httpapi/async_state_publish_scale_test.go` new 1-387 (new file) | none | none | none |
+| 14 | ba7b6ca | `internal/asyncmgr/snapshot_live_owner_scale_test.go` new 1-63 (new file) | none | none | none |
+| 15 | 971d13d | `internal/asyncmgr/async_state_lock_scale_test.go` new 1-172 (new file) | none | none | none |
+
+**Cite checks in this block:**
+- C-21, C-22 and C-24 cites are still correct at HEAD: their +3 shift is confirmed by identical text in the parent and HEAD windows (see table, row 11).
+- The commit table row for c21d26e says the hunk at new 298-300 "is the only one that touches a cited file". That is accurate for the cited `registry.go` lines. `profile_run.go` and `profile_run_test.go` also changed, but no row cites them.
+- The C-24 note (`registry.go:694-704`, "impacted by c21d26e ... does not change this path") is still right. The `cacheContent` body is unchanged; only its position moved.
+- The C-22 "no finding" verdict is unchanged. `NewBroker` is still at `registry.go:356` (HEAD), so the citation is correct.
+- The C-21 verdict is unchanged: `publishMessage` (`:621`), the second `Increments` path (`:639-642`) and `messageFrames` (`:661`) are present with the same text.
+
+**Open items:** none that change a status word in this block.
+## Impact-trace loop, block 4 (commits 16-20, newest first)
+
+Commit list (`git log --format='%h %s' dc32287..HEAD`, entries after 971d13d): 33caf30, 551a06e, bf06c05, 4bd4b47, a9828ca. 968e14d is entry 21 and starts block 5. Method: `git show --name-only`, then `git show -U0` for backend hunks. No cite was edited. No status changed.
+
+| # | Commit | Backend hunks (new side) | Cited rows touched | Cite movement | Status change |
+|---|---|---|---|---|---|
+| 16 | 33caf30 | `internal/httpapi/async_state_load_scale_test.go` new 1-373 (new file) | none (no row cites this file; C-24 cites `async_state.go:34-92`, which this commit does not touch) | none | none |
+| 17 | 551a06e | `backend-go/DECISIONS.md` new 1306 (+1) | none (no row cites DECISIONS.md) | none | none |
+| 18 | bf06c05 | `backend-go/DECISIONS.md` new 1298 (+1) | none | none | none |
+| 19 | 4bd4b47 | `backend-go/DECISIONS.md` new 1297 (+1) | none | none | none |
+| 20 | a9828ca | `internal/httpapi/run_layer_scale_test.go` new 1-130 (new file) | none (no row cites this file) | none | none |
+
+**Cite checks in this block:**
+- No cited file is changed by any of the five commits. `async_state.go`, `registry.go`, `executor.go`, `bound_runner.go` and `resolver.go` are absent from their file lists, so C-24's `async_state.go:34-92`, C-21/C-22/C-24's `registry.go` cites, and A28's `resolver.go` cites are not moved by this block.
+- The three DECISIONS.md commits add one line each, all after DECISIONS.md line 1296 (old). The added text cites `internal/app/remote_api.go:233` (bf06c05) and `httpapi/async_state.go:52` (4bd4b47). Those cites are inside DECISIONS.md, not in a row of this doc. They are not checked here.
+- Commit table rows for the five commits (lines 24-28) say "no cited row (no cited file in this commit)". That is still accurate.
+
+**Open items:** none that change a status in this block.
+## Impact-trace loop, block 5 (commits 21-25, newest first)
+
+Commit list (`git log --format='%h %s' dc32287..HEAD`, entries after a9828ca): 968e14d, a3ce7cb, 45a9df3, 83eb386, 536d113. Method: `git show --name-only`, then `git show -U0` for backend hunks. Cited lines read with `git show <parent or HEAD>:<path>`. No cite was edited. No status changed.
+
+| # | Commit | Backend hunks (new side) | Cited rows touched | Cite movement | Status change |
+|---|---|---|---|---|---|
+| 21 | 968e14d | `backend-go/DECISIONS.md` new 1298 (+1) | none (no row cites DECISIONS.md) | none | none |
+| 22 | a3ce7cb | `internal/app/profile_message_queue.go` new 316-317, 341, 345-346, 401-403, 495-496, 549, 552-554; `internal/app/profile_message_queued_watch_test.go` new 1-108 (new file) | A33 (`profile_message_queue.go:37-50`, `:49`, `:67-89`, `:87`; row 18, row 19) | None of the A33 cites moved: `beginWait` `:37`, `acquire` `:67`, `release` `:82` are at the same lines at parent and HEAD. The `delete` sites `:49` and `:87`, and the `release` guard at `:86`, are unchanged. Verdict holds (see below) | none |
+| 23 | 45a9df3 | `backend-go/DECISIONS.md` new 1288-1302 (+15) | none | none | none |
+| 24 | 83eb386 | `internal/app/profile_message_queue.go` new 497-505 (+9), 507-512 (+6, changed from old 498), old 501-503 deleted; `internal/app/profile_message_attach_test.go` new 1-65 (new file) | A33 (same cites as row 22) | None: the `:37-50`, `:67-89` ranges are above the first hunk at 497. Same text at parent and HEAD | none |
+| 25 | 536d113 | `internal/tools/native/bash_child.go` new 8 (changed), 160-163, 164-165, 288-294 (+7, `readBashPipe` now takes `readersLeft`/`readersDone`); `internal/tools/native/bash_child_readers_test.go` new 1-90 (new file) | B-20 (`bash_child.go:72`), glob paragraph, doc line 322 (`bash_child.go:72-`) | `runBashCommand` `:72` at parent and HEAD (checked): no shift, no touch. `readBashPipe` moved from parent 291 to HEAD 289 (its signature changed, so the cite `:288-292` quoted in a row, if any, would move. No row in the doc cites `readBashPipe` by line) | none |
+
+**A33 verdict check (rows 18, 19, 129, 173, 210, 211):** still "no finding". Reason: `profileQueueSet.edges` is refcounted with `delete` at `:49` (`if s.edges[e]--; s.edges[e] <= 0`), and `queues` entries are deleted at `:87` under the guard `q.refs == 0 && !q.pumping && len(q.waiting) == 0 && s.queues[key] == q`. Both lines and the guard are identical at parent 83eb386^ and HEAD. The new `a3ce7cb` and `83eb386` hunks change the goroutine lifecycle around `attach`/`beginQueued`, not these map operations. Not verified: that every new `AfterFunc` or attach path reaches the same `release`/`beginWait` cleanup. That is a leak question for A33's note and it stays open.
+
+**Cite checks in this block:**
+- A33 cites `:37-50`, `:49`, `:67-89`, `:87`: unchanged position and text at HEAD (see above).
+- B-20 cites `bash_child.go:72`: unchanged at HEAD (checked in block 5 and in the 536d113 commit-table row).
+- The glob paragraph (doc line 322) cites `bash_child.go:72-` (the start of `runBashCommand`). Still correct at 72.
+- The glob paragraph (doc line 322) cites `bash_child.go:288-292` for the `readersDone` close. Checked in block 7: at HEAD `readBashPipe` is at 289 and `:288-292` holds the close. No row cites `readBashPipe` by line.
+
+**A33 verdict pending the leak-path trace:** resolved by the step-1 trace and the (b) read. The `startEnd` ends on success come from the deferred `EndStartWait` in the two tool callers (see A33 impact text). The `refs`/`queues` cleanup holds on every exit (`release` on each `Start` branch, `pump` defer, `finish`). The `AfterFunc` (`:345`) is removed by `finish` at `:553`, and the queue timer is stopped at `:546-548`. No test was run for the counts (step (a) was not needed).
+## Impact-trace loop, block 6 (commits 26-30, newest first)
+
+Commit list (`git log --format='%h %s' dc32287..HEAD`, positions 26-30): 9548409, 67c4af7, c6dac0e, c8f74a7, b92b089. Matches the request. Method: `git show --name-only`, `git show -U0` for backend hunks, cited lines read with `git show <parent or HEAD>:<path>`. Statuses unchanged.
+
+| # | Commit | Backend hunks (new side) | Cited rows touched | Cite movement | Status change |
+|---|---|---|---|---|---|
+| 26 | 9548409 | `internal/session/tool_batch.go` new 60-62 (comment, -1 line) | none (no row cites `tool_batch.go`) | none | none |
+| 27 | 67c4af7 | `backend-go/DECISIONS.md` new 1274-1276 | none | none | none |
+| 28 | c6dac0e | `DECISIONS.md` new 1273-1278 and 1280-1285 (comment); `internal/app/leaf_budget_profile_message_test.go` new 92-104 (new hunk); `leaf_budget_remote_test.go` new 1-42 (new file); `internal/tools/native/leaf_budget_wrappers_test.go` new 1-72 (new file) | none | none | none |
+| 29 | c8f74a7 | see the list below | many (listed below) | see the list below | none |
+| 30 | b92b089 | `internal/transcript/read_records.go` new 26-41 (`ReadRecordsSnapshot`, added); `internal/transcript/jsonl.go` new 291-398 (`ReadRecordsSnapshot`, `takeSnapshot`, `checkSnapshot`); `internal/app/catalog.go` new 504-615 (scan) | A23 (`read_records.go:13-24`, `:17-23`, `:29-40`, `:33-38`, `:39`, `:44-55`), A22, A24 (`jsonl.go` cites), catalog rows (`catalog.go:210`, `:221`, `:343`, `:352`) | catalog cites are unchanged (same text at parent and HEAD); A23 cites are as written at HEAD 7faccb5 (see A23 check) | none |
+
+**c8f74a7 (block 6, row 29), hunks and affected rows.** Each row lists the new-side hunk range from `git show -U0` and the cited line movement:
+- `internal/session/runner.go` new 138-140 (`LeafBudget` field); 656 (`executeToolRound` call). B-29's `runner.go:400-513` cite: `Run` moved 397 → 400 (+3, checked). B-29's `:574-600` and `:716-760` cites: **wrong at HEAD, fixed in place** (see Cite edits below).
+- `internal/session/runner_tools.go` 211, 252 (changed lines, `executeToolRound` signature); `runner_tools_test.go` 178, 594 (changed). No row cites these lines.
+- `internal/session/tool_batch.go` 7-8, 43-54, 61, 78-79, 82, 94-95, 97-103, 105-111, 125-146, 150 (not cited by any row).
+- `internal/app/bound_runner.go` new 80 (insertion). B-29 `bound_runner.go:56-131`/`:1-141`: 1-79 identical; parent 80-141 = HEAD 81-142 (+1 shift, checked).
+- `internal/app/subagent.go` new 96 (insertion). C-26 `subagent.go:46-119`: `Run` at 46 unchanged (checked).
+- `internal/app/resolver.go` new 84-86, 253-255, 267. A28's `resolver.go:83`, `:88`, writes `:696`, `:786` are the HEAD positions (checked: `subagentManagers` `:83`, `asyncHosts` `:88`, writes at `:696` and `:786`). A28 is right at HEAD.
+- `internal/app/service.go` new 13, 37-42, 47. A37's `service.go` cites at HEAD 7faccb5: `:28-31`, `:92-113`, `:116-126` were checked (`recovering` `:30`, `closeOnce` `:31`, `startStorageRecovery` `:92`, `Close` `:116`). Shift from the 13 and 37-42 insertions is +7, as the row states.
+- `internal/app/service_*`: not in the hunks.
+- `internal/tools/catalog.go` new 124-127, 295-309. No row cites `catalog.go` at these lines.
+- `internal/tools/leaf_budget.go` new 1-38 (new file). No row cites it.
+- `internal/tools/native/{bash,edit,fetch,glob,grep,read,read_image,write}.go` new 59, 50, 141, 193, 57, 56, 62, 50 (one-line `LeafBudget: true` additions in the constructors). Glob/grep/fetch cites: `executeNativeGlob` moved 203 → 204 and `executeNativeGrep` 102 → 103 (+1 from the constructor insertions); the row's `:204` and `:103` are the HEAD numbers (checked). `fetch.go:87-112` is unchanged (same text at parent and HEAD). `fetch.go:563-576` moved +1 to `:564-577` (`Do` `:552` → `:553`); fixed in the fetch row (old `:563-576`, new `:564-577`).
+- `internal/app/catalog_*`, `usage_*`, `layout_integration_test.go`, `subagent_integration_test.go`, `leaf_budget_*_test.go`: test files, not cited.
+
+**b92b089 (block 6, row 30): A23 check.** Row 17 now points at `ReadRecordsSnapshot`. A23 is still right:
+- `read_records.go` at HEAD: `ReadRecordsRange` `:13-24` (lock short, then `journal.ReadRecordsRange` unlocked), `ReadRecordsSnapshot` `:29-40` (`s.mu` read at `:33-35`, gate `:36-38`, `journal.ReadRecordsSnapshot` `:39`), `ReadCompleteRecordsRange` `:44-55` (gate `:48-53`). Every A23 cite matches.
+- `jsonl.go` HEAD: `ReadRecordsSnapshot` `:303`, `takeSnapshot` `:347-382` (holds `j.mu` at `:348` for the tail repair and open, then unlocked), `checkSnapshot` `:387-398` (takes `j.mu` at `:388`). The row's "takes the journal lock only briefly" is right. The visit runs unlocked (`:338`).
+- The A23 note says `ReadRecordsSnapshot` (`:29-40`) was added by b92b089 at new 26-41. HEAD has it at 26-41 and `:29-40` (the function). Consistent.
+- `ReadCompleteRecordsRange` (`:44-55`) remains noted as not covered.
+- Verdict "no finding" holds.
+
+**Cite edits in this block (old → new, HEAD 701f1dd):**
+1. B-29 row (the `runner.go` cite in the `Why 1000 fails` row, line ~416): `574-600` (`compactAfterResponse`) → `577-603` (HEAD). `716-760` (`automaticCompactionTrigger`) → `719-763` (HEAD). Old values are the parent c8f74a7^ positions; the row is a HEAD row, so the cite is updated to HEAD. Text checked at parent and HEAD (`compactAfterResponse` at 574 → 577, `automaticCompactionTrigger` at 716 → 719, ends 600 → 603 and 760 → 763).
+
+**Verdict changes:** none. No verdict depends on the B-29 cite change (the cited code and its per-round cost are the same at parent and HEAD).
+
+**Open items (block 6):** none that change a status word.
+## Impact-trace loop, block 7 (commits 31-32, the last two in dc32287..HEAD)
+
+Commit list (`git log --format='%h %s' dc32287..HEAD`, positions 31-32): 534f1a0, 1959d19. Both are already in the commit table (rows 13 and 12); this block re-traces them against their hunks. Method as before. No status changed.
+
+| # | Commit | Backend hunks (new side) | Cited rows touched | Cite movement | Status change |
+|---|---|---|---|---|---|
+| 31 | 534f1a0 | `internal/tools/native/bash_child.go` new 19-24 (+6, seam vars `newBashPipe`/`newBashCommand`), 96, 100, 114, 123 (changed lines inside `runBashCommand`); `bash_child_seam_test.go` new 1-103 (new file) | B-20 (`bash_child.go:72`, glob paragraph `:21`, `:72-`) | `runBashCommand` 66 → 72 (+6, from the `:19-24` insertion; checked at 534f1a0^ and HEAD). `:21` is the `newBashPipe` line at HEAD (checked) | none |
+| 32 | 1959d19 | four test files, all new: `internal/app/usage_scan_scale_test.go` new 1-178; `internal/httpapi/registry_scale_test.go` new 1-140; `internal/session/tool_batch_scale_test.go` new 1-171; `internal/transcript/compaction_scale_test.go` new 1-199 | none (no row cites these files) | none | none |
+
+**Glob paragraph (doc line 322), checked in block 7:** `bash_child.go:21` (`newBashPipe`, HEAD) and `:288-292` (the `readersDone` close in `readBashPipe`, HEAD) match. `:72-` matches `runBashCommand` at 72.
+
+**Last-block result:** no verdict changed. No cite changed in block 7.
+
+## Impact-trace loop: final summary (dc32287..HEAD, 32 commits)
+
+**Commits traced:** all 32 in `dc32287..HEAD`, in blocks 1-7. Block 1 added three commits the commit table did not have (701f1dd, afe4206, 7faccb5); the other 29 were already rows. 534f1a0 (row 13) and 1959d19 (row 12) were re-traced in block 7.
+
+**Rows checked one by one in this loop (text at parent and/or HEAD):** 13 IDs and paragraphs: A23, A28, A33, A34, A37, B-20, B-29, C-21, C-22, C-24, C-26, the glob/grep paragraphs (lines 319-322), and the fetch paragraph (line 370). Commit-table rows: all 32 have a per-commit line.
+
+**Cite changes made in this loop (old → new, HEAD 701f1dd):**
+1. B-29, `compactAfterResponse`: `runner.go:574-600` → `runner.go:577-603`.
+2. B-29, `automaticCompactionTrigger`: `runner.go:716-760` → `runner.go:719-763`.
+3. Fetch paragraph (line 370): `fetch.go:563-576` → `fetch.go:564-577`.
+
+Other edits in this loop: the A33 impact note (approved; verdict and status unchanged), my own section text (corrections listed in each block, including the block 5 `:288-292` sentence and the block 5 hunk range 343-346 → 345-346).
+
+**Verdict changes:** none. A33 stays "no finding" (the `startEnd` ends on success come from the callers' defers). A34 stays "minor". A23 stays "no finding".
+
+**Rows not checked one by one:**
+- From the doc's own "Unverified shifts" list (c8f74a7 and b92b089 shifts): A22, A24, A30, A38, B-21, B-22, B-23, B-28, B-30, C-20, C-23, and bounds rows 17, 25, 26, 27 (only partly, through A28 and A37).
+- Catalog rows A31 and A32: only the lines `catalog.go:210`, `:221`, `:343`, `:352` were checked.
+- `DECISIONS.md` cites inside the DECISIONS text (`remote_api.go:233` in bf06c05, `async_state.go:52` in 4bd4b47). Those are not rows of this doc.
+- Other rows that cite `resolver.go` shifted by c8f74a7 (+3 to +7): only A28's cites were checked.
+
+**Still open (existing, not changed by this loop):** A34's minor note: whether every remote run path reaches `forget`. The loop did not resolve it.
+
+**Not run:** no Go tests and no `verify-go.sh` (doc-only loop; code was read, not built). No commit.
+
+## Block 8: unchecked rows from the loop (checked at HEAD 701f1dd)
+
+Scope: the rows listed as unchecked in the final summary, plus every DECISIONS.md cite. Method: each cite read with `git show HEAD:<path>` and, where the file has commits in range, the parent. Hunk ranges come from `git show -U0`. No status changed. Cite fixes listed as old → new.
+
+**Commit hunks touching these files (dc32287..HEAD):** only `app/catalog.go` (b92b089, new 504-615), `app/service.go` (c8f74a7, new 13, 37-47), `app/resolver.go` (c8f74a7, new 84-86, 253-255, 267) and `tools/native/fetch.go` (c8f74a7, new 141). Every other file in the rows below has no commit in range; its cites were checked against HEAD text only.
+
+| Row | Cites checked | Cites changed (old → new, HEAD) | Commit hunks touching it | Verdict |
+|---|---|---|---|---|
+| A22 | `session_turn.go:12` (`NextSessionTurn`), `:16` (`s.mu.Lock`), `:27` (`journal.ReadLines`); `jsonl.go:246-248` (`ReadLines` header, tail repair) | none | none | holds |
+| A24 | `run_error_cache.go:45` (`RecordRunError`), `:50`, `:72`, `:80`, `:86` (`ReadRunErrors`), `:91` (`defer s.mu.Unlock`); `bound_runner.go:257-261` (`RecordRunError` call); caps `sessionfs/session.go:26-27` | **`session_turn.go` consts → `sessionfs/session.go:26-27`** (the constants `defaultRunErrorCacheMaxEntries=50`, `maxConfiguredRunErrorCacheMaxEntries=10_000` are not in `session_turn.go`). Row text edit is a cite fix only; no line changed | none | holds |
+| A30 | `locked_config.go:14` (`lockedConfigMaxAge` comment, `DECISIONS.md` reference), `:34-41` (`put`), `:43-47` (`drop`, delete `:45`), `:49-60` (`take`, delete `:54`); `resolver.go:337-346` (put/drop closure, drop `:343`), `:418` (`take` call) | `locked_config.go:14-58` → `14-60`; `take` `:55-58` → `:51-60` (delete at `:54`); `drop` `:45` (unchanged); `resolver.go:343` (unchanged); `resolver.go:411` → `:418` (`:411` is the `Resolve` error branch, not `take`); `resolver.go:337-344` → `:337-346` | none | holds (no leak; `take` deletes every call, `drop` on run end) |
+| A31 | `list_settings_cache.go:46` (`drop`), `:53` (`keepOnly`) inside `:33-60`; `catalog.go:221` (`keepOnly` call); `session_catalog_files.go:82` (`drop` call) | none | none | holds |
+| A32 | `skipped_sessions.go:35` (`resolved`), `:37` (`delete(s.reasons, …)`), `:30-40` range; `catalog.go:210` (`resolved` call) | none | none | holds |
+| A38 | `recovery.go:44`, `:49` (`recovering = true`), `:52-54` (lock/unlock in defer), `:55`; `turn.go:160`, `input_history.go:45`, `read_records.go:20`, `:35`, `maintenance.go:61`, `:671`, `front_compact.go:53`, `session_turn.go:18` (`recovering` gates); `resolver.go:1004` (`NewTurnStore`), `:1008` (`Recover`) | none | none | holds |
+| B-21 | `task_store.go:207` (`Create`), `:213`, `:249` (`List`), `:251`, `:303` (`Update`), `:352` (`mutate`), `:354`, `:420`; `task.go:249-313` is inside `executeNativeTask` (`:224`), its caps | none (function-level cites; lines are inside the named functions) | none | holds |
+| B-22 | `memory_store.go:158` (`Create`), `:180`, `:225` (`Update`), `:326` (`List`), `:330` (`list`), `:523` (`withLock`), `:626` (`files`), `:632` (`filesKnowing`), `:665` (`totals`), `:530`, `:730`; `memory_group.go:28` (`GroupBy`) | `memory_group.go:22-` → `:28-` (`GroupBy` is at `:28`; `:22` is a struct field) | none | holds |
+| B-23 | `fetch_store.go:65` (`FetchStore` struct), `:90` (`Create`), `:110` (quota reject), `:122`, `:135` (`Page`), `:178` (`CreatePage`), `:202` (`rememberURLs`), `:222` (`cachedPage`), `:280` (`fetchDirectoryBytes`); `fetch_transport.go:41` (`pool.get`), `:85`; `fetch.go:87-112` (unchanged), `:564-577` (pool branch) | `fetch_store.go:64-91` → `:65-91` (`:64` is a comment) | `fetch.go` new 141 is outside the cited ranges (checked) | holds |
+| B-28 | `checkpoint/service.go:143-161`, `:183-189`, `:192-211`, `:450-493`, `:564-575`, `:607-635`, `:638-676`, `:696-741`, `:743-841` (no commit in range); `app/service.go` (repointed cites only: `:146-210` is the old cite the row lists) | none | `app/service.go` hunks do not touch `checkpoint/` (no change to the checkpoint cites) | holds |
+| B-30 | `process_manager.go:144-161` (`mu`, `persistMu`, `recoverMu`), `:250-330` (`Start`), `:380-390` (fork), `:429-496` (`SnapshotWithLogs`/`List`/`Wait`/`Stop`), `:974-1070` (`Recover`); `process_owner.go:30-45` | none (not checked line by line; text of the cited functions read only at the headers) | none | holds (no lock across fork) |
+| C-20 | `app/service.go:85-88` (`NewService` gate, `startStorageRecovery` call `:85`), `:92`, `:113`, `:116`, `:126` (`Close`); `storage_recovery.go:55` (`RecoverStorages`), `:87` (`recoverSessionStorages`), `:145` (`recoverProcessStorage`) | `service.go:92-113` → HEAD `:92-113` (unchanged since A37 check; `startStorageRecovery` at `:92`) | `app/service.go` c8f74a7 (new 13, 37-47) shifts it +7 from the parent `:85` | holds |
+| C-23 | `memorytrace/trace.go:19` (env name), `:86` (`New`), `:111`, `:135`, `:203-205` (ticker stop), `:210` (`ensureSamplingLocked`), `:264` (`activeIDsLocked`), `:273` (`recordLocked`), `:322`; `serverconfig/defaults.go:22` (interval 250); `httpapi/handler.go:129` (field), `:244` (`FromEnvironment`) | none | none (`trace.go` unchanged in range) | holds |
+| 17 (bounds, commit table row 17 is 551a06e; here the bounds-table row 17 is `profile_message.go:236`) | `profile_message.go:236` (`callerRunTargets.runs`); `bound_runner.go:126` (run end) | none | none (`profile_message.go` not in range) | holds |
+| 25 | `resolver.go:693` (`asyncBuilds` in flight) | none: HEAD `:693` is `delete(r.asyncBuilds, key)` (checked); parent `:686` | `resolver.go` c8f74a7 new 84-86, 253-255, 267 (+7 before `:693`) | holds |
+| 26 | `resolver.go:783` (`subagentBuilds` in flight) | none: HEAD `:783` is `delete(r.subagentBuilds, storageKey)` (checked); parent `:776` | `resolver.go` c8f74a7 new 84-86, 253-255, 267 (+7) | holds |
+| 27 | `resolver.go:960` (`stores` on failed build) | none: HEAD `:960` is `delete(r.stores, storageKey)` on a failed build (checked); parent `:952` | `resolver.go` c8f74a7 new 84-86, 253-255, 267 (+8) | holds |
+| A37 (cites in the decider list: service.go / catalog) | `app/service.go:28` (`stopRecovery`), `:30` (`recovering`), `:31` (`closeOnce`), `:92`, `:116` | none (already at HEAD 7faccb5) | `app/service.go` c8f74a7 | holds |
+
+**Bounds rows 25, 26 and 27 (`resolver.go` cites `:693`, `:783`, `:960`):** each cite is the HEAD line of its `delete` (checked by text at HEAD: `delete(r.asyncBuilds, key)`, `delete(r.subagentBuilds, storageKey)`, `delete(r.stores, storageKey)`). The parent had them at `:686`, `:776`, `:952`, so the c8f74a7 insertions moved them +7, +7 and +8. **No cite changed.** Verdicts hold.
+
+**DECISIONS.md cites (every line cite in the doc and in the DECISIONS text it quotes):**
+- The doc's own text: "all after DECISIONS.md line 1296 (old)" (block 4, line 108). Checked: 1296 is the parent's last line before the three 1297/1298 additions; not a row cite. No change.
+- DECISIONS.md line 1297 (4bd4b47's text, "Deferred: proposal A"): cites `httpapi/async_state.go:52` (`watchAsyncState`). At HEAD `watchAsyncState` is at `async_state.go:34` and `:52` is a `go func()` line inside it. `async_state.go` has no commits in range. **Stale cite in DECISIONS.md, not changed** (DECISIONS.md is outside this doc's edit scope; reported).
+- The bf06c05 "Deferred: proposal B" line cited `remote_api.go:233` and `remoteMessageRun.watch` `:266`. That line is no longer in HEAD DECISIONS.md (superseded by 83a3581's "Implemented" line at 1298, which has no line cite). Nothing to fix in the doc.
+- DECISIONS.md line 1298 ("Implemented: seam B") cites file names only. No line cite.
+
+**Verdicts in this block:** no verdict changed. The cites changed are A30 (`take` and `drop` positions), B-22 (`GroupBy`), B-23 (struct line), A24 (constants' file) and the DECISIONS.md stale cite (reported, not edited).
+
+**Unchecked (with the reason):**
+- B-30 (`process_manager.go`) function bodies: only the cited function headers were checked, not the lock lines inside them.
+- A34's "every remote run reaches forget" open item: left open, per the decider.
 ## Cite corrections (checked at HEAD 7faccb5)
 
 Old cite = as written in the doc. New cite = line at HEAD 7faccb5 (`git show HEAD:<path>`). Commit hunks are from `git diff -U0` between each commit and HEAD. The code index's `transcript/jsonl.go` data is stale, so transcript and checkpoint lines come from `git show`.
@@ -91,16 +299,16 @@ Row IDs continue from A22.
 |---|---|---|---|---|---|---|---|
 | A22 | `internal/transcript/session_turn.go:12-16` (`s.mu` at `:16`), scan at `:27` (`journal.ReadLines`, which repairs the tail under the journal lock, `jsonl.go:246-248`) | `TurnStore.mu` held across `journal.ReadLines` for the whole transcript in `NextSessionTurn` | Full-transcript scan under the store lock, blocking `BeginTurn`, `AppendInputItemsAt`, `ReadRecordsRange`, and maintenance on that session. The scan also repairs the tail. Trigger: a method with no production caller. | no finding (dead in production) | None needed; delete or leave. The app path uses its own closure (`bound_runner.go:44-54`, `scanTranscriptIndex`), which is an index read, not a scan. | No | `grep NextSessionTurn` gives only `session/runner.go:201` (fallback when the option is nil) and the definition. `session/runner.go:529` and `app/bound_runner.go:96` always pass a non-nil closure, so the store method is unused on the app path. Retracts the part of A4/A17 that claimed the full scan runs per run start. |
 | A23 | `internal/transcript/read_records.go:13-24` (`ReadRecordsRange`), `:29-40` (`ReadRecordsSnapshot`, HEAD 7faccb5) | `s.mu` held only to read the `recovering` bool; then `journal.ReadRecordsRange` runs unlocked on the store | None. The lock is short; the scan itself is the journal's lock (A4). The `recovering` flag makes reads fail fast during `Recover`, not wait. | no finding | None. | No | `read_records.go:17-23` (`ReadRecordsRange`), `:33-38` (`ReadRecordsSnapshot` gate), `:39` (`journal.ReadRecordsSnapshot`). Confirms A4 is the real holder for `ReadRecordsRange`. `ReadRecordsSnapshot` (`:29-40`, added by b92b089, new 26-41) takes the journal lock only briefly: `takeSnapshot` (`jsonl.go:347-382`) holds `j.mu` to repair the tail and open the read handle, then the visit runs unlocked; `checkSnapshot` (`jsonl.go:387`) takes `j.mu` again at the end. Its `recovering` gate is the same short `s.mu` read. Not covered by this row: `ReadCompleteRecordsRange` (`read_records.go:44-55`, HEAD) has the same recovering gate (`:48-53`) and is not covered by this row. |
-| A24 | `internal/transcript/run_error_cache.go:45-80`, `:86-91` | `s.mu` held across read, sort, and atomic rewrite (`writeJSONAtomic`) of the whole cache file on every failed run | Bounded size (`maxEntries`, config default 50, max 10000). Under the store lock, one file write per failure. Trigger: a burst of failed runs in one session. Blocks that session's `BeginTurn` for the write. | minor | Write outside `s.mu` (read-modify-write needs its own small lock). | No | `run_error_cache.go:50-72`. Config bound: `session_turn.go` consts `defaultRunErrorCacheMaxEntries=50`, `maxConfiguredRunErrorCacheMaxEntries=10_000`. `RecordRunError` is called from `bound_runner.go:257-261`. Not a memory leak: the file is capped. |
+| A24 | `internal/transcript/run_error_cache.go:45-80`, `:86-91` | `s.mu` held across read, sort, and atomic rewrite (`writeJSONAtomic`) of the whole cache file on every failed run | Bounded size (`maxEntries`, config default 50, max 10000). Under the store lock, one file write per failure. Trigger: a burst of failed runs in one session. Blocks that session's `BeginTurn` for the write. | minor | Write outside `s.mu` (read-modify-write needs its own small lock). | No | `run_error_cache.go:50-72`. Config bound: `sessionfs/session.go:26-27` consts `defaultRunErrorCacheMaxEntries=50`, `maxConfiguredRunErrorCacheMaxEntries=10_000` (cite fixed in block 8; was `session_turn.go`). `RecordRunError` is called from `bound_runner.go:257-261`. Not a memory leak: the file is capped. |
 | A25 | `internal/transcript/input_history.go:39-88` (`AppendInputItemsAt`; lock `:43`, journal append `:80`), `:130-140` (`ReadInputItems`) | `AppendInputItemsAt` holds `s.mu` for the whole append (canonicalization and `journal.AppendAt` at `:80`; the journal fsyncs under strict durability). `ReadInputItems` does not take `s.mu`; the compaction-cache read uses the journal lock | Appends hold the store lock during fsync. A full `ReadInputItems` (no handle) expands the whole transcript with no memo; each call rebuilds from byte 0. Trigger: any caller of the handle-less reader in a loop. Production callers: `state_context.go:55,156` only. | degrades (per session) | Do the canonicalization before `s.mu`; keep the lock only around the journal append. | No | `input_history.go:43,80`; `state_context.go:55,156` call `readInputItems(nil)`. `InputHistory` (memo, `input_history_memo.go`) is the per-run path and is bounded by handle lifetime (its own doc comment). |
 | A26 | `internal/transcript/input_history_memo.go:65-110` (`readTranscriptItemsMemo`) | `withRepairedFile` holds the journal lock for the whole incremental expansion, and `result = make([][]byte, len(memo.items))` copies the whole item slice on every read | Per-run cost is O(total items) per read, even when only the tail changed. Memory per handle is the expanded transcript, released by `Release()`. Trigger: long transcript, many rounds of a run (B-17 in Part B). Memory is per run, not global. | degrades | Return a slice view of the retained items (safe because items are read-only per the doc comment), not a copy. | No | `input_history_memo.go:65-110`; doc comment at `:14-22` says items are shared. |
 | A27 | `internal/app/session_catalog_files.go:103-167` (`releaseSessionChildren`) | Delete ordering: map entries are removed under `r.mu`; the slow `Close()` calls run after `r.mu.Unlock()` (`:147`) | None found. Ordering is correct: maps are cleared under the lock and managers are closed outside it. `forgetStores` (`:161-170`) also runs under `r.mu` but only deletes map keys. | no finding | None. | No | `session_catalog_files.go:103-167`, `:147` (unlock before the `Close` loops). Confirms the delete path does not hold `r.mu` across I/O (answers the gap-list concern about line 175). |
 | A28 | `internal/app/resolver.go:83`, `:88` (`subagentManagers`, `asyncHosts`); writes at `:696` and `:786` | `asyncHosts` and `subagentManagers` are never removed from their maps. No `delete` on either map anywhere in `backend-go`. Entries are keyed by storage folder: the tool storage folder for `asyncHosts`, and the subagent storage dir for `subagentManagers`. Deleting a session does not touch them: `DeleteSessionConfig` (`session_catalog_files.go:70-88`) and `releaseSessionChildren` (`:103-157`) leave both maps alone | Bounded by the number of distinct storage folders, not by sessions, so a session delete does not add entries. Each entry holds an `asyncmgr.Manager` and a `SubagentManager`. The gap is a session with a custom `tool_storage_dir` that is deleted and never used again: its manager stays for the process lifetime. Not measured. | degrades (memory), small | Evict on session delete when no other session uses the folder, the same way `releaseSessionChildren` evicts mcp/process/store entries. | No | Verified by reading at HEAD 783b849, not measured. Corrects A2, which said these were removed on session delete; they are not. |
 | A29 | `internal/app/session_catalog_files.go:103-167` vs `resolver.go:77` | `profileTurnCounts`: confirmed never deleted (only write at `catalog.go:352`, read at `:345`). Not reached by `forgetStores` or `releaseSessionChildren` | Grows with every profile path ever listed. Trigger: profile churn. | minor | Key on profile, drop on session delete. | No | `catalog.go:343-352`. Confirms A15. |
-| A30 | `internal/app/locked_config.go:14-58`; `resolver.go:343`, `:411` | `lockedConfigs.entries` is removed by `take` (`:55-58`, deletes on every call) and by `drop` (`:45`) on run end. An unused entry is removed on the next `take` for that key | Bounded in time (1 s) and removed on every normal path; not a leak. A burst of distinct keys (A12) is still count-unbounded for one second. | no finding (count bound stays minor, A12) | None needed. Optional count cap. | No | `locked_config.go:34-58`; `resolver.go:337-344` (drop), `:411` (take). Retracts the leak concern; keeps A12 as minor. |
+| A30 | `internal/app/locked_config.go:14-60`; `resolver.go:343`, `:418` | `lockedConfigs.entries` is removed by `take` (`:51-60`, deletes on every call at `:54`) and by `drop` (`:45`) on run end. An unused entry is removed on the next `take` for that key | Bounded in time (1 s) and removed on every normal path; not a leak. A burst of distinct keys (A12) is still count-unbounded for one second. | no finding (count bound stays minor, A12) | None needed. Optional count cap. | No | `locked_config.go:34-60`; `resolver.go:337-346` (`put`/drop closure, drop at `:343`), `:418` (take). Retracts the leak concern; keeps A12 as minor. |
 | A31 | `internal/app/list_settings_cache.go:33-60`; `catalog.go:221` | `listSettingsCache.entries` is pruned by `keepOnly(listed)` on every catalog list and dropped on session file delete (`session_catalog_files.go:82`) | Bounded by the number of session files on disk. Not a leak. | no finding | None. | No | `catalog.go:221`; `session_catalog_files.go:82`. |
 | A32 | `internal/app/skipped_sessions.go:30-40`, `catalog.go:210` | `skipped.reasons` is deleted when a session resolves again (`resolved`) | Bounded by the number of broken session files. | no finding (A20 stays minor) | None. | No | `skipped_sessions.go:36-39`; `catalog.go:210`. |
-| A33 | `internal/app/profile_message_queue.go:37-89` | `profileQueueSet.edges` is refcounted (`:37-50`, delete at `:49`); `queues` entries are deleted when `refs==0 && !pumping && len(waiting)==0` (`:82-89`) | Bounded by in-flight waiters. Not a leak. | no finding (A21 is about hot-target serialization, not memory) | None. | No | `profile_message_queue.go:37-50`, `:67-89`. Impact checked (HEAD 7faccb5): a3ce7cb and 83eb386 changed the queued and non-queued wait paths, not the cited lines. Their hunks are `profile_message_queue.go` new 497-512 (83eb386) and 316-554 (a3ce7cb), outside `:37-50`, `:49`, `:67-89`, `:87`; the `edges` and `queues` refcounts at those lines are unchanged. |
+| A33 | `internal/app/profile_message_queue.go:37-89` | `profileQueueSet.edges` is refcounted (`:37-50`, delete at `:49`); `queues` entries are deleted when `refs==0 && !pumping && len(waiting)==0` (`:82-89`) | Bounded by in-flight waiters. Not a leak. | no finding (A21 is about hot-target serialization, not memory) | None. | No | `profile_message_queue.go:37-50`, `:67-89`. Impact checked (HEAD 7faccb5): a3ce7cb and 83eb386 changed the queued and non-queued wait paths, not the cited lines. Their hunks are `profile_message_queue.go` new 497-512 (83eb386) and 316-554 (a3ce7cb), outside `:37-50`, `:49`, `:67-89`, `:87`; the `edges` and `queues` refcounts at those lines are unchanged. | Edge end on success (step-1 G1/G2, checked at HEAD 701f1dd): `beginWait` sets `startEnd` at `profile_message_queue.go:228`; the queued success returns at `:253-254` and `:273-275`, and the direct success at `:286-287`, without ending it. The end is made by the caller: `native/profile_message.go:424-426` (`runInline`) and `native/profile_message_async.go:206-208` (`runHandle`) each `defer blocker.EndStartWait()` on the returned run, after the error returns. So `edges` is ended on success, not leaked.
 | A34 | `internal/app/remote_api.go:36-48` (`remoteRunIndex`) | Four maps (`runs`, `byLocal`, `byID`, `byManager`). Removal is by `forget` (on run finish via the run's identity) and `forgetManager` (manager `SetOnClosed`) | Bounded by live remote runs as long as each run ends with `forget` or its manager closes. A run whose manager never closes and never reports `Done` stays. Trigger: remote runs that never finish (no run timeout reaching `forget`). Not reached by `releaseSessionChildren`. | minor | Also index by session so session delete can drop them. | No | `remote_api.go:36-48` (maps), `:84-103` (forget / forgetManager), `:401` (`SetOnClosed`), `:411` (`b.runs.forget`). Config bound on run lifetime: `run_timeout_ms` / `run_retention_ms` (see `internal/sessionfs/remote_api_settings.go:19`); I did not confirm those reach `forget` for every path. Impact checked (HEAD 7faccb5): cc43f1f's hunks are `remote_api.go` new 221-326 (the remote message path); the cited `:36-48`, `:84-103` are unchanged, and `:401`, `:411` move +24 without changing their content. |
 | A35 | `internal/app/usage.go:114-213` (`writeUsageCache` at `:203`, `writeUsageCacheCheckpoint` at `:114`) | Usage cache body: `statFile` (`:119`), `HashFileRange` 64 KB tail (`:135`), `json.Marshal`, `CreateTemp` (`:161`), write, `file.Sync()` when durability is not `process` (`:172`), `Close`, `os.Rename` (`:180`), and a directory `Sync` only when durability is `strict` (`:183`) | Cost is one fsync of a small file per advancing scan (plus one dir fsync under strict). The default durability is `turn` (`sessionfs/session.go:742`), so the file fsync runs by default. Runs inside the journal lock because `scanTranscriptIndex` calls it (A13). Temp file is removed by the deferred `os.Remove` (`:166`) on every path. Trigger: each `profile_message`/compaction scan that advances the offset. | degrades (throughput under the journal lock) | Write after releasing the journal lock (A13); keep the fsync. | No (cache schema stays v1) | `usage.go:114-180`, `:166` defer, `:183` dir sync; `session.go:742`. Corrects the gap: fsync is present, not missing. |
 | A36 | `internal/app/usage.go:203-213` (`writeUsageCache` error path) | Failure is logged once per run of failures (`usageCacheFailed` Swap, `:209`) and never fails the caller | No risk: best-effort by design. | no finding | None. | No | `usage.go:203-213`. |
@@ -220,7 +428,7 @@ Evidence: **verified** (`read.sh` `task_store.go:352-420`, `grep` `mu/Lock` + `t
 `backend-go/internal/tools/native/memory_store.go:158-180` (`Create`/`CreateValue` via `withLock` + `totals` + `MaxRecordsPerType`/`MaxTotalRecords`/`MaxTotalBytes`/`MaxTypes`),
 `225-332` (`Update`/`List` via `withLock`), `326-530` (`list` holds lock across `files()`+`sort`+per-record `readRecordText`+`parse`+`match` bounded by `MaxScanRecords`/`MaxScanBytes`/`MaxListLimit`/`MaxListBytes`),
 `665-730` (`totals()` `ReadDir` root + per-type `filesKnowing` + `Stat` unknowns, aborts with `quota scan exceeded` over `MaxScanRecords`/`MaxScanBytes`),
-`memory_group.go:22-` (`GroupBy` same lock across full scan).
+`memory_group.go:28-` (`GroupBy` same lock across full scan).
 `withLock` (`memory_store.go:523-532`) is `s.locks.Lock("memory:"+s.root)` where `s.locks` is Resolver-shared `mutationLock` (`resolver.go:276,837`, `path_locks.go:22-45` refcounted per-key `mu` + global `mu` for map).
 Shared: one `PathLocks` entry per memory root, shared across catalogs/sessions with same root.
 Why 1000 fails: `List`/`GroupBy`/`Create`/`Update` sharing a root serialize; each holds the per-root lock while doing `ReadDir` + up to `MaxScanRecords` file reads/parses (default scan budgets in `sessionfs/native_memory_settings.go`).
@@ -231,13 +439,13 @@ Evidence: **verified** (`read.sh` `memory_store.go:523-560,665-730,326-530`, `pa
 Confirms P7B-R3-05 shape (lock across I/O) on HEAD abefc5f.
 
 **B-23 fetch store quota exists but `Create/CreatePage` holds `mu` across full-dir scan + writes; no global concurrency cap — degrades (quota part is no-finding vs B-13 inferred).**
-`backend-go/internal/tools/native/fetch_store.go:64-91` (`FetchStore{mu, transports, cacheMu}`),
+`backend-go/internal/tools/native/fetch_store.go:65-91` (`FetchStore{mu, transports, cacheMu}`),
 `90-136` (`Create` `s.mu.Lock` across `MkdirAll`+`fetchDirectoryBytes`+`atomicFetchWrite` ×2),
 `177-198` (`CreatePage` calls `Create` then slices page),
 `280-300` (`fetchDirectoryBytes` `ReadDir`+`Info` per file),
 `202-240` (`rememberURLs`/`cachedPage` under separate `cacheMu`),
 `backend-go/internal/tools/native/fetch_transport.go:41-85` (`pool.get` bounded by `MaxKeepAliveHosts`, LRU evict + idle sweep under `pool.mu`),
-`fetch.go:87-112,563-576` (pool reused when `KeepAliveMS>0`, else new `http.Transport` per call).
+`fetch.go:87-112,564-577` (pool reused when `KeepAliveMS>0`, else new `http.Transport` per call).
 Quota: per-document `storedBytes > MaxStorageBytes` reject + aggregate `usedBytes+storedBytes > MaxStorageBytes` reject (`fetch_store.go:110-122`; defaults `sessionfs/native_fetch_settings.go:23-56`).
 Shared: one `FetchStore.mu` per `storageDir` (shared via `Resolver.fetchStores` `resolver.go:849-865`); one `fetchTransportPool` per store.
 Why 1000 fails: quota is per-store, not per-call-only — so B-13 "store-wide quota inferred" is **confirmed present** (no finding on that sub-point).
@@ -322,7 +530,7 @@ Confirms/extends B-18 (was inferred) + A16 (never evicted).
 **B-29 Runner hot paths below `executeRun`: per-round full-history rescan + compaction trigger parse + `CompactHistory` + state-context rebuild — degrades.**
 `backend-go/internal/session/runner.go:400-513` (impacted by c8f74a7: `RunOptions.LeafBudget` added at `:138-140`, and the leaf calls of `executeToolCalls` now pass through it at `:656`; the per-round costs below are unchanged. `Run` holds `r.mu` whole run (B-02); per round: `ToolCatalog.ResponseTools()` rebuild (`460-464`), `buildRoundRequest` (`465`), `runResponse` + `compactAfterResponse` (`486`), `enforceToolLimits`/`executeToolCalls` (`507-510`)),
 `520-573` (`persistRunInput` once; `buildRoundRequest`: `inputHistory.Read()` + `ImageStore.Rehydrate(history)` + `ImageResizer.Apply` + `BuildRequestWithStateContext`),
-`574-600` (`compactAfterResponse`: `automaticCompactionTrigger(event)` `716-760` parses `response.completed`+`usage.input_tokens` JSON per round, then `CompactHistory` (`shared.compactPreservingUsage` via `bound_runner.go:101-111`) + `OnUsageChanged`),
+`577-603` (`compactAfterResponse`, HEAD 701f1dd; parent c8f74a7^ `574-600`): `automaticCompactionTrigger(event)` `719-763` (parent `716-760`) parses `response.completed`+`usage.input_tokens` JSON per round, then `CompactHistory` (`shared.compactPreservingUsage` via `bound_runner.go:101-111`) + `OnUsageChanged`),
 `605-700` (`enforceToolLimits` sums `usedTokens` from `responseTokens(event)` per round; `executeToolCalls`: `checkpointRun.BeforeCalls` + `executeToolRound` + `ImageStore.ExternalizeAll` + `appendToolOutputs`),
 `app/bound_runner.go:56-131` (`scanTranscriptIndex` for turn, `prepareRun`, `collectStateContextSnapshot` reading process/task/memory/subagent/async stores + `AppendStateContext` after compaction).
 Shared: `Runner.mu` (per session, B-02); transcript `TurnStore.mu`/journal `mu` (A4/A6); stores read by state-context.
