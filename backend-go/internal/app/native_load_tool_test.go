@@ -65,6 +65,21 @@ func TestLoadToolIsListedWhenEnabled(t *testing.T) {
 	}
 }
 
+// The tools route lists what the model sees: an unloaded lazy tool is absent until a load lists it.
+func TestLazyRouteListsOnlyTheLazyToolsTheModelSees(t *testing.T) {
+	steps := []subagentStep{{"load_tool", `{"names":["read"]}`}}
+	f, _ := lazyFixture(t, []string{"read"}, steps)
+	if names := sessionToolNames(t, f); slices.Contains(names, "read") || !slices.Contains(names, "load_tool") {
+		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded read", names)
+	}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if names := sessionToolNames(t, f); !slices.Contains(names, "read") {
+		t.Fatalf("after a load the route lists %v, want read", names)
+	}
+}
+
 // tools.lazy without tools.native.load_tool refuses the session at load, and the error names both.
 func TestLazyWithoutLoadToolRefusesTheSession(t *testing.T) {
 	profileTools := map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "lazy": []string{"read"}}

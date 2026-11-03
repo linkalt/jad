@@ -222,6 +222,24 @@ func (c *Catalog) Definitions() []Definition {
 	return definitions
 }
 
+// ListedDefinitions returns the provider definitions of the tools that are listed now, in the
+// registry's stable order: the same tools ResponseTools sends the model.
+func (c *Catalog) ListedDefinitions() []Definition {
+	if c == nil {
+		return []Definition{}
+	}
+	definitions := make([]Definition, 0, len(c.tools))
+	for _, tool := range c.tools {
+		if tool.Listed != nil && !tool.Listed() {
+			continue
+		}
+		definition := tool.Definition
+		definition.InputSchema = append(json.RawMessage(nil), definition.InputSchema...)
+		definitions = append(definitions, definition)
+	}
+	return definitions
+}
+
 // ResponseTools returns the function-tool objects accepted by the Responses
 // API, for the tools that are listed now, in the catalog order. Native tool
 // definitions are non-strict, as in the TypeScript backend.
