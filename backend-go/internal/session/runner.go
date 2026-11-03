@@ -858,6 +858,13 @@ func decodeJSONObject(raw []byte) ([]rawObjectField, error) {
 	if !json.Valid(raw) {
 		return nil, errors.New("expected a valid JSON object")
 	}
+	return decodeValidJSONObject(raw)
+}
+
+// decodeValidJSONObject is decodeJSONObject for raw the caller has already checked with
+// json.Valid, so the per-event path does not scan every stream event twice. Each value is a
+// fresh json.RawMessage (Decode copies into it), so it is kept without another copy.
+func decodeValidJSONObject(raw []byte) ([]rawObjectField, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil {
@@ -885,10 +892,10 @@ func decodeJSONObject(raw []byte) ([]rawObjectField, error) {
 		}
 		if index, exists := positions[key]; exists {
 			// JSON.parse keeps the first property position but the last value.
-			fields[index].value = cloneRaw(value)
+			fields[index].value = value
 		} else {
 			positions[key] = len(fields)
-			fields = append(fields, rawObjectField{key: key, value: cloneRaw(value)})
+			fields = append(fields, rawObjectField{key: key, value: value})
 		}
 	}
 	if _, err := decoder.Token(); err != nil {

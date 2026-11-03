@@ -56,7 +56,7 @@ func (r *Runner) runResponse(ctx context.Context, request json.RawMessage, sessi
 		if !json.Valid(event.Raw) {
 			return errors.New("Responses stream event must contain valid JSON")
 		}
-		eventFields, err := decodeJSONObject(event.Raw)
+		eventFields, err := decodeValidJSONObject(event.Raw)
 		if err != nil {
 			return fmt.Errorf("decode Responses stream event: %w", err)
 		}
