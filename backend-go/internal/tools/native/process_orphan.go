@@ -117,6 +117,12 @@ func (manager *ManagedProcessManager) classifyOrphan(manifest ProcessManifest, s
 	if processStartTime(manifest.PID) != record.Start {
 		return orphanLost
 	}
+	// A leader that already exited and only waits to be reaped (an init that does not reap
+	// keeps it so) ended before this restart. With no live member left in its group there
+	// is nothing to stop, and reporting it stopped by the restart would be untrue.
+	if !processExists(manifest.PID) && !processGroupAlive(manifest.PID) {
+		return orphanLost
+	}
 	return orphanStoppable
 }
 
@@ -135,7 +141,9 @@ func stopOrphanGroups(pids []int, grace time.Duration) map[int]bool {
 				if gone[pid] {
 					continue
 				}
-				if processExists(pid) {
+				// The group counts too: a leader that exited (a zombie, or reaped) can leave
+				// members that ignore SIGTERM, and those still need the hard kill.
+				if processExists(pid) || processGroupAlive(pid) {
 					remaining = true
 				} else {
 					gone[pid] = true

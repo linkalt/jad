@@ -51,6 +51,16 @@ func signalProcessGroupID(pgid int, force bool) {
 	_ = syscall.Kill(-pgid, signal)
 }
 
+// processGroupAlive reports whether group pgid has a member that has not exited. kill(-pgid, 0)
+// also succeeds for a group of unreaped zombies (orphans reparented to an init that does not
+// reap them), which would make every stop wait its whole grace; where /proc says every member
+// is a zombie, the group is gone.
 func processGroupAlive(pgid int) bool {
-	return pgid > 1 && syscall.Kill(-pgid, 0) == nil
+	if pgid <= 1 || syscall.Kill(-pgid, 0) != nil {
+		return false
+	}
+	if live, known := groupHasLiveMember(pgid); known {
+		return live
+	}
+	return true
 }
