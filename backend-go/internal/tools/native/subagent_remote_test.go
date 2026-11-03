@@ -28,6 +28,11 @@ const remoteAgent = "remote:peer/main/review/reviewer/explore"
 // finish. It is an upper bound: a passing run never waits for it.
 const remoteSeamBound = 10 * time.Second
 
+// remoteDrainBound bounds the cleanup wait for the manager's remote goroutines. The longest drain
+// measured across the remote tests is 20s (a run that stays open ends at RemoteTimeoutMs), so the
+// bound leaves 10s of margin over it.
+const remoteDrainBound = 30 * time.Second
+
 type remoteSubagentFixture struct {
 	peer    *peer
 	hub     *remote.Hub
@@ -72,8 +77,13 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 		t.Fatal(err)
 	}
 	// Registered first, so it runs last: every remote goroutine this fixture starts has returned
-	// before the test does. No bound: a run that never ends is reported by the hang, not a timeout.
-	t.Cleanup(manager.remoteEnds.Wait)
+	// before the test does. A test that already failed on the wait (releaseSeamVars) is not waited on
+	// again, so a stuck goroutine costs one bound, not two.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			waitForRemoteEnds(t, manager)
+		}
+	})
 	return &remoteSubagentFixture{peer: p, hub: hub, host: host, tool: tool, async: async, local: local, manager: manager}
 }
 
@@ -607,17 +617,36 @@ func remoteSeamWait(ch chan struct{}) bool {
 	}
 }
 
+// waitForRemoteEnds waits for the manager's remote goroutines to return, for at most remoteDrainBound.
+// A goroutine still running after the bound is a missing Done or a run that never ended, so the test
+// fails with a named message.
+func waitForRemoteEnds(t *testing.T, manager *SubagentManager) {
+	t.Helper()
+	ended := make(chan struct{})
+	go func() {
+		manager.remoteEnds.Wait()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(remoteDrainBound):
+		t.Fatalf("a remote goroutine did not return within %v; a Done is missing or a run never ended", remoteDrainBound)
+	}
+}
+
 // releaseSeamVars is the cleanup of a test that set seam vars. It lets every goroutine it held go,
-// waits for the manager's remote goroutines to return (no bound: a goroutine that never returns
-// hangs the test, which is reported), and only then clears the vars. A goroutine returns after it
-// has read its seam, so the clear cannot race a read.
-func releaseSeamVars(manager *SubagentManager, seams ...*seam) {
+// waits for the manager's remote goroutines to return, and clears the vars even when that wait fails
+// (the deferred clear runs on the fatal exit). A goroutine returns after it has read its seam, so a
+// clear after a successful wait cannot race a read; after a failed wait the failure is already reported.
+func releaseSeamVars(t *testing.T, manager *SubagentManager, seams ...*seam) {
+	defer func() {
+		beforeRemoteBackgroundRelease = nil
+		beforeRemoteAsyncComplete = nil
+	}()
 	for _, s := range seams {
 		s.letGo()
 	}
-	manager.remoteEnds.Wait()
-	beforeRemoteBackgroundRelease = nil
-	beforeRemoteAsyncComplete = nil
+	waitForRemoteEnds(t, manager)
 }
 
 // The sync reply must come after the early release: the background release is held at its seam,
@@ -626,7 +655,7 @@ func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
 	bg := newSeam()
 	beforeRemoteBackgroundRelease = bg.hook
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
-	t.Cleanup(func() { releaseSeamVars(f.manager, bg) })
+	t.Cleanup(func() { releaseSeamVars(t, f.manager, bg) })
 	f.tool = newSyncRemoteTool(t, f)
 	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", SessionKey: remoteCaller.SessionKey}
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
@@ -648,7 +677,7 @@ func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T)
 	beforeRemoteBackgroundRelease = bg.hook
 	beforeRemoteAsyncComplete = done.hook
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
-	t.Cleanup(func() { releaseSeamVars(f.manager, bg, done) })
+	t.Cleanup(func() { releaseSeamVars(t, f.manager, bg, done) })
 	nested := remoteCaller
 	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
 	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, nested))
