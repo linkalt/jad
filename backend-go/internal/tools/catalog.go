@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -146,11 +147,16 @@ type Tool struct {
 type Catalog struct {
 	tools  []Tool
 	byName map[string]Tool
+	// encoded caches each tool's Responses definition, index-aligned with tools. A tool is
+	// encoded the first time it is listed, so the run loop does not re-marshal every schema on
+	// every round. The bytes are shared and must not be written to. Guarded by encodedMu.
+	encodedMu sync.Mutex
+	encoded   []json.RawMessage
 }
 
 // NewCatalog validates the tool set and rejects duplicate exposed names.
 func NewCatalog(tools []Tool) (*Catalog, error) {
-	catalog := &Catalog{tools: append([]Tool(nil), tools...), byName: make(map[string]Tool, len(tools))}
+	catalog := &Catalog{tools: append([]Tool(nil), tools...), byName: make(map[string]Tool, len(tools)), encoded: make([]json.RawMessage, len(tools))}
 	for _, tool := range tools {
 		if strings.TrimSpace(tool.Definition.ID) == "" || strings.TrimSpace(tool.Definition.Name) == "" {
 			return nil, errors.New("tool id and name are required")
@@ -248,8 +254,15 @@ func (c *Catalog) ResponseTools() ([]json.RawMessage, error) {
 		return []json.RawMessage{}, nil
 	}
 	tools := make([]json.RawMessage, 0, len(c.tools))
-	for _, tool := range c.tools {
+	for index, tool := range c.tools {
 		if tool.Listed != nil && !tool.Listed() {
+			continue
+		}
+		c.encodedMu.Lock()
+		cached := c.encoded[index]
+		c.encodedMu.Unlock()
+		if cached != nil {
+			tools = append(tools, cached)
 			continue
 		}
 		encoded, err := json.Marshal(struct {
@@ -268,6 +281,9 @@ func (c *Catalog) ResponseTools() ([]json.RawMessage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("encode response tool %s: %w", tool.Definition.Name, err)
 		}
+		c.encodedMu.Lock()
+		c.encoded[index] = encoded
+		c.encodedMu.Unlock()
 		tools = append(tools, encoded)
 	}
 	return tools, nil
