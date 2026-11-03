@@ -22,7 +22,7 @@ module JadFn
       return constant if args.empty? && options.empty? && block.nil?
       entry = JadFn.entry(constant, name)
       unless entry
-        raise "fn.#{name} has no single entry to call (#{constant_name} has #{constant.singleton_methods.empty? ? 'no singleton methods' : constant.singleton_methods.join(', ')}): define self.call or self.#{name.tr('-', '_')}"
+        raise "fn.#{name} has no single entry to call (#{constant_name} has #{constant.singleton_methods.empty? ? 'no singleton methods' : constant.singleton_methods.sort.join(', ')}): define self.call or self.#{name.tr('-', '_')}"
       end
       constant.public_send(entry, *args, **options, &block)
     end
