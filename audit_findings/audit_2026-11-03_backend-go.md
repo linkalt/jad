@@ -51,6 +51,37 @@ The 4 failing tests:
 | R3 | low-med | perf | Stream events are validated twice and every value is cloned | re-confirmed open: p2b2 **PH3** |
 | R4 | medium | memory | Per-session caches are never evicted for live sessions; `lineIndex` grows with transcript lines | re-confirmed open: p8 **PM-14**, scale **A5**, **A28** |
 
+## Fix status (2026-11-03, branch `claude/amazing-ritchie-sbqle7`)
+
+Each commit message lists the impact trace (callers, readers, lock order, persisted output), the tests and, for performance changes, before/after numbers. After the last code commit, `go test ./internal/... ./cmd/...` passed (36 packages), and `go vet` and `gofmt` were clean.
+
+| ID | Commit | Outcome |
+|---|---|---|
+| B2 | `5aef069` | fixed: sorted method list; the failing Ruby test passes |
+| B4 | `b772793` | fixed: skips without socat |
+| B1 | `7f40ffa` | fixed: zombie-aware `processGroupAlive`/`processExists` (Linux `/proc`). `classifyOrphan`/`stopOrphanGroups` were adjusted so a zombie leader is neither reported as stopped nor hides live members. 2 new tests; the 2 failing native tests pass |
+| B3, X1 | `0e8bbc3` | fixed: one write per batch, truncated back on failure; new test |
+| B5 | `9cf71d9` | fixed: raw-DEFLATE fallback; new test |
+| D3 | `53b5878` | fixed: `tools.native.process.drain_after_exit_ms` (loader, schema, tests, DECISIONS). The other three constants are recorded under DECISIONS F-27 |
+| D1 | `fc52ea1` | fixed: per-entry `manifestMu`; the fsync no longer holds `entry.mu`. New test; `-race -count=3` clean. The fsync semantics and the global `persistMu` are unchanged |
+| D2 | `6eca7ea` | fixed: `keep_finished` trims per session (also at startup). 2 new tests; the old code deleted the other session's transcript folders |
+| P4 | `66ee256` | fixed: 33.9 MB → 0.18 MB per 32 MiB copy |
+| P3 | `81412cb` | fixed: 23.5 → 4.8 µs per throttled bash plan |
+| P5 | `9547400` | partly: copies removed (9125 → 8725 allocs, time within noise). The lock scope is unchanged. The audit overstated this cost |
+| P2 | `6169959` | fixed: 0.5 ms → 1 µs per round for 40 tools |
+| P1 | `9623c0f` | fixed: one flush per burst; the loopback benchmark gain is noisy (see the commit) |
+| R1 | `a5d7340` | fixed: large-history request build 34.5-38.1 → 21.8-24.0 ms, byte-identical |
+| R2 | `9a2d9ad` | fixed: round decode 1.8 → 0.95 ms (tracing off) |
+| R3 | `e7dcb3a` | partly: double validation and double copies removed (about 8%, 108 → 101 allocs). The full key walk is kept for exact key semantics |
+| R4 | none | **open**: needs a design decision (idle eviction of `Resolver` caches with a config key and in-use tracking, or a bounded duplicate-commit check instead of the full `lineIndex`) |
+| B6 | none | **new, open** (found while cross-compiling B1): see below |
+
+### B6 (medium) `internal/remote` does not compile on macOS or BSD `[ran]`
+
+- **Where:** `internal/remote/socket_unix.go` is `//go:build unix` but calls `unix.GetsockoptUcred` / `unix.SO_PEERCRED`, which exist only on Linux.
+- **Evidence:** `GOOS=darwin go vet ./internal/tools/native` and `GOOS=freebsd …` both fail with `undefined: unix.GetsockoptUcred` / `undefined: unix.SO_PEERCRED`. `tools/native` imports `remote`, so the backend does not build for those systems.
+- **Fix:** restrict the file to `linux` and give other Unix systems a peer check that uses `getpeereid` (`unix.GetsockoptXucred` with `LOCAL_PEERCRED` on darwin), or refuse unix-socket remotes there.
+
 ---
 
 ## Bugs
