@@ -1347,13 +1347,16 @@ The cleanup of the remote tests waits for the manager's remote goroutines (`remo
 On expiry the test fails with "a remote goroutine did not return within 40s; a Done is missing or a
 run never ended". The bound is a test constant, not a product setting; `RemoteTimeoutMs` is unchanged.
 
-- **Measured drain under `-race`:** `go test -race -json -count=3 -run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'`.
-  The filter selects 25 top-level tests, each run 3 times: 75 top-level passes, 0 failures, 24 subtest
-  runs. A temporary print in `waitForRemoteEnds` recorded 90 drain waits, from 28 tests. Worst single
-  wait 20.0012s, in `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits`, which waits for its run to
-  end at `RemoteTimeoutMs` (20s). Next longest 4.4ms.
+- **Measured drain under `-race`:** `go test -race -json -count=3 -run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'`
+  on `internal/tools/native`. The filter selects 25 top-level tests, each run 3 times: 75 top-level
+  `pass` actions, 0 `fail`, and 24 subtest `run` actions (not counted in the 75). Worst single wait
+  20.0011s, in `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits`, which waits for its run to end
+  at `RemoteTimeoutMs` (20s). The wait was measured with a temporary print, not kept in the tree.
 - **Bound:** 40s, twice the measured worst wait. It was 30s before, which left only 10s of margin.
-- **Cost:** a passing test whose run stays open takes up to 20s. A stuck goroutine costs one bound (40s).
-- **Failing runs:** when the test has already failed (`t.Failed()`, for any reason), the fixture cleanup
-  skips its drain wait, so a stuck goroutine costs one bound, not two. In that case a late goroutine can
-  still read a later test's seam. This can only change the result of a run that is already red.
+- **Cost:** a passing test whose run stays open takes up to 20s. A stuck goroutine costs one bound
+  (40s) in a test that only has the fixture cleanup. A seam test also waits in `releaseSeamVars`, so a
+  stuck goroutine there can cost up to two bounds (80s).
+- **Failing runs:** the fixture cleanup skips its drain wait whenever `t.Failed()` is true, for any
+  reason. `releaseSeamVars` does not check `t.Failed()` and always waits. In a failing run a late
+  goroutine can still read a later test's seam; this can only change the result of a run that is
+  already red.
