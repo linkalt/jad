@@ -63,7 +63,7 @@ type SubagentManager struct {
 	mu       sync.Mutex
 	closed   bool
 	runs     map[string]*subagentRun
-	finished []string // ids of ended runs, oldest first
+	finished []string // ids of ended runs, oldest first; keep_finished trims it per owner
 	running  int      // slots held
 	// writers counts the runs of each owner that can change files and run as handles,
 	// from reservation to end; see reserveWriter.
@@ -136,7 +136,9 @@ func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManag
 }
 
 // recover loads the stored runs, marks the ones a restart interrupted as lost, and
-// drops the oldest ended runs beyond keep.
+// drops each owner's oldest ended runs beyond keep. keep is the setting of the session that
+// built the manager, the only one known at startup; each session's own keep_finished applies
+// again as its runs end.
 func (m *SubagentManager) recover(keep int) {
 	manifests := m.store.load()
 	now := m.now()
@@ -165,8 +167,14 @@ func (m *SubagentManager) recover(keep int) {
 		return a.id < b.id
 	})
 	var dropped []droppedRun
-	for len(m.finished) > keep {
-		dropped = append(dropped, m.dropOldestLocked())
+	owners := make(map[string]struct{})
+	for _, id := range m.finished {
+		if run := m.runs[id]; run != nil {
+			owners[run.owner] = struct{}{}
+		}
+	}
+	for owner := range owners {
+		dropped = append(dropped, m.trimOwnerLocked(owner, keep)...)
 	}
 	m.removeDropped(dropped)
 }
@@ -179,12 +187,38 @@ type droppedRun struct {
 	dir string
 }
 
-// dropOldestLocked forgets the oldest ended run. The caller holds mu or is the only user of
-// the manager, and must pass the result to removeDropped after releasing mu, so a slow disk
-// never holds the lock.
-func (m *SubagentManager) dropOldestLocked() droppedRun {
-	id := m.finished[0]
-	m.finished = m.finished[1:]
+// trimOwnerLocked forgets owner's oldest ended runs beyond keep. keep_finished is a session
+// setting, while sessions that share a storage directory share this manager: trimming the
+// whole list by the keep of whichever run ended let one session's small keep_finished drop
+// (and, with delete_transcripts, delete) another session's runs. An id whose run is gone is
+// dropped as well. The caller holds mu or is the only user of the manager, and must pass the
+// result to removeDropped after releasing mu, so a slow disk never holds the lock.
+func (m *SubagentManager) trimOwnerLocked(owner string, keep int) []droppedRun {
+	count := 0
+	for _, id := range m.finished {
+		if run := m.runs[id]; run != nil && run.owner == owner {
+			count++
+		}
+	}
+	var dropped []droppedRun
+	for index := 0; index < len(m.finished); {
+		run := m.runs[m.finished[index]]
+		if run != nil && (run.owner != owner || count <= keep) {
+			index++
+			continue
+		}
+		if run != nil {
+			count--
+		}
+		dropped = append(dropped, m.dropFinishedLocked(index))
+	}
+	return dropped
+}
+
+// dropFinishedLocked forgets the ended run at index of m.finished; see trimOwnerLocked.
+func (m *SubagentManager) dropFinishedLocked(index int) droppedRun {
+	id := m.finished[index]
+	m.finished = append(m.finished[:index], m.finished[index+1:]...)
 	run := m.runs[id]
 	delete(m.runs, id)
 	dropped := droppedRun{id: id, run: run}
@@ -241,7 +275,7 @@ func (m *SubagentManager) DeleteTranscriptsUnder(root string) {
 	m.transcriptRoot = filepath.Clean(root)
 }
 
-// removeDropped deletes the manifests and transcript folders chosen by dropOldestLocked. The
+// removeDropped deletes the manifests and transcript folders chosen by trimOwnerLocked. The
 // caller must not hold mu: a manifest removal waits for the store, which a save holds across
 // its fsync. A failure is logged and does not stop the others.
 func (m *SubagentManager) removeDropped(dropped []droppedRun) {
@@ -919,9 +953,7 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	countDown(m.byRoot, run.root)
 	countDown(m.bySession, run.session)
 	m.finished = append(m.finished, run.id)
-	for len(m.finished) > spec.keep {
-		dropped = append(dropped, m.dropOldestLocked())
-	}
+	dropped = m.trimOwnerLocked(run.owner, spec.keep)
 	m.mu.Unlock()
 	m.removeDropped(dropped)
 	if run.countedWriter {
