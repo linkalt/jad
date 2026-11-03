@@ -428,10 +428,41 @@ func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
 			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts", entry)
 		}
 	}
-	// The lazy pass never binds these, so the loader refuses them as lazy entries (checkLazyEntriesVisible).
+	// The late-built tools and subagent are bound by the lazy pass, so the loader accepts them as lazy entries.
 	for _, entry := range []string{"subagent", "profile_message", "transcript", "transcripts", "profile"} {
-		if lazy.MatchString(entry) {
-			t.Errorf("the schema's lazy pattern admits %q, which the lazy pass cannot bind", entry)
+		if !lazy.MatchString(entry) {
+			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts as a lazy entry", entry)
+		}
+	}
+}
+
+// The schema's lazy pattern admits exactly the native names the loader accepts as lazy entries: every native
+// tool except load_tool. A name added to nativeToolNames must reach the lazy pattern too, or this fails.
+func TestProfileToolsSchemaLazyPatternAgreesWithTheLoaderForEveryNativeName(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/profile.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Tools struct {
+				Properties map[string]struct {
+					Items struct {
+						Pattern string `json:"pattern"`
+					} `json:"items"`
+				} `json:"properties"`
+			} `json:"tools"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	lazy := regexp.MustCompile(schema.Properties.Tools.Properties["lazy"].Items.Pattern)
+	for _, name := range nativeToolNames {
+		admitted := lazy.MatchString(name)
+		want := name != LoadToolName
+		if admitted != want {
+			t.Errorf("native tool %q: the schema's lazy pattern admits it = %v, the loader wants %v", name, admitted, want)
 		}
 	}
 }
