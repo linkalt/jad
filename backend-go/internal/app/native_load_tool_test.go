@@ -80,6 +80,23 @@ func TestLazyRouteListsOnlyTheLazyToolsTheModelSees(t *testing.T) {
 	}
 }
 
+// The same route check for an MCP lazy tool: the unloaded mcp:fixture:lookup is absent until
+// load_tool loads it, and then the route lists its model-facing name.
+func TestLazyRouteListsAnUnloadedMCPLazyToolOnlyAfterLoad(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	steps := []subagentStep{{"load_tool", `{"names":["` + name + `"]}`}}
+	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
+	if names := sessionToolNames(t, f); slices.Contains(names, name) || !slices.Contains(names, "load_tool") {
+		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded %s", names, name)
+	}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if names := sessionToolNames(t, f); !slices.Contains(names, name) {
+		t.Fatalf("after a load the route lists %v, want %s", names, name)
+	}
+}
+
 // tools.lazy without tools.native.load_tool refuses the session at load, and the error names both.
 func TestLazyWithoutLoadToolRefusesTheSession(t *testing.T) {
 	profileTools := map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "lazy": []string{"read"}}
