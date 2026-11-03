@@ -39,22 +39,24 @@ const (
 type ToolSmithNested struct {
 	mu        sync.RWMutex
 	available []tools.Tool
-	deny      []string
+	profile   sessionfs.ProfileToolSettings
 }
 
-// Bind sets the tools a script may reach and the profile's tools.deny entries.
-func (n *ToolSmithNested) Bind(available []tools.Tool, deny []string) {
+// Bind sets the tools a script may reach and the profile's tools block, which decides
+// what the model sees, so a script reaches no more than the model does.
+func (n *ToolSmithNested) Bind(available []tools.Tool, profile sessionfs.ProfileToolSettings) {
 	if n == nil {
 		return
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.available = append([]tools.Tool(nil), available...)
-	n.deny = append([]string(nil), deny...)
+	n.profile = profile
 }
 
 // allowed is the native tools named in settings.Tools, in that order, minus the always
-// excluded ones and what the profile denies.
+// excluded ones and what the profile does not show the model (deny, or outside allow).
+// The lazy gate is already on each tool, so a lazy tool stays refused until it is loaded.
 func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []tools.Tool {
 	if n == nil {
 		return nil
@@ -68,7 +70,7 @@ func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []
 			continue
 		}
 		for _, tool := range n.available {
-			if (tool.Definition.Source == "native" || tool.Definition.Source == "extension") && tool.Definition.Name == name && !tools.AnyEntryMatches(n.deny, tool.Definition) {
+			if (tool.Definition.Source == "native" || tool.Definition.Source == "extension") && tool.Definition.Name == name && tools.ProfileShows(n.profile, tool.Definition) {
 				picked = append(picked, tool)
 				break
 			}

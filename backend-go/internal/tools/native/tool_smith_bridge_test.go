@@ -70,7 +70,7 @@ func bridgeSettings(t *testing.T, root string, names ...string) sessionfs.Native
 
 func bridgeNested(list ...tools.Tool) *ToolSmithNested {
 	nested := &ToolSmithNested{}
-	nested.Bind(list, nil)
+	nested.Bind(list, sessionfs.ProfileToolSettings{})
 	return nested
 }
 
@@ -164,7 +164,7 @@ return out.join('|');`)
 func TestToolSmithNestedCatalogHoldsOnlyAllowedNativeTools(t *testing.T) {
 	list := []tools.Tool{bridgeTestTool(t, "read", true, nil), bridgeTestTool(t, "grep", true, nil), bridgeTestTool(t, "bash", false, nil), mcpReadOnlyTool("read_mcp")}
 	nested := &ToolSmithNested{}
-	nested.Bind(list, []string{"grep"})
+	nested.Bind(list, sessionfs.ProfileToolSettings{Restricted: true, Deny: []string{"grep"}})
 	got := poolNames(nested.allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"bash", "grep", "read", "read_mcp"}}))
 	if len(got) != 1 || got[0] != "read" {
 		t.Fatalf("allowed = %v", got)

@@ -35,7 +35,7 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 		return nil, nil, err
 	}
 	exposed, hidden, err := registered.Filter(func(definition tools.Definition) bool {
-		return profileToolShown(settings, definition)
+		return tools.ProfileShows(settings, definition)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -55,7 +55,7 @@ func openLazySet(config sessionfs.SessionConfig, logger *slog.Logger) (*tools.La
 	if config.StateDir == "" || config.MessagesPath == "" {
 		return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy needs a catalog layout; this session has no state folder", config.SettingPath, config.Profile)}
 	}
-	shown := func(definition tools.Definition) bool { return profileToolShown(config.ProfileTools, definition) }
+	shown := func(definition tools.Definition) bool { return tools.ProfileShows(config.ProfileTools, definition) }
 	return tools.OpenLazySet(filepath.Dir(config.MessagesPath), config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown, logger)
 }
 
@@ -67,7 +67,7 @@ func checkLazyLoadToolShown(config sessionfs.SessionConfig, settings sessionfs.P
 		return nil
 	}
 	for _, definition := range registered {
-		if definition.Name != sessionfs.LoadToolName || definition.Source != "native" || profileToolShown(settings, definition) {
+		if definition.Name != sessionfs.LoadToolName || definition.Source != "native" || tools.ProfileShows(settings, definition) {
 			continue
 		}
 		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools hides %q, but tools.lazy lists %d tool(s) that only %q can load: allow %q, or remove tools.lazy",
@@ -84,7 +84,7 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 	for index, entry := range settings.Lazy {
 		visible := false
 		for _, definition := range registered {
-			if tools.EntryMatches(entry, definition) && !native.NotLazyBindable(definition) && profileToolShown(settings, definition) {
+			if tools.EntryMatches(entry, definition) && !native.NotLazyBindable(definition) && tools.ProfileShows(settings, definition) {
 				visible = true
 				break
 			}
@@ -96,15 +96,6 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 			config.SettingPath, config.Profile, index, entry)}
 	}
 	return nil
-}
-
-// profileToolShown reports whether the profile's model sees the tool: an allow list
-// (when the block has one) must cover it, and no deny entry may.
-func profileToolShown(settings sessionfs.ProfileToolSettings, definition tools.Definition) bool {
-	if tools.AnyEntryMatches(settings.Deny, definition) {
-		return false
-	}
-	return !settings.HasAllow || tools.AnyEntryMatches(settings.Allow, definition)
 }
 
 // checkProfileToolEntries refuses an entry that names nothing registered, so a typo

@@ -58,7 +58,7 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 // Each late-built native tool, and subagent, can be lazy: a call before its load is refused with
 // tool_not_loaded, and after the set loads it the call is not refused.
 func TestLateNativeToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
-	arguments := map[string]string{"transcript": `{}`, "transcripts": `{}`, "profile": `{}`, "profile_message": `{"profile":"reviewer","message":"hi"}`, "subagent": `{"task":"x","agent":"explore"}`}
+	arguments := map[string]string{"transcript": `{}`, "transcripts": `{}`, "profile": `{"action":"info"}`, "profile_message": `{"profile":"reviewer","message":"hi"}`, "subagent": `{"task":"x","agent":"explore"}`}
 	for name, args := range arguments {
 		t.Run(name, func(t *testing.T) {
 			set, err := tools.OpenLazySet(t.TempDir(), []string{name}, 256, nil, nil)
@@ -84,7 +84,7 @@ func TestLateNativeToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
 // is not wrapped twice. TestLoadedLazyNativeCallFiresItsHookOnce is the app-level version of this check.
 // subagent is checked too, because its parent copy is hooked and gated like the late tools.
 func TestLateNativeToolHookFiresOncePerCallBeforeAndAfterLoad(t *testing.T) {
-	calls := map[string]string{"transcripts": `{}`, "subagent": `{"task":"x","agent":"explore"}`}
+	calls := map[string]string{"transcript": `{}`, "transcripts": `{}`, "profile": `{"action":"info"}`, "profile_message": `{"profile":"reviewer","message":"hi"}`, "subagent": `{"task":"x","agent":"explore"}`}
 	for name, args := range calls {
 		t.Run(name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "fires")

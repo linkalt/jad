@@ -100,7 +100,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
 		}
 	}
-	loaded, definitions, manager, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, lazy)
+	loaded, definitions, manager, toolSmithNested, err := buildNativeTools(config, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, lazy)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +235,10 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		tool = WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		loaded = append(loaded, tool)
 	}
+	// The late tools were appended after buildNativeTools bound the early list, so the script bridge is bound
+	// again with the whole list: the same gated, hooked copies the model sees. tool_smith itself is excluded
+	// by name (NativeToolSmithExcludedTools), so the rebind cannot reach it and recurse.
+	toolSmithNested.Bind(loaded, config.ProfileTools)
 	return tools.NewCatalog(loaded)
 }
 
@@ -314,7 +318,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		if resources != nil {
 			manager, taskStore, memoryStore, fetchStore = resources.Resources(derived)
 		}
-		loaded, _, manager, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, nil)
+		loaded, _, manager, _, err := buildNativeTools(derived, locks, manager, taskStore, memoryStore, fetchStore, asyncHost, nil)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}
@@ -325,7 +329,7 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 
 // buildNativeTools builds every native tool the settings enable except the subagent
 // tool, with the definitions it read and the process manager it used.
-func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncHost *AsyncHost, lazy *tools.LazySet) ([]tools.Tool, map[string]tools.Definition, ProcessManager, error) {
+func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, asyncHost *AsyncHost, lazy *tools.LazySet) ([]tools.Tool, map[string]tools.Definition, ProcessManager, *ToolSmithNested, error) {
 	if config.NativeProcess != nil && manager == nil {
 		manager = NewConfiguredProcessManager(*config.NativeProcess)
 	}
@@ -338,27 +342,27 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if len(config.ToolDefinitionPaths) == 0 {
 		for _, name := range sessionfs.NativeToolNames() {
 			if nativeToolConfigured(config, name) {
-				return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
+				return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
 			}
 		}
 		if config.ExtensionDecideSystemone != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide_systemone is configured but extension.decide_systemone is missing from tool_definition_paths", config.SettingPath)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide_systemone is configured but extension.decide_systemone is missing from tool_definition_paths", config.SettingPath)}
 		}
 	}
 	definitions, err := loadDefinitions(config.ToolDefinitionPaths)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	var loaded []tools.Tool
 	toolSmithNested := &ToolSmithNested{}
 	if config.NativeRead != nil {
 		definition, err := requireNativeDefinition(config, definitions, "read", readToolID, readInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewReadTool(*config.NativeRead)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -366,11 +370,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeWrite != nil {
 		definition, err := requireNativeDefinition(config, definitions, "write", writeToolID, writeInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewWriteTool(*config.NativeWrite, locks)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		tool = withConfiguredHooks(config, tool)
@@ -379,11 +383,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeEdit != nil {
 		definition, err := requireNativeDefinition(config, definitions, "edit", editToolID, editInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewEditTool(*config.NativeEdit, locks)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		tool = withConfiguredHooks(config, tool)
@@ -392,11 +396,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeGrep != nil {
 		definition, err := requireNativeDefinition(config, definitions, "grep", grepToolID, grepInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewGrepTool(*config.NativeGrep)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -404,11 +408,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeBash != nil {
 		definition, err := requireNativeDefinition(config, definitions, "bash", bashToolID, bashInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewBashTool(*config.NativeBash, config.Model.APIKeyEnv)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -416,11 +420,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeExec != nil {
 		definition, err := requireNativeDefinition(config, definitions, "exec", execToolID, execInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewExecTool(*config.NativeExec, config.Model.APIKeyEnv, asyncHost)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -428,11 +432,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeGlob != nil {
 		definition, err := requireNativeDefinition(config, definitions, "glob", globToolID, globInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewGlobTool(*config.NativeGlob)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -440,11 +444,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeReadImage != nil {
 		definition, err := requireNativeDefinition(config, definitions, "read_image", readImageToolID, readImageInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewReadImageTool(*config.NativeReadImage, imagestore.FromSettings(config.ImageStore))
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -452,11 +456,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeProcess != nil {
 		definition, err := requireNativeDefinition(config, definitions, "process", processToolID, processInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewProcessToolWithAsync(*config.NativeProcess, manager, config.Model.APIKeyEnv, asyncHost)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -464,11 +468,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeAsync != nil {
 		definition, err := requireNativeDefinition(config, definitions, "async", asyncToolID, asyncInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewAsyncTool(asyncHost)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -476,11 +480,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeTask != nil {
 		definition, err := requireNativeDefinition(config, definitions, "task", taskToolID, taskInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewTaskTool(*config.NativeTask, taskStore)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -488,11 +492,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeMemory != nil {
 		definition, err := requireNativeDefinition(config, definitions, "memory", memoryToolID, memoryInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewMemoryTool(*config.NativeMemory, memoryStore)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -500,11 +504,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeFetch != nil {
 		definition, err := requireNativeDefinition(config, definitions, "fetch", fetchToolID, fetchInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewFetchTool(*config.NativeFetch, fetchStore)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -512,11 +516,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeRequestDraft != nil {
 		definition, err := requireNativeDefinition(config, definitions, "request_draft", requestDraftToolID, requestDraftInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewRequestDraftTool(*config.NativeRequestDraft)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -524,11 +528,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeSkill != nil {
 		definition, err := requireNativeDefinition(config, definitions, "skill", skillToolID, skillInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -536,11 +540,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.NativeToolSmith != nil {
 		definition, err := requireNativeDefinition(config, definitions, "tool_smith", toolSmithToolID, toolSmithInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := NewToolSmithTool(*config.NativeToolSmith, config.Model.APIKeyEnv, toolSmithNested, asyncHost)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -548,11 +552,11 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 	if config.ExtensionDecideSystemone != nil {
 		definition, err := requireDefinition(config, definitions, "extension", "decide_systemone", extension.DecideSystemoneToolID, extension.DecideSystemoneInputSchema)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		tool, err := extension.NewDecideSystemoneTool(*config.ExtensionDecideSystemone)
 		if err != nil {
-			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, tool)
@@ -566,8 +570,8 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		}
 	}
 	loaded = WithToolEventHooksAll(loaded, config.Hooks, config.Model.APIKeyEnv)
-	toolSmithNested.Bind(loaded, config.ProfileTools.Deny)
-	return loaded, definitions, manager, nil
+	toolSmithNested.Bind(loaded, config.ProfileTools)
+	return loaded, definitions, manager, toolSmithNested, nil
 }
 
 func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {

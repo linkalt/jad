@@ -760,3 +760,30 @@ func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
 		t.Errorf("the child reached the MCP server through load_tool's refusal (%d calls)", calls.Load())
 	}
 }
+
+// The resolver gives the owning profile's lazy set to the subagent tool (SetLazy) before it binds the MCP
+// tools into the children (BindToolsets). The order is pinned here: a profile with a lazy subagent whose child
+// lists a lazy MCP tool must refuse that child's call until the owner loads it. If BindToolsets ran first, the
+// child's copy would be built with no set and would run, so this test would fail.
+func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	calls := &atomic.Int32{}
+	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"subagent", "mcp:fixture:lookup"}}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	// The parent loads subagent first: a lazy subagent is refused until the owner's set loads it.
+	f.provider.parentSteps = []subagentStep{{"load_tool", `{"names":["subagent"]}`}, {"subagent", `{"task":"look it up","agent":"explore"}`}}
+	f.provider.childFirstCall = [2]string{name, `{}`}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	child := f.provider.forModel("child-model")
+	if len(child) < 2 {
+		t.Fatalf("child made %d requests", len(child))
+	}
+	if history := child[len(child)-1].Text; !strings.Contains(history, "tool_not_loaded") {
+		t.Errorf("the child's call to the unloaded lazy MCP tool was not refused:\n%s", history)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("the MCP server ran for an unloaded lazy MCP tool (%d calls)", calls.Load())
+	}
+}

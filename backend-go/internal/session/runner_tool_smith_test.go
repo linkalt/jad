@@ -189,7 +189,7 @@ func TestRunnerToolSmithRunWithNestedReadPersistsOneFunctionCallOutput(t *testin
 		t.Fatal(err)
 	}
 	nested := &native.ToolSmithNested{}
-	nested.Bind([]tools.Tool{read}, nil)
+	nested.Bind([]tools.Tool{read}, sessionfs.ProfileToolSettings{})
 	tool, err := native.NewToolSmithTool(sessionfs.NativeToolSmithSettings{
 		Child:                smithChildSettings(t, workspace),
 		CodeMaxBytes:         4096,
