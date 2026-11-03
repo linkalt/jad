@@ -77,11 +77,10 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 		t.Fatal(err)
 	}
 	// Registered first, so it runs last: every remote goroutine this fixture starts has returned
-	// before the test does. A test that has already failed for any reason skips this wait. A seam
-	// test's releaseSeamVars still waits on the same counter, so a stuck goroutine can cost up to two
-	// bounds there: one in releaseSeamVars and, when the body failed for another reason, none here.
-	// Trade-off: in that failing run a late goroutine can still read the next test's seam; it only
-	// changes the result of an already red run.
+	// before the test does. A test that has already failed for any reason skips this wait, so a stuck
+	// goroutine costs at most one drain bound here, and none when the test failed. Trade-off: in that
+	// failing run a late goroutine can still read the next test's seam; it only changes the result of
+	// an already red run.
 	t.Cleanup(func() {
 		if !t.Failed() {
 			waitForRemoteEnds(t, manager)
