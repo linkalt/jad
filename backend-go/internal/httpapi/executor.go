@@ -110,13 +110,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			return emitter.push(message)
 		},
 		OnToolResult: func(item json.RawMessage) {
-			run.keepLiveImages(item)
-			message, changed := normalizedRun.AddToolResult(item)
-			if changed {
-				if err := emitter.push(message); err != nil {
-					logger.Warn("failed to publish tool result", slog.Any("error", err))
-				}
-			}
+			publishToolResult(run, normalizedRun, emitter, item, logger)
 		},
 	})
 	if err != nil {
@@ -265,4 +259,18 @@ func abortReason(ctx context.Context) string {
 		return cause.Error()
 	}
 	return "unspecified"
+}
+
+// publishToolResult shows a tool result the runner just settled: its inline images are kept
+// for the live image route first, then the message part that counts them is published. One
+// projection serves both, so the images are kept under the call id the part reports.
+func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *messageStreamEmitter, item json.RawMessage, logger *slog.Logger) {
+	part, ok := streaming.ProjectToolResult(item)
+	if !ok {
+		return
+	}
+	run.keepLiveImages(item, part)
+	if err := emitter.push(streaming.AddToolResultPart(part)); err != nil {
+		logging.Or(logger).Warn("failed to publish tool result", slog.Any("error", err))
+	}
 }

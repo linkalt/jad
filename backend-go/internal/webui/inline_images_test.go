@@ -281,3 +281,27 @@ func TestProjectingOneCallGroupsMessagesAsAFullProjection(t *testing.T) {
 		}
 	}
 }
+
+// TestInlineImagesDecodesEveryImageAsInlineImageDoes: one read of the record gives every
+// image InlineImage gives by index, and fails as a whole when any one image would fail.
+func TestInlineImagesDecodesEveryImageAsInlineImageDoes(t *testing.T) {
+	second := append([]byte("GIF89a"), bytes.Repeat([]byte{1}, 10)...)
+	record := outputRecord(`[{"type":"input_text","text":"x"},{"type":"input_image","image_url":"` + dataURL("image/png", pngBytes) + `"},{"type":"input_image","image_url":"` + dataURL("image/gif", second) + `"}]`)
+	images, ok := InlineImages(record)
+	if !ok || len(images) != 2 {
+		t.Fatalf("InlineImages = %d images, %v", len(images), ok)
+	}
+	for index, image := range images {
+		data, contentType, ok := InlineImage(record, index)
+		if !ok || !bytes.Equal(image.Data, data) || image.ContentType != contentType {
+			t.Errorf("image %d = %s %d bytes, InlineImage gives %s %d bytes (%v)", index, image.ContentType, len(image.Data), contentType, len(data), ok)
+		}
+	}
+	lying := outputRecord(`[{"type":"input_image","image_url":"` + dataURL("image/png", pngBytes) + `"},{"type":"input_image","image_url":"` + dataURL("image/png", second) + `"}]`)
+	if images, ok := InlineImages(lying); ok {
+		t.Errorf("an image whose bytes are not its claimed type was accepted: %d images", len(images))
+	}
+	if _, ok := InlineImages(json.RawMessage(`{"type":"message","output":[]}`)); ok {
+		t.Error("a record that is not a tool output was accepted")
+	}
+}

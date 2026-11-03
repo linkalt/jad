@@ -50,7 +50,7 @@ func (r *Resolver) ReadSessionHistory(ctx context.Context, reference, profile, i
 // file stamps alone, so a client that already holds the block gets 304 without the
 // backup being read and normalized.
 func (r *Resolver) historyResponse(ctx context.Context, config sessionfs.SessionConfig, ifNoneMatch string) (httpapi.CatalogResponse, error) {
-	if version, ok, err := historyVersion(config); err != nil {
+	if version, ok, err := r.historyVersion(config); err != nil {
 		return httpapi.CatalogResponse{}, err
 	} else if ok && httpapi.ETagMatches(ifNoneMatch, `"`+version+`"`) {
 		return httpapi.CatalogResponse{ETag: `"` + version + `"`, NotModified: true}, nil
@@ -236,7 +236,7 @@ func (r *Resolver) readTurnRecords(ctx context.Context, config sessionfs.Session
 // backup is read: a backup replaced in between then yields a block newer than its ETag,
 // which the next request refetches, never an older block under the newer ETag.
 func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.SessionConfig) (historyBlock, error) {
-	etag, ok, err := historyVersion(config)
+	etag, ok, err := r.historyVersion(config)
 	if err != nil || !ok {
 		return historyBlock{}, err
 	}
@@ -252,9 +252,10 @@ func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.Sessio
 }
 
 // historyVersion is the ETag of the history block, from the backup's stamp, the
-// transcript's identity and the turn count; ok is false when the session keeps no backup.
-// It reads no record.
-func historyVersion(config sessionfs.SessionConfig) (etag string, ok bool, err error) {
+// transcript's identity, the turn count and the inline cap the block is served with (a
+// browser holding a block cut at another cap must refetch it); ok is false when the
+// session keeps no backup. It reads no record.
+func (r *Resolver) historyVersion(config sessionfs.SessionConfig) (etag string, ok bool, err error) {
 	if config.BackupTurns <= 0 {
 		return "", false, nil
 	}
@@ -274,7 +275,7 @@ func historyVersion(config sessionfs.SessionConfig) (etag string, ok bool, err e
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", false, fmt.Errorf("stat session transcript %q: %w", config.MessagesPath, err)
 	}
-	key := fmt.Sprintf("%s|%s|%d", fileStamp(config.MessagesBackupPath), generation, config.BackupTurns)
+	key := fmt.Sprintf("%s|%s|%d|%d", fileStamp(config.MessagesBackupPath), generation, config.BackupTurns, r.catalog.MaxInlinePartBytes)
 	return strings.Trim(makeETag(key), `"`), true, nil
 }
 
@@ -282,7 +283,7 @@ func historyVersion(config sessionfs.SessionConfig) (etag string, ok bool, err e
 // message count. The count is kept with its ETag on the shared session, so a snapshot
 // reads the backup only after the backup or the transcript identity changed.
 func (r *Resolver) historyReferenceFor(ctx context.Context, config sessionfs.SessionConfig, shared *sharedSession) (*historyReference, error) {
-	etag, ok, err := historyVersion(config)
+	etag, ok, err := r.historyVersion(config)
 	if err != nil {
 		return nil, err
 	}

@@ -12,18 +12,20 @@ import (
 // browser can show them before the result is in the transcript. The live message carries
 // only their count; the image route of a stored message cannot find a result that is not
 // persisted yet. The copies are dropped with the run's other state.
-func (r *activeRun) keepLiveImages(item json.RawMessage) {
-	part, ok := webui.ToolResultPart(item, 0)
-	if !ok || part.InlineImages == 0 {
+//
+// part is the live message's part for item (StreamingRun.ProjectToolResult): the images are
+// kept under the call id the browser will ask for, and the item is read once for all of them.
+func (r *activeRun) keepLiveImages(item json.RawMessage, part webui.Part) {
+	if part.InlineImages == 0 {
 		return
 	}
-	images := make([]SessionImage, 0, part.InlineImages)
-	for index := 0; index < part.InlineImages; index++ {
-		data, contentType, ok := webui.InlineImage(item, index)
-		if !ok {
-			return
-		}
-		images = append(images, SessionImage{ContentType: contentType, Data: data})
+	decoded, ok := webui.InlineImages(item)
+	if !ok || len(decoded) != part.InlineImages {
+		return
+	}
+	images := make([]SessionImage, 0, len(decoded))
+	for _, image := range decoded {
+		images = append(images, SessionImage{ContentType: image.ContentType, Data: image.Data})
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

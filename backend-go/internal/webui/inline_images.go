@@ -40,18 +40,54 @@ func inlineImageURLsOf(parts []toolOutputPart) []string {
 // false when the record has no such image, the payload is not base64, or its bytes are
 // not the type the header claims.
 func InlineImage(record json.RawMessage, index int) (data []byte, contentType string, ok bool) {
+	urls, ok := recordInlineImageURLs(record)
+	if !ok || index < 0 || index >= len(urls) {
+		return nil, "", false
+	}
+	return decodeInlineImage(urls[index])
+}
+
+// DecodedImage is one inline image of a tool output, decoded.
+type DecodedImage struct {
+	Data        []byte
+	ContentType string
+}
+
+// InlineImages decodes every inline image of a function_call_output record, in order, with
+// one read of the record (InlineImage reads it again for each index). ok is false when the
+// record is not a tool output or any one image fails as it would in InlineImage.
+func InlineImages(record json.RawMessage) ([]DecodedImage, bool) {
+	urls, ok := recordInlineImageURLs(record)
+	if !ok {
+		return nil, false
+	}
+	images := make([]DecodedImage, 0, len(urls))
+	for _, url := range urls {
+		data, contentType, ok := decodeInlineImage(url)
+		if !ok {
+			return nil, false
+		}
+		images = append(images, DecodedImage{Data: data, ContentType: contentType})
+	}
+	return images, true
+}
+
+// recordInlineImageURLs lists the inline image data URLs of a function_call_output record.
+func recordInlineImageURLs(record json.RawMessage) ([]string, bool) {
 	var fields struct {
 		Type   string          `json:"type"`
 		Output json.RawMessage `json:"output"`
 	}
 	if json.Unmarshal(record, &fields) != nil || fields.Type != "function_call_output" {
-		return nil, "", false
+		return nil, false
 	}
-	urls := inlineImageURLs(fields.Output)
-	if index < 0 || index >= len(urls) {
-		return nil, "", false
-	}
-	header, payload, _ := strings.Cut(urls[index], ";base64,")
+	return inlineImageURLs(fields.Output), true
+}
+
+// decodeInlineImage decodes one data URL; ok is false when the payload is not base64 or
+// its bytes are not the type the header claims.
+func decodeInlineImage(url string) (data []byte, contentType string, ok bool) {
+	header, payload, _ := strings.Cut(url, ";base64,")
 	claimed := strings.TrimPrefix(header, "data:")
 	data, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil || http.DetectContentType(data) != claimed {

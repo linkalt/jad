@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"jad/backend-go/internal/sessionfs"
@@ -35,7 +36,7 @@ func TestHistoryRouteAnswersAMatchingETagWithoutReadingTheBackup(t *testing.T) {
 	if _, err := resolver.historyResponse(context.Background(), config, ""); err == nil {
 		t.Fatal("reading the unreadable backup did not fail")
 	}
-	version, ok, err := historyVersion(config)
+	version, ok, err := resolver.historyVersion(config)
 	if err != nil || !ok {
 		t.Fatalf("historyVersion = %q, %v, %v", version, ok, err)
 	}
@@ -95,5 +96,26 @@ func TestSnapshotHistoryReferenceKeepsTheCountWithItsETag(t *testing.T) {
 	none, err := resolver.historyReferenceFor(context.Background(), config, shared)
 	if err != nil || none.ETag != nil || none.Count != 0 {
 		t.Fatalf("reference without a backup = %+v, %v", none, err)
+	}
+}
+
+// TestHistoryETagChangesWithTheInlineCap: the history block is served cut at
+// server.max_inline_part_bytes, so a browser that holds a block cut at another cap must
+// not be told it is current.
+func TestHistoryETagChangesWithTheInlineCap(t *testing.T) {
+	config := historyTestConfig(t, historyUserLine)
+	small := &Resolver{catalog: CatalogConfig{MaxInlinePartBytes: 3}}
+	held, err := small.historyResponse(context.Background(), config, "")
+	if err != nil || held.ETag == "" || !strings.Contains(string(held.Body), `"truncated"`) {
+		t.Fatalf("block at a 3-byte cap = %+v, %v", held, err)
+	}
+	whole := &Resolver{catalog: CatalogConfig{MaxInlinePartBytes: 1 << 20}}
+	again, err := whole.historyResponse(context.Background(), config, held.ETag)
+	if err != nil || again.NotModified || strings.Contains(string(again.Body), `"truncated"`) {
+		t.Fatalf("after the cap changed: %+v, %v; want the whole block, not 304", again, err)
+	}
+	snapshot, err := whole.historyReferenceFor(context.Background(), config, &sharedSession{})
+	if err != nil || snapshot.ETag == nil || `"`+*snapshot.ETag+`"` != again.ETag {
+		t.Fatalf("snapshot reference %+v, %v does not name the block the route serves (%s)", snapshot, err, again.ETag)
 	}
 }

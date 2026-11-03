@@ -237,17 +237,32 @@ func (r *StreamingRun) Update(raw json.RawMessage) (Message, bool) {
 // AddToolResult appends a persisted function_call_output item to the live
 // message. Call it only after the runner has durably appended the item.
 func (r *StreamingRun) AddToolResult(raw json.RawMessage) (Message, bool) {
-	if r == nil {
-		return Message{}, false
-	}
-	part, ok := ToolResultPart(raw, len(r.parts))
+	part, ok := r.ProjectToolResult(raw)
 	if !ok {
 		return Message{}, false
+	}
+	return r.AddToolResultPart(part), true
+}
+
+// ProjectToolResult is the part AddToolResult would add for raw, without adding it, so a
+// caller can use the same part (and its call id) before the message shows it. Pass it to
+// AddToolResultPart with no other change to the run in between.
+func (r *StreamingRun) ProjectToolResult(raw json.RawMessage) (Part, bool) {
+	if r == nil {
+		return Part{}, false
+	}
+	return ToolResultPart(raw, len(r.parts))
+}
+
+// AddToolResultPart appends a part ProjectToolResult returned.
+func (r *StreamingRun) AddToolResultPart(part Part) Message {
+	if r == nil {
+		return Message{}
 	}
 	r.ensureStep("")
 	r.parts = append(r.parts, part)
 	r.updateCurrentStep(false)
-	return r.Message("streaming"), true
+	return r.Message("streaming")
 }
 
 // Complete reconciles the final response with streamed parts and clears all
