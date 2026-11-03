@@ -108,6 +108,9 @@ func TestClientRefusesARealForeignPeerAfterTheDial(t *testing.T) {
 	if _, err := user.Lookup("daemon"); err != nil {
 		t.Skip("no daemon user to run the foreign listener:", err)
 	}
+	if _, err := exec.LookPath("socat"); err != nil {
+		t.Skip("socat is unavailable, so no foreign listener can run:", err)
+	}
 	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+shortSocket(t)+`","token_env":"JAD_REMOTE_T","timeout_ms":2000,"retries":0}}`))
 	if err != nil {
 		t.Fatal(err)
