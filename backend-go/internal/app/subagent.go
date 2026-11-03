@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -231,17 +232,20 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 }
 
 // copyFileExclusive copies src to dst, creating dst and failing if it already exists. The
-// source is read only, and a copy never overwrites a file of another run.
+// source is read only, and a copy never overwrites a file of another run. It streams, so a
+// long transcript is not held in memory whole. As before, dst gets no fsync of its own; in the
+// turn and strict durability modes the journal's next append syncs the file.
 func copyFileExclusive(src, dst string) error {
-	data, err := os.ReadFile(src)
+	source, err := os.Open(src)
 	if err != nil {
 		return err
 	}
+	defer source.Close()
 	file, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := file.Write(data); err != nil {
+	if _, err := io.Copy(file, source); err != nil {
 		_ = file.Close()
 		return err
 	}
