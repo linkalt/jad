@@ -66,7 +66,7 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
-	block := p.blockFor(arguments)
+	block := p.blockFor(arguments, execution)
 	plan := &remotePlan{
 		directory: p.remotes.directory,
 		target:    target,

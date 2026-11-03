@@ -51,6 +51,8 @@ type NativeProfileMessageSettings struct {
 	// DefaultBlockMs is how long a call that sends no block_ms waits for the answer before
 	// it returns an id, clamped to tools.native.async max_block_ms. Zero (settings built in
 	// code) means the async default_block_ms.
+	// A call that later calls of its response wait behind (ExecutionContext.BatchWaiting) waits
+	// the async default_block_ms instead.
 	DefaultBlockMs int64
 	// BusyWaitMs is the longest a call may stay queued behind a busy target before it fails
 	// with profile_busy; 0 (default) sets no limit of its own, so TimeoutMs bounds the wait.

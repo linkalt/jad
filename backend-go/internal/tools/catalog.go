@@ -69,6 +69,11 @@ type ExecutionContext struct {
 	// RemoteHops is how many JAD servers the request that started this run passed through
 	// (0 for a run a user started). A remote call made from here sends RemoteHops+1.
 	RemoteHops int
+	// BatchWaiting says that other calls of the same model response cannot start until this
+	// one returns (the batch runs one call at a time, or has fewer slots than calls). A tool
+	// that would wait long by default, like subagent and profile_message, then waits only
+	// the async default_block_ms, so it does not hold the rest of the response back.
+	BatchWaiting bool
 }
 
 // executionContextPerCall names the fields of ExecutionContext that describe one call
@@ -76,7 +81,7 @@ type ExecutionContext struct {
 // so ForNested clears them; every other field carries over to the nested call.
 // TestForNestedKeepsEveryRunScopedField walks all the fields and fails when one is
 // neither copied nor listed here.
-var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments"}
+var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments", "BatchWaiting"}
 
 // ForNested returns the context of a call made inside this one: a nested call of a
 // tool_smith script, or the tools of a sub-agent. The whole run scope carries over — above
@@ -89,6 +94,7 @@ func (e ExecutionContext) ForNested() ExecutionContext {
 	nested.CallID = ""
 	nested.ToolName = ""
 	nested.RawArguments = nil
+	nested.BatchWaiting = false
 	return nested
 }
 

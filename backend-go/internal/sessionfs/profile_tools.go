@@ -25,8 +25,9 @@ type ProfileToolSettings struct {
 	// Deny lists what is taken away, in the same entry form. It wins over Allow, and
 	// it also limits the profile's sub-agents: a denied tool is in no child's catalog.
 	Deny []string
-	// Lazy lists the tools the model sees by name and summary only; load_tool returns
-	// a tool's full definition, and a call to it is refused until then. Same entry
+	// Lazy lists the tools the model sees by name and summary only; load_tool loads a tool,
+	// which the next request lists with its full definition, and a call to it is refused
+	// until then. Same entry
 	// forms as Allow and Deny. Nil when the block has no lazy list.
 	Lazy []string
 	// LazySummaryBytes bounds the first line of a lazy tool's description that the
@@ -54,8 +55,9 @@ const (
 	maxLazyLoadMax     = 100
 )
 
-// LoadToolName is the native tool that shows a lazy tool's full definition. It is enabled only
-// by tools.native.load_tool, like every native tool; tools.lazy needs it (checkLazyNeedsLoadTool).
+// LoadToolName is the native tool that loads a lazy tool, so its full definition is listed. It
+// is enabled only by tools.native.load_tool, like every native tool; tools.lazy needs it
+// (checkLazyNeedsLoadTool).
 const LoadToolName = "load_tool"
 
 // ProfileToolMCPPrefix starts every MCP entry of the allow and deny lists.

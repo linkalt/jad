@@ -272,12 +272,22 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 
 	var mu sync.Mutex
 	concurrency := toolBatchConcurrency(toExecute, limit, scheduling, catalog.ChangesState)
+	// With fewer slots than calls, a call that is not the last may hold a later one back
+	// until it returns; it is told so (BatchWaiting) and does not block long by default.
+	held := make(map[string]bool, len(toExecute))
+	if concurrency < len(toExecute) {
+		for _, call := range toExecute[:len(toExecute)-1] {
+			held[functionCallID(call)] = true
+		}
+	}
 	batchErr := runToolBatchLeaves(budget, toExecute, concurrency, catalog.IsLeafCall,
 		func(call json.RawMessage) (json.RawMessage, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			return catalog.ExecuteFunctionCall(ctx, call, execution)
+			callExecution := execution
+			callExecution.BatchWaiting = held[functionCallID(call)]
+			return catalog.ExecuteFunctionCall(ctx, call, callExecution)
 		},
 		func(_ json.RawMessage, output json.RawMessage) error {
 			outputID := functionCallID(output)

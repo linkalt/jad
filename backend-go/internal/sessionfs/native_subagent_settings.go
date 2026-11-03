@@ -75,6 +75,8 @@ type NativeSubagentSettings struct {
 	// DefaultBlockMs is how long a call that sends no block_ms waits for the answer before
 	// it returns a run id, clamped to tools.native.async max_block_ms. Zero (settings built
 	// in code) means the async default_block_ms.
+	// A call that later calls of its response wait behind (ExecutionContext.BatchWaiting) waits
+	// the async default_block_ms instead.
 	DefaultBlockMs int64
 	// MaxConcurrent is the most children that run at once. Children outlive a call, so
 	// the limit counts every child of the same storage directory, across runs; the

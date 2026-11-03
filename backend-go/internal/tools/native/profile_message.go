@@ -341,7 +341,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
-	block := p.blockFor(arguments)
+	block := p.blockFor(arguments, execution)
 	request := ProfileMessageRequest{
 		Blocking:     !handled || block > 0,
 		OwnerKey:     execution.SessionKey,

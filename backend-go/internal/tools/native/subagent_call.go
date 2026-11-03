@@ -178,7 +178,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	// the wait, never the run.
 	wait := -time.Millisecond
 	if handle != nil {
-		wait = s.blockFor(arguments)
+		wait = s.blockFor(arguments, execution)
 	}
 	return s.await(ctx, callID, run, wait, handle == nil)
 }
@@ -205,20 +205,22 @@ func handleOwner(execution tools.ExecutionContext) (string, bool) {
 
 // blockFor is the block the call asked for, or the tool's default_block_ms, within the async
 // policy cap.
-func (s *subagentTool) blockFor(arguments map[string]any) time.Duration {
+func (s *subagentTool) blockFor(arguments map[string]any, execution tools.ExecutionContext) time.Duration {
 	if s.async == nil {
 		return 0
 	}
-	return agentBlock(s.async.Config(), arguments, s.settings.DefaultBlockMs)
+	return agentBlock(s.async.Config(), arguments, s.settings.DefaultBlockMs, execution.BatchWaiting)
 }
 
 // agentBlock is the block of a subagent or profile_message call: the call's block_ms, else the
-// tool's own default (zero: the async default_block_ms), clamped to max_block_ms.
-func agentBlock(config asyncmgr.Config, arguments map[string]any, toolDefault int64) time.Duration {
+// tool's own default (zero: the async default_block_ms), clamped to max_block_ms. A call that
+// other calls of its response wait behind (batchWaiting) and that names no block_ms takes the
+// async default_block_ms instead of the tool's own, so the long default does not delay them.
+func agentBlock(config asyncmgr.Config, arguments map[string]any, toolDefault int64, batchWaiting bool) time.Duration {
 	var asked *int64
 	if value, ok := safeInteger(arguments["block_ms"]); ok {
 		asked = &value
-	} else if toolDefault > 0 {
+	} else if toolDefault > 0 && !batchWaiting {
 		asked = &toolDefault
 	}
 	return config.BlockDuration(asked)

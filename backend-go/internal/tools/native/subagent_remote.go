@@ -206,7 +206,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		_, _ = s.async.Manager().Complete(id, s.remoteAsyncResult(target, outcome))
 	}()
 	s.async.Manager().MarkRunning(id)
-	timer := time.NewTimer(s.blockFor(arguments))
+	timer := time.NewTimer(s.blockFor(arguments, execution))
 	defer timer.Stop()
 	select {
 	case <-ended:

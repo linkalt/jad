@@ -31,7 +31,7 @@ type lazyToolsState struct {
 }
 
 // LazyEntry is one lazy tool of a profile: the tool the session registered and the one-line
-// summary the model sees until load_tool shows the full definition.
+// summary the model sees until load_tool loads it and the next request lists its full definition.
 type LazyEntry struct {
 	Tool    Tool
 	Summary string

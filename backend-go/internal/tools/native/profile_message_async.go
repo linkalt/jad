@@ -116,11 +116,11 @@ func (h *AsyncHost) dropProfileMessageRun(id string) {
 	delete(h.profileMessages, id)
 }
 
-func (p *profileMessageTool) blockFor(arguments map[string]any) time.Duration {
+func (p *profileMessageTool) blockFor(arguments map[string]any, execution tools.ExecutionContext) time.Duration {
 	if p.host == nil {
 		return 0
 	}
-	return agentBlock(p.host.Config(), arguments, p.settings.DefaultBlockMs)
+	return agentBlock(p.host.Config(), arguments, p.settings.DefaultBlockMs, execution.BatchWaiting)
 }
 
 // beginProfileMessageWaits marks the owner's run as blocked on the profile_message handles
