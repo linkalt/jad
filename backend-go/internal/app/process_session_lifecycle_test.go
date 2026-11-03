@@ -105,7 +105,7 @@ func (p processHandleFixture) requireStillRunning(t *testing.T, id, what string)
 
 func (p processHandleFixture) wait(t *testing.T, owner string) string {
 	t.Helper()
-	out, err := p.async.Execute(context.Background(), map[string]any{"action": "wait", "block_ms": json.Number("0")},
+	out, err := p.async.Execute(context.Background(), map[string]any{"action": "wait", "wait_ms": json.Number("0")},
 		tools.ExecutionContext{CallID: "w", WorkspaceRoot: p.f.cwd, SessionKey: owner})
 	if err != nil {
 		t.Fatal(err)

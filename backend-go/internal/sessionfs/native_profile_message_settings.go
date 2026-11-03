@@ -17,6 +17,12 @@ const (
 	maxNativeProfileMessageMaxQueued          int64 = 256
 )
 
+// DefaultNativeAgentBlockMs is the default_block_ms of subagent and profile_message: a model
+// run usually takes longer than a shell command, so these calls wait longer for the answer
+// than tools.native.async default_block_ms (which the other start tools use) before they
+// hand back an id to collect with async.
+const DefaultNativeAgentBlockMs int64 = 120_000
+
 // DefaultProfileMessageMaxChain is the longest chain of profiles a message may travel
 // through when max_chain is not set: the caller and one profile it reaches.
 const DefaultProfileMessageMaxChain = 2
@@ -29,7 +35,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -42,6 +48,10 @@ type NativeProfileMessageSettings struct {
 	DenyProfiles []string
 	// TimeoutMs bounds the whole call, the time queued behind a busy target included.
 	TimeoutMs int
+	// DefaultBlockMs is how long a call that sends no block_ms waits for the answer before
+	// it returns an id, clamped to tools.native.async max_block_ms. Zero (settings built in
+	// code) means the async default_block_ms.
+	DefaultBlockMs int64
 	// BusyWaitMs is the longest a call may stay queued behind a busy target before it fails
 	// with profile_busy; 0 (default) sets no limit of its own, so TimeoutMs bounds the wait.
 	BusyWaitMs int
@@ -116,6 +126,10 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if busyWaitMS > timeoutMS {
 		return nil, configError("%s: %s.busy_wait_ms must not exceed timeout_ms", settingPath, section)
 	}
+	defaultBlockMS, err := configuredInteger(fields, "default_block_ms", DefaultNativeAgentBlockMs, 1, maxToolTimeoutMs, settingPath, section)
+	if err != nil {
+		return nil, err
+	}
 	resultMaxBytes, err := configuredInteger(fields, "result_max_bytes", defaultNativeProfileMessageResultMaxBytes, 1, maxNativeToolBytes, settingPath, section)
 	if err != nil {
 		return nil, err
@@ -146,7 +160,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
+	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

@@ -120,11 +120,7 @@ func (p *profileMessageTool) blockFor(arguments map[string]any) time.Duration {
 	if p.host == nil {
 		return 0
 	}
-	var blockMs *int64
-	if value, ok := safeInteger(arguments["block_ms"]); ok {
-		blockMs = &value
-	}
-	return p.host.Config().BlockDuration(blockMs)
+	return agentBlock(p.host.Config(), arguments, p.settings.DefaultBlockMs)
 }
 
 // beginProfileMessageWaits marks the owner's run as blocked on the profile_message handles

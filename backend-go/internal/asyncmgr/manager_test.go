@@ -42,7 +42,7 @@ func TestBlockAndWaitDurationClamp(t *testing.T) {
 	if cfg.BlockDuration(nil) != 10*time.Second || cfg.BlockDuration(&big) != 120*time.Second || cfg.BlockDuration(&neg) != 0 {
 		t.Fatal("BlockDuration does not default and clamp")
 	}
-	if cfg.WaitDuration(nil) != 10*time.Second || cfg.WaitDuration(&big) != 120*time.Second || cfg.WaitDuration(&neg) != 0 {
+	if cfg.WaitDuration(nil) != 120*time.Second || cfg.WaitDuration(&big) != 120*time.Second || cfg.WaitDuration(&neg) != 0 {
 		t.Fatal("WaitDuration does not default and clamp")
 	}
 }

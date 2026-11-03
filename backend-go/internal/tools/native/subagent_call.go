@@ -203,16 +203,25 @@ func handleOwner(execution tools.ExecutionContext) (string, bool) {
 	return execution.SessionKey, execution.SessionKey != ""
 }
 
-// blockFor is the block the call asked for, or the default, within the async policy cap.
+// blockFor is the block the call asked for, or the tool's default_block_ms, within the async
+// policy cap.
 func (s *subagentTool) blockFor(arguments map[string]any) time.Duration {
 	if s.async == nil {
 		return 0
 	}
+	return agentBlock(s.async.Config(), arguments, s.settings.DefaultBlockMs)
+}
+
+// agentBlock is the block of a subagent or profile_message call: the call's block_ms, else the
+// tool's own default (zero: the async default_block_ms), clamped to max_block_ms.
+func agentBlock(config asyncmgr.Config, arguments map[string]any, toolDefault int64) time.Duration {
 	var asked *int64
 	if value, ok := safeInteger(arguments["block_ms"]); ok {
 		asked = &value
+	} else if toolDefault > 0 {
+		asked = &toolDefault
 	}
-	return s.async.Config().BlockDuration(asked)
+	return config.BlockDuration(asked)
 }
 
 // await waits for a run to end, for at most wait (a negative wait has no limit), and

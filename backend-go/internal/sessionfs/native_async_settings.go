@@ -90,6 +90,11 @@ func normalizeNativeAsyncSettings(setting map[string]json.RawMessage, settingPat
 			return nil, err
 		}
 	}
+	if _, set := fields["default_wait_ms"]; !set {
+		// The default wait is the longest the configuration allows, so a max_wait_ms set
+		// below it on its own is still valid.
+		config.DefaultWaitMs = min(config.DefaultWaitMs, config.MaxWaitMs)
+	}
 	if err := config.Validate(); err != nil {
 		return nil, configError("%s: %s: %v", settingPath, section, err)
 	}

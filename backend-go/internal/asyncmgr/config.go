@@ -64,7 +64,7 @@ func DefaultConfig() Config {
 	return Config{
 		MaxHandles: 16, MaxHandlesTotal: 64,
 		DefaultBlockMs: 10_000, MaxBlockMs: 120_000,
-		DefaultWaitMs: 10_000, MaxWaitMs: 120_000,
+		DefaultWaitMs: 120_000, MaxWaitMs: 120_000,
 		WaitMaxSignals: 10, ListDefaultLimit: 10, ListMaxLimit: 50,
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,

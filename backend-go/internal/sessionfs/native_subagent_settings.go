@@ -51,7 +51,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -72,6 +72,10 @@ type NativeSubagentSettings struct {
 	// RemoteTimeoutMs bounds a remote sub-agent run from the local side: past it the run is
 	// stopped on the remote and ends as timed_out.
 	RemoteTimeoutMs int64
+	// DefaultBlockMs is how long a call that sends no block_ms waits for the answer before
+	// it returns a run id, clamped to tools.native.async max_block_ms. Zero (settings built
+	// in code) means the async default_block_ms.
+	DefaultBlockMs int64
 	// MaxConcurrent is the most children that run at once. Children outlive a call, so
 	// the limit counts every child of the same storage directory, across runs; the
 	// session that first uses the directory sets it.
@@ -259,6 +263,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.RemoteTimeoutMs, err = configuredInteger(fields, "remote_timeout_ms", defaultNativeSubagentTimeoutMS, 1000, maxNativeSubagentTimeoutMS, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.DefaultBlockMs, err = configuredInteger(fields, "default_block_ms", DefaultNativeAgentBlockMs, 1, maxToolTimeoutMs, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.MaxConcurrent, err = configuredInteger(fields, "max_concurrent", defaultNativeSubagentMaxConcurrent, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {
