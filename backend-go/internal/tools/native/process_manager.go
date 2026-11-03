@@ -372,7 +372,7 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	}
 	// Wait returns this long after the shell exits even if a descendant still holds
 	// stdout or stderr; output captured so far is kept.
-	command.WaitDelay = bashDrainAfterExit
+	command.WaitDelay = processDrainAfterExit(request.Policy.DrainAfterExitMs)
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		if stdinReader != nil {
@@ -829,6 +829,15 @@ func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, 
 	manager.manifests[manifest.ID] = manifest
 	manager.mu.Unlock()
 	return manager.persistManifest(manifest)
+}
+
+// processDrainAfterExit is the configured tools.native.process.drain_after_exit_ms; a policy
+// built without the setting (zero) keeps the bash default.
+func processDrainAfterExit(ms int64) time.Duration {
+	if ms <= 0 {
+		return bashDrainAfterExit
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func waitForManagedProcess(entry *managedProcess, timeout time.Duration) bool {

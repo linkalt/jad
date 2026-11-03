@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
@@ -35,6 +37,9 @@ func TestNormalizeNativeProcessSettingsDefaultsAndIgnoresBash(t *testing.T) {
 	wantStderr := NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}
 	if settings.Stdout != wantStdout || settings.Stderr != wantStderr {
 		t.Fatalf("process stream budgets = %+v / %+v, want its own defaults %+v / %+v, not bash's", settings.Stdout, settings.Stderr, wantStdout, wantStderr)
+	}
+	if settings.DrainAfterExitMs != defaultNativeBashDrainAfterExit {
+		t.Fatalf("default process drain_after_exit_ms = %d, want the bash default %d", settings.DrainAfterExitMs, defaultNativeBashDrainAfterExit)
 	}
 	if settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("process output defaults = max_line_chars %d, strip_ansi %v", settings.MaxLineChars, settings.StripANSI)
@@ -65,7 +70,7 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	toolStorage := filepath.Join(cwd, "profile-tools")
 	settingPath := filepath.Join(globalRoot, "session", "setting.json")
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"max_running":4,"max_completed":8,"retention_days":0,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
+		"tools": json.RawMessage(`{"native":{"process":{"shell":" /bin/zsh ","login_shell":true,"kill_grace_ms":0,"drain_after_exit_ms":70,"max_running":4,"max_completed":8,"retention_days":0,"stdout":{"head_bytes":11,"tail_bytes":13},"stderr":{"head_bytes":17,"tail_bytes":19},"log_cap_bytes":512,"max_line_chars":80,"stdin_max_bytes":4096,"strip_ansi":false,"env":{"PROCESS_TEST":"enabled"},"env_deny":["PROCESS_SECRET"],"storage_dir":"runtime","paths":{"allow":["shared"],"deny":["private"]},"statecontext":{"states":["exited","running","exited"],"limit":7}}}}`),
 	}
 	settings, err := normalizeNativeProcessSettings(
 		setting,
@@ -84,6 +89,9 @@ func TestNormalizeNativeProcessSettingsOverridesAndStorage(t *testing.T) {
 	}
 	if settings.Stdout != (NativeBashStreamBudget{HeadBytes: 11, TailBytes: 13}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 17, TailBytes: 19}) {
 		t.Fatalf("normalized process budgets = %+v/%+v", settings.Stdout, settings.Stderr)
+	}
+	if settings.DrainAfterExitMs != 70 {
+		t.Fatalf("overridden process drain_after_exit_ms = %d, want 70", settings.DrainAfterExitMs)
 	}
 	if settings.StdinMaxBytes != 4096 {
 		t.Fatalf("overridden process stdin_max_bytes = %d, want 4096", settings.StdinMaxBytes)
@@ -122,6 +130,9 @@ func TestNormalizeNativeProcessSettingsValidatesUnsupportedValues(t *testing.T) 
 		`{"shell":"  "}`,
 		`{"login_shell":"yes"}`,
 		`{"kill_grace_ms":-1}`,
+		`{"drain_after_exit_ms":0}`,
+		`{"drain_after_exit_ms":60001}`,
+		`{"drain_after_exit_ms":"500"}`,
 		`{"max_running":0}`,
 		`{"max_completed":0}`,
 		`{"retention_days":-1}`,
@@ -277,6 +288,42 @@ func TestProcessStopOrphansSetting(t *testing.T) {
 	} {
 		if got, err := read(tc.setting); err != nil || got != tc.want {
 			t.Errorf("%s: got %v, %v; want %v", name, got, err, tc.want)
+		}
+	}
+}
+
+// The schema declares tools.native.process.drain_after_exit_ms with the loader's range.
+func TestSettingSchemaDeclaresProcessDrainAfterExit(t *testing.T) {
+	file, err := os.Open(filepath.Join("..", "..", "..", "sample", "schemes", "setting.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	document, err := jsonschema.UnmarshalJSON(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("setting.schema.json", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("setting.schema.json#/properties/tools/properties/native/properties/process")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(text string) error {
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return schema.Validate(value)
+	}
+	if err := check(`{"drain_after_exit_ms":70}`); err != nil {
+		t.Errorf("schema rejects drain_after_exit_ms 70: %v", err)
+	}
+	for _, text := range []string{`{"drain_after_exit_ms":0}`, `{"drain_after_exit_ms":60001}`, `{"drain_after_exit_ms":"500"}`} {
+		if err := check(text); err == nil {
+			t.Errorf("schema accepts %s", text)
 		}
 	}
 }

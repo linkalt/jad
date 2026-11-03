@@ -45,17 +45,20 @@ type NativeProcessStateContextSettings struct {
 // NativeProcessSettings contains process lifecycle, output, environment, and
 // storage policy for native.process.
 type NativeProcessSettings struct {
-	Policy        NativePathPolicy
-	Shell         string
-	LoginShell    bool
-	KillGraceMs   int64
-	MaxRunning    int64
-	MaxCompleted  int64
-	RetentionDays int64
-	Stdout        NativeBashStreamBudget
-	Stderr        NativeBashStreamBudget
-	LogCapBytes   int64
-	MaxLineChars  int64
+	Policy      NativePathPolicy
+	Shell       string
+	LoginShell  bool
+	KillGraceMs int64
+	// DrainAfterExitMs is how long the output pipes may stay open after the shell exited,
+	// because a descendant still holds them, before the output is cut (exec.Cmd.WaitDelay).
+	DrainAfterExitMs int64
+	MaxRunning       int64
+	MaxCompleted     int64
+	RetentionDays    int64
+	Stdout           NativeBashStreamBudget
+	Stderr           NativeBashStreamBudget
+	LogCapBytes      int64
+	MaxLineChars     int64
 	// StdinMaxBytes is the largest stdin text one start may write to its process.
 	StdinMaxBytes int64
 	StripANSI     bool
@@ -98,7 +101,7 @@ func normalizeNativeProcessSettings(
 	}
 	for key := range fields {
 		switch key {
-		case "shell", "login_shell", "kill_grace_ms", "max_running", "max_completed", "retention_days", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext":
+		case "shell", "login_shell", "kill_grace_ms", "drain_after_exit_ms", "max_running", "max_completed", "retention_days", "stdout", "stderr", "status_log_bytes", "log_cap_bytes", "max_line_chars", "stdin_max_bytes", "strip_ansi", "stop_orphans", "env_file", "env", "env_deny", "storage_dir", "paths", "statecontext":
 		default:
 			return nil, configError("%s: tools.native.process.%s is not supported", settingPath, key)
 		}
@@ -130,6 +133,9 @@ func normalizeNativeProcessSettings(
 		}
 	}
 	if settings.KillGraceMs, err = configuredInteger(fields, "kill_grace_ms", defaultNativeBashKillGraceMs, 0, maxNativeBashKillGraceMs, settingPath, "tools.native.process"); err != nil {
+		return nil, err
+	}
+	if settings.DrainAfterExitMs, err = configuredInteger(fields, "drain_after_exit_ms", defaultNativeBashDrainAfterExit, 1, maxNativeBashDrainAfterExitMs, settingPath, "tools.native.process"); err != nil {
 		return nil, err
 	}
 	if settings.MaxRunning, err = configuredInteger(fields, "max_running", defaultNativeProcessMaxRunning, 1, maxNativeProcessMaxRunning, settingPath, "tools.native.process"); err != nil {

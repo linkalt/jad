@@ -1565,6 +1565,9 @@
                 }
               ],
               "properties": {
+                "drain_after_exit_ms": {
+                  "$ref": "#/$defs/bash_style/properties/drain_after_exit_ms"
+                },
                 "statecontext": {
                   "type": "object",
                   "description": "Process state included in statecontext snapshots.",
