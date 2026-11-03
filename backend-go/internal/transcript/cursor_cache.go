@@ -138,9 +138,7 @@ func (s *TurnStore) rebuildCursorIndex(info os.FileInfo) (CursorIndex, error) {
 
 func (s *TurnStore) scanCursorRuns(start, end int64, runs *[]CursorRun) (int64, error) {
 	return s.journal.ReadCompleteRecordsRange(start, end, func(offset int64, line []byte) error {
-		if !json.Valid(line) {
-			return nil
-		}
+		// json.Unmarshal refuses a line that is not valid JSON, so no separate check.
 		var record struct {
 			Type        string `json:"type"`
 			SessionTurn int64  `json:"session_turn"`

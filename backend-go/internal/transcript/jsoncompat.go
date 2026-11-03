@@ -19,48 +19,67 @@ type jsonField struct {
 	value []byte
 }
 
+// objectFields splits a JSON object that has not been checked yet. It accepts exactly
+// what json.Valid accepts, checking each key and value as it splits them, so the record
+// is read once rather than once to validate and again to split.
 func objectFields(raw []byte) ([]jsonField, error) {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
-		return nil, errors.New("expected a JSON object")
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errNotJSONObject
 	}
-	return objectFieldsValid(trimmed)
+	fields, end, err := splitObjectFields(trimmed, true)
+	if err != nil || end != len(trimmed) {
+		return nil, errNotJSONObject
+	}
+	return fields, nil
 }
 
+var errNotJSONObject = errors.New("expected a JSON object")
+
+// objectFieldsValid splits a JSON object that is already known to be valid.
 func objectFieldsValid(raw []byte) ([]jsonField, error) {
+	fields, _, err := splitObjectFields(raw, false)
+	return fields, err
+}
+
+// splitObjectFields splits the object at the start of raw and returns where it ends.
+// With validate it checks every key and value fully (a nested value as validJSON does);
+// without, it only finds where each one ends, which is enough for bytes already checked.
+func splitObjectFields(raw []byte, validate bool) ([]jsonField, int, error) {
 	position := skipJSONSpace(raw, 0)
 	if position >= len(raw) || raw[position] != '{' {
-		return nil, errors.New("expected a JSON object")
+		return nil, 0, errors.New("expected a JSON object")
 	}
 	position++
 	fields := make([]jsonField, 0, 8)
 	// Small objects look keys up linearly; the map is built only once an object
 	// grows past objectFieldIndexThreshold fields.
 	var indices map[string]int
-	for {
+	for afterComma := false; ; afterComma = true {
 		position = skipJSONSpace(raw, position)
 		if position >= len(raw) {
-			return nil, errors.New("unterminated JSON object")
+			return nil, 0, errors.New("unterminated JSON object")
 		}
-		if raw[position] == '}' {
-			return fields, nil
+		// A comma must be followed by another field; only validation needs to say so.
+		if raw[position] == '}' && !(validate && afterComma) {
+			return fields, position + 1, nil
 		}
-		keyEnd, err := scanJSONString(raw, position)
+		keyEnd, err := scanObjectPart(raw, position, validate, validStringEnd, scanJSONString)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		key, err := jsonStringValue(raw[position:keyEnd])
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		position = skipJSONSpace(raw, keyEnd)
 		if position >= len(raw) || raw[position] != ':' {
-			return nil, errors.New("expected colon after JSON object key")
+			return nil, 0, errors.New("expected colon after JSON object key")
 		}
 		valueStart := skipJSONSpace(raw, position+1)
-		valueEnd, err := scanJSONValue(raw, valueStart)
+		valueEnd, err := scanObjectPart(raw, valueStart, validate, validFieldValueEnd, scanJSONValue)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		field := jsonField{key: key, value: raw[valueStart:valueEnd]}
 		if index := indexOfField(fields, indices, key); index >= 0 {
@@ -79,17 +98,33 @@ func objectFieldsValid(raw []byte) ([]jsonField, error) {
 		}
 		position = skipJSONSpace(raw, valueEnd)
 		if position >= len(raw) {
-			return nil, errors.New("unterminated JSON object")
+			return nil, 0, errors.New("unterminated JSON object")
 		}
 		if raw[position] == '}' {
-			return fields, nil
+			return fields, position + 1, nil
 		}
 		if raw[position] != ',' {
-			return nil, errors.New("expected comma between JSON object fields")
+			return nil, 0, errors.New("expected comma between JSON object fields")
 		}
 		position++
 	}
 }
+
+// scanObjectPart finds the end of the key or value at start: checked with valid when
+// validate is set, otherwise only located with scan.
+func scanObjectPart(raw []byte, start int, validate bool, valid func([]byte, int) (int, bool), scan func([]byte, int) (int, error)) (int, error) {
+	if !validate {
+		return scan(raw, start)
+	}
+	end, ok := valid(raw, start)
+	if !ok {
+		return 0, errNotJSONObject
+	}
+	return end, nil
+}
+
+// validFieldValueEnd checks a value of a top-level object: one object is already open.
+func validFieldValueEnd(raw []byte, start int) (int, bool) { return validValueEnd(raw, start, 1) }
 
 // objectFieldIndexThreshold is the object size at which duplicate-key lookup
 // switches from a linear scan to a map. It is an algorithmic cutover, not a limit.
@@ -147,7 +182,7 @@ func jsonStringValue(raw []byte) (string, error) {
 
 func arrayValues(raw []byte, visit func([]byte) error) error {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '[' || !json.Valid(trimmed) {
+	if len(trimmed) == 0 || trimmed[0] != '[' || !validJSON(trimmed) {
 		return errors.New("expected a JSON array")
 	}
 	position := skipJSONSpace(trimmed, 1)
@@ -177,17 +212,27 @@ func arrayValues(raw []byte, visit func([]byte) error) error {
 	}
 }
 
+// scanJSONString finds the end of a string in bytes already checked. It jumps from quote
+// to quote with bytes.IndexByte: a quote ends the string unless an odd run of
+// backslashes escapes it.
 func scanJSONString(raw []byte, start int) (int, error) {
 	if start >= len(raw) || raw[start] != '"' {
 		return 0, errors.New("expected JSON string")
 	}
-	for position := start + 1; position < len(raw); position++ {
-		switch raw[position] {
-		case '\\':
-			position++
-		case '"':
+	for position := start + 1; position < len(raw); {
+		quote := bytes.IndexByte(raw[position:], '"')
+		if quote < 0 {
+			break
+		}
+		position += quote
+		backslashes := 0
+		for before := position - 1; before > start && raw[before] == '\\'; before-- {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
 			return position + 1, nil
 		}
+		position++
 	}
 	return 0, errors.New("unterminated JSON string")
 }
@@ -206,23 +251,14 @@ func scanJSONValue(raw []byte, start int) (int, error) {
 		} else {
 			stack = append(stack, ']')
 		}
-		inString := false
-		escaped := false
 		for position := start + 1; position < len(raw); position++ {
-			current := raw[position]
-			if inString {
-				if escaped {
-					escaped = false
-				} else if current == '\\' {
-					escaped = true
-				} else if current == '"' {
-					inString = false
-				}
-				continue
-			}
-			switch current {
+			switch current := raw[position]; current {
 			case '"':
-				inString = true
+				end, err := scanJSONString(raw, position)
+				if err != nil {
+					return 0, errors.New("unterminated JSON container")
+				}
+				position = end - 1
 			case '{':
 				stack = append(stack, '}')
 			case '[':
@@ -275,7 +311,7 @@ func skipJSONSpace(raw []byte, position int) int {
 // and IEEE-754 number rendering while retaining nested field insertion order.
 func canonicalJSON(raw []byte) ([]byte, error) {
 	trimmed := bytes.TrimSpace(raw)
-	if !json.Valid(trimmed) {
+	if !validJSON(trimmed) {
 		return nil, errors.New("invalid JSON value")
 	}
 	return canonicalJSONValid(trimmed)
