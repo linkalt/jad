@@ -2,7 +2,9 @@ package native
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
@@ -751,5 +753,31 @@ func TestFetchURLPolicyTreatsRootedHostAsTheSameHost(t *testing.T) {
 	open := fetchTestSettings(t.TempDir())
 	if _, err := validateFetchURL(context.Background(), "https://example.com./", open, resolver); err != nil {
 		t.Errorf("rooted host without policy = %v, want allowed", err)
+	}
+}
+
+// Content-Encoding: deflate is zlib-wrapped by the standard, but some servers send raw
+// DEFLATE; both must decode (audit B5).
+func TestReadFetchResponseDecodesZlibAndRawDeflate(t *testing.T) {
+	const text = "deflated response body"
+	var zlibBody, rawBody bytes.Buffer
+	zw := zlib.NewWriter(&zlibBody)
+	_, _ = io.WriteString(zw, text)
+	_ = zw.Close()
+	fw, err := flate.NewWriter(&rawBody, flate.DefaultCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(fw, text)
+	_ = fw.Close()
+	for name, encoded := range map[string][]byte{"zlib": zlibBody.Bytes(), "raw": rawBody.Bytes()} {
+		response := &http.Response{
+			Header: http.Header{"Content-Encoding": []string{"deflate"}},
+			Body:   io.NopCloser(bytes.NewReader(encoded)),
+		}
+		body, truncated, err := readFetchResponseTruncating(response, 1_000, false)
+		if err != nil || truncated || string(body) != text {
+			t.Errorf("%s: body = %q, truncated = %v, err = %v", name, body, truncated, err)
+		}
 	}
 }

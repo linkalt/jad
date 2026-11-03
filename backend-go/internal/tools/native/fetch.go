@@ -1,6 +1,8 @@
 package native
 
 import (
+	"bufio"
+	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
 	"context"
@@ -649,7 +651,7 @@ func readFetchResponseTruncating(response *http.Response, maximum int64, truncat
 		}
 		body, decoder = reader, reader
 	case "deflate":
-		reader, err := zlib.NewReader(response.Body)
+		reader, err := newDeflateReader(response.Body)
 		if err != nil {
 			return nil, false, err
 		}
@@ -683,6 +685,23 @@ func readFetchResponseTruncating(response *http.Response, maximum int64, truncat
 		return contents, true, nil
 	}
 	return contents, false, nil
+}
+
+// newDeflateReader decodes Content-Encoding: deflate. The standard says zlib-wrapped
+// DEFLATE, but some servers send raw DEFLATE; the zlib header (CM = 8, a window of at most
+// 32 KiB, and a check that makes the first two bytes a multiple of 31) tells them apart.
+// A body too short to hold a header goes to zlib, which reports it as before.
+func newDeflateReader(body io.Reader) (io.ReadCloser, error) {
+	buffered := bufio.NewReader(body)
+	header, _ := buffered.Peek(2)
+	if len(header) == 2 && !isZlibHeader(header[0], header[1]) {
+		return flate.NewReader(buffered), nil
+	}
+	return zlib.NewReader(buffered)
+}
+
+func isZlibHeader(cmf, flg byte) bool {
+	return cmf&0x0f == 8 && cmf>>4 <= 7 && (uint16(cmf)<<8|uint16(flg))%31 == 0
 }
 
 func closeFetchResponse(response *http.Response) {
