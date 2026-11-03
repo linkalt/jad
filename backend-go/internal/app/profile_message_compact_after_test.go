@@ -63,6 +63,34 @@ func TestProfileMessageCompactAfterIsStrictlyGreater(t *testing.T) {
 	}
 }
 
+func TestProfileMessageCompactAfterRaisedInTheSameCallerRunStillCompacts(t *testing.T) {
+	f := newLayoutFixture(t)
+	calls := countCompactions(f)
+	messenger := profileMessenger{resolver: f.service.resolver}
+	// Seed the target with 5 input tokens in its own caller run.
+	f.usage = compactUsageJSON
+	if _, err := messenger.Message(callerRunContext(t, f, 2), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	send := func() {
+		t.Helper()
+		request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true, CompactAfter: 10}
+		if _, err := messenger.send(callerRunContext(t, f, 1), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first send reads 5 tokens, at or below compact_after; its own response raises them to 50.
+	f.usage = `"usage":{"input_tokens":50,"output_tokens":1,"total_tokens":51},`
+	send()
+	if len(*calls) != 0 {
+		t.Fatalf("first send compacted at 5 tokens with compact_after 10: %v", *calls)
+	}
+	send()
+	if len(*calls) != 1 {
+		t.Fatalf("second send in the same caller run compactions = %v, want 1", *calls)
+	}
+}
+
 func TestProfileMessageCompactOnWithoutUsageDoesNotCompact(t *testing.T) {
 	if compactAfterTarget(t, nil, true, 0) {
 		t.Fatal("compacted a target with no completed response")
