@@ -154,9 +154,9 @@ type ManagedProcessManager struct {
 	// removeAll deletes the folder of a pruned process; it is a field so a test can hold
 	// the finisher inside the prune that follows the close of its done channel.
 	removeAll func(string) error
-	// liveHook, when set, is called by recordLiveManifest with entry.mu held and manager.mu not
-	// yet taken, so a test can park a stop at exactly the point where the two locks are taken.
-	// It is nil in production.
+	// liveHook, when set, is called by persistLiveManifest with the entry's manifestMu held,
+	// entry.mu released and manager.mu not yet taken, so a test can park a live write between
+	// its state check and its map and disk writes. It is nil in production.
 	liveHook  func(id string)
 	recoverMu sync.Mutex
 	recovered bool
@@ -171,9 +171,14 @@ type ManagedProcessManager struct {
 }
 
 type managedProcess struct {
-	mu       sync.Mutex
-	manifest ProcessManifest
-	command  *exec.Cmd
+	// manifestMu orders the manifest writes of this process (map and disk) so a live write
+	// can never land after the terminal one. It is taken before mu, never while mu is held, and
+	// the output writers never take it, so a manifest fsync does not stall the child's pipes.
+	// Lock order: manifestMu, then mu, then the manager's mu.
+	manifestMu sync.Mutex
+	mu         sync.Mutex
+	manifest   ProcessManifest
+	command    *exec.Cmd
 	// stdinWriter is the write end of the stdin pipe when the start had stdin text.
 	// It is closed when the process ends so a writer blocked on a process that
 	// never reads cannot outlive it.
@@ -408,10 +413,8 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	manager.writeOwnerRecord(id, manifest.PID)
 	// The running manifest goes through the guarded write: the finisher may already have written
 	// the terminal one, and a stale "running" clone landing on disk after it is exactly the
-	// phantom P6BM-08 is about (the map is guarded by finish, the file was not).
-	entry.mu.Lock()
-	persistErr := manager.recordLiveManifest(entry, manifest)
-	entry.mu.Unlock()
+	// phantom P6BM-08 is about.
+	persistErr := manager.persistLiveManifest(entry)
 	if persistErr != nil {
 		manager.signalProcess(entry, true)
 		_ = waitForManagedProcess(entry, 2*time.Second)
@@ -541,10 +544,9 @@ func (manager *ManagedProcessManager) Stop(id, reason string) (*ProcessSnapshot,
 	entry.manifest.StopReason = reason
 	pid := entry.manifest.PID
 	command := entry.command
-	updated := cloneProcessManifest(entry.manifest)
-	// A stop that loses the race to the exit writes nothing: the terminal manifest stands.
-	_ = manager.recordLiveManifest(entry, updated)
 	entry.mu.Unlock()
+	// A stop that loses the race to the exit writes nothing: the terminal manifest stands.
+	_ = manager.persistLiveManifest(entry)
 	if pid <= 0 || command == nil {
 		manager.setLeftRunning(entry)
 		snapshot := manager.snapshotEntry(entry)
@@ -583,8 +585,9 @@ func (manager *ManagedProcessManager) Close() error {
 		entries = append(entries, entry)
 	}
 	manager.mu.Unlock()
-	// The entries are inspected outside manager.mu: a manifest write takes entry.mu first and
-	// manager.mu second, so holding manager.mu while taking entry.mu here would deadlock.
+	// The entries are inspected outside manager.mu. The lock order is the entry's manifestMu,
+	// then entry.mu, then manager.mu (see managedProcess); taking entry.mu while holding
+	// manager.mu here would invert it.
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		entry.mu.Lock()
@@ -748,11 +751,16 @@ func (manager *ManagedProcessManager) finish(entry *managedProcess, state Proces
 		entry.manifest = manifest
 		entry.mu.Unlock()
 
+		// Under manifestMu, after the terminal state is set: a live write still in flight
+		// finishes first, and any later one sees the terminal state and writes nothing.
+		entry.manifestMu.Lock()
 		manager.mu.Lock()
 		manager.manifests[manifest.ID] = cloneProcessManifest(manifest)
 		manager.mu.Unlock()
-		if err := manager.persistManifest(manifest); err != nil {
-			entry.finalizeErr = fmt.Errorf("persist process manifest: %w", err)
+		persistErr := manager.persistManifest(manifest)
+		entry.manifestMu.Unlock()
+		if persistErr != nil {
+			entry.finalizeErr = fmt.Errorf("persist process manifest: %w", persistErr)
 		}
 		// The signal is queued before done closes, so a caller released by done that
 		// marks the result read cannot race the completion.
@@ -807,26 +815,35 @@ func (manager *ManagedProcessManager) signalProcess(entry *managedProcess, force
 
 func (manager *ManagedProcessManager) setLeftRunning(entry *managedProcess) {
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
 	entry.manifest.LeftRunning = true
-	_ = manager.recordLiveManifest(entry, cloneProcessManifest(entry.manifest))
+	entry.mu.Unlock()
+	_ = manager.persistLiveManifest(entry)
 }
 
-// recordLiveManifest records manifest as the entry's manifest, in memory and on disk, but
-// only while the entry is live. It must be called with entry.mu held: a stop that passed its
-// own state check before the process exited would otherwise write "running" over the terminal
-// manifest finish had already written, leaving a phantom process for the rest of the server's
-// life (and after a restart). finish takes entry.mu before it sets the terminal state, so
-// holding it here also orders the two writes.
-func (manager *ManagedProcessManager) recordLiveManifest(entry *managedProcess, manifest ProcessManifest) error {
+// persistLiveManifest records the entry's current manifest in the manager's map and on disk,
+// but only while the entry is live. A stop that passed its own state check before the process
+// exited would otherwise write "running" over the terminal manifest finish had already written,
+// leaving a phantom process for the rest of the server's life (and after a restart; P6BM-08).
+// The entry's manifestMu orders it against finish, which sets the terminal state under entry.mu
+// and then writes under manifestMu: a live write either sees the terminal state and writes
+// nothing, or completes before the terminal write starts. entry.mu is held only to copy the
+// manifest, so the fsync never blocks the child's output writers. The caller must not hold
+// entry.mu.
+func (manager *ManagedProcessManager) persistLiveManifest(entry *managedProcess) error {
+	entry.manifestMu.Lock()
+	defer entry.manifestMu.Unlock()
+	entry.mu.Lock()
 	if processTerminal(entry.manifest.State) {
+		entry.mu.Unlock()
 		return nil
 	}
+	manifest := cloneProcessManifest(entry.manifest)
+	entry.mu.Unlock()
 	if hook := manager.liveHook; hook != nil {
 		hook(manifest.ID)
 	}
 	manager.mu.Lock()
-	manager.manifests[manifest.ID] = manifest
+	manager.manifests[manifest.ID] = cloneProcessManifest(manifest)
 	manager.mu.Unlock()
 	return manager.persistManifest(manifest)
 }

@@ -213,8 +213,9 @@ func TestStopAndStopOwnedKeepOneLockOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Park the stop inside recordLiveManifest: from here on it holds entry.mu and has not taken
-	// manager.mu yet. stopOwned then has to inspect the same entry, which is the interleaving.
+	// Park the stop inside persistLiveManifest: from here on it holds the entry's manifestMu and
+	// has not taken manager.mu yet. stopOwned then has to inspect the same entry, which is the
+	// interleaving.
 	parked, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	manager.liveHook = func(string) {
@@ -426,7 +427,8 @@ func TestStopKeepsTheTerminalManifestOfAProcessThatExitsFirst(t *testing.T) {
 		}
 	}
 
-	// The guarded write itself: a stale "running" clone of a finished entry is dropped.
+	// The guarded write itself: a live write on a finished entry (a stop that lost the race to
+	// the exit, its state already terminal) writes nothing.
 	snapshot, err := manager.Start(processTestRequest(directory, "true", 1024))
 	if err != nil {
 		t.Fatal(err)
@@ -441,14 +443,10 @@ func TestStopKeepsTheTerminalManifestOfAProcessThatExitsFirst(t *testing.T) {
 		t.Fatalf("no entry for %s", snapshot.ID)
 	}
 	entry.mu.Lock()
-	stale := cloneProcessManifest(entry.manifest)
+	entry.manifest.LeftRunning = true
+	entry.manifest.StopReason = "stopped_by_agent"
 	entry.mu.Unlock()
-	stale.State = ProcessRunning
-	stale.LeftRunning = true
-	stale.StopReason = "stopped_by_agent"
-	entry.mu.Lock()
-	manager.recordLiveManifest(entry, stale)
-	entry.mu.Unlock()
+	_ = manager.persistLiveManifest(entry)
 	assertTerminal("after a stale write", snapshot.ID)
 
 	// The same through the public path: a stop racing a process that exits at once.

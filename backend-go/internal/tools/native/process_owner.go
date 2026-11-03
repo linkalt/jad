@@ -54,9 +54,9 @@ func (manager *ManagedProcessManager) stopOwned(owner, reason string) int {
 		}
 	}
 	manager.mu.Unlock()
-	// The entries are inspected outside manager.mu: a manifest write takes entry.mu first and
-	// manager.mu second (recordLiveManifest), so holding manager.mu while taking entry.mu here
-	// deadlocks with a Stop that is recording its own manifest. Close is written the same way.
+	// The entries are inspected outside manager.mu. The lock order is the entry's manifestMu,
+	// then entry.mu, then manager.mu (see managedProcess); taking entry.mu while holding
+	// manager.mu would invert it. Close is written the same way.
 	var running []string
 	for index, entry := range entries {
 		entry.mu.Lock()
