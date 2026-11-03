@@ -122,22 +122,26 @@ func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
 	}
 }
 
-// NotLazyBindable names exactly the native tools the lazy pass never binds. Each refused name is
-// refused, and an ordinary native tool and the extension decide_systemone are not.
-func TestNotLazyBindableRefusesExactlyTheToolsAddedAfterTheLazyPass(t *testing.T) {
-	for _, id := range []string{transcriptToolID, transcriptsToolID, profileToolID, subagentToolID, profileMessageToolID, loadToolID} {
-		if !NotLazyBindable(tools.Definition{ID: id, Source: "native"}) {
-			t.Errorf("%s is added after the lazy pass but NotLazyBindable accepts it", id)
-		}
+// NotLazyBindable names exactly load_tool: the one native tool that can never be lazy. The late-built
+// transcript, transcripts, profile, profile_message and subagent tools are bound by lazyLate, and an
+// ordinary native tool, the extension decide_systemone and an MCP tool are bound by the lazy pass.
+func TestNotLazyBindableRefusesExactlyLoadTool(t *testing.T) {
+	if !NotLazyBindable(tools.Definition{ID: loadToolID, Source: "native"}) {
+		t.Errorf("%s can never be lazy but NotLazyBindable accepts it", loadToolID)
 	}
 	for _, definition := range []tools.Definition{
+		{ID: subagentToolID, Source: "native", Name: "subagent"},
+		{ID: transcriptToolID, Source: "native", Name: "transcript"},
+		{ID: transcriptsToolID, Source: "native", Name: "transcripts"},
+		{ID: profileToolID, Source: "native", Name: "profile"},
+		{ID: profileMessageToolID, Source: "native", Name: "profile_message"},
 		{ID: readToolID, Source: "native", Name: "read"},
 		{ID: bashToolID, Source: "native", Name: "bash"},
 		{ID: "decide_systemone", Source: "extension", Name: "decide_systemone"},
 		{ID: "mcp:docs:search", Source: "mcp", Name: "search"},
 	} {
 		if NotLazyBindable(definition) {
-			t.Errorf("%s is bound by the lazy pass but NotLazyBindable refuses it", definition.ID)
+			t.Errorf("%s can be lazy but NotLazyBindable refuses it", definition.ID)
 		}
 	}
 }

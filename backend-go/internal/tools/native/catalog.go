@@ -120,7 +120,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, tool)
+		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
 	}
 	if config.NativeTranscripts != nil {
 		definition, err := requireNativeDefinition(config, definitions, "transcripts", transcriptsToolID, transcriptsInputSchema)
@@ -138,7 +138,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, tool)
+		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
 	}
 	if config.NativeProfile != nil {
 		definition, err := requireNativeDefinition(config, definitions, "profile", profileToolID, profileInputSchema)
@@ -156,7 +156,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, tool)
+		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
 	}
 	// profile_message is built before the subagent tool so an agent can list it, but it is
 	// added to the catalog after the subagent tool, where it always was.
@@ -179,7 +179,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
-		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
+		hooked := WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
@@ -214,7 +214,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 		// of the manifest's text and not replaced by it. The tool's own description is the code's
 		// text plus the list, whose markers depend on which agents may run in the background.
 		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
 	}
 	if profileMessageTool != nil {
 		loaded = append(loaded, *profileMessageTool)
@@ -248,15 +248,26 @@ func gateLazy(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
 	return gated
 }
 
-// NotLazyBindable reports whether a native tool is added after the lazy pass, so a tools.lazy entry
-// can never bind it. The pass binds the tools buildNativeTools builds; the transcript, profile,
-// subagent, profile_message and load_tool tools are appended later, and an entry naming one is refused.
+// lazyLate binds a late-built native tool to the lazy set and returns its gate. Late tools are
+// transcript, transcripts, profile, profile_message and subagent: they are built after buildNativeTools has
+// bound its list, so each one is bound here, before its gate and before any hook wraps it. A subagent's
+// nested copies are gated by SetLazy, not here.
+func lazyLate(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
+	if lazy == nil {
+		return tool
+	}
+	lazy.Bind([]tools.Tool{tool})
+	return gateLazy(tool, lazy)
+}
+
+// NotLazyBindable reports whether a native tool can never be lazy: load_tool. It shows the lazy tools, so a
+// lazy copy of it would hide the only tool that loads them. The other late-built tools are bound by lazyLate.
 func NotLazyBindable(definition tools.Definition) bool {
 	if definition.Source != "native" {
 		return false
 	}
 	switch definition.ID {
-	case transcriptToolID, transcriptsToolID, profileToolID, subagentToolID, profileMessageToolID, loadToolID:
+	case loadToolID:
 		return true
 	}
 	return false

@@ -135,15 +135,18 @@ func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
 	return m.BindToolsets(mcpTools, nil)
 }
 
-// SetLazy gives the owning profile's lazy set to the children: each child's MCP tools in that set are gated
-// with it. loadTool is the child's load_tool, built by the owner from the same set and manifest; nil
-// when the owner enables no load_tool. A child gets it only when its tools list names it.
+// SetLazy gives the owning profile's lazy set to the children: each child's MCP tools and its nested
+// subagent tool in that set are gated with it. loadTool is the child's load_tool, built by the owner from the
+// same set and manifest; nil when the owner enables no load_tool. A child gets it only when its tools list names it.
 func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
 	if m == nil || m.tool == nil {
 		return nil
 	}
 	m.tool.lazy = lazy
 	m.tool.loadTool = loadTool
+	if err := m.tool.regateNestedSelf(); err != nil {
+		return err
+	}
 	if loadTool != nil {
 		return m.tool.addLoadToolToNestingAgents()
 	}
@@ -157,13 +160,24 @@ func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[strin
 	if m == nil || m.tool == nil {
 		return nil
 	}
-	hook := func(tool tools.Tool) tools.Tool { return WithToolEventHooks(tool, m.hooks, m.apiKeyEnv) }
-	return m.tool.bindMCP(mcpTools, toolsetTools, hook)
+	return m.tool.bindMCP(mcpTools, toolsetTools, m.hookTool)
+}
+
+// hookTool wraps a nested copy of a tool with the owning profile's hooks. A nil handle returns the
+// tool unchanged, as newSubagentToolRemotes builds a tool without one.
+func (m *SubagentMCP) hookTool(tool tools.Tool) tools.Tool {
+	if m == nil {
+		return tool
+	}
+	return WithToolEventHooks(tool, m.hooks, m.apiKeyEnv)
 }
 
 type subagentTool struct {
-	// self is the tool as a nesting child gets it.
-	self     tools.Tool
+	// self is the tool as the owner built it, before any lazy gate or hook; nestedSelf makes each
+	// nesting child's copy from it.
+	self tools.Tool
+	// mcp hooks the nested copies with the owning profile's hooks; nil when the caller has no handle.
+	mcp      *SubagentMCP
 	settings sessionfs.NativeSubagentSettings
 	// mu guards the agents' catalogs, which Bind fills in after the tool is built.
 	mu       sync.RWMutex
@@ -266,7 +280,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 		manager = NewSubagentManager()
 	}
 	readOnly, changers := childToolPools(settings, parentTools)
-	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host}
+	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host, mcp: mcp}
 	if remotes != nil && len(settings.Remotes) > 0 {
 		runtime.remotes = remoteAgentSettings{names: settings.Remotes, directory: remotes, timeout: time.Duration(settings.RemoteTimeoutMs) * time.Millisecond}
 	}
@@ -339,11 +353,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			return runtime.execute(ctx, arguments, execution)
 		},
 	}
-	// The nested copy is hooked here, once, so every child catalog built from it fires the owner's hooks.
 	runtime.self = self
-	if mcp != nil {
-		runtime.self = WithToolEventHooks(self, mcp.hooks, mcp.apiKeyEnv)
-	}
 	if err := runtime.addSelfToNestingAgents(); err != nil {
 		return tools.Tool{}, err
 	}
@@ -362,7 +372,40 @@ func (s *subagentTool) addSelfToNestingAgents() error {
 		if s.settings.MaxDepth < 2 {
 			return fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"subagent\", but tools.native.subagent.max_depth is %d: raise it to 2 or more, or remove it from the list", agent.config.Name, max(s.settings.MaxDepth, 1))
 		}
-		agent.nativeTools = append(agent.nativeTools, s.self)
+		agent.nativeTools = append(agent.nativeTools, s.nestedSelf())
+		if len(agent.mcpIDs) > 0 {
+			continue
+		}
+		catalog, err := tools.NewCatalog(agent.nativeTools)
+		if err != nil {
+			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+		}
+		agent.catalog = catalog
+	}
+	return nil
+}
+
+// nestedSelf is the subagent tool as a nesting child gets it: gated with the owner's lazy set when the set
+// has bound it, and hooked with the owner's hooks. GateFor leaves the set's one-shot gate to the parent's copy.
+func (s *subagentTool) nestedSelf() tools.Tool {
+	gated, _ := s.lazy.GateFor(s.self)
+	return s.mcp.hookTool(gated)
+}
+
+// regateNestedSelf replaces the nested copy of the subagent tool that each agent lists with one gated by the
+// owner's lazy set, which is known only once SetLazy runs. An agent without MCP tools gets its catalog rebuilt;
+// an agent with MCP tools gets its catalog in bindMCP, so SetLazy must run before BindToolsets.
+func (s *subagentTool) regateNestedSelf() error {
+	for index := range s.agents {
+		agent := &s.agents[index]
+		if !containsName(agent.config.Tools, "subagent") {
+			continue
+		}
+		for position := range agent.nativeTools {
+			if agent.nativeTools[position].Definition.ID == subagentToolID {
+				agent.nativeTools[position] = s.nestedSelf()
+			}
+		}
 		if len(agent.mcpIDs) > 0 {
 			continue
 		}

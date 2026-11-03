@@ -92,7 +92,7 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 		if visible {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows that can be lazy (a denied tool, one outside allow, or one of subagent, profile_message, transcript, transcripts, profile and load_tool cannot be lazy)",
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows that can be lazy (a denied tool, one outside allow, or load_tool cannot be lazy)",
 			config.SettingPath, config.Profile, index, entry)}
 	}
 	return nil

@@ -386,21 +386,31 @@ func TestLazyProfileWhoseAllowHidesLoadToolIsAConfigError(t *testing.T) {
 	}
 }
 
-// A lazy entry the lazy pass can never bind is a configuration error too. The subagent, profile_message,
-// transcript and profile tools are added after the pass, so a lazy entry that names one would be
-// accepted and do nothing: the tool would stay in the array.
+// A lazy entry the lazy pass can never bind is a configuration error too. load_tool is never bound, so a
+// lazy entry that names it would be accepted and do nothing: the tool would stay in the array. The late
+// transcript, profile, profile_message and subagent tools are bound, not refused.
 func TestLazyEntryNamingAToolTheLazyPassCannotBindIsAConfigError(t *testing.T) {
 	registered := []tools.Definition{
 		{ID: "native.read", Source: "native", Name: "read"},
 		{ID: "native.subagent", Source: "native", Name: "subagent"},
-		{ID: "native.profile_message", Source: "native", Name: "profile_message"},
+		{ID: "native.load_tool", Source: "native", Name: "load_tool"},
 	}
 	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
-	for _, name := range []string{"subagent", "profile_message"} {
+	for _, name := range []string{"load_tool"} {
 		settings := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
 		err := checkLazyEntriesVisible(config, settings, registered)
 		if err == nil || !strings.Contains(err.Error(), `tools.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "cannot be lazy") {
 			t.Errorf("%s: err = %v, want the lazy-entry refusal naming it", name, err)
+		}
+		if err != nil && (strings.Contains(err.Error(), `"subagent"`) || strings.Contains(err.Error(), `"profile_message"`) || strings.Contains(err.Error(), `"transcript"`) || strings.Contains(err.Error(), `"profile"`)) {
+			t.Errorf("%s: the refusal names a tool that can be lazy: %v", name, err)
+		}
+	}
+	// profile_message and subagent are bound by the late pass, so a lazy entry naming either is accepted.
+	for _, name := range []string{"profile_message", "subagent"} {
+		accepted := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
+		if err := checkLazyEntriesVisible(config, accepted, []tools.Definition{{ID: "native." + name, Source: "native", Name: name}}); err != nil {
+			t.Errorf("%s: lazy entry refused: %v", name, err)
 		}
 	}
 }
