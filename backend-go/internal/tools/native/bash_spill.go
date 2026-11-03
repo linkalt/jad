@@ -105,7 +105,10 @@ func planBashSpill(
 				"{stream}", string(stream),
 			).Replace(pruneTemplate))
 		}
-		pruneBashSpillFilesThrottled(filepath.Dir(path), bashSpillPruneRegexp(pruneTemplate, workspaceRoot, sessionDir), policy.RetentionDays, time.Duration(policy.PruneIntervalSeconds)*time.Second)
+		template := pruneTemplate
+		pruneBashSpillFilesThrottled(filepath.Dir(path), template+"\x00"+workspaceRoot+"\x00"+sessionDir, func() *regexp.Regexp {
+			return bashSpillPruneRegexp(template, workspaceRoot, sessionDir)
+		}, policy.RetentionDays, time.Duration(policy.PruneIntervalSeconds)*time.Second)
 		plan.writers[stream] = &bashSpillWriter{path: path, capBytes: policy.CapBytes}
 	}
 	return plan
@@ -269,12 +272,15 @@ var bashSpillPrunes = struct {
 	last map[string]time.Time
 }{last: map[string]time.Time{}}
 
-func pruneBashSpillFilesThrottled(directory string, pattern *regexp.Regexp, retentionDays int64, interval time.Duration) {
+// pruneBashSpillFilesThrottled prunes directory at most once per interval for one pattern.
+// patternKey names the pattern (the inputs it is built from) and pattern builds it: it is
+// only called when a prune is due, so a bash call that prunes nothing compiles nothing.
+func pruneBashSpillFilesThrottled(directory, patternKey string, pattern func() *regexp.Regexp, retentionDays int64, interval time.Duration) {
 	if retentionDays <= 0 || pattern == nil {
 		return
 	}
 	if interval > 0 {
-		key := directory + "\x00" + pattern.String()
+		key := directory + "\x00" + patternKey
 		bashSpillPrunes.Lock()
 		now := time.Now()
 		// A key older than the interval is due on its next call anyway, so dropping it
@@ -294,7 +300,7 @@ func pruneBashSpillFilesThrottled(directory string, pattern *regexp.Regexp, rete
 			return
 		}
 	}
-	pruneBashSpillFiles(directory, pattern, retentionDays)
+	pruneBashSpillFiles(directory, pattern(), retentionDays)
 }
 
 func pruneBashSpillFiles(directory string, pattern *regexp.Regexp, retentionDays int64) {

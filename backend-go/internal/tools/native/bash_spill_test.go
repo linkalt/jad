@@ -65,7 +65,7 @@ func TestPruneBashSpillThrottleForgetsExpiredKeys(t *testing.T) {
 	interval := time.Millisecond
 	for call := 0; call < 50; call++ {
 		pattern := regexp.MustCompile(fmt.Sprintf("^bash-%d\\.log$", call))
-		pruneBashSpillFilesThrottled(directory, pattern, 14, interval)
+		pruneBashSpillFilesThrottled(directory, pattern.String(), func() *regexp.Regexp { return pattern }, 14, interval)
 		time.Sleep(2 * interval)
 	}
 	bashSpillPrunes.Lock()
