@@ -787,3 +787,21 @@ func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T
 		t.Errorf("the MCP server ran for an unloaded lazy MCP tool (%d calls)", calls.Load())
 	}
 }
+
+// The resolver gives the subagent tool its lazy set (SetLazy) before it binds the MCP tools (BindToolsets). A
+// child copy is gated when BindToolsets builds it, so a reversed order builds every child copy with no set.
+// This test fails under that order, and the message names the order, so a reversal is not read as a mystery.
+func TestResolverGivesTheSubagentItsLazySetBeforeItBindsMCPTools(t *testing.T) {
+	src, err := os.ReadFile("resolver.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLazy := strings.Index(string(src), "subagentMCP.SetLazy(lazy, childLoadTool)")
+	bind := strings.Index(string(src), "subagentMCP.BindToolsets(mcpTools, toolsetMCP)")
+	if setLazy < 0 || bind < 0 {
+		t.Fatal("resolver.go no longer calls SetLazy and BindToolsets by these names; update this pin")
+	}
+	if setLazy > bind {
+		t.Fatal("resolver.go calls subagentMCP.BindToolsets before SetLazy: each child's MCP copy is built with no lazy set, so the child's lazy MCP tool is not gated")
+	}
+}

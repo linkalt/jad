@@ -1259,7 +1259,7 @@
                   "type": "array",
                   "uniqueItems": true,
                   "default": ["read", "grep", "glob"],
-                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
+                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
                   "items": {
                     "type": "string",
                     "minLength": 1,

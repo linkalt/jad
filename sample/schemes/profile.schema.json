@@ -63,6 +63,7 @@
       "properties": {
         "allow": {
           "type": "array",
+          "description": "Tools the model sees, as the names of a tool or an mcp:<server>:<tool> entry. A tool_smith script can call only the tools this shows.",
           "items": {
             "type": "string",
             "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
@@ -71,6 +72,7 @@
         },
         "deny": {
           "type": "array",
+          "description": "Tools the model does not see, as the names of a tool or an mcp:<server>:<tool> entry; wins over allow. A tool_smith script cannot call them either.",
           "items": {
             "type": "string",
             "pattern": "^(read|write|edit|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
