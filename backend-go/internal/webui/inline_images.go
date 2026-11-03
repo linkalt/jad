@@ -14,13 +14,14 @@ var inlineImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "i
 // inlineImageURLs lists, in order, the base64 data URLs of the input_image parts of a
 // tool output. Stored-image references and other URLs are not listed.
 func inlineImageURLs(output json.RawMessage) []string {
-	var parts []struct {
-		Type     string `json:"type"`
-		ImageURL string `json:"image_url"`
-	}
-	if json.Unmarshal(output, &parts) != nil {
+	parts, ok := imageParts(output)
+	if !ok {
 		return nil
 	}
+	return inlineImageURLsOf(parts)
+}
+
+func inlineImageURLsOf(parts []toolOutputPart) []string {
 	var urls []string
 	for _, part := range parts {
 		if part.Type != "input_image" {
@@ -65,11 +66,13 @@ func InlineImage(record json.RawMessage, index int) (data []byte, contentType st
 // message part reports, which is synthetic for an output that had none.
 func FindInlineImage(records []TranscriptRecord, messageID, callID string, index int) (data []byte, contentType string, ok bool) {
 	var source json.RawMessage
+	// Only the asked tool result reads its output: the others are needed for grouping
+	// alone, and a turn of large inline images would otherwise be decoded whole per fetch.
 	_, err := normalizeTranscript(records, func(id string, part Part, entry TranscriptRecord) {
 		if source == nil && id == messageID && part.CallID == callID && part.InlineImages > 0 {
 			source = entry.Raw
 		}
-	})
+	}, func(id string) bool { return id == callID })
 	if err != nil || source == nil {
 		return nil, "", false
 	}

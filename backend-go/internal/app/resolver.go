@@ -156,6 +156,11 @@ type sharedSession struct {
 	runMu        runMutex
 	turnStartsMu sync.Mutex
 	turnStarts   *turnStartsCache
+	// historyMu guards the history block's message count, kept with the block's ETag
+	// (historyReferenceFor). An empty historyETag holds nothing.
+	historyMu    sync.Mutex
+	historyETag  string
+	historyCount int
 	runners      map[string]*session.Runner
 
 	logger           *slog.Logger

@@ -398,14 +398,8 @@ func (r *Resolver) ReadSessionSnapshot(ctx context.Context, reference, profile s
 	// history block, and a page does not restate it.
 	var historyRef *historyReference
 	if options.Before == nil {
-		history, err := r.readHistoryBlock(ctx, config)
-		if err != nil {
+		if historyRef, err = r.historyReferenceFor(ctx, config, shared); err != nil {
 			return httpapi.CatalogResponse{}, err
-		}
-		historyRef = &historyReference{Count: len(history.Messages)}
-		if history.ETag != "" {
-			etagValue := history.ETag
-			historyRef.ETag = &etagValue
 		}
 	}
 	etag = sessionVersionForCatalog(location, config, r.catalog.MaxInlinePartBytes, runs)

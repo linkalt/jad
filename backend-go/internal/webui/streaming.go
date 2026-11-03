@@ -25,6 +25,88 @@ type StreamingRun struct {
 	// part each time. deltaPart 0 means no part is tracked.
 	delta     strings.Builder
 	deltaPart int
+	// summary keeps FieldsFromParts(parts) current, so a snapshot per delta does not
+	// join every text part again (which made a long multi-step answer quadratic).
+	summary summaryCache
+}
+
+// summaryCache caches the message-level text and reasoning of a run's parts. valid is
+// false after any change to a text or reasoning part other than a delta appended to the
+// last part, and the next snapshot rebuilds it. A kind with a single part uses that
+// part's text directly; the builders hold the join only when a kind has several parts.
+type summaryCache struct {
+	valid                     bool
+	textParts, reasoningParts int
+	lastText, lastReasoning   int
+	text, reasoning           strings.Builder
+}
+
+// invalidate marks the summary stale after a text or reasoning part changed.
+func (s *summaryCache) invalidate() { s.valid = false }
+
+// appended records that delta was appended to the last part, of kind kind.
+func (s *summaryCache) appended(kind, delta string) {
+	if !s.valid {
+		return
+	}
+	switch {
+	case kind == "text" && s.textParts > 1:
+		s.text.WriteString(delta)
+	case kind == "reasoning" && s.reasoningParts > 1:
+		s.reasoning.WriteString(delta)
+	}
+}
+
+// fields returns what FieldsFromParts(parts) returns, rebuilding the cache if stale.
+func (s *summaryCache) fields(parts []Part) (text, reasoning string) {
+	if !s.valid {
+		s.rebuild(parts)
+	}
+	switch s.textParts {
+	case 0:
+	case 1:
+		text = parts[s.lastText].Text
+	default:
+		text = s.text.String()
+	}
+	switch s.reasoningParts {
+	case 0:
+	case 1:
+		reasoning = strings.TrimSpace(parts[s.lastReasoning].Text)
+	default:
+		reasoning = strings.TrimSpace(s.reasoning.String())
+	}
+	return text, reasoning
+}
+
+func (s *summaryCache) rebuild(parts []Part) {
+	s.textParts, s.reasoningParts = 0, 0
+	for index, part := range parts {
+		switch part.Type {
+		case "text":
+			s.textParts++
+			s.lastText = index
+		case "reasoning":
+			s.reasoningParts++
+			s.lastReasoning = index
+		}
+	}
+	s.text.Reset()
+	s.reasoning.Reset()
+	if s.textParts > 1 || s.reasoningParts > 1 {
+		for _, part := range parts {
+			switch {
+			case part.Type == "text" && s.textParts > 1:
+				s.text.WriteString(part.Text)
+			case part.Type == "reasoning" && s.reasoningParts > 1:
+				if s.reasoning.Len() > 0 {
+					s.reasoning.WriteString("\n\n")
+				}
+				s.reasoning.WriteString(part.Text)
+			}
+		}
+	}
+	s.valid = true
 }
 
 // appendDelta adds streamed text to the last part of the given kind, or starts
@@ -37,8 +119,10 @@ func (r *StreamingRun) appendDelta(kind, text string) {
 	if last >= 0 && r.parts[last].Type == kind && r.deltaPart == last+1 && r.delta.Len() == len(r.parts[last].Text) {
 		r.delta.WriteString(text)
 		r.parts[last].Text = r.delta.String()
+		r.summary.appended(kind, text)
 		return
 	}
+	r.summary.invalidate()
 	r.parts = appendTextPart(r.parts, kind, text)
 	last = len(r.parts) - 1
 	r.delta.Reset()
@@ -176,7 +260,7 @@ func (r *StreamingRun) Message(status string) Message {
 		return Message{}
 	}
 	parts := cloneParts(r.parts)
-	text, reasoning := FieldsFromParts(parts)
+	text, reasoning := r.summary.fields(parts)
 	message := Message{
 		ID:               r.id,
 		Sender:           "assistant",
@@ -319,6 +403,7 @@ func (r *StreamingRun) updateToolCall(callID string, update func(string) string,
 
 func (r *StreamingRun) mergeCompletedResponse(response map[string]json.RawMessage) {
 	r.deltaPart = 0
+	r.summary.invalidate()
 	r.ensureStep(stringField(response["id"]))
 	completed := responseParts(response)
 	currentStepStart := 0
@@ -447,12 +532,22 @@ func ToolResultPart(raw json.RawMessage, key any) (Part, bool) {
 	if err != nil || stringField(fields["type"]) != "function_call_output" {
 		return Part{}, false
 	}
-	part, _ := toolResult(fields, fmt.Sprint(key))
+	part, _, read := toolResultOutput(fields, fmt.Sprint(key))
 	if part == nil {
 		return Part{}, false
 	}
+	if read.parts != nil {
+		part.Status = "success"
+		for _, output := range read.parts {
+			if output.Text == mcpToolErrorText {
+				part.Status = "error"
+				break
+			}
+		}
+		return *part, true
+	}
 	var outputs []map[string]json.RawMessage
-	if json.Unmarshal(fields["output"], &outputs) == nil && outputs != nil {
+	if firstByte(fields["output"]) == '[' && json.Unmarshal(fields["output"], &outputs) == nil && outputs != nil {
 		part.Status = "success"
 		for _, output := range outputs {
 			if stringField(output["text"]) == mcpToolErrorText {

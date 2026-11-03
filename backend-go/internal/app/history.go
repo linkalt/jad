@@ -43,6 +43,18 @@ func (r *Resolver) ReadSessionHistory(ctx context.Context, reference, profile, i
 	if err != nil {
 		return httpapi.CatalogResponse{}, mapSessionError(err)
 	}
+	return r.historyResponse(ctx, config, ifNoneMatch)
+}
+
+// historyResponse answers the history route for a loaded session. The ETag comes from
+// file stamps alone, so a client that already holds the block gets 304 without the
+// backup being read and normalized.
+func (r *Resolver) historyResponse(ctx context.Context, config sessionfs.SessionConfig, ifNoneMatch string) (httpapi.CatalogResponse, error) {
+	if version, ok, err := historyVersion(config); err != nil {
+		return httpapi.CatalogResponse{}, err
+	} else if ok && httpapi.ETagMatches(ifNoneMatch, `"`+version+`"`) {
+		return httpapi.CatalogResponse{ETag: `"` + version + `"`, NotModified: true}, nil
+	}
 	block, err := r.readHistoryBlock(ctx, config)
 	if err != nil {
 		return httpapi.CatalogResponse{}, err
@@ -220,7 +232,14 @@ func (r *Resolver) readTurnRecords(ctx context.Context, config sessionfs.Session
 	return records, nil
 }
 
+// readHistoryBlock reads and normalizes the history block. Its ETag is taken before the
+// backup is read: a backup replaced in between then yields a block newer than its ETag,
+// which the next request refetches, never an older block under the newer ETag.
 func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.SessionConfig) (historyBlock, error) {
+	etag, ok, err := historyVersion(config)
+	if err != nil || !ok {
+		return historyBlock{}, err
+	}
 	records, hasBackup, err := readHistoryRecords(ctx, config)
 	if err != nil || !hasBackup {
 		return historyBlock{}, err
@@ -229,15 +248,61 @@ func (r *Resolver) readHistoryBlock(ctx context.Context, config sessionfs.Sessio
 	if err != nil {
 		return historyBlock{}, err
 	}
+	return historyBlock{ETag: etag, Messages: messages}, nil
+}
+
+// historyVersion is the ETag of the history block, from the backup's stamp, the
+// transcript's identity and the turn count; ok is false when the session keeps no backup.
+// It reads no record.
+func historyVersion(config sessionfs.SessionConfig) (etag string, ok bool, err error) {
+	if config.BackupTurns <= 0 {
+		return "", false, nil
+	}
+	info, err := os.Stat(config.MessagesBackupPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("stat session backup %q: %w", config.MessagesBackupPath, err)
+	}
+	if info.Size() <= 0 {
+		return "", false, nil
+	}
 	generation := "0:0:0"
 	if stat, err := statFile(config.MessagesPath); err == nil {
 		generation = stat.generation()
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return historyBlock{}, fmt.Errorf("stat session transcript %q: %w", config.MessagesPath, err)
+		return "", false, fmt.Errorf("stat session transcript %q: %w", config.MessagesPath, err)
 	}
 	key := fmt.Sprintf("%s|%s|%d", fileStamp(config.MessagesBackupPath), generation, config.BackupTurns)
-	etag := strings.Trim(makeETag(key), `"`)
-	return historyBlock{ETag: etag, Messages: messages}, nil
+	return strings.Trim(makeETag(key), `"`), true, nil
+}
+
+// historyReferenceFor is the snapshot's reference to the history block: its ETag and
+// message count. The count is kept with its ETag on the shared session, so a snapshot
+// reads the backup only after the backup or the transcript identity changed.
+func (r *Resolver) historyReferenceFor(ctx context.Context, config sessionfs.SessionConfig, shared *sharedSession) (*historyReference, error) {
+	etag, ok, err := historyVersion(config)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return &historyReference{}, nil
+	}
+	if count, hit := shared.cachedHistoryCount(etag); hit {
+		return &historyReference{ETag: &etag, Count: count}, nil
+	}
+	block, err := r.readHistoryBlock(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	reference := &historyReference{Count: len(block.Messages)}
+	if block.ETag != "" {
+		etagValue := block.ETag
+		reference.ETag = &etagValue
+		shared.keepHistoryCount(block.ETag, len(block.Messages))
+	}
+	return reference, nil
 }
 
 func readBackupTail(ctx context.Context, path string, limit int) ([]webui.TranscriptRecord, error) {
@@ -315,4 +380,21 @@ func readBackupTail(ctx context.Context, path string, limit int) ([]webui.Transc
 		}
 	}
 	return tail, nil
+}
+
+// cachedHistoryCount returns the history block's message count kept for etag.
+func (s *sharedSession) cachedHistoryCount(etag string) (int, bool) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	if etag == "" || s.historyETag != etag {
+		return 0, false
+	}
+	return s.historyCount, true
+}
+
+// keepHistoryCount keeps the history block's message count with its ETag.
+func (s *sharedSession) keepHistoryCount(etag string, count int) {
+	s.historyMu.Lock()
+	s.historyETag, s.historyCount = etag, count
+	s.historyMu.Unlock()
 }

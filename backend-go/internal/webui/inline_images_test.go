@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,44 @@ func TestFindInlineImageServesAResultThatJoinedItsToolCallMessage(t *testing.T) 
 	}
 	if data, _, ok := FindInlineImage(records, "resp-1", "call_9", 0); !ok || !bytes.Equal(data, pngBytes) {
 		t.Fatalf("served %v (ok %v)", data, ok)
+	}
+}
+
+// TestProjectingOneCallGroupsMessagesAsAFullProjection: FindInlineImage reads the output
+// of the asked call only. The others still join their messages, so every message keeps
+// its id, its steps and its parts in place, and the asked call's part is whole.
+func TestProjectingOneCallGroupsMessagesAsAFullProjection(t *testing.T) {
+	records := historyFixture(4, 64, true)
+	records = append(records,
+		TranscriptRecord{Offset: 900001, Prefix: "o", Raw: json.RawMessage(`{"type":"function_call_output","output":"orphan without call id"}`)},
+		TranscriptRecord{Offset: 900002, Prefix: "o", Raw: json.RawMessage(`{"type":"function_call_output","call_id":"call-1","output":"a repeated call id"}`)},
+	)
+	full, err := NormalizeTranscript(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asked := range []string{"call-0", "call-2", "tool-call-o900001", "none"} {
+		projected, err := normalizeTranscript(records, nil, func(id string) bool { return id == asked })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(projected) != len(full) {
+			t.Fatalf("%s: %d messages, want %d", asked, len(projected), len(full))
+		}
+		for index := range full {
+			want, got := full[index], projected[index]
+			if got.ID != want.ID || !reflect.DeepEqual(got.Steps, want.Steps) || len(got.Parts) != len(want.Parts) {
+				t.Fatalf("%s: message %d = %s %+v (%d parts), want %s %+v (%d parts)", asked, index, got.ID, got.Steps, len(got.Parts), want.ID, want.Steps, len(want.Parts))
+			}
+			for position := range want.Parts {
+				wantPart, gotPart := want.Parts[position], got.Parts[position]
+				if gotPart.Type != wantPart.Type || gotPart.CallID != wantPart.CallID {
+					t.Fatalf("%s: message %d part %d = %s %s, want %s %s", asked, index, position, gotPart.Type, gotPart.CallID, wantPart.Type, wantPart.CallID)
+				}
+				if wantPart.Type == "tool_result" && wantPart.CallID == asked && !reflect.DeepEqual(gotPart, wantPart) {
+					t.Fatalf("%s: asked part = %+v, want %+v", asked, gotPart, wantPart)
+				}
+			}
+		}
 	}
 }

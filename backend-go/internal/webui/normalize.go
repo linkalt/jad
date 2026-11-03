@@ -13,12 +13,15 @@ import (
 // NormalizeTranscript converts JSONL transcript entries into frontend messages.
 // Prefix is "o" for current transcript offsets and "b" for backup offsets.
 func NormalizeTranscript(records []TranscriptRecord) ([]Message, error) {
-	return normalizeTranscript(records, nil)
+	return normalizeTranscript(records, nil, nil)
 }
 
 // normalizeTranscript is NormalizeTranscript that also reports, for every tool result, the
-// id of the message it joined and the record it came from.
-func normalizeTranscript(records []TranscriptRecord, onToolResult func(messageID string, part Part, entry TranscriptRecord)) ([]Message, error) {
+// id of the message it joined and the record it came from. When project is set, only the
+// tool results whose call id it accepts read their output; the others join their message
+// as an empty part. Messages are grouped the same way either way, since grouping never
+// looks at a tool output.
+func normalizeTranscript(records []TranscriptRecord, onToolResult func(messageID string, part Part, entry TranscriptRecord), project func(callID string) bool) ([]Message, error) {
 	state := reducerState{toolMessages: make(map[string]int), activeToolMessage: -1, onToolResult: onToolResult}
 	for _, entry := range records {
 		var fields map[string]json.RawMessage
@@ -43,6 +46,12 @@ func normalizeTranscript(records []TranscriptRecord, onToolResult func(messageID
 			}
 		}
 		if typeName == "function_call_output" {
+			if project != nil {
+				if callID := toolResultCallID(fields, key); !project(callID) {
+					state.addToolResult(callID, Part{Type: "tool_result", CallID: callID, Status: "unknown"}, entry)
+					continue
+				}
+			}
 			if part, callID := toolResult(fields, key); part != nil {
 				state.addToolResult(callID, *part, entry)
 				continue
@@ -252,12 +261,15 @@ func responseParts(response map[string]json.RawMessage) []Part {
 }
 
 func toolResult(fields map[string]json.RawMessage, key string) (*Part, string) {
-	callID := stringField(fields["call_id"])
-	if callID == "" {
-		callID = "tool-call-" + key
-	}
-	outputRaw := fields["output"]
-	output := toolOutputForUI(outputRaw)
+	part, callID, _ := toolResultOutput(fields, key)
+	return part, callID
+}
+
+// toolResultOutput is toolResult that also returns the output it read.
+func toolResultOutput(fields map[string]json.RawMessage, key string) (*Part, string, toolOutput) {
+	callID := toolResultCallID(fields, key)
+	read := readToolOutput(fields["output"])
+	output := read.text
 	status := "unknown"
 	firstLine, _, _ := strings.Cut(output, "\n")
 	var parsed map[string]json.RawMessage
@@ -270,20 +282,100 @@ func toolResult(fields map[string]json.RawMessage, key string) (*Part, string) {
 			}
 		}
 	}
-	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status, Images: storedImageNames(outputRaw), InlineImages: len(inlineImageURLs(outputRaw))}
-	return part, callID
+	part := &Part{Type: "tool_result", CallID: callID, Output: output, Status: status, Images: read.images, InlineImages: read.inlineImages}
+	return part, callID, read
+}
+
+// toolResultCallID is the call id a tool result part reports: the record's, or one made
+// from the record key when the record has none.
+func toolResultCallID(fields map[string]json.RawMessage, key string) string {
+	if callID := stringField(fields["call_id"]); callID != "" {
+		return callID
+	}
+	return "tool-call-" + key
+}
+
+// toolOutputPart is one entry of a tool output that is a list of content parts.
+type toolOutputPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL string `json:"image_url"`
+	Filename string `json:"filename"`
+}
+
+// toolOutput is a function_call_output's output read once: the text the UI shows
+// (toolOutputForUI), the stored images it names (storedImageNames) and the number of
+// inline images (inlineImageURLs). parts is the decoded list, or nil when the output is
+// not a list of content parts.
+type toolOutput struct {
+	text         string
+	images       []string
+	inlineImages int
+	parts        []toolOutputPart
+}
+
+// readToolOutput reads an output with one decode where the old projection took up to
+// five passes: three of them tried to read a plain-string output as a list and failed
+// only after scanning all of it. A string is unquoted once; a list is decoded once into
+// typed parts. Every other value, and a list the typed decode refuses (an entry that is
+// not an object, or a field that is not a string), takes the per-field helpers, which
+// give the same result for every output the typed decode accepts.
+func readToolOutput(raw json.RawMessage) toolOutput {
+	switch firstByte(raw) {
+	case '"':
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			return toolOutput{text: text}
+		}
+	case '[':
+		var parts []toolOutputPart
+		if json.Unmarshal(raw, &parts) == nil && parts != nil {
+			return toolOutput{text: toolPartsForUI(parts), images: storedImageNamesOf(parts), inlineImages: len(inlineImageURLsOf(parts)), parts: parts}
+		}
+	}
+	return toolOutput{text: toolOutputForUI(raw), images: storedImageNames(raw), inlineImages: len(inlineImageURLs(raw))}
+}
+
+// firstByte is the first byte of raw that is not JSON whitespace, or 0.
+func firstByte(raw json.RawMessage) byte {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		}
+		return b
+	}
+	return 0
 }
 
 // storedImageNames returns the stored-image file names a tool output refers to, in
 // order and without repeats. An image still inline as a data URL is not listed.
 func storedImageNames(raw json.RawMessage) []string {
-	var parts []struct {
+	parts, ok := imageParts(raw)
+	if !ok {
+		return nil
+	}
+	return storedImageNamesOf(parts)
+}
+
+// imageParts decodes only the type and image_url of each entry of a tool output list,
+// so an entry with an odd text or filename value still lists its image.
+func imageParts(raw json.RawMessage) ([]toolOutputPart, bool) {
+	var entries []struct {
 		Type     string `json:"type"`
 		ImageURL string `json:"image_url"`
 	}
-	if json.Unmarshal(raw, &parts) != nil {
-		return nil
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil, false
 	}
+	parts := make([]toolOutputPart, len(entries))
+	for index, entry := range entries {
+		parts[index] = toolOutputPart{Type: entry.Type, ImageURL: entry.ImageURL}
+	}
+	return parts, true
+}
+
+func storedImageNamesOf(parts []toolOutputPart) []string {
 	var names []string
 	for _, part := range parts {
 		name, ok := strings.CutPrefix(part.ImageURL, imagestore.RefPrefix)
@@ -299,31 +391,13 @@ func storedImageNames(raw json.RawMessage) []string {
 }
 
 func toolOutputForUI(raw json.RawMessage) string {
-	var parts []map[string]json.RawMessage
-	if json.Unmarshal(raw, &parts) == nil && parts != nil {
-		lines := make([]string, 0, len(parts))
-		for _, part := range parts {
-			typeName := stringField(part["type"])
-			switch typeName {
-			case "input_text":
-				lines = append(lines, stringField(part["text"]))
-			case "input_image":
-				lines = append(lines, "[MCP image content]")
-			case "input_file":
-				filename := stringField(part["filename"])
-				if filename == "" {
-					lines = append(lines, "[MCP file]")
-				} else {
-					lines = append(lines, "[MCP file: "+filename+"]")
-				}
-			default:
-				if typeName == "" {
-					typeName = "unknown"
-				}
-				lines = append(lines, "[MCP content: "+typeName+"]")
-			}
+	var fields []map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil && fields != nil {
+		parts := make([]toolOutputPart, len(fields))
+		for index, field := range fields {
+			parts[index] = toolOutputPart{Type: stringField(field["type"]), Text: stringField(field["text"]), Filename: stringField(field["filename"])}
 		}
-		return strings.Join(lines, "\n")
+		return toolPartsForUI(parts)
 	}
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
@@ -333,6 +407,32 @@ func toolOutputForUI(raw json.RawMessage) string {
 		return "null"
 	}
 	return string(raw)
+}
+
+// toolPartsForUI is the text the UI shows for a tool output that is a list of parts.
+func toolPartsForUI(parts []toolOutputPart) string {
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		typeName := part.Type
+		switch typeName {
+		case "input_text":
+			lines = append(lines, part.Text)
+		case "input_image":
+			lines = append(lines, "[MCP image content]")
+		case "input_file":
+			if part.Filename == "" {
+				lines = append(lines, "[MCP file]")
+			} else {
+				lines = append(lines, "[MCP file: "+part.Filename+"]")
+			}
+		default:
+			if typeName == "" {
+				typeName = "unknown"
+			}
+			lines = append(lines, "[MCP content: "+typeName+"]")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func appendTextPart(parts []Part, kind, text string) []Part {
