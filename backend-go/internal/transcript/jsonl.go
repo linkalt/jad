@@ -42,6 +42,8 @@ type Journal struct {
 	index *lineIndex
 	// dirSyncHook replaces syncDirectory in tests.
 	dirSyncHook func(path string) error
+	// appendWriteHook replaces the batch write of AppendAt in tests.
+	appendWriteHook func(file *os.File, data []byte) error
 }
 
 func (j *Journal) syncDirectory(path string) error {
@@ -77,9 +79,6 @@ func NewJournal(path string, durability DurabilityMode) (*Journal, error) {
 	return &Journal{path: filepath.Clean(path), durability: durability}, nil
 }
 
-// Append validates and compacts all records before touching the transcript,
-// repairs any incomplete trailing line, then appends each record with a newline.
-// An empty append is a no-op and does not create the file.
 // ReplaceRecords atomically replaces the transcript with compact JSONL records.
 func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	if j == nil {
@@ -147,6 +146,10 @@ func (j *Journal) byteSize() (int64, error) {
 	return info.Size(), nil
 }
 
+// Append validates and compacts all records before touching the transcript,
+// repairs any incomplete trailing line, then appends each record with a newline.
+// The records land together or not at all (see AppendAt). An empty append is a
+// no-op and does not create the file.
 func (j *Journal) Append(records ...[]byte) error {
 	_, err := j.AppendAt(records...)
 	return err
@@ -154,7 +157,9 @@ func (j *Journal) Append(records ...[]byte) error {
 
 // AppendAt appends like Append and returns the byte offset each record starts
 // at in the transcript, in order. The offsets are what the web-ui projection
-// uses in its message ids.
+// uses in its message ids. The batch is written in one write; if it fails, the
+// file is cut back to its size before the batch, so a failed append never
+// leaves a complete prefix of the batch behind for readers to count.
 func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 	if j == nil {
 		return nil, errors.New("transcript journal is not initialized")
@@ -193,14 +198,30 @@ func (j *Journal) AppendAt(records ...[]byte) (offsets []int64, result error) {
 		return nil, fmt.Errorf("stat transcript: %w", err)
 	}
 	offset := info.Size()
+	start := offset
 	created := offset == 0
 	offsets = make([]int64, len(lines))
+	batchBytes := 0
+	for _, line := range lines {
+		batchBytes += len(line) + 1
+	}
+	batch := make([]byte, 0, batchBytes)
 	for index, line := range lines {
 		offsets[index] = offset
-		if err := writeAll(file, append(line, '\n')); err != nil {
-			return nil, fmt.Errorf("append transcript record: %w", err)
-		}
+		batch = append(batch, line...)
+		batch = append(batch, '\n')
 		offset += int64(len(line)) + 1
+	}
+	write := writeAll
+	if j.appendWriteHook != nil {
+		write = j.appendWriteHook
+	}
+	if err := write(file, batch); err != nil {
+		cause := fmt.Errorf("append transcript record: %w", err)
+		if truncateErr := file.Truncate(start); truncateErr != nil {
+			return nil, errors.Join(cause, fmt.Errorf("cut transcript back after a failed append: %w", truncateErr))
+		}
+		return nil, cause
 	}
 	if j.durability != DurabilityProcess {
 		if err := file.Sync(); err != nil {
