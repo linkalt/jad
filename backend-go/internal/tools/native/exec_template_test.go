@@ -302,6 +302,24 @@ func TestExecPythonFnSeesAHelperInAFolderCreatedAfterStart(t *testing.T) {
 	}
 }
 
+// TestExecPythonFnSeesAHelperWrittenIntoAListedFolder pins the template's cache reset: Python
+// keeps a folder's listing until the folder's mtime changes, so a helper written within the same
+// mtime tick (here the mtime is put back) is only found because fn.<name> resets that listing.
+func TestExecPythonFnSeesAHelperWrittenIntoAListedFolder(t *testing.T) {
+	requireInterpreters(t, "python3")
+	root, settings := execTemplateSettings(map[string]string{"python/first.py": "# First\nv = 1\n"})
+	defer os.RemoveAll(root)
+	// The first import writes __pycache__ into the folder, which changes its mtime; the second
+	// lookup lists the folder again, so the listing and the mtime put back below agree.
+	code := "import os\nfolder = os.environ['JAD_RUNNER_DIR']\nprint(fn.first.v)\nfn.first\nstat = os.stat(folder)\n" +
+		"open(folder + '/second.py', 'w').write('v = 2\\n')\nos.utime(folder, ns=(stat.st_atime_ns, stat.st_mtime_ns))\n" +
+		"print(fn.second.v)"
+	got := execContent(runExec(t, root, settings, bashTestSettings(t, root), map[string]any{"lang": "python", "code": code}))
+	if got != "1\n2\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestExecFnLineNumbersOfUserCodeAreUnchanged(t *testing.T) {
 	for _, tc := range []struct{ lang, interp, code, want string }{
 		{"ts", "bun", "const a = 1;\nconst b = 2;\nthrow new Error('line4');", "[eval]:3"},

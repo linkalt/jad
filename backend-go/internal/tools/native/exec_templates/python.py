@@ -3,11 +3,12 @@ import importlib as _importlib
 import importlib.machinery as _machinery
 import importlib.util as _util
 import os as _os
-import re as _re
 import sys as _sys
-
-import inspect as _inspect
 import types as _types
+
+# Every interpreter start loads this file, so it imports only what start-up needs: inspect and
+# re cost about 12 ms of a 15 ms load. A function is a types.FunctionType (what
+# inspect.isfunction tests), and re is imported when code first reads fn.<name>.
 
 _here = _os.path.dirname(_os.path.abspath(__file__))
 
@@ -15,11 +16,11 @@ _here = _os.path.dirname(_os.path.abspath(__file__))
 def _entry(module):
     # The function named like the module (a dash written _), else its only public function.
     candidate = getattr(module, module.__name__.replace("-", "_"), None)
-    if _inspect.isfunction(candidate):
+    if isinstance(candidate, _types.FunctionType):
         return candidate
     functions = [
         value for key, value in vars(module).items()
-        if not key.startswith("_") and _inspect.isfunction(value) and value.__module__ == module.__name__
+        if not key.startswith("_") and isinstance(value, _types.FunctionType) and value.__module__ == module.__name__
     ]
     return functions[0] if len(functions) == 1 else None
 
@@ -28,7 +29,7 @@ class _Helper(_types.ModuleType):
     def __call__(self, *args, **kwargs):
         entry = _entry(self)
         if entry is None:
-            names = [k for k, v in vars(self).items() if not k.startswith("_") and _inspect.isfunction(v) and v.__module__ == self.__name__]
+            names = [k for k, v in vars(self).items() if not k.startswith("_") and isinstance(v, _types.FunctionType) and v.__module__ == self.__name__]
             raise TypeError(
                 "fn." + self.__name__ + " has no single entry to call ("
                 + ("it defines " + ", ".join(names) + "; call fn." + self.__name__ + "." + names[0] + "(...)" if names else "it defines no function")
@@ -55,12 +56,22 @@ class _Fn:
     def __getattr__(self, name):
         if name.startswith("_"):
             raise AttributeError(name)
+        import re as _re
+
         directory = _os.environ.get("JAD_RUNNER_DIR")
         if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
             raise AttributeError("fn." + name + " is not a helper name: use letters, digits, _ and - (a dash needs getattr(fn, 'my-helper')) and start with a letter or digit")
         if not directory:
             raise AttributeError("no helper fn." + name + " in (the helper library does not exist)")
-        _importlib.invalidate_caches()
+        # A helper the program just wrote must be found, in a folder it may just have made:
+        # forget what is cached for this folder, as importlib.invalidate_caches() does for every
+        # path (a None entry, kept for a folder that did not exist, is dropped; a finder forgets
+        # its listing). That call imports importlib.metadata in 3.10+, about 20 ms.
+        finder = _sys.path_importer_cache.get(directory)
+        if finder is None:
+            _sys.path_importer_cache.pop(directory, None)
+        else:
+            finder.invalidate_caches()
         spec = _machinery.PathFinder.find_spec(name, [directory])
         if spec is None:
             raise AttributeError("no helper fn." + name + " in " + directory)
