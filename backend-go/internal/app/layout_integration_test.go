@@ -150,7 +150,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
-		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"},
+		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k", "JAD_REMOTE_E2E": e2eToken},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)

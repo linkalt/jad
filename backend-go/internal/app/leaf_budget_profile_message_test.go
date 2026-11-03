@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,14 +34,31 @@ func requireParentReceivedProfileMessageOutput(t *testing.T, f *layoutFixture, b
 	}
 	// The parent's request that carries the call's output is the one a handled message
 	// does not answer again; a request of the target profile may come after it.
+	// Only the output items are searched: a request body also carries the tool definitions,
+	// whose text could hold want.
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var outputs []string
 	for _, body := range f.bodies {
-		if strings.Contains(body, `"type":"function_call_output"`) && strings.Contains(body, want) {
-			return
+		var request struct {
+			Input []struct {
+				Type   string `json:"type"`
+				Output string `json:"output"`
+			} `json:"input"`
+		}
+		if json.Unmarshal([]byte(body), &request) != nil {
+			continue
+		}
+		for _, item := range request.Input {
+			if item.Type == "function_call_output" {
+				if strings.Contains(item.Output, want) {
+					return
+				}
+				outputs = append(outputs, item.Output)
+			}
 		}
 	}
-	t.Fatalf("no request carries the profile_message output %q", want)
+	t.Fatalf("no request carries the profile_message output %q; outputs:\n%s", want, strings.Join(outputs, "\n---\n"))
 }
 
 // targetReadsThenAnswers scripts the target profile (model-large) to call read on notes.txt
@@ -99,6 +117,6 @@ func requireTargetReadTheNotes(t *testing.T, f *layoutFixture) {
 func TestDeadlockProfileMessageHandledFinishesWithBudgetOne(t *testing.T) {
 	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"read":{},"async":{}},"mcp":{}}`)
 	targetReadsThenAnswers(f, map[string]any{"profile": "review/reviewer", "message": "first", "block_ms": 0})
-	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "handle")
+	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "use the async tool with id pm_")
 	requireTargetReadTheNotes(t, f)
 }

@@ -22,7 +22,7 @@
           "block_ms": {
             "type": "integer",
             "minimum": 0,
-            "description": "Most time to block for the answer. If the profile has not answered (or is busy and the message waits its turn) an id is returned; collect it with the async tool."
+            "description": "Most time to block for the answer before an id is returned; collect it with the async tool."
           }
         },
         "required": ["profile", "message"],

@@ -108,7 +108,7 @@ func NewProfileToolWithRemotes(settings sessionfs.NativeProfileSettings, own Tra
 	}, nil
 }
 
-const profileDescription = "Work on profiles of your session: list them (action list, path session:<id> for another session), show what a profile holds with its context tokens (action info), compact its transcript (action compact) or reset it (action reset). compact and reset are for a profile other than your own; a sub-agent may not use them. reset is refused while a run of the profile is active; compact waits for a live run to end."
+const profileDescription = "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it."
 
 func (t *profileTool) fail(execution tools.ExecutionContext, status tools.Status, code, summary string, information ...tools.Information) string {
 	return tools.ExecutionError(execution.CallID, status, code, summary, information...)

@@ -23,7 +23,7 @@ var profileMessageInputSchema = json.RawMessage(`{
   "properties":{
     "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
     "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
-    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer. If the profile has not answered (or is busy and the message waits its turn) an id is returned; collect it with the async tool."}
+    "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer before an id is returned; collect it with the async tool."}
   },
   "required":["profile","message"],
   "additionalProperties":false

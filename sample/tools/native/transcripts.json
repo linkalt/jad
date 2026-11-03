@@ -5,14 +5,14 @@
       "id": "native.transcripts",
       "source": "native",
       "name": "transcripts",
-      "description": "List the sub-agent runs of a profile, newest first, and the sessions (path sessions) (path remote:<name>/session:<id> lists a remote JAD server when remote reading is on). The profiles of a session are listed by the profile tool. Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity. Use filters to narrow by name, status for runs, limit and cursor to page.",
+      "description": "List the sub-agent runs of a profile, newest first, or the sessions. Each line gives the exact path to pass to transcript and the full messages.jsonl file path, with size and time of last activity.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "What to list. Use path profile:<category>/<name> (or profile:<session>/<category>/<name>) for the sub-agent runs of one profile; an empty path is refused and points to the profile tool; sessions lists the sessions; remote:<name>/session:<id> (or remote:<name>) lists a remote JAD server's sessions, and remote:<name>/profile:<session>/<category>/<name> its runs; only when allow_remote is on. The profiles of a session are listed by the profile tool (action list)."
+            "description": "What to list: profile:<category>/<name> (or profile:<session>/<category>/<name>) for the sub-agent runs of one profile; sessions for the sessions; remote:<name>/session:<id> (or remote:<name>) for a remote JAD server's sessions and remote:<name>/profile:<session>/<category>/<name> for its runs, only when allow_remote is on. The profiles of a session are listed by the profile tool (action list)."
           },
           "filters": {
             "type": "array",

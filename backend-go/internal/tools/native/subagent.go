@@ -28,7 +28,7 @@ var subagentInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session from its transcript as a new run (the old one is not changed; the result says resumed_from). [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends."
+const subagentDescription = "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends."
 
 // subagentExample is shown to the model when its arguments are rejected.
 var subagentExample = json.RawMessage(`{"task":"Find where the retry delay is computed and report the file paths and line numbers."}`)
