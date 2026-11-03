@@ -168,6 +168,10 @@ type shellChildRun struct {
 	program *shellProgram
 	// section is the settings block the run reads, named in advice: tools.native.bash or tools.native.exec.
 	section string
+	// standby is a waiting interpreter (exec) that runs standbyCode instead of a fresh start of
+	// file and argv; file and argv still start the program when the standby declines it.
+	standby     *standbyProcess
+	standbyCode string
 }
 
 type shellResultFile struct {
@@ -222,6 +226,13 @@ func runShellChildDetailed(
 	apiKeyEnv string,
 	execution tools.ExecutionContext,
 ) shellRunResult {
+	// A standby the call does not reach stops here; one it reaches is the run's from then on.
+	standbyHandedOver := false
+	defer func() {
+		if run.standby != nil && !standbyHandedOver {
+			run.standby.stop()
+		}
+	}()
 	resolved, pathError := resolveExistingTarget(run.cwd, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathError != "" {
 		return shellRunResult{text: pathError}
@@ -250,14 +261,8 @@ func runShellChildDetailed(
 	if watch := outputWatchFrom(ctx); watch != nil {
 		watch.set(collector)
 	}
-	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
-	for _, name := range sortedKeys(run.extraEnv) {
-		environment = append(environment, name+"="+run.extraEnv[name])
-	}
-	for _, name := range sortedKeys(run.prependEnv) {
-		environment = prependEnvironmentList(environment, name, run.prependEnv[name])
-	}
-	child := runBashCommand(ctx, bashChildRequest{
+	environment := shellChildEnvironment(run, settings, apiKeyEnv)
+	request := bashChildRequest{
 		file:                     run.file,
 		args:                     run.argv,
 		cwd:                      resolved.realPath,
@@ -271,7 +276,14 @@ func runShellChildDetailed(
 		collector:                collector,
 		spill:                    spillWriters,
 		stdin:                    run.stdin,
-	})
+	}
+	var child bashChildResult
+	if run.standby != nil {
+		standbyHandedOver = true
+		child = runStandbyCommand(ctx, request, run.standby, run.standbyCode)
+	} else {
+		child = runBashCommand(ctx, request)
+	}
 	spillDecision := applyBashSpillPolicy(settings.Spill, spillPlan, child, execution.WorkspaceRoot)
 	var answer *shellResult
 	if run.resultFile != nil {
@@ -283,6 +295,19 @@ func runShellChildDetailed(
 	}
 	text := renderBashExecutionResult(execution.CallID, resolved.displayPath, run.file, timeoutMs, child, spillDecision, answer, run.program, run.settingsSection())
 	return shellRunResult{text: text, child: &child, answer: answer}
+}
+
+// shellChildEnvironment is the environment a run's child gets: the process environment under
+// the settings' allowlist and denials, then the run's own variables and list prefixes.
+func shellChildEnvironment(run shellChildRun, settings sessionfs.NativeBashSettings, apiKeyEnv string) []string {
+	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
+	for _, name := range sortedKeys(run.extraEnv) {
+		environment = append(environment, name+"="+run.extraEnv[name])
+	}
+	for _, name := range sortedKeys(run.prependEnv) {
+		environment = prependEnvironmentList(environment, name, run.prependEnv[name])
+	}
+	return environment
 }
 
 func sortedKeys(values map[string]string) []string {

@@ -23,6 +23,22 @@ const (
 	defaultNativeExecArgMax int64 = 100000
 	// defaultNativeExecFunctionsDir is its own folder, never tool_smith's.
 	defaultNativeExecFunctionsDir = ".jad/exec"
+	// defaultNativeExecStandbyPool is how many started interpreters wait for a call per runner
+	// and environment; 0 turns standby off.
+	defaultNativeExecStandbyPool int64 = 1
+	maxNativeExecStandbyPool     int64 = 16
+	// defaultNativeExecStandbyIdleMs is how long a waiting interpreter stays unused before it
+	// is stopped.
+	defaultNativeExecStandbyIdleMs int64 = 5 * 60 * 1000
+	minNativeExecStandbyIdleMs     int64 = 1000
+	// maxNativeExecStandbyIdleMs stays under the 7-hour age at which a starting backend sweeps
+	// an exec- scratch directory (native staleScratchAge), so a waiting one is never swept.
+	maxNativeExecStandbyIdleMs int64 = 6 * 60 * 60 * 1000
+	// defaultNativeExecStandbyMax bounds the waiting interpreters of the whole backend.
+	defaultNativeExecStandbyMax int64 = 8
+	maxNativeExecStandbyMax     int64 = 256
+	// maxNativeExecStandbyCode bounds a configured standby_code.
+	maxNativeExecStandbyCode = 64 * 1024
 
 	// NativeExecModeArg, NativeExecModeFile and NativeExecModeStdin are the ways a program
 	// receives its code: as one argument ({code}), as a temporary file ({file}), or on
@@ -36,6 +52,12 @@ const (
 	NativeExecTemplatePython = "python"
 	NativeExecTemplateRuby   = "ruby"
 
+	// The built-in standby shims a runner may name. A shim is started before the call, reads
+	// the call's code from fd 3 and runs it the way the runner's argv would.
+	NativeExecStandbyPython = "python"
+	NativeExecStandbyJS     = "js"
+	NativeExecStandbyRuby   = "ruby"
+
 	nativeExecFilePlaceholder     = "{file}"
 	nativeExecCodePlaceholder     = "{code}"
 	nativeExecTemplatePlaceholder = "{template}"
@@ -46,9 +68,10 @@ var (
 	nativeExecOwnKeys = []string{
 		"arg_max_bytes", "code_max_bytes", "default_lang", "function_max_bytes", "functions_dir", "input_max_bytes",
 		"line_aware", "list_header_bytes", "list_max_files", "list_max_results", "result_max_bytes", "runners",
+		"standby_idle_ms", "standby_max", "standby_pool",
 	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
-	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode", "template"}
+	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode", "standby", "standby_code", "template"}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	nativeExecExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -74,6 +97,11 @@ type NativeExecLang struct {
 	// functions_dir/<name>/_template<ext>. js and ruby are attached where argv has {template};
 	// python is a sitecustomize.py in a directory put on PYTHONPATH. Empty: no fn.
 	Template string
+	// Standby names the built-in shim (NativeExecStandby*) that lets an interpreter start
+	// before the call; StandbyCode is a configured shim instead. Both empty: every call starts
+	// its interpreter. The shim takes the place of {code} (mode arg) or is the {file} (mode file).
+	Standby     string
+	StandbyCode string
 }
 
 // NativeExecSettings holds the normalized settings of native.exec. Child is how its
@@ -104,18 +132,26 @@ type NativeExecSettings struct {
 	FunctionMaxBytes int64
 	// LineAware cuts a truncated stream at line boundaries.
 	LineAware bool
+	// StandbyPool is how many started interpreters wait per runner and environment (0: none),
+	// StandbyIdleMs how long one waits unused before it is stopped, and StandbyMax the most
+	// that wait in the whole backend.
+	StandbyPool   int64
+	StandbyIdleMs int64
+	StandbyMax    int64
 }
 
 // defaultNativeExecLangs are the interpreters available without configuration. The code
-// is one argument; bash and sh get a fixed $0 so the call's args start at $1.
+// is one argument; bash and sh get a fixed $0 so the call's args start at $1. python, node
+// and ruby start slowly enough to wait on standby; bash, sh, perl and bun start in a few
+// milliseconds, so they start per call.
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 	names := []string{"python", "node", "bash", "sh", "ruby", "perl", "ts"}
 	return names, map[string]NativeExecLang{
-		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH", Template: NativeExecTemplatePython},
-		"node":   {Argv: []string{"node", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS},
+		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH", Template: NativeExecTemplatePython, Standby: NativeExecStandbyPython},
+		"node":   {Argv: []string{"node", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS, Standby: NativeExecStandbyJS},
 		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
 		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
-		"ruby":   {Argv: []string{"ruby", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB", Template: NativeExecTemplateRuby},
+		"ruby":   {Argv: []string{"ruby", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB", Template: NativeExecTemplateRuby, Standby: NativeExecStandbyRuby},
 		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB"},
 		"ts":     {Argv: []string{"bun", "--no-install", "--preload", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript", "bun"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS},
 	}
@@ -201,6 +237,15 @@ func normalizeNativeExecSettings(
 		return nil, err
 	}
 	if settings.FunctionMaxBytes, err = configuredInteger(fields, "function_max_bytes", defaultNativeToolSmithFunctionMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.StandbyPool, err = configuredInteger(fields, "standby_pool", defaultNativeExecStandbyPool, 0, maxNativeExecStandbyPool, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.StandbyIdleMs, err = configuredInteger(fields, "standby_idle_ms", defaultNativeExecStandbyIdleMs, minNativeExecStandbyIdleMs, maxNativeExecStandbyIdleMs, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.StandbyMax, err = configuredInteger(fields, "standby_max", defaultNativeExecStandbyMax, 1, maxNativeExecStandbyMax, settingPath, section); err != nil {
 		return nil, err
 	}
 	return settings, nil
@@ -348,6 +393,9 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 	case lang.Template == "" && placeholders > 0:
 		return NativeExecLang{}, configError("%s.argv contains %s but the runner has no template", path, nativeExecTemplatePlaceholder)
 	}
+	if err := normalizeNativeExecStandby(fields, &lang, path); err != nil {
+		return NativeExecLang{}, err
+	}
 	if value, present := nullableField(fields, "aliases"); present {
 		var rawAliases []json.RawMessage
 		if json.Unmarshal(value, &rawAliases) != nil {
@@ -372,4 +420,30 @@ func nullableField(fields map[string]json.RawMessage, name string) (json.RawMess
 		return nil, false
 	}
 	return raw, true
+}
+
+// normalizeNativeExecStandby reads a runner's standby shim: a built-in one by name, or a
+// configured one. A stdin runner has no standby, because its standard input is its code.
+func normalizeNativeExecStandby(fields map[string]json.RawMessage, lang *NativeExecLang, path string) error {
+	if value, present := nullableField(fields, "standby"); present {
+		if json.Unmarshal(value, &lang.Standby) != nil || (lang.Standby != "" && lang.Standby != NativeExecStandbyPython && lang.Standby != NativeExecStandbyJS && lang.Standby != NativeExecStandbyRuby) {
+			return configError("%s.standby must be \"\", \"python\", \"js\" or \"ruby\"", path)
+		}
+	}
+	if value, present := nullableField(fields, "standby_code"); present {
+		if json.Unmarshal(value, &lang.StandbyCode) != nil || strings.TrimSpace(lang.StandbyCode) == "" || len(lang.StandbyCode) > maxNativeExecStandbyCode || strings.ContainsRune(lang.StandbyCode, 0) {
+			return configError("%s.standby_code must be a program of 1 to %d bytes without a NUL byte", path, maxNativeExecStandbyCode)
+		}
+	}
+	switch {
+	case lang.Standby != "" && lang.StandbyCode != "":
+		return configError("%s: give standby or standby_code, not both", path)
+	case lang.Mode == NativeExecModeStdin && (lang.Standby != "" || lang.StandbyCode != ""):
+		return configError("%s: a runner with mode \"stdin\" cannot have a standby shim; use mode arg or file", path)
+	case lang.Mode == NativeExecModeFile && lang.Standby != "":
+		// A built-in shim runs the code the way {code} would (python -c, node -e, ruby -e);
+		// a file names its tracebacks after the file, which the shim cannot copy.
+		return configError("%s.standby needs mode \"arg\"; a mode \"file\" runner can use standby_code", path)
+	}
+	return nil
 }

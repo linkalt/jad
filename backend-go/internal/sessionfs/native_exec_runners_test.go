@@ -110,3 +110,62 @@ func TestExecRunnersAcceptACustomTemplateRunner(t *testing.T) {
 		t.Errorf("deno = %+v", config.NativeExec.Langs["deno"])
 	}
 }
+
+func TestExecStandbyDefaultsWarmOnlyTheSlowStartingRunners(t *testing.T) {
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := config.NativeExec
+	want := map[string]string{"python": NativeExecStandbyPython, "node": NativeExecStandbyJS, "ruby": NativeExecStandbyRuby, "bash": "", "sh": "", "perl": "", "ts": ""}
+	for name, standby := range want {
+		if got := exec.Langs[name].Standby; got != standby || exec.Langs[name].StandbyCode != "" {
+			t.Errorf("%s: standby = %q, want %q", name, got, standby)
+		}
+	}
+	if exec.StandbyPool != 1 || exec.StandbyIdleMs != 300000 || exec.StandbyMax != 8 {
+		t.Errorf("standby defaults = pool %d idle %d max %d", exec.StandbyPool, exec.StandbyIdleMs, exec.StandbyMax)
+	}
+}
+
+func TestExecStandbySettingsAreReadAndBounded(t *testing.T) {
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
+		"standby_pool": 0, "standby_idle_ms": 1000, "standby_max": 256,
+		"runners": map[string]any{
+			"python": map[string]any{"argv": []any{"python3.12", "-c", "{code}"}},
+			"lua":    map[string]any{"argv": []any{"lua", "{file}"}, "mode": "file", "ext": ".lua", "standby_code": "local f = io.open('/dev/fd/3')"},
+			"deno":   map[string]any{"argv": []any{"deno", "eval", "{code}"}, "standby": "js"},
+		},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := config.NativeExec
+	if exec.StandbyPool != 0 || exec.StandbyIdleMs != 1000 || exec.StandbyMax != 256 {
+		t.Errorf("standby settings = pool %d idle %d max %d", exec.StandbyPool, exec.StandbyIdleMs, exec.StandbyMax)
+	}
+	if exec.Langs["python"].Standby != "" {
+		t.Error("an entry that replaces a built-in runner keeps no standby it did not set")
+	}
+	if exec.Langs["lua"].StandbyCode != "local f = io.open('/dev/fd/3')" || exec.Langs["deno"].Standby != NativeExecStandbyJS {
+		t.Errorf("configured shims = %+v %+v", exec.Langs["lua"], exec.Langs["deno"])
+	}
+	for _, bad := range []struct {
+		name, want string
+		exec       map[string]any
+	}{
+		{"pool over", "standby_pool must be a safe integer between 0 and 16", map[string]any{"standby_pool": 17}},
+		{"idle under", "standby_idle_ms must be a safe integer between 1000 and 21600000", map[string]any{"standby_idle_ms": 999}},
+		{"max zero", "standby_max must be a safe integer between 1 and 256", map[string]any{"standby_max": 0}},
+		{"unknown shim", `standby must be "", "python", "js" or "ruby"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "php"}}}},
+		{"both shims", "give standby or standby_code, not both", map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "js", "standby_code": "y"}}}},
+		{"blank code", "standby_code must be a program of 1 to 65536 bytes", map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby_code": " "}}}},
+		{"file mode built-in", `standby needs mode "arg"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{file}"}, "mode": "file", "standby": "python"}}}},
+		{"stdin mode", `a runner with mode "stdin" cannot have a standby shim`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x"}, "mode": "stdin", "standby": "python"}}}},
+	} {
+		_, err := loadSetting(t, nativeTools(map[string]any{"exec": bad.exec}))
+		if err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%s: error = %v, want %q", bad.name, err, bad.want)
+		}
+	}
+}

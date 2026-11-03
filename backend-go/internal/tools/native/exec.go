@@ -203,51 +203,56 @@ func executeNativeExecAsync(
 		cwd = value
 	}
 	run := func(ctx context.Context) shellRunResult {
-		// A private directory per call holds the code file (file delivery) and the result file;
-		// it is removed afterwards, whatever the program did.
-		workDir, err := os.MkdirTemp("", "exec-")
-		if err != nil {
-			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
-				tools.Information{Key: "system_error", Value: err.Error()})}
+		var template []byte
+		if plan.lang.Template != "" {
+			text, err := execTemplateText(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
+			if err != nil {
+				return shellRunResult{text: execTemplateError(callID, plan, err)}
+			}
+			template = text
+		}
+		helperPrepend, helperEnv := execHelperEnvironment(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
+		standby := takeExecStandby(plan, settings, apiKeyEnv, execution, cwd, template, helperPrepend, helperEnv)
+		// A private directory per call holds the code file (file delivery), the template and the
+		// result file; it is removed afterwards, whatever the program did. A standby brings its own.
+		var workDir string
+		if standby != nil {
+			workDir = standby.workDir
+		} else {
+			created, err := os.MkdirTemp("", "exec-")
+			if err != nil {
+				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
+					tools.Information{Key: "system_error", Value: err.Error()})}
+			}
+			workDir = created
 		}
 		defer os.RemoveAll(workDir)
-		resultPath := filepath.Join(workDir, "result.txt")
-		file, argv, stdin, problem := plan.prepare(workDir)
-		if problem != "" {
-			return shellRunResult{text: problem}
-		}
-		attachment, err := attachExecTemplate(settings, plan.lang, plan.langName, execution.WorkspaceRoot, workDir)
-		if err != nil {
-			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "template_failed", "The template for "+plan.langName+" could not be prepared",
-				tools.Information{Key: "system_error", Value: err.Error()},
-				tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})}
-		}
-		prepend, libraryEnv := execHelperEnvironment(settings, plan.lang, plan.langName, execution.WorkspaceRoot)
-		if attachment.pythonPath != "" {
-			if prepend == nil {
-				prepend = map[string]string{}
+		launch := plan.launch(workDir, plan.code, "code", template, helperPrepend, helperEnv)
+		if err := writeStandbyFiles(launch.codeFiles); err != nil {
+			if standby != nil {
+				standby.stop()
 			}
-			if existing := prepend["PYTHONPATH"]; existing != "" {
-				prepend["PYTHONPATH"] = attachment.pythonPath + string(os.PathListSeparator) + existing
-			} else {
-				prepend["PYTHONPATH"] = attachment.pythonPath
-			}
+			return shellRunResult{text: execCodeFileError(callID, err)}
 		}
-		extraEnv := map[string]string{execResultEnv: resultPath}
-		for name, value := range libraryEnv {
-			extraEnv[name] = value
+		if standby == nil {
+			// A standby's directory already holds the same template: it is part of its key.
+			if err := writeStandbyFiles(launch.templateFiles); err != nil {
+				return shellRunResult{text: execTemplateError(callID, plan, err)}
+			}
 		}
 		return runShellChildDetailed(ctx, shellChildRun{
-			file:       file,
-			argv:       argv,
-			stdin:      stdin,
-			cwd:        cwd,
-			lineAware:  settings.LineAware,
-			section:    "tools.native.exec",
-			extraEnv:   extraEnv,
-			prependEnv: prepend,
-			resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes},
-			program:    &plan.program,
+			file:        launch.file,
+			argv:        launch.argv,
+			stdin:       launch.stdin,
+			cwd:         cwd,
+			lineAware:   settings.LineAware,
+			section:     "tools.native.exec",
+			extraEnv:    launch.extraEnv,
+			prependEnv:  launch.prependEnv,
+			resultFile:  &shellResultFile{path: launch.resultPath, maxBytes: settings.ResultMaxBytes},
+			program:     &plan.program,
+			standby:     standby,
+			standbyCode: plan.code,
 		}, settings.Child, apiKeyEnv, execution)
 	}
 	if _, canHandle := handleOwner(execution); host == nil || !canHandle {
@@ -268,9 +273,128 @@ type execPlan struct {
 	// langName and lang are the runner the code runs in.
 	langName string
 	lang     sessionfs.NativeExecLang
-	// prepare writes any file into workDir and returns the program, its arguments and the
-	// stdin text; problem is a rendered error when it cannot.
-	prepare func(workDir string) (file string, argv []string, stdin, problem string)
+	// code is the call's program and stdin the text written to its standard input.
+	code   string
+	stdin  string
+	callID string
+}
+
+// execLaunch is how one call's program starts inside its scratch directory.
+type execLaunch struct {
+	file       string
+	argv       []string
+	stdin      string
+	extraEnv   map[string]string
+	prependEnv map[string]string
+	resultPath string
+	// codeFiles holds the code file of a mode file runner; templateFiles the runner's template.
+	codeFiles     []standbyFile
+	templateFiles []standbyFile
+}
+
+// launch builds the program, its arguments, environment and files in workDir. body stands for
+// {code} or is written to the code file, named name plus the runner's extension: the call's
+// code, or a standby shim, which reads the code later. The template text is nil when the
+// runner has none. Nothing is written here.
+func (plan execPlan) launch(workDir, body, name string, template []byte, helperPrepend, helperEnv map[string]string) execLaunch {
+	lang := plan.lang
+	codePath := filepath.Join(workDir, name+lang.Ext)
+	launch := execLaunch{file: lang.Argv[0], stdin: plan.stdin, resultPath: filepath.Join(workDir, "result.txt")}
+	if lang.Mode == sessionfs.NativeExecModeFile {
+		launch.codeFiles = []standbyFile{{path: codePath, data: []byte(body)}}
+	}
+	if lang.Mode == sessionfs.NativeExecModeStdin {
+		launch.stdin = body
+	}
+	// The template is attached before the code is inserted: the model's program is not a
+	// template, so a literal {template} inside it must reach the runner as written (P6BM-02).
+	templatePath := ""
+	if lang.Template != "" {
+		templatePath = execTemplatePath(lang, workDir)
+	}
+	launch.argv = make([]string, 0, len(lang.Argv)-1)
+	for _, flag := range lang.Argv[1:] {
+		flag = strings.ReplaceAll(flag, "{file}", codePath)
+		if templatePath != "" {
+			flag = strings.ReplaceAll(flag, "{template}", templatePath)
+		}
+		launch.argv = append(launch.argv, strings.ReplaceAll(flag, "{code}", body))
+	}
+	launch.prependEnv = map[string]string{}
+	for variable, dir := range helperPrepend {
+		launch.prependEnv[variable] = dir
+	}
+	if template != nil {
+		if lang.Template == sessionfs.NativeExecTemplatePython {
+			dir := filepath.Join(workDir, "template")
+			launch.templateFiles = []standbyFile{{path: dir, dir: true}, {path: filepath.Join(dir, "sitecustomize.py"), data: template}}
+			if existing := launch.prependEnv["PYTHONPATH"]; existing != "" {
+				launch.prependEnv["PYTHONPATH"] = dir + string(os.PathListSeparator) + existing
+			} else {
+				launch.prependEnv["PYTHONPATH"] = dir
+			}
+		} else {
+			launch.templateFiles = []standbyFile{{path: templatePath, data: template}}
+		}
+	}
+	launch.extraEnv = map[string]string{execResultEnv: launch.resultPath}
+	for variable, value := range helperEnv {
+		launch.extraEnv[variable] = value
+	}
+	return launch
+}
+
+// prepare writes the call's code file into workDir and returns the program, its arguments and
+// the stdin text; problem is a rendered error when it cannot.
+func (plan execPlan) prepare(workDir string) (file string, argv []string, stdin, problem string) {
+	launch := plan.launch(workDir, plan.code, "code", nil, nil, nil)
+	if err := writeStandbyFiles(launch.codeFiles); err != nil {
+		return "", nil, "", execCodeFileError(plan.callID, err)
+	}
+	return launch.file, launch.argv, launch.stdin, ""
+}
+
+func execCodeFileError(callID string, err error) string {
+	return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
+		tools.Information{Key: "system_error", Value: err.Error()})
+}
+
+func execTemplateError(callID string, plan execPlan, err error) string {
+	return tools.ExecutionError(callID, tools.StatusError, "template_failed", "The template for "+plan.langName+" could not be prepared",
+		tools.Information{Key: "system_error", Value: err.Error()},
+		tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})
+}
+
+// takeExecStandby returns a waiting interpreter started exactly as this call would start one,
+// or nil, and starts a replacement in the background. A runner without a shim, a call whose
+// directory does not resolve, or standby_pool 0 gets nil and starts its own.
+func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKeyEnv string, execution tools.ExecutionContext, cwd string, template []byte, helperPrepend, helperEnv map[string]string) *standbyProcess {
+	if settings.StandbyPool <= 0 {
+		return nil
+	}
+	shim := standbyShim(plan.lang)
+	if shim == "" || (plan.lang.Mode == sessionfs.NativeExecModeArg && int64(len(shim)) > settings.ArgMaxBytes) {
+		return nil
+	}
+	resolved, problem := resolveExistingTarget(cwd, execution.WorkspaceRoot, settings.Child.Policy, execution.CallID)
+	if problem != "" {
+		return nil
+	}
+	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
+		return nil
+	}
+	spawn := func(workDir string) (standbySpawn, error) {
+		launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
+		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
+		files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
+		return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files}, nil
+	}
+	keyed, _ := spawn(standbyKeyDir)
+	key := standbyKey(keyed)
+	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
+	process := execStandby.take(key, idle)
+	execStandby.refill(key, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	return process
 }
 
 func execGiven(arguments map[string]any, key string) bool {
@@ -347,34 +471,8 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 		langName: name,
 		lang:     lang,
 		program:  shellProgram{name: name, setting: "tools.native.exec.runners." + name + ".argv", failureSuggestion: failureSuggestion},
-		prepare: func(workDir string) (string, []string, string, string) {
-			codePath := filepath.Join(workDir, "code"+lang.Ext)
-			if lang.Mode == sessionfs.NativeExecModeFile {
-				if err := os.WriteFile(codePath, []byte(code), 0o600); err != nil {
-					return "", nil, "", tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The code file could not be written",
-						tools.Information{Key: "system_error", Value: err.Error()})
-				}
-			}
-			// The template is attached before the code is inserted: the model's program is
-			// not a template, so a literal {template} inside it must reach the runner as
-			// written (P6BM-02).
-			templatePath := ""
-			if lang.Template != "" {
-				templatePath = execTemplatePath(lang, workDir)
-			}
-			argv := make([]string, 0, len(lang.Argv)-1)
-			for _, flag := range lang.Argv[1:] {
-				flag = strings.ReplaceAll(flag, "{file}", codePath)
-				if templatePath != "" {
-					flag = strings.ReplaceAll(flag, "{template}", templatePath)
-				}
-				argv = append(argv, strings.ReplaceAll(flag, "{code}", code))
-			}
-			runStdin := stdin
-			if lang.Mode == sessionfs.NativeExecModeStdin {
-				runStdin = code
-			}
-			return lang.Argv[0], argv, runStdin, ""
-		},
+		code:     code,
+		stdin:    stdin,
+		callID:   callID,
 	}, ""
 }

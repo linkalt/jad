@@ -1122,11 +1122,25 @@
                         },
                         "default": [],
                         "description": "Other names the model may use for this language."
+                      },
+                      "standby": {
+                        "type": "string",
+                        "enum": ["", "python", "js", "ruby"],
+                        "description": "Built-in standby shim. With one, exec starts the interpreter (and its template) before the call arrives, so a call waits only for its own code to run; see standby_pool. The shim stands in for {code} (mode arg) or is written to {file} (mode file), reads the call's code from fd 3 and runs it as the runner's argv would: python runs it as python -c, js as node -e (an uncaught error's stack also lists the shim's two frames), ruby as ruby -e. Code the shim cannot run the same way (a syntax error, or ES module syntax and top-level await in js) runs in a fresh interpreter instead. Built-ins: python python, node js, ruby ruby; bash, sh, perl and ts start in a few milliseconds and have none. An entry that replaces a built-in runner has no standby unless it sets one. Needs mode arg; not with standby_code."
+                      },
+                      "standby_code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 65536,
+                        "description": "A standby shim of your own, for an interpreter without a built-in one. It stands in for {code} (mode arg) or is written to {file} (mode file), and must: read the call's code from fd 3 to its end and close fd 3; exit at once with no output when the code is empty; when it cannot run the code exactly as the runner's argv would (for example a syntax error), write F to fd 4 and exit with no output, and the call then runs in a fresh interpreter; otherwise write R to fd 4, close it, and run the code. Standard input, output and error, the working directory, the environment and $JAD_RESULT are the call's. Not with mode stdin or standby."
                       }
                     },
                     "additionalProperties": false
                   }
                 },
+                "standby_pool": {"type": "integer", "minimum": 0, "maximum": 16, "default": 1, "description": "Started interpreters that wait for a call, per runner with a standby shim and per working directory and environment. A call takes a waiting one and a replacement starts at once, so each call still runs in a process of its own. The first call of a runner, and a call whose directory or environment differs, starts its interpreter itself. 0 turns standby off."},
+                "standby_idle_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 300000, "description": "How long a waiting interpreter stays unused before it is stopped. A runner whose waiting interpreter fails to start is not started on standby again for this long."},
+                "standby_max": {"type": "integer", "minimum": 1, "maximum": 256, "default": 8, "description": "Most waiting interpreters in the whole backend, over every session and runner. Past it a call starts its interpreter itself."},
                 "input_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest JSON input one call may write to the program's stdin, in UTF-8 bytes."},
                 "arg_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 100000, "description": "Largest code a mode arg runner receives as one argument; the kernel limits a single argument (128 KiB on Linux)."},
                 "functions_dir": {"type": "string", "minLength": 1, "default": ".jad/exec", "description": "Root of the saved helpers, relative to the workspace root: one folder per runner name (bash/, python/, ...). Code reaches its own language's folder through the runner's lib_env and every folder through $JAD_FUNCTIONS_DIR. Separate from tool_smith's."},

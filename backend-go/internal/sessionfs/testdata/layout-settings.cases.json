@@ -782,7 +782,7 @@
     "unknown_key": 1
    }
   },
-  "error": "tools.native.exec.unknown_key is not supported; supported keys are arg_max_bytes, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, function_max_bytes, functions_dir, input_max_bytes, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, line_aware, list_header_bytes, list_max_files, list_max_results, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, runners, shell, spill, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
+  "error": "tools.native.exec.unknown_key is not supported; supported keys are arg_max_bytes, code_max_bytes, default_lang, drain_after_exit_ms, env, env_deny, env_file, function_max_bytes, functions_dir, input_max_bytes, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, line_aware, list_header_bytes, list_max_files, list_max_results, login_shell, max_bytes, max_line_chars, max_timeout_ms, paths, result_max_bytes, runners, shell, spill, standby_idle_ms, standby_max, standby_pool, stderr, stdin_max_bytes, stdout, strip_ansi, timeout_ms"
  },
  {
   "name": "exec code_max_bytes zero",

@@ -501,8 +501,9 @@ func TestExecTemplateLeavesTheProgramAlone(t *testing.T) {
 	if problem != "" {
 		t.Fatalf("prepare: %s", problem)
 	}
-	if _, err := attachExecTemplate(settings, plan.lang, plan.langName, root, workDir); err != nil {
-		t.Fatalf("attachExecTemplate: %v", err)
+	launch := plan.launch(workDir, plan.code, "code", []byte("// template"), nil, nil)
+	if len(launch.templateFiles) != 1 || launch.templateFiles[0].path != filepath.Join(workDir, "template.js") {
+		t.Fatalf("template files = %+v", launch.templateFiles)
 	}
 	want := []string{"-r", filepath.Join(workDir, "template.js"), "-e", code}
 	if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {

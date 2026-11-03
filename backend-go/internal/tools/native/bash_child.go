@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"sync/atomic"
 	"time"
 )
@@ -157,6 +158,45 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		}(stdinWriter, request.stdin)
 	}
 
+	child := &startedBashChild{command: command, stdout: stdoutReader, stderr: stderrReader}
+	child.watch()
+	return superviseBashChild(ctx, request, child, started, result)
+}
+
+// startedBashChild is a started child whose output pipes have no reader yet: one this call
+// just started, or a standby interpreter that waited for the call.
+type startedBashChild struct {
+	command        *exec.Cmd
+	stdout, stderr *os.File
+	// done is closed once Wait returned; waitErr is its result.
+	done    chan struct{}
+	waitErr error
+}
+
+// watch waits for the child in the background, so its exit is seen even before a call takes it.
+func (c *startedBashChild) watch() {
+	c.done = make(chan struct{})
+	go func() {
+		c.waitErr = c.command.Wait()
+		close(c.done)
+	}()
+}
+
+// exited reports whether the child has already ended.
+func (c *startedBashChild) exited() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// superviseBashChild reads the child's output into the request's collector and spills and
+// enforces the request's timeout, cancel, kill and drain rules until the child and its output
+// are done. started is when the call began, for the duration.
+func superviseBashChild(ctx context.Context, request bashChildRequest, child *startedBashChild, started time.Time, result bashChildResult) bashChildResult {
+	command, stdoutReader, stderrReader := child.command, child.stdout, child.stderr
 	// Both readers are started below, after the command started, so the count is always 2.
 	var readersLeft atomic.Int32
 	readersLeft.Store(2)
@@ -167,10 +207,8 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		pid := command.Process.Pid
 		defer groups.add(pid, request.killGrace)
 	}
-	waitResult := make(chan error, 1)
-	go func() { waitResult <- command.Wait() }()
 
-	var waitChannel <-chan error = waitResult
+	var waitChannel <-chan struct{} = child.done
 	var readersChannel <-chan struct{} = readersDone
 	var timeoutTimer *time.Timer
 	var timeoutChannel <-chan time.Time
@@ -222,7 +260,8 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 
 	for !waitDone || !readersFinished {
 		select {
-		case waitErr = <-waitChannel:
+		case <-waitChannel:
+			waitErr = child.waitErr
 			waitDone = true
 			waitChannel = nil
 			result.exitCode, result.hasExitCode, result.signal = bashExitStatus(waitErr)

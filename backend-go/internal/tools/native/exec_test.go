@@ -367,7 +367,9 @@ func itoa(value int) string {
 
 func callExecThroughTheCatalog(t *testing.T, root string, settings sessionfs.NativeExecSettings, arguments string) string {
 	t.Helper()
-	settings.Child = bashTestSettings(t, root)
+	if settings.Child.Shell == "" {
+		settings.Child = bashTestSettings(t, root)
+	}
 	tool, err := NewExecTool(settings, "", nil)
 	if err != nil {
 		t.Fatal(err)
