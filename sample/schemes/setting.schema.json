@@ -1427,6 +1427,13 @@
                   "default": 16384,
                   "description": "Detail mode: most bytes of a step one call returns; the rest is paged with a cursor."
                 },
+                "index_cache_entries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4096,
+                  "default": 32,
+                  "description": "How many transcripts' turn tables the server keeps between calls (16 bytes per turn), so a call parses only what was appended since the last one. A table is dropped when the file's first line or the bytes before its end change (compaction, reset). 0 parses the whole file every call."
+                },
                 "line_max_bytes": {
                   "type": "integer",
                   "minimum": 1,

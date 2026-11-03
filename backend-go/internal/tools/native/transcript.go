@@ -303,7 +303,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "transcript_unreadable", "The transcript could not be read")
 	}
-	turns, complete, err := indexTranscriptTurns(ctx, file, size, t.settings.LineMaxBytes)
+	turns, complete, err := transcriptIndexes.turns(ctx, file, path, identity, size, t.settings.LineMaxBytes, int(t.settings.IndexCacheEntries))
 	if err != nil {
 		return t.scanFailure(execution, err)
 	}
@@ -364,17 +364,11 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		}
 	}
 
-	walk := newTranscriptWalk(turns, first, strings.ToLower(search), int(t.settings.PreviewBytes), int(t.settings.ValueBytes))
-	err = scanTranscript(ctx, file, startOff, endOff, t.settings.LineMaxBytes, func(line transcriptLine) (bool, error) {
-		walk.visit(line)
-		return true, nil
-	})
+	list := transcriptList{tool: t, ctx: ctx, file: file, turns: turns, first: first, last: last, endOff: endOff,
+		search: strings.ToLower(search), role: role, toolFilter: toolFilter, context: int(contextValue), resume: resume, hasResume: hasResume}
+	selected, lastTurn, err := list.steps()
 	if err != nil {
 		return t.scanFailure(execution, err)
-	}
-	selected := selectTranscriptSteps(walk.steps, role, toolFilter, search != "", int(contextValue))
-	if hasResume {
-		selected = selected[:sort.Search(len(selected), func(i int) bool { return resume.less(selected[i].id) })]
 	}
 	var lines []string
 	var used int64
@@ -389,7 +383,7 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		lines = append(lines, line)
 		used += int64(len(line)) + 1
 	}
-	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(walk.turnIndex, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
+	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(lastTurn, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
 	if turns[0].number != 1 {
 		header += ": it was compacted, its earlier turns may be in the backup"
 	}

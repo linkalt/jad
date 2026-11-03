@@ -97,3 +97,19 @@ func TestTranscriptRemoteSettings(t *testing.T) {
 		t.Fatalf("the remote API reads without paths and without path: %+v %+v %v", one, all, err)
 	}
 }
+
+// TestTranscriptSettingsIndexCacheEntries: 32 turn tables by default, 0 turns the cache off,
+// and the count is capped.
+func TestTranscriptSettingsIndexCacheEntries(t *testing.T) {
+	for body, want := range map[string]int64{`{}`: 32, `{"index_cache_entries":0}`: 0, `{"index_cache_entries":4096}`: 4096} {
+		settings, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(body), "s.json", NativePathPolicy{})
+		if err != nil || settings.IndexCacheEntries != want {
+			t.Errorf("%s: %+v, %v; want %d", body, settings, err, want)
+		}
+	}
+	for _, body := range []string{`{"index_cache_entries":4097}`, `{"index_cache_entries":-1}`} {
+		if _, err := normalizeNativeTranscriptSettings(transcriptSettingsFor(body), "s.json", NativePathPolicy{}); err == nil || !strings.Contains(err.Error(), "index_cache_entries") {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+}

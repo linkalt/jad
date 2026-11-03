@@ -110,7 +110,7 @@ func indexTranscriptTurnsFrom(ctx context.Context, file *os.File, start, size, m
 	err := scanTranscript(ctx, file, start, size, maxLine, func(line transcriptLine) (bool, error) {
 		end = line.off + line.length
 		var head transcriptHead
-		if !line.tooLong {
+		if !line.tooLong && transcriptLineMayHead(line.data) {
 			_ = json.Unmarshal(line.data, &head)
 		}
 		if len(turns) == 0 || (head.startsUserTurn() && line.off != start) {

@@ -20,26 +20,33 @@ const (
 	defaultNativeTranscriptMaxListEntries   int64 = 100
 	maxNativeTranscriptMaxListEntries       int64 = 5000
 	defaultNativeTranscriptMaxDetailBytes   int64 = 16 * 1024
+	// defaultNativeTranscriptIndexCacheEntries is how many transcripts' turn tables the process
+	// keeps; a table is 16 bytes per turn.
+	defaultNativeTranscriptIndexCacheEntries int64 = 32
+	maxNativeTranscriptIndexCacheEntries     int64 = 4096
 )
 
 var nativeTranscriptKeys = []string{
 	"response_max_bytes", "line_max_bytes", "scan_max_bytes",
-	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_reasoning", "allow_other_profiles", "allow_children", "allow_path", "allow_remote", "remotes",
+	"suggest_max", "timeout_ms", "preview_bytes", "value_bytes", "max_list_entries", "max_detail_bytes", "allow_other_sessions", "allow_other_reasoning", "allow_other_profiles", "allow_children", "allow_path", "allow_remote", "remotes", "index_cache_entries",
 }
 
 // NativeTranscriptSettings holds the limits and switches of native.transcript. The path
 // policy is not a key of this tool: path reads follow the read tool's policy.
 type NativeTranscriptSettings struct {
-	Policy             NativePathPolicy
-	ResponseMaxBytes   int64
-	LineMaxBytes       int64
-	ScanMaxBytes       int64
-	SuggestMax         int64
-	TimeoutMs          int64
-	PreviewBytes       int64
-	ValueBytes         int64
-	MaxListEntries     int64
-	MaxDetailBytes     int64
+	Policy           NativePathPolicy
+	ResponseMaxBytes int64
+	LineMaxBytes     int64
+	ScanMaxBytes     int64
+	SuggestMax       int64
+	TimeoutMs        int64
+	PreviewBytes     int64
+	ValueBytes       int64
+	MaxListEntries   int64
+	MaxDetailBytes   int64
+	// IndexCacheEntries is how many transcripts' turn tables are kept between calls, so a call
+	// parses only what was appended since; 0 parses the whole file every call.
+	IndexCacheEntries  int64
 	AllowOtherSessions bool
 	// AllowOtherReasoning shows the reasoning of another session in detail mode. Off by default:
 	// reasoning is private planning, so a session reads another session's only when this is set.
@@ -100,6 +107,7 @@ func normalizeNativeTranscriptSettings(setting map[string]json.RawMessage, setti
 		{&settings.MaxListEntries, "max_list_entries", defaultNativeTranscriptMaxListEntries, 1, maxNativeTranscriptMaxListEntries},
 		{&settings.MaxDetailBytes, "max_detail_bytes", defaultNativeTranscriptMaxDetailBytes, 1, maxNativeToolBytes},
 		{&settings.TimeoutMs, "timeout_ms", defaultNativeTranscriptTimeoutMs, 1, maxToolTimeoutMs},
+		{&settings.IndexCacheEntries, "index_cache_entries", defaultNativeTranscriptIndexCacheEntries, 0, maxNativeTranscriptIndexCacheEntries},
 	} {
 		if *field.target, err = configuredInteger(fields, field.name, field.fallback, field.min, field.max, settingPath, section); err != nil {
 			return nil, err
