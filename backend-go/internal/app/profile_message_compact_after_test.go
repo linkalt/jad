@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -88,6 +91,45 @@ func TestProfileMessageCompactAfterRaisedInTheSameCallerRunStillCompacts(t *test
 	send()
 	if len(*calls) != 1 {
 		t.Fatalf("second send in the same caller run compactions = %v, want 1", *calls)
+	}
+}
+
+func TestProfileMessageQueuedCompactAfterRaisedInTheSameCallerRunStillCompacts(t *testing.T) {
+	p := newPMFixture(t, func(settings *sessionfs.NativeProfileMessageSettings) {
+		settings.Compact = sessionfs.ProfileMessageCompactOn
+		settings.CompactAfter = 10
+	})
+	calls := countCompactions(p.f)
+	// beforeRun reads the usage once per queued message, when the pump starts it. The first
+	// message reads 5 tokens, at or below compact_after; by the second the target has grown to 50.
+	var reads atomic.Int64
+	p.f.service.resolver.profileUsage = func(context.Context, string, string) (*int64, error) {
+		tokens := int64(5)
+		if reads.Add(1) > 1 {
+			tokens = 50
+		}
+		return &tokens, nil
+	}
+	// The held transcript makes the target busy, so both sends of the same caller run queue behind it.
+	release := p.holdTranscript(t)
+	queuedSend := func(text string) string {
+		t.Helper()
+		out := p.sendAs(t, callerRunContext(t, p.f, 1), tools.ExecutionContext{SessionKey: p.owner}, text)
+		if !strings.Contains(out, "state: queued") {
+			t.Fatalf("a message to a busy target must queue:\n%s", out)
+		}
+		return p.handle(t, out)
+	}
+	first := queuedSend("alpha-1 please")
+	second := queuedSend("alpha-2 please")
+	release()
+	for id, want := range map[string]string{first: "answer for alpha-1", second: "answer for alpha-2"} {
+		if got := p.wait(t, id); !strings.Contains(got, want) {
+			t.Fatalf("handle %s: want %q:\n%s", id, want, got)
+		}
+	}
+	if len(*calls) != 1 || (*calls)[0] != "review/reviewer" {
+		t.Fatalf("compactions %v, want one of review/reviewer for the second queued message", *calls)
 	}
 }
 
