@@ -18,10 +18,11 @@ func (m profileMessenger) ProfileInfo(ctx context.Context, session, profile stri
 	if err != nil {
 		return nil, err
 	}
-	shared, err := m.resolver.sharedStore(config)
+	shared, release, err := m.resolver.sharedStore(config)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	index, err := scanTranscriptIndex(shared, config)
 	if err != nil {
 		return nil, fmt.Errorf("read usage of profile %q: %w", profile, err)

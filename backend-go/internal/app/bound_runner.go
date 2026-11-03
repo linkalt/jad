@@ -28,7 +28,28 @@ type boundRunner struct {
 	memoryStore    *native.MemoryStore
 }
 
+// hold leases the transcript store cached for the session now and points r at it for
+// the rest of the operation. The store the runner was resolved with may have been
+// dropped as idle since (CatalogConfig.StoreIdle), and only the cached store may write
+// the transcript. A runner without a resolver (a test) keeps the store it was given.
+func (r *boundRunner) hold() (func(), error) {
+	if r.resolver == nil {
+		return noRelease, nil
+	}
+	shared, release, err := r.resolver.sharedStore(r.config)
+	if err != nil {
+		return noRelease, err
+	}
+	r.shared = shared
+	return release, nil
+}
+
 func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options session.RunOptions) (session.RunResult, error) {
+	release, err := r.hold()
+	if err != nil {
+		return session.RunResult{}, err
+	}
+	defer release()
 	if err := r.shared.runMu.LockCtx(ctx); err != nil {
 		return session.RunResult{}, err
 	}
@@ -236,6 +257,11 @@ func (r boundRunner) ReadRunUsageSummary(ctx context.Context) (webui.UsageSummar
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
+	release, err := r.hold()
+	if err != nil {
+		return empty, err
+	}
+	defer release()
 	if r.shared == nil || r.shared.store == nil || r.config.MessagesPath == "" {
 		return empty, errors.New("bound session runner is not initialized")
 	}
@@ -255,6 +281,11 @@ func (r boundRunner) ReadRunUsageSummary(ctx context.Context) (webui.UsageSummar
 // RecordRunError keeps a failed run in the session's run-error cache, outside
 // messages.jsonl. The cap is the session's persistence.run_error_cache_max_entries.
 func (r boundRunner) RecordRunError(entry transcript.RunErrorEntry) error {
+	release, err := r.hold()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if r.shared == nil || r.shared.store == nil {
 		return errors.New("bound session runner is not initialized")
 	}

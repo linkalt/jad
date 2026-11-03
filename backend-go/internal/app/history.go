@@ -179,10 +179,11 @@ func readHistoryRecords(ctx context.Context, config sessionfs.SessionConfig) (re
 
 // readTurnRecords returns the records of the transcript turn that starts at cursor.
 func (r *Resolver) readTurnRecords(ctx context.Context, config sessionfs.SessionConfig, reference string, cursor int64) ([]webui.TranscriptRecord, error) {
-	shared, err := r.sharedStore(config)
+	shared, release, err := r.sharedStore(config)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	index, err := scanTranscriptIndex(shared, config)
 	if err != nil {
 		return nil, fmt.Errorf("read session transcript %q: %w", reference, err)

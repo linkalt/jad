@@ -131,6 +131,13 @@
           "default": 10000,
           "description": "Go backend only. How long deleting a session waits for its stopped runs to end before the delete is refused with a conflict. 0 does not wait, so a session with an active run is refused at once."
         },
+        "session_store_idle_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
+          "default": 600000,
+          "description": "Go backend only. How long a session's transcript store (its run lock, runner and transcript indexes) stays in memory after the last request that used it ends. A later request opens it again from disk, with the same recovery as the first open after a start. 0 keeps every store until the session is deleted or the server stops."
+        },
         "log_level": {
           "type": "string",
           "enum": ["debug", "info", "warn", "error", "off"],

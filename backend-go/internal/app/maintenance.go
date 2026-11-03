@@ -32,10 +32,13 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 	if err != nil {
 		return httpapi.ResolvedMutation{}, mapSessionError(err)
 	}
-	shared, err := r.sharedStore(config)
+	// Each mutation leases the store again (boundMutation.hold); this open only reports
+	// a store that cannot be used before the mutation starts.
+	shared, release, err := r.sharedStore(config)
 	if err != nil {
 		return httpapi.ResolvedMutation{}, err
 	}
+	release()
 	processManager := r.sharedProcessManager(config)
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
@@ -43,7 +46,7 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 		Reference: location.Reference,
 		Profile:   config.Profile,
 		Session: boundMutation{
-			shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
+			resolver: r, shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
 			asyncManager: r.sessionAsyncManager(config), subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
 			reference: location.Reference, logger: r.logger,
 		},
@@ -51,6 +54,8 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 }
 
 type boundMutation struct {
+	// resolver hands out the cached store for each operation; see hold.
+	resolver        *Resolver
 	shared          *sharedSession
 	config          sessionfs.SessionConfig
 	processManager  native.ProcessManager
@@ -64,6 +69,21 @@ type boundMutation struct {
 	logger    *slog.Logger
 }
 
+// hold leases the transcript store cached for the session now and points m at it for
+// the rest of the operation; see boundRunner.hold. A mutation without a resolver (a
+// test) keeps the store it was given.
+func (m *boundMutation) hold() (func(), error) {
+	if m.resolver == nil {
+		return noRelease, nil
+	}
+	shared, release, err := m.resolver.sharedStore(m.config)
+	if err != nil {
+		return noRelease, err
+	}
+	m.shared = shared
+	return release, nil
+}
+
 func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse, error) {
 	var result httpapi.CompactionResponse
 	if ctx == nil {
@@ -72,6 +92,11 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	release, err := m.hold()
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}
@@ -136,6 +161,11 @@ func (m boundMutation) Reset(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	release, err := m.hold()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if m.shared == nil || m.shared.store == nil {
 		return errors.New("session transcript store is not initialized")
 	}

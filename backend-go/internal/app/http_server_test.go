@@ -100,6 +100,35 @@ func TestServerClosesIdleKeepAliveConnection(t *testing.T) {
 	}
 }
 
+func TestServiceCarriesTheSessionStoreIdle(t *testing.T) {
+	service := func(server string) *Service {
+		cwd := t.TempDir()
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := NewService(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(created.Close)
+		return created
+	}
+	if got := service(`{}`).resolver.catalog.StoreIdle; got != 10*time.Minute {
+		t.Errorf("default = %v, want 10m", got)
+	}
+	if got := service(`{"session_store_idle_ms":2500}`).resolver.catalog.StoreIdle; got != 2500*time.Millisecond {
+		t.Errorf("configured = %v, want 2.5s", got)
+	}
+	if got := service(`{"session_store_idle_ms":0}`).resolver.catalog.StoreIdle; got != 0 {
+		t.Errorf("zero = %v, want 0", got)
+	}
+}
+
 func TestLoadConfigCarriesTheSessionDeleteStopWait(t *testing.T) {
 	load := func(server string) Config {
 		cwd := t.TempDir()

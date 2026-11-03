@@ -45,7 +45,7 @@ func TestSharedStoreOpensDifferentKeysInParallel(t *testing.T) {
 		done.Add(1)
 		go func() {
 			defer done.Done()
-			if _, err := resolver.sharedStore(storeTestConfig(filepath.Join(t.TempDir(), name))); err != nil {
+			if _, _, err := resolver.sharedStore(storeTestConfig(filepath.Join(t.TempDir(), name))); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -70,7 +70,7 @@ func TestSharedStoreDoesNotBlockTheResolverWhileOpening(t *testing.T) {
 		<-release
 		return fakeSession(config, options, durability), nil
 	})
-	go func() { _, _ = resolver.sharedStore(storeTestConfig(t.TempDir())) }()
+	go func() { _, _, _ = resolver.sharedStore(storeTestConfig(t.TempDir())) }()
 	<-entered
 	locked := make(chan struct{})
 	go func() {
@@ -98,7 +98,7 @@ func TestSharedStoreCoalescesConcurrentOpensOfOneKey(t *testing.T) {
 	results := make(chan *sharedSession, 8)
 	for range 8 {
 		go func() {
-			shared, err := resolver.sharedStore(config)
+			shared, _, err := resolver.sharedStore(config)
 			if err != nil {
 				t.Error(err)
 			}
@@ -130,13 +130,13 @@ func TestSharedStoreRetriesAfterAFailedOpen(t *testing.T) {
 		return fakeSession(config, options, durability), nil
 	})
 	config := storeTestConfig(t.TempDir())
-	if _, err := resolver.sharedStore(config); err == nil || err.Error() != "disk full" {
+	if _, _, err := resolver.sharedStore(config); err == nil || err.Error() != "disk full" {
 		t.Fatalf("first error = %v", err)
 	}
-	if _, err := resolver.sharedStore(config); err == nil {
+	if _, _, err := resolver.sharedStore(config); err == nil {
 		t.Fatal("a panicking open must come back as an error")
 	}
-	if shared, err := resolver.sharedStore(config); err != nil || shared == nil {
+	if shared, _, err := resolver.sharedStore(config); err != nil || shared == nil {
 		t.Fatalf("third open = %v, %v: a failed build must not be cached", shared, err)
 	}
 }
@@ -146,12 +146,12 @@ func TestSharedStoreStillRejectsIncompatibleSettings(t *testing.T) {
 		return fakeSession(config, options, durability), nil
 	})
 	config := storeTestConfig(t.TempDir())
-	if _, err := resolver.sharedStore(config); err != nil {
+	if _, _, err := resolver.sharedStore(config); err != nil {
 		t.Fatal(err)
 	}
 	other := config
 	other.StagingDir = filepath.Join(filepath.Dir(config.StagingDir), "other-staging")
-	if _, err := resolver.sharedStore(other); err == nil {
+	if _, _, err := resolver.sharedStore(other); err == nil {
 		t.Fatal("a different staging directory for the same transcript was accepted")
 	}
 }
@@ -171,7 +171,7 @@ func TestSharedStoreForgottenDuringOpenIsNotHandedOut(t *testing.T) {
 	config := storeTestConfig(dir)
 	result := make(chan error, 1)
 	go func() {
-		_, err := resolver.sharedStore(config)
+		_, _, err := resolver.sharedStore(config)
 		result <- err
 	}()
 	<-entered
@@ -180,7 +180,7 @@ func TestSharedStoreForgottenDuringOpenIsNotHandedOut(t *testing.T) {
 	if err := <-result; !errors.Is(err, errStoreForgotten) {
 		t.Fatalf("error = %v, want the session-deleted error", err)
 	}
-	if shared, err := resolver.sharedStore(config); err != nil || shared == nil {
+	if shared, _, err := resolver.sharedStore(config); err != nil || shared == nil {
 		t.Fatalf("open after the forget = %v, %v", shared, err)
 	}
 	if got := opens.Load(); got != 2 {

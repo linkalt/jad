@@ -75,7 +75,7 @@ func TestHTTPCompactAndResetWithFilesystemResolver(t *testing.T) {
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("compaction cache missing: %v", err)
 	}
-	shared, err := service.resolver.sharedStore(sessionConfig)
+	shared, _, err := service.resolver.sharedStore(sessionConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

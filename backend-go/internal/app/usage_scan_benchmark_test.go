@@ -23,7 +23,7 @@ func BenchmarkScanTranscriptIndexRebuild(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			shared, err := resolver.sharedStore(config)
+			shared, _, err := resolver.sharedStore(config)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestScanTranscriptIndexRejectsCompletedRecordWithoutObjectResponse(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := resolver.sharedStore(config)
+	shared, _, err := resolver.sharedStore(config)
 	if err != nil {
 		t.Fatal(err)
 	}

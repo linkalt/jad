@@ -3,17 +3,21 @@
 package serverconfig
 
 const (
-	DefaultToolStreamIntervalMS          = 120
-	MaxToolStreamIntervalMS              = 60 * 1000
-	DefaultSSEHeartbeatIntervalMS        = 5_000
-	MaxSSEHeartbeatIntervalMS            = 5 * 60 * 1000
-	DefaultSSEWriteTimeoutMS             = 30_000
-	MaxSSEWriteTimeoutMS                 = 5 * 60 * 1000
-	DefaultReadHeaderTimeoutMS           = 60_000
-	MaxReadHeaderTimeoutMS               = 5 * 60 * 1000
-	DefaultIdleTimeoutMS                 = 5_000
-	DefaultSessionDeleteStopWaitMS       = 10_000
-	MaxSessionDeleteStopWaitMS           = 5 * 60 * 1000
+	DefaultToolStreamIntervalMS    = 120
+	MaxToolStreamIntervalMS        = 60 * 1000
+	DefaultSSEHeartbeatIntervalMS  = 5_000
+	MaxSSEHeartbeatIntervalMS      = 5 * 60 * 1000
+	DefaultSSEWriteTimeoutMS       = 30_000
+	MaxSSEWriteTimeoutMS           = 5 * 60 * 1000
+	DefaultReadHeaderTimeoutMS     = 60_000
+	MaxReadHeaderTimeoutMS         = 5 * 60 * 1000
+	DefaultIdleTimeoutMS           = 5_000
+	DefaultSessionDeleteStopWaitMS = 10_000
+	MaxSessionDeleteStopWaitMS     = 5 * 60 * 1000
+	// server.session_store_idle_ms: how long an unused session's transcript store stays
+	// cached; zero keeps it until the session is deleted or the server stops.
+	DefaultSessionStoreIdleMS            = 10 * 60 * 1000
+	MaxSessionStoreIdleMS                = 24 * 60 * 60 * 1000
 	MaxIdleTimeoutMS                     = 60 * 60 * 1000
 	DefaultRunContentMemoryBytes         = 100 * 1024
 	DefaultRunContentWriteBatchBytes     = 32 * 1024

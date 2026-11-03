@@ -162,8 +162,12 @@ func (r *Resolver) forgetStores(dir string) {
 	prefix := filepath.Clean(dir) + string(filepath.Separator)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for key := range r.stores {
+	for key, entry := range r.stores {
 		if strings.HasPrefix(key, prefix) {
+			if entry.idleTimer != nil {
+				entry.idleTimer.Stop()
+				entry.idleTimer = nil
+			}
 			delete(r.stores, key)
 		}
 	}

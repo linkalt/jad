@@ -117,7 +117,7 @@ func TestScaleUsageScanWithAppenders(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			shared, err := resolver.sharedStore(config)
+			shared, _, err := resolver.sharedStore(config)
 			if err != nil {
 				t.Fatal(err)
 			}

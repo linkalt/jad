@@ -26,6 +26,11 @@ func (m boundMutation) RestoreCheckpoint(ctx context.Context, id string, request
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	release, err := m.hold()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if m.shared == nil {
 		return nil, errors.New("session transcript store is not initialized")
 	}

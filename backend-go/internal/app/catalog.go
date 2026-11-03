@@ -231,11 +231,12 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 		if err := ctx.Err(); err != nil {
 			return httpapi.CatalogResponse{}, err
 		}
-		shared, err := r.sharedStore(candidate.config)
+		shared, release, err := r.sharedStore(candidate.config)
 		if err != nil {
 			return httpapi.CatalogResponse{}, err
 		}
 		index, err := scanTranscriptIndex(shared, candidate.config)
+		release()
 		if err != nil {
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", candidate.location.Reference, err)
 		}
@@ -323,11 +324,12 @@ func (r *Resolver) profileTurns(location sessionfs.Location, config sessionfs.Se
 		if err != nil {
 			continue
 		}
-		shared, err := r.sharedStore(other)
+		shared, release, err := r.sharedStore(other)
 		if err != nil {
 			continue
 		}
 		index, err := scanTranscriptIndex(shared, other)
+		release()
 		if err != nil {
 			continue
 		}
@@ -379,10 +381,11 @@ func (r *Resolver) ReadSessionSnapshot(ctx context.Context, reference, profile s
 	if httpapi.ETagMatches(ifNoneMatch, etag) {
 		return httpapi.CatalogResponse{ETag: etag, NotModified: true}, nil
 	}
-	shared, err := r.sharedStore(config)
+	shared, release, err := r.sharedStore(config)
 	if err != nil {
 		return httpapi.CatalogResponse{}, err
 	}
+	defer release()
 	index, err := scanTranscriptIndex(shared, config)
 	if err != nil {
 		return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", location.Reference, err)

@@ -46,7 +46,7 @@ func TestFrontCompactSucceedsWhenUsageCacheCannotBeWritten(t *testing.T) {
 	if err := os.MkdirAll(f.config.UsageCachePath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := f.resolver.sharedStore(f.config)
+	shared, _, err := f.resolver.sharedStore(f.config)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,6 +141,9 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"read_header_timeout_ms", "-1", "server.read_header_timeout_ms must be a safe integer between 0 and 300000"},
 		{"idle_timeout_ms", "-1", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
 		{"session_delete_stop_wait_ms", "-1", "server.session_delete_stop_wait_ms must be a safe integer between 0 and 300000"},
+		{"session_store_idle_ms", "-1", "server.session_store_idle_ms must be a safe integer between 0 and 86400000"},
+		{"session_store_idle_ms", "86400001", "server.session_store_idle_ms must be a safe integer between 0 and 86400000"},
+		{"session_store_idle_ms", `"600000"`, "server.session_store_idle_ms must be a safe integer between 0 and 86400000"},
 		{"snapshot_turns", "-1", "server.snapshot_turns must be a safe integer between 0 and 100000"},
 		{"max_page_turns", "0", "server.max_page_turns must be a safe integer between 1 and 1000"},
 		{"max_inline_part_bytes", "-1", "server.max_inline_part_bytes must be a safe integer between 0 and 16777216"},
@@ -693,6 +696,38 @@ func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
 	}
 	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
 		t.Fatalf("empty folder with the same name: %v", err)
+	}
+}
+
+func TestSessionStoreIdleSettingDefaultsAndBounds(t *testing.T) {
+	if got := Defaults().SessionStoreIdle; got != 10*time.Minute {
+		t.Fatalf("default session store idle = %v, want 10m", got)
+	}
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, accepted := range []struct {
+		server string
+		want   time.Duration
+	}{
+		{`{}`, 10 * time.Minute},
+		{`{"session_store_idle_ms":null}`, 10 * time.Minute},
+		{`{"session_store_idle_ms":0}`, 0},
+		{`{"session_store_idle_ms":1500}`, 1500 * time.Millisecond},
+		{`{"session_store_idle_ms":86400000}`, 24 * time.Hour},
+	} {
+		setting := `{"session_roots":[{"path":"sessions"}],"server":` + accepted.server + `}`
+		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", accepted.server, err)
+		}
+		if config.Server.SessionStoreIdle != accepted.want {
+			t.Errorf("Load(%s) idle = %v, want %v", accepted.server, config.Server.SessionStoreIdle, accepted.want)
+		}
 	}
 }
 

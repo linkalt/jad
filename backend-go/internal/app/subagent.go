@@ -158,10 +158,11 @@ func (l subagentLauncher) stateContextFor(agent sessionfs.NativeSubagentAgent) (
 	if !agent.StateContext {
 		return nil, nil
 	}
-	shared, err := l.resolver.sharedStore(l.parent)
+	shared, release, err := l.resolver.sharedStore(l.parent)
 	if err != nil {
 		return nil, fmt.Errorf("read the session state context: %w", err)
 	}
+	defer release()
 	entries, err := boundRunner{resolver: l.resolver, shared: shared, config: l.parent}.stateContextEntries()
 	if err != nil {
 		return nil, err

@@ -20,6 +20,11 @@ func (m boundMutation) FrontCompact(ctx context.Context, messageID string) (http
 	if !m.config.FrontCompactionConfig.Enabled {
 		return result, &httpapi.StatusError{Code: 403, Message: "front compaction is disabled for this session"}
 	}
+	release, err := m.hold()
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}

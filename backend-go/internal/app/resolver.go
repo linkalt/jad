@@ -40,6 +40,10 @@ type CatalogConfig struct {
 	SnapshotTurns      int
 	MaxPageTurns       int
 	MaxInlinePartBytes int
+	// StoreIdle is server.session_store_idle_ms: how long a session's transcript store
+	// stays cached after its last use ends. Zero keeps every store until the session is
+	// deleted or the server stops.
+	StoreIdle time.Duration
 }
 
 // profileTurnsEntry is a profile's turn count with the file stamp of the transcript it was counted from.
@@ -129,10 +133,19 @@ var errStoreForgotten = &httpapi.StatusError{Code: http.StatusNotFound, Message:
 // storeEntry is one transcript store being built or built. Opening a store creates
 // directories, opens the journal and recovers the transcript tail, so it runs outside
 // Resolver.mu: callers of the same key wait on ready, other keys do not wait at all.
+//
+// leases counts the operations using the store now. Only a store nobody uses leaves the
+// cache: two stores of one transcript would each have their own run lock and journal
+// lock, and could write it at once. When the count drops to zero, idleTimer drops the
+// entry after CatalogConfig.StoreIdle unless a use starts first; idleEpoch tells a timer
+// that fires late that a newer idle period has begun. All three are guarded by Resolver.mu.
 type storeEntry struct {
-	ready  chan struct{}
-	shared *sharedSession
-	err    error
+	ready     chan struct{}
+	shared    *sharedSession
+	err       error
+	leases    int
+	idleEpoch uint64
+	idleTimer *time.Timer
 }
 
 type sharedSession struct {
@@ -239,7 +252,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 	if environment == nil {
 		return nil, errors.New("process environment is required")
 	}
-	if catalog.SnapshotTurns < 0 || catalog.MaxPageTurns < 1 || catalog.MaxInlinePartBytes < 0 {
+	if catalog.SnapshotTurns < 0 || catalog.MaxPageTurns < 1 || catalog.MaxInlinePartBytes < 0 || catalog.StoreIdle < 0 {
 		return nil, errors.New("invalid session catalog settings")
 	}
 	copyRoots := append([]sessionfs.Root(nil), roots...)
@@ -424,10 +437,13 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 		}
 		r.logConfigWarnings(location.Reference, config)
 	}
-	shared, err := r.sharedStore(config)
+	// The runner leases the store again for each operation (boundRunner.hold); this
+	// open only reports a store that cannot be used before the run is registered.
+	shared, release, err := r.sharedStore(config)
 	if err != nil {
 		return httpapi.ResolvedSession{}, err
 	}
+	release()
 	return httpapi.ResolvedSession{
 		Reference: location.Reference,
 		Profile:   config.Profile,
@@ -930,7 +946,11 @@ func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
 	return manager, nil
 }
 
-func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, error) {
+// sharedStore returns the transcript store cached for config, opening it when it is not
+// cached, and a release that ends this use of it. The caller calls release exactly once,
+// when it no longer touches the store; until then the store is not dropped as idle. An
+// error comes with a release that does nothing.
+func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, func(), error) {
 	storeOptions := transcript.TurnStoreOptions{
 		Logger:                     r.logger,
 		MaxItemBytes:               config.Persistence.MaxItemBytes,
@@ -948,12 +968,13 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return nil, &httpapi.StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
+		return nil, noRelease, &httpapi.StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
 	}
 	entry := r.stores[storageKey]
 	if entry == nil {
 		entry = &storeEntry{ready: make(chan struct{})}
 		r.stores[storageKey] = entry
+		r.leaseStoreLocked(entry)
 		r.mu.Unlock()
 		entry.shared, entry.err = r.buildStore(config, storeOptions, durability)
 		r.mu.Lock()
@@ -965,21 +986,76 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		}
 		close(entry.ready)
 		r.mu.Unlock()
-		return entry.shared, entry.err
+		release := r.storeRelease(storageKey, entry)
+		if entry.err != nil {
+			release()
+			return nil, noRelease, entry.err
+		}
+		return entry.shared, release, nil
 	}
+	r.leaseStoreLocked(entry)
 	r.mu.Unlock()
+	release := r.storeRelease(storageKey, entry)
 	<-entry.ready
 	if entry.err != nil {
-		return nil, entry.err
+		release()
+		return nil, noRelease, entry.err
 	}
 	shared := entry.shared
 	if shared.options != storeOptions || shared.staging != filepath.Clean(config.StagingDir) || shared.durability != durability {
-		return nil, &httpapi.StatusError{
+		release()
+		return nil, noRelease, &httpapi.StatusError{
 			Code:    http.StatusUnprocessableEntity,
 			Message: "session path profiles share transcript storage but have incompatible staging or persistence settings",
 		}
 	}
-	return shared, nil
+	return shared, release, nil
+}
+
+// noRelease is the release handed out with an error: nothing was leased.
+func noRelease() {}
+
+// leaseStoreLocked starts one use of entry and cancels a pending idle drop. The caller
+// holds r.mu.
+func (r *Resolver) leaseStoreLocked(entry *storeEntry) {
+	entry.leases++
+	if entry.idleTimer != nil {
+		entry.idleTimer.Stop()
+		entry.idleTimer = nil
+	}
+}
+
+// storeRelease returns the release of one use of entry. A second call does nothing, so a
+// caller that releases twice cannot end another caller's use.
+func (r *Resolver) storeRelease(storageKey string, entry *storeEntry) func() {
+	var once sync.Once
+	return func() { once.Do(func() { r.releaseStore(storageKey, entry) }) }
+}
+
+// releaseStore ends one use of entry. When it was the last and the entry is still the
+// cached one, the entry is dropped after the idle time unless a use starts first. A store
+// dropped this way is opened again, with recovery, by its next use.
+func (r *Resolver) releaseStore(storageKey string, entry *storeEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry.leases--
+	if entry.leases > 0 || r.closed || r.catalog.StoreIdle <= 0 || r.stores[storageKey] != entry {
+		return
+	}
+	entry.idleEpoch++
+	epoch := entry.idleEpoch
+	entry.idleTimer = time.AfterFunc(r.catalog.StoreIdle, func() { r.dropIdleStore(storageKey, entry, epoch) })
+}
+
+// dropIdleStore removes entry from the cache if nobody has used it since the idle period
+// epoch began.
+func (r *Resolver) dropIdleStore(storageKey string, entry *storeEntry, epoch uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stores[storageKey] == entry && entry.leases == 0 && entry.idleEpoch == epoch {
+		entry.idleTimer = nil
+		delete(r.stores, storageKey)
+	}
 }
 
 // buildStore runs the store opener and turns a panic into an error, so the callers waiting
@@ -1029,6 +1105,12 @@ func (r *Resolver) Close() {
 		return
 	}
 	r.closed = true
+	for _, entry := range r.stores {
+		if entry.idleTimer != nil {
+			entry.idleTimer.Stop()
+			entry.idleTimer = nil
+		}
+	}
 	managers := make([]*native.ManagedProcessManager, 0, len(r.processManagers))
 	for _, manager := range r.processManagers {
 		managers = append(managers, manager)

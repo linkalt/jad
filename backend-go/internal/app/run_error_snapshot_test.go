@@ -69,7 +69,7 @@ func TestSnapshotOmitsFailuresWhenNothingFailed(t *testing.T) {
 
 func TestSnapshotCarriesFailuresFromTheRunErrorCache(t *testing.T) {
 	resolver, location, config := newRunErrorSnapshotFixture(t)
-	shared, err := resolver.sharedStore(config)
+	shared, _, err := resolver.sharedStore(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestRunErrorCacheChangesTheSessionETag(t *testing.T) {
 		t.Fatalf("an unchanged session must answer not-modified, got %+v", unchanged)
 	}
 
-	shared, err := resolver.sharedStore(config)
+	shared, _, err := resolver.sharedStore(config)
 	if err != nil {
 		t.Fatal(err)
 	}

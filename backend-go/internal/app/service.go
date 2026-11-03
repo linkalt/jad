@@ -44,6 +44,7 @@ func newServiceWithBudget(config Config, budget *tools.LeafBudget) (*Service, er
 		SnapshotTurns:      config.HTTP.SnapshotTurns,
 		MaxPageTurns:       config.HTTP.MaxPageTurns,
 		MaxInlinePartBytes: config.HTTP.MaxInlinePartBytes,
+		StoreIdle:          config.SessionStoreIdle,
 	}, WithLogger(config.HTTP.Logger), withLeafBudget(budget))
 	if err != nil {
 		return nil, err

@@ -44,6 +44,8 @@ type Config struct {
 	Roots                      []sessionfs.Root
 	// RootSettingWarnings are the notices of the root setting load: keys it does not read.
 	RootSettingWarnings []string
+	// SessionStoreIdle is server.session_store_idle_ms; see CatalogConfig.StoreIdle.
+	SessionStoreIdle time.Duration
 	// MaxLeafCalls is server.max_leaf_calls: the leaf tool calls that may run at once in the process.
 	MaxLeafCalls int
 	// RemoteAPI is server.remote_api.
@@ -97,6 +99,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			File:   loaded.Server.LogFile,
 		},
 		RecoverProcessesAtStart:    loaded.Server.RecoverProcessesAtStart,
+		SessionStoreIdle:           loaded.Server.SessionStoreIdle,
 		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
 		RootSettingWarnings:        loaded.Warnings,

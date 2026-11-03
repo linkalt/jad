@@ -68,6 +68,9 @@ type ServerSettings struct {
 	// SessionDeleteStopWait is how long deleting a session waits for its stopped runs to end
 	// before it gives up with a conflict; zero does not wait.
 	SessionDeleteStopWait time.Duration
+	// SessionStoreIdle is how long a session's transcript store stays cached after its
+	// last use ends; zero keeps it until the session is deleted or the server stops.
+	SessionStoreIdle time.Duration
 	// LogLevel, LogFormat and LogFile configure the Go backend's structured log.
 	// LogFile is absolute (resolved against the setting file) or empty for stderr.
 	LogLevel  string
@@ -181,6 +184,7 @@ func Defaults() ServerSettings {
 		IdleTimeout:                time.Duration(serverconfig.DefaultIdleTimeoutMS) * time.Millisecond,
 		ShutdownTimeout:            time.Duration(serverconfig.DefaultShutdownTimeoutMS) * time.Millisecond,
 		SessionDeleteStopWait:      time.Duration(serverconfig.DefaultSessionDeleteStopWaitMS) * time.Millisecond,
+		SessionStoreIdle:           time.Duration(serverconfig.DefaultSessionStoreIdleMS) * time.Millisecond,
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
 		RecoverProcessesAtStart:    serverconfig.DefaultRecoverProcessesAtStart,
@@ -645,6 +649,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.SessionDeleteStopWait = time.Duration(deleteWait) * time.Millisecond
+	storeIdle := int64(settings.SessionStoreIdle / time.Millisecond)
+	if err := readInt("session_store_idle_ms", &storeIdle, 0, serverconfig.MaxSessionStoreIdleMS); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.SessionStoreIdle = time.Duration(storeIdle) * time.Millisecond
 	if err := readChoice(fields, "log_level", &settings.LogLevel, serverconfig.IsLogLevel, "debug, info, warn, error or off", path); err != nil {
 		return ServerSettings{}, err
 	}

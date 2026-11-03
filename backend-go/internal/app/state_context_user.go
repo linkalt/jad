@@ -29,6 +29,11 @@ func (m boundMutation) StateContext(ctx context.Context, prompt string, preview 
 	if int64(len(prompt)) > trigger.MaxPromptBytes {
 		return result, &httpapi.StatusError{Code: http.StatusBadRequest, Message: fmt.Sprintf("prompt is larger than statecontext.triggers.user.max_prompt_bytes (%d)", trigger.MaxPromptBytes)}
 	}
+	release, err := m.hold()
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	if m.shared == nil || m.shared.store == nil {
 		return result, errors.New("session transcript store is not initialized")
 	}
