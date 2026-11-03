@@ -2,6 +2,7 @@ package native
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,5 +135,25 @@ func TestToolSmithDescriptionStatesTheScriptIsNotSandboxed(t *testing.T) {
 	}
 	if !strings.Contains(toolSmithDescription, want) {
 		t.Errorf("toolSmithDescription = %q, want it to contain %q", toolSmithDescription, want)
+	}
+}
+
+// The description the model sees is written twice: the manifest sample and toolSmithDescription. They must stay
+// equal, so an edit to one without the other fails here.
+func TestToolSmithDescriptionCopiesAreEqual(t *testing.T) {
+	data, err := os.ReadFile(sampleToolSmithManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Tools []struct {
+			Description string `json:"description"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil || len(document.Tools) != 1 {
+		t.Fatalf("tool_smith.json: %v, %d tools", err, len(document.Tools))
+	}
+	if got := document.Tools[0].Description; got != toolSmithDescription {
+		t.Errorf("tool_smith.json description differs from toolSmithDescription:\njson: %q\ngo:   %q", got, toolSmithDescription)
 	}
 }

@@ -791,6 +791,8 @@ func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T
 // The resolver gives the subagent tool its lazy set (SetLazy) before it binds the MCP tools (BindToolsets). A
 // child copy is gated when BindToolsets builds it, so a reversed order builds every child copy with no set.
 // This test fails under that order, and the message names the order, so a reversal is not read as a mystery.
+// It reads resolver.go as text, so it breaks on a rename or reformat of those two calls; then update the names here.
+// The real check is the behavioural test TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP.
 func TestResolverGivesTheSubagentItsLazySetBeforeItBindsMCPTools(t *testing.T) {
 	src, err := os.ReadFile("resolver.go")
 	if err != nil {

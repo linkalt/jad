@@ -140,3 +140,46 @@ func TestGrandchildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 		t.Fatalf("the grandchild's script reached read outside the owner's allow list: %s", got)
 	}
 }
+
+// A tool_smith script at depth 3 is limited by the owner's allow list too. The owner's allow hides read, and the
+// great-grandchild lists read, so its script is refused read as not allowed. The chain is owner, child, grandchild,
+// great-grandchild, each started by the level above's nested subagent.
+func TestDepthThreeToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
+	root := shortTempDir(t)
+	smith := bridgeSettings(t, root)
+	smith.Tools = []string{"read"}
+	childAgent := nestingAgent("explore", "read", "subagent", "tool_smith")
+	launcher := &fakeLauncher{}
+	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 3, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
+	config := sessionfs.SessionConfig{
+		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		NativeToolSmith:     &smith,
+		NativeSubagent:      &subagent,
+		Profile:             "main",
+		Profiles:            []string{"main"},
+		ProfileTools:        sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"subagent", "tool_smith"}},
+	}
+	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("BuildCatalogWithAsync: %v", err)
+	}
+	subagentCall(t, catalog, `{"task":"x","agent":"explore"}`)
+	if len(launcher.requests) != 1 {
+		t.Fatalf("the child ran %d times, want 1", len(launcher.requests))
+	}
+	subagentCall(t, launcher.requests[0].Tools, `{"task":"y","agent":"explore"}`)
+	if len(launcher.requests) != 2 {
+		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
+	}
+	subagentCall(t, launcher.requests[1].Tools, `{"task":"z","agent":"explore"}`)
+	if len(launcher.requests) != 3 {
+		t.Fatalf("the great-grandchild ran %d times in total, want 3", len(launcher.requests))
+	}
+	got := runScriptThroughCatalog(t, launcher.requests[2].Tools, root, "read")
+	if !strings.Contains(got, "read:invalid_input:tool read not allowed") {
+		t.Fatalf("the depth-3 script reached read outside the owner's allow list: %s", got)
+	}
+}

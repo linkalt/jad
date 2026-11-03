@@ -170,6 +170,11 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	if !handled {
 		select {
 		case <-run.Done():
+			// The places are given back before the reply, so a caller that reads the count
+			// after the reply sees them free.
+			if reservation != nil {
+				s.manager.releaseRemote(reservation)
+			}
 		case <-ctx.Done():
 			run.Stop("caller_cancelled")
 			return "", ctx.Err()
@@ -183,6 +188,9 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	go func() {
 		defer close(ended)
 		<-run.Done()
+		if reservation != nil {
+			s.manager.releaseRemote(reservation)
+		}
 		outcome := run.Outcome()
 		s.async.dropProfileMessageRun(id)
 		_, _ = s.async.Manager().Complete(id, s.remoteAsyncResult(target, outcome))
