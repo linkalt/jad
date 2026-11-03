@@ -24,6 +24,10 @@ var remoteRunHandle = regexp.MustCompile(`rs_[0-9a-f]{8}`)
 
 const remoteAgent = "remote:peer/main/review/reviewer/explore"
 
+// remoteSeamBound is how long a cap-slot test waits for a remote goroutine to reach its seam or
+// finish. It is an upper bound: a passing run never waits for it.
+const remoteSeamBound = 10 * time.Second
+
 type remoteSubagentFixture struct {
 	peer    *peer
 	hub     *remote.Hub
@@ -574,20 +578,31 @@ func newSyncRemoteTool(t *testing.T, f *remoteSubagentFixture) tools.Tool {
 func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
 	held := make(chan struct{})
 	release := make(chan struct{})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
 	beforeRemoteBackgroundRelease = func() {
 		close(held)
 		<-release
 	}
-	t.Cleanup(func() { beforeRemoteBackgroundRelease = nil })
+	t.Cleanup(func() {
+		letGo()
+		// The seam is cleared only once the background goroutine has passed its read of it. If the
+		// goroutine never reaches the seam, the seam stays set: it is then never read.
+		select {
+		case <-held:
+			beforeRemoteBackgroundRelease = nil
+		case <-time.After(remoteSeamBound):
+			t.Errorf("the background release never reached its seam; the seam is left set")
+		}
+	})
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	f.tool = newSyncRemoteTool(t, f)
 	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", SessionKey: remoteCaller.SessionKey}
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	f.start(t, remoteAgent, 0, nested)
-	defer close(release)
 	select {
 	case <-held:
-	case <-time.After(5 * time.Second):
+	case <-time.After(remoteSeamBound):
 		t.Fatal("the background release did not reach its seam")
 	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
@@ -604,22 +619,27 @@ func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T)
 	var once sync.Once
 	letGo := func() { once.Do(func() { close(release) }) }
 	backgroundHeld := make(chan struct{})
+	var backgroundOnce sync.Once
 	beforeRemoteAsyncComplete = func() {
 		close(held)
 		<-release
 	}
 	beforeRemoteBackgroundRelease = func() {
-		close(backgroundHeld)
+		backgroundOnce.Do(func() { close(backgroundHeld) })
 		<-release
 	}
 	t.Cleanup(func() {
 		letGo()
+		// The seams are cleared only once the background goroutine has passed its read of
+		// beforeRemoteBackgroundRelease. If it never reaches the seam, the seam stays set: it is
+		// then never read, and the test has already failed.
 		select {
 		case <-backgroundHeld:
-		case <-time.After(5 * time.Second):
+			beforeRemoteAsyncComplete = nil
+			beforeRemoteBackgroundRelease = nil
+		case <-time.After(remoteSeamBound):
+			t.Errorf("the background release never reached its seam; the seams are left set")
 		}
-		beforeRemoteAsyncComplete = nil
-		beforeRemoteBackgroundRelease = nil
 	})
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	nested := remoteCaller
@@ -629,7 +649,7 @@ func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T)
 	defer letGo()
 	select {
 	case <-held:
-	case <-time.After(5 * time.Second):
+	case <-time.After(remoteSeamBound):
 		t.Fatal("the async completion did not reach its seam")
 	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
