@@ -795,10 +795,22 @@ func (h *Handler) serveSSE(w http.ResponseWriter, r *http.Request, run *activeRu
 		if err := writeFrame(event.frame); err != nil {
 			return
 		}
-		flusher.Flush()
 		if event.name == "done" {
+			flusher.Flush()
 			return
 		}
+		// Frames that queued while this one was waiting go out in the same flush: one
+		// push per burst instead of one per frame (token deltas arrive in bursts).
+		for _, more := range queue.takeQueued() {
+			if err := writeFrame(more.frame); err != nil {
+				return
+			}
+			if more.name == "done" {
+				flusher.Flush()
+				return
+			}
+		}
+		flusher.Flush()
 	}
 }
 

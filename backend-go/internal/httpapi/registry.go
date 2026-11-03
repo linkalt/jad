@@ -218,6 +218,24 @@ func (q *eventQueue) nextOrIdle(ctx context.Context, idle time.Duration) (event 
 	}
 }
 
+// takeQueued removes and returns every event queued right now, without waiting. The SSE
+// writer sends them behind the event it just took and flushes once, instead of once per
+// frame; the queue's byte budget bounds how much one call returns.
+func (q *eventQueue) takeQueued() []streamEvent {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.queue) == 0 {
+		return nil
+	}
+	events := q.queue
+	// Every queued frame leaves at once, the uncharged oversized snapshot included, so
+	// nothing is left to account for.
+	q.queue = nil
+	q.bytes = 0
+	q.oversizedSnapshot = false
+	return events
+}
+
 func (q *eventQueue) close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
