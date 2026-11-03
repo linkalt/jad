@@ -94,6 +94,23 @@ func (s *summaryCache) rebuild(parts []Part) {
 	s.text.Reset()
 	s.reasoning.Reset()
 	if s.textParts > 1 || s.reasoningParts > 1 {
+		// Sized first: the joined text is kept by the run's last committed message for the
+		// retention window, so it must not carry a builder's growth slack.
+		textBytes, reasoningBytes := 0, 0
+		for _, part := range parts {
+			switch part.Type {
+			case "text":
+				textBytes += len(part.Text)
+			case "reasoning":
+				reasoningBytes += len(part.Text) + 2
+			}
+		}
+		if s.textParts > 1 {
+			s.text.Grow(textBytes)
+		}
+		if s.reasoningParts > 1 {
+			s.reasoning.Grow(reasoningBytes - 2)
+		}
 		for _, part := range parts {
 			switch {
 			case part.Type == "text" && s.textParts > 1:

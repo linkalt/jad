@@ -102,3 +102,25 @@ func checkSummaries(t *testing.T, label string, message Message) {
 		t.Errorf("%s: summaries = %q / %q, want %q / %q", label, message.Text, message.ReasoningContent, text, reasoning)
 	}
 }
+
+// TestStreamingRunSummaryRebuildAllocatesTheJoinOnce: a rebuilt summary is kept by the
+// run's last committed message for the whole retention window, so each joined kind is
+// one allocation of its exact size, as strings.Join made it, not a builder grown with slack.
+func TestStreamingRunSummaryRebuildAllocatesTheJoinOnce(t *testing.T) {
+	parts := make([]Part, 0, 40)
+	for step := 0; step < 20; step++ {
+		parts = append(parts, Part{Type: "reasoning", Text: strings.Repeat("r", 1000+step)}, Part{Type: "text", Text: strings.Repeat("t", 3000+step)})
+	}
+	var summary summaryCache
+	allocations := testing.AllocsPerRun(20, func() {
+		summary.invalidate()
+		summary.fields(parts)
+	})
+	if allocations != 2 {
+		t.Fatalf("rebuild made %v allocations, want 2 (one exact buffer per joined kind)", allocations)
+	}
+	text, reasoning := summary.fields(parts)
+	if wantText, wantReasoning := FieldsFromParts(parts); text != wantText || reasoning != wantReasoning {
+		t.Fatal("sized rebuild changed the summaries")
+	}
+}
