@@ -1347,21 +1347,27 @@ The cleanup of the remote tests waits for the manager's remote goroutines (`remo
 On expiry the test fails with "a remote goroutine did not return within 40s; a Done is missing or a
 run never ended". The bound is a test constant, not a product setting; `RemoteTimeoutMs` is unchanged.
 
-- **Filter span:** `-run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'` selects 25 top-level tests
-  (`go test -list`, re-run for this entry) from three files: `subagent_remote_test.go` (22),
-  `profile_message_remote_test.go` (2) and `async_latest_test.go` (1). The resume tests in
-  `subagent_remote_resume_test.go` are not selected.
+- **Filter span:** `-run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'` is a substring match on test
+  names, not an anchored one. `go test -list` selects 25 top-level tests from three files:
+  `subagent_remote_test.go` (22), `profile_message_remote_test.go` (2) and `async_latest_test.go` (1).
+  `RemoteRun` also matches `TestRemoteInlineAndAsyncNameTheRemoteRunTheSameWay`, because its name
+  contains "RemoteRun". The resume tests in `subagent_remote_resume_test.go` are not selected.
 - **Measured drain under `-race`:** `go test -race -json -count=3` with the filter above, on
   `internal/tools/native`. The 25 tests each run 3 times: 75 top-level `pass` actions, 0 `fail`, and
-  24 subtest `run` actions (not counted in the 75). Worst single wait 20.0012s, in
-  `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits`, which waits for its run to end at
-  `RemoteTimeoutMs` (20s). The wait was measured with a temporary print, not kept in the tree.
-- **Bound:** 40s, twice the measured worst wait. It was 30s before, which left only 10s of margin.
-- **Cost:** a passing test whose run stays open takes up to 20s. A stuck drain costs one drain bound
-  (40s): in `releaseSeamVars` for a test that set seams, or in the fixture cleanup for one that did
-  not. The fixture cleanup adds no drain wait when the test has failed. A missed seam fails the body
-  after `remoteSeamBound` (10s), and `releaseSeamVars` still runs its drain wait, so the worst case is
-  10s plus one drain bound (50s). It is not two drain bounds.
+  24 subtest `run` actions (not counted in the 75). Worst single drain wait 20.0015s in one run and
+  20.0012s in an earlier run, both in `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits`, which
+  waits for its run to end at `RemoteTimeoutMs` (20s). The waits were measured with a temporary print,
+  not kept in the tree.
+- **Bound:** 40s, twice the measured worst drain wait. It was 30s before, which left only 10s of margin.
+- **Worst case per test:** a stuck drain costs one drain bound (40s), in `releaseSeamVars` for a test
+  that set seams or in the fixture cleanup for one that did not. The fixture cleanup adds no drain wait
+  when the test has failed.
+  - Sync seam test: the body waits up to `remoteSeamBound` (10s) for its seam, then `releaseSeamVars`
+    waits up to one drain bound (40s). Worst case 50s.
+  - Async seam test: the body waits up to 10s for its seam, then up to 10s more in the `wait` call
+    (`wait_ms` 10000), then `releaseSeamVars` waits up to one drain bound (40s). Worst case 60s.
+  - The measured longest drain for a test with no seams is 20.0s, the run that stays open to
+    `RemoteTimeoutMs`. This is a measurement, not a stated worst case.
 - **Failing runs:** the fixture cleanup skips its drain wait whenever `t.Failed()` is true, for any
   reason. `releaseSeamVars` does not check `t.Failed()` and always waits. In a failing run a late
   goroutine can still read a later test's seam; this can only change the result of a run that is
