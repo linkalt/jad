@@ -190,8 +190,10 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		run.Stop(reason)
 	}
 	ended := make(chan struct{})
+	s.manager.remoteEnds.Add(1)
 	go func() {
 		defer close(ended)
+		defer s.manager.remoteEnds.Done()
 		<-run.Done()
 		if reservation != nil {
 			s.manager.releaseRemote(reservation)
