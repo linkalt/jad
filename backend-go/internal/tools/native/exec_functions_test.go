@@ -153,7 +153,7 @@ func TestExecListsHelpersPerLanguageAndFiltersNarrowThem(t *testing.T) {
 	bash := bashTestSettings(t, root)
 	text := execContent(runExec(t, root, settings, bash, map[string]any{}))
 	for _, want := range []string{
-		"call as: fn.<name>(...) in ts/node/python/ruby",
+		"call as shown: fn.<name>(...) in ts/node/deno/python/ruby/lua, fn->name(...) in perl",
 		"python:\n  fn.read_json(...)   read_json.py — Read a JSON file and print its keys (input: {path: string})",
 		"bash:\n  build — Build the project\n  script1.sh — Summarise the README",
 		"node:\n  fn.read(...)   read.js — Read a file",

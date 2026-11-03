@@ -72,7 +72,7 @@ func TestExecRunnersDefaultTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 	langs := config.NativeExec.Langs
-	for name, want := range map[string]string{"python": "python", "node": "js", "ts": "js", "ruby": "ruby", "bash": "", "sh": "", "perl": ""} {
+	for name, want := range map[string]string{"python": "python", "node": "js", "ts": "js", "ruby": "ruby", "bash": "", "sh": "", "perl": "perl", "php": "php", "lua": "lua", "deno": "deno", "r": "r"} {
 		if langs[name].Template != want {
 			t.Errorf("%s: template = %q, want %q", name, langs[name].Template, want)
 		}
@@ -84,7 +84,10 @@ func TestExecRunnersRefuseABadTemplate(t *testing.T) {
 		entry map[string]any
 		want  string
 	}{
-		"unknown":     {map[string]any{"argv": []any{"x", "{code}"}, "template": "perl"}, "x.template must be"},
+		"unknown":     {map[string]any{"argv": []any{"x", "{code}"}, "template": "cobol"}, "x.template must be one of js, python, ruby, perl, php, lua, r, deno"},
+		"perl marker": {map[string]any{"argv": []any{"x", "{template}", "{code}"}, "template": "perl"}, "the perl template is found through PERL5LIB"},
+		"r marker":    {map[string]any{"argv": []any{"x", "{template}", "{file}"}, "mode": "file", "template": "r"}, "the r template is found through R_PROFILE_USER"},
+		"php no mark": {map[string]any{"argv": []any{"x", "{file}"}, "mode": "file", "template": "php"}, "exactly once"},
 		"no marker":   {map[string]any{"argv": []any{"x", "{code}"}, "template": "js"}, "x.argv must contain {template} exactly once"},
 		"two markers": {map[string]any{"argv": []any{"x", "{template}", "{template}", "{code}"}, "template": "ruby"}, "exactly once"},
 		"python":      {map[string]any{"argv": []any{"x", "{template}", "{code}"}, "template": "python"}, "must not contain {template}"},
@@ -157,15 +160,42 @@ func TestExecStandbySettingsAreReadAndBounded(t *testing.T) {
 		{"pool over", "standby_pool must be a safe integer between 0 and 16", map[string]any{"standby_pool": 17}},
 		{"idle under", "standby_idle_ms must be a safe integer between 1000 and 21600000", map[string]any{"standby_idle_ms": 999}},
 		{"max zero", "standby_max must be a safe integer between 1 and 256", map[string]any{"standby_max": 0}},
-		{"unknown shim", `standby must be "", "python", "js" or "ruby"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "php"}}}},
+		{"pipe in arg mode", `standby "pipe" needs mode "file"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "pipe"}}}},
+		{"unknown shim", `standby must be "", "python", "js", "ruby" or "pipe"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "php"}}}},
 		{"both shims", "give standby or standby_code, not both", map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby": "js", "standby_code": "y"}}}},
 		{"blank code", "standby_code must be a program of 1 to 65536 bytes", map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "standby_code": " "}}}},
-		{"file mode built-in", `standby needs mode "arg"`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{file}"}, "mode": "file", "standby": "python"}}}},
+		{"file mode built-in", `standby needs mode "arg"; a mode "file" runner can use "pipe" or standby_code`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{file}"}, "mode": "file", "standby": "python"}}}},
 		{"stdin mode", `a runner with mode "stdin" cannot have a standby shim`, map[string]any{"runners": map[string]any{"x": map[string]any{"argv": []any{"x"}, "mode": "stdin", "standby": "python"}}}},
 	} {
 		_, err := loadSetting(t, nativeTools(map[string]any{"exec": bad.exec}))
 		if err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("%s: error = %v, want %q", bad.name, err, bad.want)
 		}
+	}
+}
+
+func TestExecRunnersAddPHPLuaDenoAndR(t *testing.T) {
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := config.NativeExec
+	if got := strings.Join(exec.LangNames, " "); got != "python node bash sh ruby perl ts php lua deno r" {
+		t.Fatalf("runner order = %s", got)
+	}
+	for name, want := range map[string]struct{ argv, mode, ext, standby string }{
+		"perl": {"perl -MJadFn -e {code}", NativeExecModeArg, ".pl", ""},
+		"php":  {"php -d auto_prepend_file={template} {file}", NativeExecModeFile, ".php", NativeExecStandbyPipe},
+		"lua":  {"lua -e dofile[[{template}]] -e {code}", NativeExecModeArg, ".lua", ""},
+		"deno": {"deno run --allow-all --preload {template} {file}", NativeExecModeFile, ".ts", NativeExecStandbyPipe},
+		"r":    {"Rscript {file}", NativeExecModeFile, ".R", NativeExecStandbyPipe},
+	} {
+		lang := exec.Langs[name]
+		if got := strings.Join(lang.Argv, " "); got != want.argv || lang.Mode != want.mode || lang.Ext != want.ext || lang.Standby != want.standby {
+			t.Errorf("%s = %q mode %s ext %s standby %q", name, got, lang.Mode, lang.Ext, lang.Standby)
+		}
+	}
+	if exec.Langs["r"].Aliases[0] != "rscript" {
+		t.Errorf("r aliases = %v", exec.Langs["r"].Aliases)
 	}
 }

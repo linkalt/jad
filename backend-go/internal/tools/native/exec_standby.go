@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
@@ -15,9 +17,11 @@ import (
 
 // A standby is an interpreter exec started before the call that will use it. It waits in its
 // shim, which reads the call's code from fd 3 and answers on fd 4: R when it runs the code, F
-// when it cannot run it the way a fresh interpreter would. A call that takes a standby skips
-// the interpreter's start-up; each standby still runs one call and ends with it, so a program
-// sees no state of another call.
+// when it cannot run it the way a fresh interpreter would. A pipe standby has no shim: a mode
+// file runner starts with its usual argv while its code file is a named pipe, and the
+// interpreter reads the call's code from it. A call that takes a standby skips the
+// interpreter's start-up; each standby still runs one call and ends with it, so a program sees
+// no state of another call.
 const (
 	standbyCodeFD    = 3
 	standbyControlFD = 4
@@ -65,6 +69,8 @@ type standbySpawn struct {
 	environment []string
 	// files are written into the standby's directory before it starts (template, shim file).
 	files []standbyFile
+	// pipe is the code file of a pipe standby, made a named pipe before it starts.
+	pipe string
 }
 
 type standbyFile struct {
@@ -88,6 +94,7 @@ func standbyKey(spawn standbySpawn) string {
 	}
 	field(spawn.file)
 	field(spawn.cwd)
+	field(spawn.pipe)
 	for _, list := range [][]string{spawn.argv, spawn.environment} {
 		count(len(list))
 		for _, item := range list {
@@ -113,6 +120,8 @@ type standbyProcess struct {
 	workDir string
 	child   *startedBashChild
 	stdin   *os.File
+	// code is the write end of fd 3, or of the code file's named pipe (pipe standby); control
+	// is the read end of fd 4, nil for a pipe standby, which does not answer.
 	code    *os.File
 	control *os.File
 	timer   *time.Timer
@@ -141,7 +150,9 @@ func (p *standbyProcess) discard() {
 func (p *standbyProcess) closePipes() {
 	_ = p.stdin.Close()
 	_ = p.code.Close()
-	_ = p.control.Close()
+	if p.control != nil {
+		_ = p.control.Close()
+	}
 }
 
 // standbyPool holds the waiting interpreters of the whole backend, by launch key. A tool
@@ -260,6 +271,9 @@ func (pool *standbyPool) startIn(spawn func(workDir string) (standbySpawn, error
 	return process, nil
 }
 
+// writeStandbyFiles writes the files of a launch. A file is written beside its path and renamed
+// over it, so the named pipe of a pipe standby is replaced, never written into: an interpreter
+// that opens the path later (for a traceback's source line) reads the code from the file.
 func writeStandbyFiles(files []standbyFile) error {
 	for _, file := range files {
 		if file.dir {
@@ -268,7 +282,19 @@ func writeStandbyFiles(files []standbyFile) error {
 			}
 			continue
 		}
-		if err := os.WriteFile(file.path, file.data, 0o600); err != nil {
+		temporary, err := os.CreateTemp(filepath.Dir(file.path), "."+filepath.Base(file.path)+".*")
+		if err != nil {
+			return err
+		}
+		_, err = temporary.Write(file.data)
+		if closeErr := temporary.Close(); err == nil {
+			err = closeErr
+		}
+		if err == nil {
+			err = os.Rename(temporary.Name(), file.path)
+		}
+		if err != nil {
+			_ = os.Remove(temporary.Name())
 			return err
 		}
 	}
@@ -372,13 +398,25 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 	if err != nil {
 		return fail(err)
 	}
-	codeReader, codeWriter, err := pipe()
-	if err != nil {
-		return fail(err)
-	}
-	controlReader, controlWriter, err := pipe()
-	if err != nil {
-		return fail(err)
+	var codeReader, codeWriter, controlReader, controlWriter *os.File
+	if spawn.pipe != "" {
+		// The interpreter opens its code file by path. Held open for reading and writing, the
+		// named pipe never blocks that open, and its read waits for the call's code.
+		if err := syscall.Mkfifo(spawn.pipe, 0o600); err != nil {
+			return fail(err)
+		}
+		codeWriter, err = os.OpenFile(spawn.pipe, os.O_RDWR, 0)
+		if err != nil {
+			return fail(err)
+		}
+		opened = append(opened, codeWriter)
+	} else {
+		if codeReader, codeWriter, err = pipe(); err != nil {
+			return fail(err)
+		}
+		if controlReader, controlWriter, err = pipe(); err != nil {
+			return fail(err)
+		}
 	}
 	resolved, err := resolveBashExecutable(spawn.file, spawn.environment, spawn.cwd)
 	if err != nil {
@@ -390,13 +428,17 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 	command.Stdin = stdinReader
 	command.Stdout = stdoutWriter
 	command.Stderr = stderrWriter
-	// ExtraFiles[i] is fd 3+i in the child.
-	command.ExtraFiles = []*os.File{codeReader, controlWriter}
+	childEnds := []*os.File{stdoutWriter, stderrWriter, stdinReader}
+	if spawn.pipe == "" {
+		// ExtraFiles[i] is fd 3+i in the child.
+		command.ExtraFiles = []*os.File{codeReader, controlWriter}
+		childEnds = append(childEnds, codeReader, controlWriter)
+	}
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		return fail(err)
 	}
-	for _, childEnd := range []*os.File{stdoutWriter, stderrWriter, stdinReader, codeReader, controlWriter} {
+	for _, childEnd := range childEnds {
 		_ = childEnd.Close()
 	}
 	child := &startedBashChild{command: command, stdout: stdoutReader, stderr: stderrReader}
@@ -418,12 +460,19 @@ func runStandbyCommand(ctx context.Context, request bashChildRequest, process *s
 		_, _ = io.WriteString(process.code, code)
 		_ = process.code.Close()
 	}()
+	// A write the interpreter never reads (it opened the replaced file instead) ends with the call.
+	defer process.code.Close()
 	answer := make(chan bool, 1)
-	go func() {
-		var reply [1]byte
-		read, _ := process.control.Read(reply[:])
-		answer <- read == 1 && reply[0] == standbyAccept
-	}()
+	if process.control == nil {
+		// A pipe standby is the runner's own argv reading its own code file: nothing to decline.
+		answer <- true
+	} else {
+		go func() {
+			var reply [1]byte
+			read, _ := process.control.Read(reply[:])
+			answer <- read == 1 && reply[0] == standbyAccept
+		}()
+	}
 	var timeout <-chan time.Time
 	if request.timeout > 0 {
 		timer := time.NewTimer(request.timeout)
@@ -442,7 +491,9 @@ func runStandbyCommand(ctx context.Context, request bashChildRequest, process *s
 		signalProcessGroup(process.child.command, true)
 		accepted, expired = <-answer, true
 	}
-	_ = process.control.Close()
+	if process.control != nil {
+		_ = process.control.Close()
+	}
 	if !accepted {
 		process.stop()
 		return runBashCommand(ctx, request)

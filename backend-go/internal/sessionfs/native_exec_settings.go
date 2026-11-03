@@ -47,16 +47,27 @@ const (
 	NativeExecModeFile  = "file"
 	NativeExecModeStdin = "stdin"
 
-	// The built-in templates a runner may name; each installs the global fn before the code runs.
+	// The built-in templates a runner may name; each installs fn before the code runs. js,
+	// ruby, php, lua and deno are attached where argv has {template}; python and perl are a file in
+	// a folder put in front of PYTHONPATH or PERL5LIB (perl's argv loads it with -MJadFn); r is the
+	// file named by R_PROFILE_USER.
 	NativeExecTemplateJS     = "js"
 	NativeExecTemplatePython = "python"
 	NativeExecTemplateRuby   = "ruby"
+	NativeExecTemplatePerl   = "perl"
+	NativeExecTemplatePHP    = "php"
+	NativeExecTemplateLua    = "lua"
+	NativeExecTemplateR      = "r"
+	NativeExecTemplateDeno   = "deno"
 
 	// The built-in standby shims a runner may name. A shim is started before the call, reads
 	// the call's code from fd 3 and runs it the way the runner's argv would.
 	NativeExecStandbyPython = "python"
 	NativeExecStandbyJS     = "js"
 	NativeExecStandbyRuby   = "ruby"
+	// NativeExecStandbyPipe needs no shim: a mode file runner starts with its code file a named
+	// pipe at the path a fresh start would use, and the interpreter reads the code from it.
+	NativeExecStandbyPipe = "pipe"
 
 	nativeExecFilePlaceholder     = "{file}"
 	nativeExecCodePlaceholder     = "{code}"
@@ -72,6 +83,14 @@ var (
 	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
 	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode", "standby", "standby_code", "template"}
+
+	nativeExecTemplates = []string{NativeExecTemplateJS, NativeExecTemplatePython, NativeExecTemplateRuby, NativeExecTemplatePerl, NativeExecTemplatePHP, NativeExecTemplateLua, NativeExecTemplateR, NativeExecTemplateDeno}
+	// nativeExecTemplateOutsideArgv names how a template that is not in argv is found.
+	nativeExecTemplateOutsideArgv = map[string]string{
+		NativeExecTemplatePython: "PYTHONPATH",
+		NativeExecTemplatePerl:   "PERL5LIB (load it with -MJadFn)",
+		NativeExecTemplateR:      "R_PROFILE_USER",
+	}
 
 	nativeExecNamePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	nativeExecExtensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -140,20 +159,25 @@ type NativeExecSettings struct {
 	StandbyMax    int64
 }
 
-// defaultNativeExecLangs are the interpreters available without configuration. The code
-// is one argument; bash and sh get a fixed $0 so the call's args start at $1. python, node
-// and ruby start slowly enough to wait on standby; bash, sh, perl and bun start in a few
-// milliseconds, so they start per call.
+// defaultNativeExecLangs are the interpreters available without configuration. bash and sh
+// get a fixed $0 so the call's args start at $1. python, node, ruby, php, deno and r start
+// slowly enough to wait on standby; bash, sh, perl, bun and lua start in a few milliseconds, so
+// they start per call. php, deno and r run a code file (php needs its <?php tag), which lets a
+// standby read it from a named pipe with no shim.
 func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
-	names := []string{"python", "node", "bash", "sh", "ruby", "perl", "ts"}
+	names := []string{"python", "node", "bash", "sh", "ruby", "perl", "ts", "php", "lua", "deno", "r"}
 	return names, map[string]NativeExecLang{
 		"python": {Argv: []string{"python3", "-c", "{code}"}, Mode: NativeExecModeArg, Ext: ".py", Aliases: []string{"python3", "py"}, LibEnv: "PYTHONPATH", Template: NativeExecTemplatePython, Standby: NativeExecStandbyPython},
 		"node":   {Argv: []string{"node", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".js", Aliases: []string{"nodejs", "js", "javascript"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS, Standby: NativeExecStandbyJS},
 		"bash":   {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{"shell"}, LibEnv: "PATH"},
 		"sh":     {Argv: []string{"sh", "-c", "{code}", "exec"}, Mode: NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"},
 		"ruby":   {Argv: []string{"ruby", "-r", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".rb", Aliases: []string{"rb"}, LibEnv: "RUBYLIB", Template: NativeExecTemplateRuby, Standby: NativeExecStandbyRuby},
-		"perl":   {Argv: []string{"perl", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB"},
+		"perl":   {Argv: []string{"perl", "-MJadFn", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".pl", Aliases: []string{}, LibEnv: "PERL5LIB", Template: NativeExecTemplatePerl},
 		"ts":     {Argv: []string{"bun", "--no-install", "--preload", "{template}", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".ts", Aliases: []string{"typescript", "bun"}, LibEnv: "NODE_PATH", Template: NativeExecTemplateJS},
+		"php":    {Argv: []string{"php", "-d", "auto_prepend_file={template}", "{file}"}, Mode: NativeExecModeFile, Ext: ".php", Aliases: []string{}, Template: NativeExecTemplatePHP, Standby: NativeExecStandbyPipe},
+		"lua":    {Argv: []string{"lua", "-e", "dofile[[{template}]]", "-e", "{code}"}, Mode: NativeExecModeArg, Ext: ".lua", Aliases: []string{}, Template: NativeExecTemplateLua},
+		"deno":   {Argv: []string{"deno", "run", "--allow-all", "--preload", "{template}", "{file}"}, Mode: NativeExecModeFile, Ext: ".ts", Aliases: []string{}, Template: NativeExecTemplateDeno, Standby: NativeExecStandbyPipe},
+		"r":      {Argv: []string{"Rscript", "{file}"}, Mode: NativeExecModeFile, Ext: ".R", Aliases: []string{"rscript"}, Template: NativeExecTemplateR, Standby: NativeExecStandbyPipe},
 	}
 }
 
@@ -377,8 +401,8 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 		}
 	}
 	if value, present := nullableField(fields, "template"); present {
-		if json.Unmarshal(value, &lang.Template) != nil || (lang.Template != NativeExecTemplateJS && lang.Template != NativeExecTemplatePython && lang.Template != NativeExecTemplateRuby) {
-			return NativeExecLang{}, configError("%s.template must be \"js\", \"python\" or \"ruby\"", path)
+		if json.Unmarshal(value, &lang.Template) != nil || (lang.Template != "" && !containsString(nativeExecTemplates, lang.Template)) {
+			return NativeExecLang{}, configError("%s.template must be one of %s", path, strings.Join(nativeExecTemplates, ", "))
 		}
 	}
 	placeholders := 0
@@ -386,9 +410,9 @@ func normalizeNativeExecLang(raw json.RawMessage, path string) (NativeExecLang, 
 		placeholders += strings.Count(item, nativeExecTemplatePlaceholder)
 	}
 	switch {
-	case lang.Template == NativeExecTemplatePython && placeholders > 0:
-		return NativeExecLang{}, configError("%s.argv must not contain %s: a python template is found through PYTHONPATH", path, nativeExecTemplatePlaceholder)
-	case (lang.Template == NativeExecTemplateJS || lang.Template == NativeExecTemplateRuby) && placeholders != 1:
+	case lang.Template != "" && nativeExecTemplateOutsideArgv[lang.Template] != "" && placeholders > 0:
+		return NativeExecLang{}, configError("%s.argv must not contain %s: the %s template is found through %s", path, nativeExecTemplatePlaceholder, lang.Template, nativeExecTemplateOutsideArgv[lang.Template])
+	case lang.Template != "" && nativeExecTemplateOutsideArgv[lang.Template] == "" && placeholders != 1:
 		return NativeExecLang{}, configError("%s.argv must contain %s exactly once when template is \"%s\"", path, nativeExecTemplatePlaceholder, lang.Template)
 	case lang.Template == "" && placeholders > 0:
 		return NativeExecLang{}, configError("%s.argv contains %s but the runner has no template", path, nativeExecTemplatePlaceholder)
@@ -426,8 +450,8 @@ func nullableField(fields map[string]json.RawMessage, name string) (json.RawMess
 // configured one. A stdin runner has no standby, because its standard input is its code.
 func normalizeNativeExecStandby(fields map[string]json.RawMessage, lang *NativeExecLang, path string) error {
 	if value, present := nullableField(fields, "standby"); present {
-		if json.Unmarshal(value, &lang.Standby) != nil || (lang.Standby != "" && lang.Standby != NativeExecStandbyPython && lang.Standby != NativeExecStandbyJS && lang.Standby != NativeExecStandbyRuby) {
-			return configError("%s.standby must be \"\", \"python\", \"js\" or \"ruby\"", path)
+		if json.Unmarshal(value, &lang.Standby) != nil || (lang.Standby != "" && lang.Standby != NativeExecStandbyPython && lang.Standby != NativeExecStandbyJS && lang.Standby != NativeExecStandbyRuby && lang.Standby != NativeExecStandbyPipe) {
+			return configError("%s.standby must be \"\", \"python\", \"js\", \"ruby\" or \"pipe\"", path)
 		}
 	}
 	if value, present := nullableField(fields, "standby_code"); present {
@@ -440,10 +464,12 @@ func normalizeNativeExecStandby(fields map[string]json.RawMessage, lang *NativeE
 		return configError("%s: give standby or standby_code, not both", path)
 	case lang.Mode == NativeExecModeStdin && (lang.Standby != "" || lang.StandbyCode != ""):
 		return configError("%s: a runner with mode \"stdin\" cannot have a standby shim; use mode arg or file", path)
-	case lang.Mode == NativeExecModeFile && lang.Standby != "":
+	case lang.Standby == NativeExecStandbyPipe && lang.Mode != NativeExecModeFile:
+		return configError("%s.standby \"pipe\" needs mode \"file\": the interpreter reads its code file, a named pipe until the call", path)
+	case lang.Mode == NativeExecModeFile && lang.Standby != "" && lang.Standby != NativeExecStandbyPipe:
 		// A built-in shim runs the code the way {code} would (python -c, node -e, ruby -e);
 		// a file names its tracebacks after the file, which the shim cannot copy.
-		return configError("%s.standby needs mode \"arg\"; a mode \"file\" runner can use standby_code", path)
+		return configError("%s.standby needs mode \"arg\"; a mode \"file\" runner can use \"pipe\" or standby_code", path)
 	}
 	return nil
 }

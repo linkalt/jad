@@ -69,11 +69,15 @@ func openExecFunction(dir, realRoot, file string, maxBytes int64) (*os.File, str
 	return handle, ""
 }
 
-// execFunctionHeader reads the leading comment block of a source file (after a shebang):
-// its first line is the description; a later line starting with "input:" documents the input.
+// execFunctionHeader reads the leading comment block of a source file (after a shebang, or a
+// php file's <?php tag): its first line is the description; a later line starting with "input:"
+// documents the input.
 func execFunctionHeader(text string) (description, input string) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if len(lines) > 0 && strings.HasPrefix(lines[0], "#!") {
+		lines = lines[1:]
+	}
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "<?php" {
 		lines = lines[1:]
 	}
 	for _, line := range lines {
@@ -166,15 +170,21 @@ type execHelperFile struct{ runner, name string }
 
 // execListLegend explains the call column of the listing and the rule that makes fn.<name> callable.
 var execListLegend = []string{
-	"call as: fn.<name>(...) in ts/node/python/ruby; the file name itself in bash/sh (the folder is on PATH)",
-	"fn.<name>(...) runs the helper's entry; every other export stays reachable as fn.<name>.<member>(...)",
-	"entry: ts/node = default export, else the export named <name>, else the only function; python = the function named <name>, else the only public function; ruby = self.call, else self.<name>, else the only singleton method (needs arguments; fn.<name> alone is the constant)",
+	"call as shown: fn.<name>(...) in ts/node/deno/python/ruby/lua, fn->name(...) in perl, $fn->name(...) in php (global $fn; inside a function), fn$name(...) in r; the file name itself in bash/sh (the folder is on PATH)",
+	"the call runs the helper's entry; every other member stays reachable: fn.<name>.<member> (fn$name$member in r, $fn->name['member'] in php, fn::lib('name')->{member} in perl)",
+	"entry: ts/node/deno = default export, else the export named <name>, else the only function; python = the function named <name>, else the only public function; ruby = self.call, else self.<name>, else the only singleton method (needs arguments; fn.<name> alone is the constant); perl/php/lua = the helper itself if it is a function, else its call, else its <name>, else its only function; r = the function named <name>, else call, else the only function",
+	"a perl, php or lua helper file returns its helper (perl: its last value, a code ref or hash ref); php files start with <?php",
 	"",
 }
 
 var (
 	execJSIdentifier     = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 	execPythonIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// execRName is a syntactic R name that $ takes without backquotes.
+	execRName = regexp.MustCompile(`^([A-Za-z]|\.[A-Za-z_.])[A-Za-z0-9_.]*$|^\.$`)
+	// execLuaKeywords cannot follow fn. in lua.
+	execLuaKeywords = map[string]bool{"and": true, "break": true, "do": true, "else": true, "elseif": true, "end": true, "false": true, "for": true, "function": true,
+		"goto": true, "if": true, "in": true, "local": true, "nil": true, "not": true, "or": true, "repeat": true, "return": true, "then": true, "true": true, "until": true, "while": true}
 )
 
 // execHelperCall is what to type to call the helper stored in file: fn.<name>(...) for a runner with a
@@ -189,7 +199,24 @@ func execHelperCall(file string, lang sessionfs.NativeExecLang) string {
 		name = strings.TrimSuffix(file, lang.Ext)
 	}
 	var call string
+	identifier := execPythonIdentifier.MatchString(name)
 	switch {
+	case lang.Template == sessionfs.NativeExecTemplatePerl && identifier:
+		call = "fn->" + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplatePerl:
+		call = `fn::call("` + name + `", ...)`
+	case lang.Template == sessionfs.NativeExecTemplatePHP && identifier:
+		call = "$fn->" + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplatePHP:
+		call = "$fn->{'" + name + "'}(...)"
+	case lang.Template == sessionfs.NativeExecTemplateLua && identifier && !execLuaKeywords[name]:
+		call = "fn." + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplateLua:
+		call = `fn["` + name + `"](...)`
+	case lang.Template == sessionfs.NativeExecTemplateR && execRName.MatchString(name):
+		call = "fn$" + name + "(...)"
+	case lang.Template == sessionfs.NativeExecTemplateR:
+		call = "fn$`" + name + "`(...)"
 	case lang.Template == sessionfs.NativeExecTemplatePython && execPythonIdentifier.MatchString(name):
 		call = "fn." + name + "(...)"
 	case lang.Template == sessionfs.NativeExecTemplatePython:
