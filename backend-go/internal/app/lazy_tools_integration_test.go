@@ -645,8 +645,9 @@ func TestLazyStarLoadsOnlyTheLazyToolsTheProfileListed(t *testing.T) {
 	}
 }
 
-// Overlapping patterns load a tool once: the file lists it once, and its definition appears once,
-// under the first section, while the later section says it is already listed above.
+// Overlapping patterns load a tool once: the file lists it once, and its line appears once, under
+// the first section, while the later section says it is already listed above. The result names the
+// tool; its definition is not repeated (the next request's tools array carries it).
 func TestLazyOverlappingPatternsShowAToolOnce(t *testing.T) {
 	steps := []subagentStep{
 		{"load_tool", `{"names":["mcp:fixture:*","mcp:fixture:lookup"]}`},
@@ -656,7 +657,7 @@ func TestLazyOverlappingPatternsShowAToolOnce(t *testing.T) {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
 	history := lastRequestText(t, parentRequests(f))
-	if strings.Count(history, "inputSchema:") != 1 || !strings.Contains(history, "already listed above") {
+	if strings.Count(history, mcpToolNameFor("fixture", "lookup")+" — ") != 1 || !strings.Contains(history, "already listed above") || strings.Contains(history, "inputSchema:") {
 		t.Errorf("the overlap was not shown once:\n%s", history)
 	}
 	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 {

@@ -170,8 +170,9 @@ func newTestLazySetWithTool(t *testing.T) *tools.LazySet {
 	return set
 }
 
-// A load says the loaded tools are listed from the next request, and names them with their
-// real definitions.
+// A load says the loaded tools are listed, with their full definitions, from the next request,
+// and names them with their summaries instead of repeating the definition the tools array carries.
+// A second load of the same tool says it was already loaded.
 func TestLoadToolResultSaysAvailableFromTheNextRequest(t *testing.T) {
 	set := newTestLazySetWithTool(t)
 	tool, err := NewLoadToolTool(set, 16)
@@ -182,11 +183,15 @@ func TestLoadToolResultSaysAvailableFromTheNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output, "Loaded. Available from the next request.") {
-		t.Fatalf("output = %q, want it to start with the next-request sentence", output)
+	if output != "Loaded. Available, with the full definition, from the next request.\n\nread — read a file." {
+		t.Fatalf("output = %q, want the next-request sentence and the tool's summary line", output)
 	}
-	if !strings.Contains(output, "read a file.") || !strings.Contains(output, "inputSchema:") {
-		t.Errorf("output = %q, want the real definition of read", output)
+	again, err := tool.Execute(context.Background(), map[string]any{"names": []any{"read"}}, tools.ExecutionContext{CallID: "call-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != "read — read a file. (already loaded)" {
+		t.Errorf("second load = %q, want the summary marked already loaded and no sentence", again)
 	}
 }
 

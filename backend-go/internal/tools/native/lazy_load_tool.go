@@ -23,7 +23,7 @@ var loadToolInputSchema = json.RawMessage(`{
       "type":"array",
       "minItems":1,
       "uniqueItems":true,
-      "description":"Tool names or tools.lazy-style patterns of the lazy tools to show and load, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Omit names to list the lazy tools. Each pattern is limited to lazy tools; the total of matched tools is limited by the profile's tools.lazy_load_max.",
+      "description":"Tool names or tools.lazy-style patterns of the lazy tools to load, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Omit names to list the lazy tools. Each pattern is limited to lazy tools; the total of matched tools is limited by the profile's tools.lazy_load_max.",
       "items":{"type":"string","minLength":1}
     }
   },
@@ -51,10 +51,11 @@ func ChildLoadTool(config sessionfs.SessionConfig, lazy *tools.LazySet) (tools.T
 }
 
 // NewLoadToolTool builds load_tool for a session with lazy tools. With no names it lists the
-// lazy tools as "name — summary" lines. With names it shows the full definition of each lazy
-// tool a name selects (a tool name, mcp:<server>:<tool>, mcp:<server>:* or *) and records them as
-// loaded, so the next call to one validates against the real schema. Loading enables nothing:
-// the tool list the model sees does not change.
+// lazy tools as "name — summary" lines. With names it records each lazy tool a name selects (a
+// tool name, mcp:<server>:<tool>, mcp:<server>:* or *) as loaded and names it with its summary.
+// A loaded tool is listed (WithLazyGate's Listed) in the tools array of the next request, which
+// carries its full definition, so the result does not repeat it. Loading enables nothing the
+// profile does not allow.
 func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(loadToolInputSchema)
 	if err != nil {
@@ -65,7 +66,7 @@ func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 			ID:          loadToolID,
 			Source:      "native",
 			Name:        sessionfs.LoadToolName,
-			Description: "List the lazy tools (name and one-line summary), or show the full definitions of the named lazy tools and load them, in one call. Loading a tool does not enable it; a call to a lazy tool before it is loaded is refused.",
+			Description: "List the lazy tools (name and one-line summary), or load the named lazy tools in one call. A loaded tool is in your tool list, with its full definition, from your next request; a call to a lazy tool before it is loaded is refused. Loading a tool does not enable it.",
 			InputSchema: append(json.RawMessage(nil), loadToolInputSchema...),
 		},
 		Validator:        validator,
@@ -119,13 +120,20 @@ func matchCount(matches [][]tools.LazyEntry) int {
 	return len(seen)
 }
 
-// loadLazyTools shows the lazy tools each pattern selects, one section per pattern in the order
-// sent, and loads them in one write. A tool is shown in full under the first section that selects
-// it; a later section that selects it again says so. A pattern that selects nothing, or a name that
+// loadLazyTools loads the lazy tools each pattern selects in one write and names them, one section
+// per pattern in the order sent: "name — summary", marked when it was loaded before this call. The
+// full definition is not repeated: the next request lists the tool with it. A tool is named under
+// the first section that selects it; a later section that selects it again says so. A pattern that selects nothing, or a name that
 // is not a lazy tool, gets its own line, and the others still load. A newly loaded tool is listed
 // from the next request, since a request's tools array is built before its calls run. The caller
 // has checked the count against the limit and the names for duplicates.
 func loadLazyTools(set *tools.LazySet, patterns []string, matches [][]tools.LazyEntry) string {
+	before := map[string]bool{}
+	for _, entries := range matches {
+		for _, entry := range entries {
+			before[entry.Tool.Definition.ID] = set.Loaded(entry.Tool.Definition.ID)
+		}
+	}
 	added, err := set.LoadMatches(matches)
 	if err != nil {
 		return fmt.Sprintf("Could not record the loaded lazy tools: %v", err)
@@ -146,13 +154,17 @@ func loadLazyTools(set *tools.LazySet, patterns []string, matches [][]tools.Lazy
 				continue
 			}
 			shown[definition.ID] = true
-			lines = append(lines, fmt.Sprintf("%s\n\n%s\n\ninputSchema: %s", definition.Name, definition.Description, definition.InputSchema))
+			line := definition.Name + " — " + entry.Summary
+			if before[definition.ID] {
+				line += " (already loaded)"
+			}
+			lines = append(lines, line)
 		}
-		sections = append(sections, strings.Join(lines, "\n\n"))
+		sections = append(sections, strings.Join(lines, "\n"))
 	}
-	text := strings.Join(sections, "\n\n---\n\n")
+	text := strings.Join(sections, "\n")
 	if added > 0 {
-		return "Loaded. Available from the next request.\n\n" + text
+		return "Loaded. Available, with the full definition, from the next request.\n\n" + text
 	}
 	return text
 }
