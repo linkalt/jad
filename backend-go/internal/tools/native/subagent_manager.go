@@ -56,6 +56,9 @@ type SubagentManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	active sync.WaitGroup
+	// remoteEnds counts the background goroutines of remote runs that have not returned yet. A
+	// test waits on it so no remote goroutine outlives the test.
+	remoteEnds sync.WaitGroup
 
 	mu       sync.Mutex
 	closed   bool

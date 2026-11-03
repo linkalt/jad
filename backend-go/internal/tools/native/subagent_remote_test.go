@@ -71,6 +71,9 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered first, so it runs last: every remote goroutine this fixture starts has returned
+	// before the test does. No bound: a run that never ends is reported by the hang, not a timeout.
+	t.Cleanup(manager.remoteEnds.Wait)
 	return &remoteSubagentFixture{peer: p, hub: hub, host: host, tool: tool, async: async, local: local, manager: manager}
 }
 
@@ -573,36 +576,62 @@ func newSyncRemoteTool(t *testing.T, f *remoteSubagentFixture) tools.Tool {
 	return tool
 }
 
+// seam holds one remote goroutine at a seam var. reached closes when the goroutine enters the
+// seam; exited closes once it has returned from the seam, so it no longer reads the var.
+type seam struct {
+	reached, exited, release chan struct{}
+	reachedOnce, exitedOnce  sync.Once
+	releaseOnce              sync.Once
+}
+
+func newSeam() *seam {
+	return &seam{reached: make(chan struct{}), exited: make(chan struct{}), release: make(chan struct{})}
+}
+
+// hook is the function set on the seam var: it holds the goroutine until letGo.
+func (s *seam) hook() {
+	s.reachedOnce.Do(func() { close(s.reached) })
+	<-s.release
+	s.exitedOnce.Do(func() { close(s.exited) })
+}
+
+func (s *seam) letGo() { s.releaseOnce.Do(func() { close(s.release) }) }
+
+// remoteSeamWait waits for ch within remoteSeamBound and reports whether it closed in time.
+func remoteSeamWait(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(remoteSeamBound):
+		return false
+	}
+}
+
+// releaseSeamVars is the cleanup of a test that set seam vars. It lets every goroutine it held go,
+// waits for the manager's remote goroutines to return (no bound: a goroutine that never returns
+// hangs the test, which is reported), and only then clears the vars. A goroutine returns after it
+// has read its seam, so the clear cannot race a read.
+func releaseSeamVars(manager *SubagentManager, seams ...*seam) {
+	for _, s := range seams {
+		s.letGo()
+	}
+	manager.remoteEnds.Wait()
+	beforeRemoteBackgroundRelease = nil
+	beforeRemoteAsyncComplete = nil
+}
+
 // The sync reply must come after the early release: the background release is held at its seam,
 // so the place can only have been given back by the reply path, and the count is read at the reply.
 func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
-	held := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	letGo := func() { once.Do(func() { close(release) }) }
-	beforeRemoteBackgroundRelease = func() {
-		close(held)
-		<-release
-	}
-	t.Cleanup(func() {
-		letGo()
-		// The seam is cleared only once the background goroutine has passed its read of it. If the
-		// goroutine never reaches the seam, the seam stays set: it is then never read.
-		select {
-		case <-held:
-			beforeRemoteBackgroundRelease = nil
-		case <-time.After(remoteSeamBound):
-			t.Errorf("the background release never reached its seam; the seam is left set")
-		}
-	})
+	bg := newSeam()
+	beforeRemoteBackgroundRelease = bg.hook
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
+	t.Cleanup(func() { releaseSeamVars(f.manager, bg) })
 	f.tool = newSyncRemoteTool(t, f)
 	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", SessionKey: remoteCaller.SessionKey}
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	f.start(t, remoteAgent, 0, nested)
-	select {
-	case <-held:
-	case <-time.After(remoteSeamBound):
+	if !remoteSeamWait(bg.reached) {
 		t.Fatal("the background release did not reach its seam")
 	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
@@ -614,48 +643,24 @@ func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
 // held, so only the completion can free the place, and the completion is held at its seam before
 // Complete. The count is read while the handle is pending.
 func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T) {
-	held := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	letGo := func() { once.Do(func() { close(release) }) }
-	backgroundHeld := make(chan struct{})
-	var backgroundOnce sync.Once
-	beforeRemoteAsyncComplete = func() {
-		close(held)
-		<-release
-	}
-	beforeRemoteBackgroundRelease = func() {
-		backgroundOnce.Do(func() { close(backgroundHeld) })
-		<-release
-	}
-	t.Cleanup(func() {
-		letGo()
-		// The seams are cleared only once the background goroutine has passed its read of
-		// beforeRemoteBackgroundRelease. If it never reaches the seam, the seam stays set: it is
-		// then never read, and the test has already failed.
-		select {
-		case <-backgroundHeld:
-			beforeRemoteAsyncComplete = nil
-			beforeRemoteBackgroundRelease = nil
-		case <-time.After(remoteSeamBound):
-			t.Errorf("the background release never reached its seam; the seams are left set")
-		}
-	})
+	bg := newSeam()
+	done := newSeam()
+	beforeRemoteBackgroundRelease = bg.hook
+	beforeRemoteAsyncComplete = done.hook
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
+	t.Cleanup(func() { releaseSeamVars(f.manager, bg, done) })
 	nested := remoteCaller
 	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
 	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, nested))
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "found it"}) }()
-	defer letGo()
-	select {
-	case <-held:
-	case <-time.After(remoteSeamBound):
+	if !remoteSeamWait(done.reached) {
 		t.Fatal("the async completion did not reach its seam")
 	}
 	if got := f.manager.sessionRuns(remoteCaller.SessionKey); got != 0 {
 		t.Fatalf("the handle is pending while the session still counts %d remote runs, want 0", got)
 	}
-	letGo()
+	bg.letGo()
+	done.letGo()
 	if waited := f.asyncCall(t, map[string]any{"action": "wait", "ids": []any{id}, "wait_ms": json.Number("10000")}); !strings.Contains(waited, "found it") {
 		t.Fatalf("wait:\n%s", waited)
 	}

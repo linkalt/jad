@@ -162,10 +162,12 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		// The run's end gives the places back on every path: completion, failure, stop, timeout
 		// and cancel all end in run.Done.
 		handedOver = true
+		s.manager.remoteEnds.Add(1)
 		go func() {
+			defer s.manager.remoteEnds.Done()
 			<-run.Done()
-			if beforeRemoteBackgroundRelease != nil {
-				beforeRemoteBackgroundRelease()
+			if f := beforeRemoteBackgroundRelease; f != nil {
+				f()
 			}
 			s.manager.releaseRemote(reservation)
 		}()
@@ -194,8 +196,8 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 		if reservation != nil {
 			s.manager.releaseRemote(reservation)
 		}
-		if beforeRemoteAsyncComplete != nil {
-			beforeRemoteAsyncComplete()
+		if f := beforeRemoteAsyncComplete; f != nil {
+			f()
 		}
 		outcome := run.Outcome()
 		s.async.dropProfileMessageRun(id)
