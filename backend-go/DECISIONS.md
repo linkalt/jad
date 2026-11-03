@@ -1339,3 +1339,19 @@ exit 0. One invocation runs N=100, 500 and 1000 in turn. Each N reports its grou
 The six groups http_driver, remote_message_watcher, remote_subagent_start, remote_subagent_end,
 attach_waiter and pump are not_measured in this test. The 1,010 goal is still open and NOT MET.
 This entry records a reproduced baseline, not a reduction.
+
+## Remote cap-slot tests: drain bound 40s (test-only, Go only)
+
+The cleanup of the remote tests waits for the manager's remote goroutines (`remoteEnds`) through
+`waitForRemoteEnds`, bounded by `remoteDrainBound` in `internal/tools/native/subagent_remote_test.go`.
+On expiry the test fails with "a remote goroutine did not return within 40s; a Done is missing or a
+run never ended". The bound is a test constant, not a product setting; `RemoteTimeoutMs` is unchanged.
+
+- **Measured drain under `-race`:** `-count=3` over `RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync`
+  (90 waits). Worst case 20.0015s, in `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits`, which
+  waits for its run to end at `RemoteTimeoutMs` (20s). Next longest was 4.6ms.
+- **Bound:** 40s, twice the measured worst case. It was 30s before, which left only 10s of margin.
+- **Cost:** a passing test whose run stays open takes up to 20s. A stuck goroutine costs one bound (40s).
+- **Failing runs:** after a failed wait the fixture cleanup does not wait again (`!t.Failed()`), so a
+  stuck goroutine costs one bound, not two. A late goroutine in that failing run can still read a later
+  test's seam. This can only change the result of a run that is already red.

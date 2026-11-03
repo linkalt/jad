@@ -29,9 +29,9 @@ const remoteAgent = "remote:peer/main/review/reviewer/explore"
 const remoteSeamBound = 10 * time.Second
 
 // remoteDrainBound bounds the cleanup wait for the manager's remote goroutines. The longest drain
-// measured across the remote tests is 20s (a run that stays open ends at RemoteTimeoutMs), so the
-// bound leaves 10s of margin over it.
-const remoteDrainBound = 30 * time.Second
+// measured under -race is 20.0s (a run that stays open ends at RemoteTimeoutMs), and the bound is
+// twice that.
+const remoteDrainBound = 40 * time.Second
 
 type remoteSubagentFixture struct {
 	peer    *peer
@@ -78,7 +78,8 @@ func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs
 	}
 	// Registered first, so it runs last: every remote goroutine this fixture starts has returned
 	// before the test does. A test that already failed on the wait (releaseSeamVars) is not waited on
-	// again, so a stuck goroutine costs one bound, not two.
+	// again, so a stuck goroutine costs one bound, not two. Trade-off: in that failing run a late
+	// goroutine can still read the next test's seam; it only changes the result of an already red run.
 	t.Cleanup(func() {
 		if !t.Failed() {
 			waitForRemoteEnds(t, manager)
@@ -622,10 +623,10 @@ func remoteSeamWait(ch chan struct{}) bool {
 // fails with a named message.
 func waitForRemoteEnds(t *testing.T, manager *SubagentManager) {
 	t.Helper()
-	ended := make(chan struct{})
+	ended := make(chan struct{}, 1)
 	go func() {
 		manager.remoteEnds.Wait()
-		close(ended)
+		ended <- struct{}{}
 	}()
 	select {
 	case <-ended:
