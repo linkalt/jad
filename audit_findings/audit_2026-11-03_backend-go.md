@@ -73,10 +73,12 @@ Each commit message lists the impact trace (callers, readers, lock order, persis
 | R1 | `a5d7340` | fixed: large-history request build 34.5-38.1 → 21.8-24.0 ms, byte-identical |
 | R2 | `9a2d9ad` | fixed: round decode 1.8 → 0.95 ms (tracing off) |
 | R3 | `e7dcb3a` | partly: double validation and double copies removed (about 8%, 108 → 101 allocs). The full key walk is kept for exact key semantics |
-| R4 | none | **open**: needs a design decision (idle eviction of `Resolver` caches with a config key and in-use tracking, or a bounded duplicate-commit check instead of the full `lineIndex`) |
-| B6 | none | **new, open** (found while cross-compiling B1): see below |
+| R4 | `0b6b673`, `0460236` | fixed: the per-line duplicate index is gone (65.7 → 0 B kept per transcript line; first commit after an open on 50 MB 44.6 → 0.84 ms); idle transcript stores leave the cache after `server.session_store_idle_ms` (default 10 min), with leases so a store in use is never dropped (25.4 → 6.6 KB held per run session). MCP, process, async, sub-agent, task, memory and fetch managers are still kept (about 5 KB per session, they own connections or running work; see DECISIONS) |
+| B6 | none | **by design, not fixed**: the backend supports Linux only (owner decision, 2026-11-03), so a darwin/BSD build failure is expected |
 
-### B6 (medium) `internal/remote` does not compile on macOS or BSD `[ran]`
+### B6 (none, by design) `internal/remote` does not compile on macOS or BSD `[ran]`
+
+- **Status:** not a defect. The backend supports Linux only (owner decision, 2026-11-03); no fix is planned. The notes below stay as a record in case another system is ever supported.
 
 - **Where:** `internal/remote/socket_unix.go` is `//go:build unix` but calls `unix.GetsockoptUcred` / `unix.SO_PEERCRED`, which exist only on Linux.
 - **Evidence:** `GOOS=darwin go vet ./internal/tools/native` and `GOOS=freebsd …` both fail with `undefined: unix.GetsockoptUcred` / `undefined: unix.SO_PEERCRED`. `tools/native` imports `remote`, so the backend does not build for those systems.
