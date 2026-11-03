@@ -31,11 +31,19 @@ func responseTokens(event json.RawMessage) int64 {
 			Usage map[string]json.RawMessage `json:"usage"`
 		} `json:"response"`
 	}
-	if json.Unmarshal(event, &envelope) != nil || envelope.Response.Usage == nil {
+	if json.Unmarshal(event, &envelope) != nil {
+		return 0
+	}
+	return usageTokens(envelope.Response.Usage)
+}
+
+// usageTokens is responseTokens for an already decoded usage object.
+func usageTokens(usage map[string]json.RawMessage) int64 {
+	if usage == nil {
 		return 0
 	}
 	count := func(name string) (int64, bool) {
-		raw, exists := envelope.Response.Usage[name]
+		raw, exists := usage[name]
 		if !exists {
 			return 0, false
 		}

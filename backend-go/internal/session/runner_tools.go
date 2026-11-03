@@ -78,8 +78,31 @@ func responseFunctionCalls(event json.RawMessage) ([]json.RawMessage, error) {
 	if err := json.Unmarshal(event, &envelope); err != nil {
 		return nil, fmt.Errorf("decode committed response for tool calls: %w", err)
 	}
+	return outputFunctionCalls(envelope.Response.Output), nil
+}
+
+// responseTokensAndCalls is responseTokens and responseFunctionCalls with one decode of the
+// committed event instead of two. If the shared decode fails (one of the two fields has an
+// unexpected shape), each is decoded on its own as before, so a malformed field affects only
+// the answer it always affected.
+func responseTokensAndCalls(event json.RawMessage) (int64, []json.RawMessage, error) {
+	var envelope struct {
+		Response struct {
+			Output []json.RawMessage          `json:"output"`
+			Usage  map[string]json.RawMessage `json:"usage"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(event, &envelope) != nil {
+		calls, err := responseFunctionCalls(event)
+		return responseTokens(event), calls, err
+	}
+	return usageTokens(envelope.Response.Usage), outputFunctionCalls(envelope.Response.Output), nil
+}
+
+// outputFunctionCalls copies the function_call items of a response output, in order.
+func outputFunctionCalls(output []json.RawMessage) []json.RawMessage {
 	calls := make([]json.RawMessage, 0)
-	for _, item := range envelope.Response.Output {
+	for _, item := range output {
 		var header struct {
 			Type string `json:"type"`
 		}
@@ -90,7 +113,7 @@ func responseFunctionCalls(event json.RawMessage) ([]json.RawMessage, error) {
 			calls = append(calls, cloneRaw(item))
 		}
 	}
-	return calls, nil
+	return calls
 }
 
 func functionCallID(item json.RawMessage) string {

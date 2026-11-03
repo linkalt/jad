@@ -516,10 +516,12 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		}
 		result.Event = responseResult.Event
 		result.Commit = responseResult.Commit
-		trace.Mark("provider-response-complete", responseTraceDetails(result.Event))
-		usedTokens += responseTokens(result.Event)
-
-		calls, err := responseFunctionCalls(result.Event)
+		if trace.Enabled() {
+			// The details decode the whole event; a disabled trace would throw them away.
+			trace.Mark("provider-response-complete", responseTraceDetails(result.Event))
+		}
+		tokens, calls, err := responseTokensAndCalls(result.Event)
+		usedTokens += tokens
 		if err != nil {
 			return result, err
 		}
