@@ -1285,12 +1285,15 @@
                   "minItems": 1,
                   "maxItems": 32,
                   "default": ["bun", "run", "{file}"],
-                  "description": "The interpreter and its fixed flags, run without a shell. One item contains {file}, replaced by the path of the script file Go writes.",
+                  "description": "The interpreter and its fixed flags, run without a shell. One item contains {file}, replaced by the path of the entry file main.ts: it loads the prelude, waits for its fd 3 to end, then imports wrapper.ts with the call's code. The interpreter must read /dev/fd/3 through node:fs (bun, node and deno do).",
                   "items": {
                     "type": "string",
                     "minLength": 1
                   }
-                }
+                },
+                "standby_pool": {"type": "integer", "minimum": 0, "maximum": 16, "default": 1, "description": "Interpreters that wait for a call with the prelude already loaded, per working directory, environment and nested tool set. A call takes one, writes its code and input, and ends the wait on fd 3; a replacement starts at once, and each run still has a process of its own. A fresh start runs the same files with fd 3 already ended, so both give the same result. 0 turns standby off."},
+                "standby_idle_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 300000, "description": "How long a waiting interpreter stays unused before it is stopped."},
+                "standby_max": {"type": "integer", "minimum": 1, "maximum": 256, "default": 8, "description": "Most waiting interpreters in the whole backend (exec's and tool_smith's together). Past it a call starts its interpreter itself."}
               },
               "additionalProperties": false
             },

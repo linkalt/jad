@@ -172,6 +172,8 @@ type shellChildRun struct {
 	// file and argv; file and argv still start the program when the standby declines it.
 	standby     *standbyProcess
 	standbyCode string
+	// extraFiles are a fresh child's fd 3 and up (tool_smith's ended fd 3).
+	extraFiles []*os.File
 }
 
 type shellResultFile struct {
@@ -276,6 +278,7 @@ func runShellChildDetailed(
 		collector:                collector,
 		spill:                    spillWriters,
 		stdin:                    run.stdin,
+		extraFiles:               run.extraFiles,
 	}
 	var child bashChildResult
 	if run.standby != nil {

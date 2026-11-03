@@ -31,7 +31,7 @@ var (
 	nativeToolSmithOwnKeys = []string{
 		"functions_dir", "code_max_bytes", "result_max_bytes", "nested_result_max_bytes",
 		"nested_request_max_bytes", "max_nested_calls", "max_parallel_calls", "list_max_results", "list_max_files", "list_header_bytes", "function_max_bytes", "tools",
-		"interpreter",
+		"interpreter", "standby_idle_ms", "standby_max", "standby_pool",
 	}
 	nativeToolSmithKeys = append(nativeBashStyleKeysWithout("paths"), nativeToolSmithOwnKeys...)
 
@@ -82,6 +82,12 @@ type NativeToolSmithSettings struct {
 	Tools []string
 	// Interpreter is the argv that launches the script file; {file} stands for its path.
 	Interpreter []string
+	// StandbyPool, StandbyIdleMs and StandbyMax mean what they mean for exec: interpreters that
+	// start before the call with the prelude loaded, how long one waits unused, and the most
+	// that wait in the whole backend.
+	StandbyPool   int64
+	StandbyIdleMs int64
+	StandbyMax    int64
 }
 
 func normalizeNativeToolSmithSettings(
@@ -164,6 +170,15 @@ func normalizeNativeToolSmithSettings(
 		return nil, err
 	}
 	if settings.Interpreter, err = normalizeNativeToolSmithInterpreter(fields, settingPath+": "+section+".interpreter"); err != nil {
+		return nil, err
+	}
+	if settings.StandbyPool, err = configuredInteger(fields, "standby_pool", defaultNativeExecStandbyPool, 0, maxNativeExecStandbyPool, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.StandbyIdleMs, err = configuredInteger(fields, "standby_idle_ms", defaultNativeExecStandbyIdleMs, minNativeExecStandbyIdleMs, maxNativeExecStandbyIdleMs, settingPath, section); err != nil {
+		return nil, err
+	}
+	if settings.StandbyMax, err = configuredInteger(fields, "standby_max", defaultNativeExecStandbyMax, 1, maxNativeExecStandbyMax, settingPath, section); err != nil {
 		return nil, err
 	}
 	return settings, nil

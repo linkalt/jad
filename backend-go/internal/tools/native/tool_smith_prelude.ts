@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 
-export const input = JSON.parse(readFileSync(process.env.TOOL_SMITH_INPUT, "utf8"));
+// The prelude loads before the call exists (main.ts, standby), so the input and the function
+// manifest are read when the run starts, not when this module loads.
 
 let socket;
 let buffered = "";
@@ -89,16 +90,24 @@ export const tools = new Proxy(
   },
 );
 
-const manifest = JSON.parse(readFileSync(process.env.TOOL_SMITH_FUNCTIONS, "utf8"));
+let loadedManifest;
+
+function manifest() {
+  if (loadedManifest === undefined) {
+    loadedManifest = JSON.parse(readFileSync(process.env.TOOL_SMITH_FUNCTIONS, "utf8"));
+  }
+  return loadedManifest;
+}
 
 function unknownFunction(name) {
-  if (manifest.library_error) {
-    return "no saved function " + name + "; the function library is unavailable: " + manifest.library_error;
+  const { library_error, available, more, scan_cut } = manifest();
+  if (library_error) {
+    return "no saved function " + name + "; the function library is unavailable: " + library_error;
   }
   return (
-    "no saved function " + name + "; available: " + (manifest.available.join(", ") || "(none)") +
-    (manifest.more ? ", and " + manifest.more + " more" : "") +
-    (manifest.scan_cut ? " (only the first files were scanned; raise list_max_files)" : "")
+    "no saved function " + name + "; available: " + (available.join(", ") || "(none)") +
+    (more ? ", and " + more + " more" : "") +
+    (scan_cut ? " (only the first files were scanned; raise list_max_files)" : "")
   );
 }
 
@@ -108,10 +117,11 @@ export const fn = new Proxy(
     get(_target, name) {
       if (typeof name !== "string" || name === "then" || name === "toJSON") return undefined;
       return async (arg) => {
-        if (Object.hasOwn(manifest.malformed, name)) {
-          throw new Error("function " + name + " is malformed: " + manifest.malformed[name]);
+        const { malformed, callable } = manifest();
+        if (Object.hasOwn(malformed, name)) {
+          throw new Error("function " + name + " is malformed: " + malformed[name]);
         }
-        if (!manifest.callable.includes(name)) throw new Error(unknownFunction(name));
+        if (!callable.includes(name)) throw new Error(unknownFunction(name));
         const mod = await import("./fn/" + name + ".ts");
         if (typeof mod[name] !== "function") {
           throw new Error("function " + name + " is malformed: export async function " + name + " is missing");
@@ -127,6 +137,7 @@ globalThis.fn = fn;
 
 export async function deliver(body) {
   try {
+    const input = JSON.parse(readFileSync(process.env.TOOL_SMITH_INPUT, "utf8"));
     const value = await body(input);
     if (value === undefined) return;
     const text = typeof value === "string" ? value : JSON.stringify(value);

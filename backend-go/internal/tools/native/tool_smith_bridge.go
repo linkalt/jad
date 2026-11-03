@@ -192,14 +192,29 @@ type toolSmithBridge struct {
 }
 
 // startToolSmithBridge listens on a socket inside dir (a private directory the caller
-// removes) and serves nested calls of the given tools until Close.
+// removes) and serves nested calls of the given tools until Close, with a new token.
 func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.NativeToolSmithSettings, nested []tools.Tool, execution tools.ExecutionContext) (*toolSmithBridge, error) {
-	catalog, err := tools.NewCatalog(nested)
+	token, err := newToolSmithToken()
 	if err != nil {
 		return nil, err
 	}
+	return startToolSmithBridgeWithToken(ctx, dir, settings, nested, execution, token)
+}
+
+// newToolSmithToken is the secret a script sends with every bridge request.
+func newToolSmithToken() (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(random[:]), nil
+}
+
+// startToolSmithBridgeWithToken is startToolSmithBridge with the token the script already has:
+// an interpreter started before the call (standby) got it in its environment then.
+func startToolSmithBridgeWithToken(ctx context.Context, dir string, settings sessionfs.NativeToolSmithSettings, nested []tools.Tool, execution tools.ExecutionContext, token string) (*toolSmithBridge, error) {
+	catalog, err := tools.NewCatalog(nested)
+	if err != nil {
 		return nil, err
 	}
 	socketPath := filepath.Join(dir, toolSmithSocketName)
@@ -232,7 +247,7 @@ func startToolSmithBridge(ctx context.Context, dir string, settings sessionfs.Na
 		baseCallID: baseCallID,
 		listener:   listener,
 		socketPath: socketPath,
-		token:      hex.EncodeToString(random[:]),
+		token:      token,
 		ctx:        bridgeCtx,
 		cancel:     cancel,
 		parallel:   make(chan struct{}, max(settings.MaxParallelCalls, 1)),

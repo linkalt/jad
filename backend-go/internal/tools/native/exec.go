@@ -219,7 +219,7 @@ func executeNativeExecAsync(
 		if standby != nil {
 			workDir = standby.workDir
 		} else {
-			created, err := os.MkdirTemp("", "exec-")
+			created, err := makeExecWorkDir()
 			if err != nil {
 				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
 					tools.Information{Key: "system_error", Value: err.Error()})}
@@ -377,6 +377,11 @@ func execTemplateError(callID string, plan execPlan, err error) string {
 		tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})
 }
 
+// makeExecWorkDir is the private scratch directory of one exec run or standby.
+func makeExecWorkDir() (string, error) {
+	return os.MkdirTemp("", "exec-")
+}
+
 // takeExecStandby returns a waiting interpreter started exactly as this call would start one,
 // or nil, and starts a replacement in the background. A runner without a shim, a call whose
 // directory does not resolve, or standby_pool 0 gets nil and starts its own.
@@ -413,7 +418,7 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 	key := standbyKey(keyed)
 	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
 	process := execStandby.take(key, idle)
-	execStandby.refill(key, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	execStandby.refill(key, makeExecWorkDir, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
 	return process
 }
 

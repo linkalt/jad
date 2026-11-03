@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
@@ -25,6 +26,9 @@ const toolSmithResultEnv = "EXEC_RESULT"
 
 //go:embed tool_smith_prelude.ts
 var toolSmithPrelude string
+
+//go:embed tool_smith_main.ts
+var toolSmithMain string
 
 var toolSmithInputSchema = json.RawMessage(`{
   "type":"object",
@@ -170,63 +174,87 @@ type toolSmithScript struct {
 }
 
 // runToolSmithScript runs the script to its end in a private work directory and renders the result.
+// The entry main.ts loads the prelude and imports the call's wrapper.ts once its fd 3 ends: at once
+// for a fresh start, which gets /dev/null, and when this call's files are written for a waiting
+// interpreter (standby), which loaded the prelude before the call.
 func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunResult {
 	settings, execution, callID := script.settings, script.execution, script.execution.CallID
-	workDir, err := makeToolSmithWorkDir(os.TempDir(), toolSmithShortTempDir)
-	if err != nil {
-		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
-			tools.Information{Key: "system_error", Value: err.Error()})}
-	}
-	defer os.RemoveAll(workDir)
-	if err := requirePrivateDirectory(workDir); err != nil {
-		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working directory is not private",
-			tools.Information{Key: "system_error", Value: err.Error()})}
-	}
-	wrapperPath := filepath.Join(workDir, "wrapper.ts")
-	inputPath := filepath.Join(workDir, "input.json")
-	resultPath := filepath.Join(workDir, "result.txt")
-	wrapper := "import { deliver, tools, fn } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + script.body + "\n});\n"
-	for path, content := range map[string]string{
-		wrapperPath:                          wrapper,
-		filepath.Join(workDir, "prelude.ts"): toolSmithPrelude,
-		inputPath:                            string(script.inputJSON),
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The script files could not be written",
+	allowed := script.nested.allowed(settings)
+	bridged := len(allowed) > 0
+	standby := takeToolSmithStandby(settings, script.apiKeyEnv, execution, bridged)
+	handedOver := false
+	defer func() {
+		if standby != nil && !handedOver {
+			standby.stop()
+		}
+	}()
+	var workDir, token string
+	if standby != nil {
+		workDir, token = standby.workDir, standby.token
+	} else {
+		created, err := makeToolSmithPrivateDir()
+		if err != nil {
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
 				tools.Information{Key: "system_error", Value: err.Error()})}
 		}
+		workDir = created
+		if bridged {
+			if token, err = newToolSmithToken(); err != nil {
+				os.RemoveAll(workDir)
+				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The tool bridge could not be started",
+					tools.Information{Key: "system_error", Value: err.Error()})}
+			}
+		}
 	}
-
+	defer os.RemoveAll(workDir)
+	launch := toolSmithLaunch(settings, workDir, bridged, token)
+	files := []standbyFile{
+		{path: filepath.Join(workDir, "wrapper.ts"), data: []byte("import { deliver, tools, fn } from \"./prelude.ts\";\nawait deliver(async (input) => {\n" + script.body + "\n});\n")},
+		{path: filepath.Join(workDir, "input.json"), data: script.inputJSON},
+	}
+	if standby == nil {
+		// A standby's directory already holds them: they are part of its key.
+		files = append(launch.files, files...)
+	}
+	if err := writeStandbyFiles(files); err != nil {
+		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The script files could not be written",
+			tools.Information{Key: "system_error", Value: err.Error()})}
+	}
 	if err := stageToolSmithFunctions(workDir, settings, execution.WorkspaceRoot); err != nil {
 		return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The saved functions could not be staged",
 			tools.Information{Key: "system_error", Value: err.Error()})}
 	}
-
-	argv := make([]string, len(settings.Interpreter))
-	for index, item := range settings.Interpreter {
-		argv[index] = strings.ReplaceAll(item, "{file}", wrapperPath)
-	}
-	extraEnv := map[string]string{toolSmithResultEnv: resultPath, toolSmithInputEnv: inputPath,
-		toolSmithFunctionsEnv: filepath.Join(workDir, "fn-manifest.json")}
 	var bridge *toolSmithBridge
-	if allowed := script.nested.allowed(settings); len(allowed) > 0 {
-		bridge, err = startToolSmithBridge(ctx, workDir, settings, allowed, execution)
+	if bridged {
+		var err error
+		bridge, err = startToolSmithBridgeWithToken(ctx, workDir, settings, allowed, execution, token)
 		if err != nil {
 			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The tool bridge could not be started",
 				tools.Information{Key: "system_error", Value: err.Error()})}
 		}
 		defer bridge.Close()
-		extraEnv[toolSmithSocketEnv] = bridge.socketPath
-		extraEnv[toolSmithTokenEnv] = bridge.token
 	}
+	var extraFiles []*os.File
+	if standby == nil {
+		ended, err := os.Open(os.DevNull)
+		if err != nil {
+			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The script's fd 3 could not be opened",
+				tools.Information{Key: "system_error", Value: err.Error()})}
+		}
+		defer ended.Close()
+		extraFiles = []*os.File{ended}
+	}
+	handedOver = true
 	result := runShellChildDetailed(ctx, shellChildRun{
-		file:       argv[0],
-		argv:       argv[1:],
+		file:       launch.argv[0],
+		argv:       launch.argv[1:],
 		cwd:        ".",
 		section:    "tools.native.tool_smith",
-		extraEnv:   extraEnv,
-		resultFile: &shellResultFile{path: resultPath, maxBytes: settings.ResultMaxBytes, cutMarker: true},
-		program:    &shellProgram{name: filepath.Base(argv[0]), setting: "tools.native.tool_smith.interpreter", subject: "Script"},
+		extraEnv:   launch.extraEnv,
+		resultFile: &shellResultFile{path: filepath.Join(workDir, "result.txt"), maxBytes: settings.ResultMaxBytes, cutMarker: true},
+		program:    &shellProgram{name: filepath.Base(launch.argv[0]), setting: "tools.native.tool_smith.interpreter", subject: "Script"},
+		standby:    standby,
+		extraFiles: extraFiles,
 	}, settings.Child, script.apiKeyEnv, execution)
 	var lines []string
 	if bridge != nil {
@@ -235,6 +263,88 @@ func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunRes
 	lines = append(lines, script.notes...)
 	result.text = appendToolSmithInformation(result.text, lines)
 	return result
+}
+
+// toolSmithLaunchSpec is how a script starts in workDir: the argv, the environment it adds, and the
+// files that do not depend on the call.
+type toolSmithLaunchSpec struct {
+	argv     []string
+	extraEnv map[string]string
+	files    []standbyFile
+}
+
+// toolSmithLaunch builds the launch of a script in workDir. With bridged, the environment names
+// the bridge socket inside workDir and the token.
+func toolSmithLaunch(settings sessionfs.NativeToolSmithSettings, workDir string, bridged bool, token string) toolSmithLaunchSpec {
+	mainPath := filepath.Join(workDir, "main.ts")
+	argv := make([]string, len(settings.Interpreter))
+	for index, item := range settings.Interpreter {
+		argv[index] = strings.ReplaceAll(item, "{file}", mainPath)
+	}
+	extraEnv := map[string]string{
+		toolSmithResultEnv:    filepath.Join(workDir, "result.txt"),
+		toolSmithInputEnv:     filepath.Join(workDir, "input.json"),
+		toolSmithFunctionsEnv: filepath.Join(workDir, "fn-manifest.json"),
+	}
+	if bridged {
+		extraEnv[toolSmithSocketEnv] = filepath.Join(workDir, toolSmithSocketName)
+		extraEnv[toolSmithTokenEnv] = token
+	}
+	return toolSmithLaunchSpec{argv: argv, extraEnv: extraEnv, files: []standbyFile{
+		{path: mainPath, data: []byte(toolSmithMain)},
+		{path: filepath.Join(workDir, "prelude.ts"), data: []byte(toolSmithPrelude)},
+	}}
+}
+
+// standbyKeyToken stands in for the bridge token when the key is computed: each standby has its own.
+const standbyKeyToken = "\x00standby-token\x00"
+
+// takeToolSmithStandby returns an interpreter that started as this run would start one, with the
+// prelude loaded, or nil; and starts a replacement in the background.
+func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv string, execution tools.ExecutionContext, bridged bool) *standbyProcess {
+	if settings.StandbyPool <= 0 || len(settings.Interpreter) == 0 {
+		return nil
+	}
+	resolved, problem := resolveExistingTarget(".", execution.WorkspaceRoot, settings.Child.Policy, execution.CallID)
+	if problem != "" {
+		return nil
+	}
+	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
+		return nil
+	}
+	build := func(workDir, token string) standbySpawn {
+		launch := toolSmithLaunch(settings, workDir, bridged, token)
+		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, apiKeyEnv)
+		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token}
+	}
+	spawn := func(workDir string) (standbySpawn, error) {
+		token := ""
+		if bridged {
+			var err error
+			if token, err = newToolSmithToken(); err != nil {
+				return standbySpawn{}, err
+			}
+		}
+		return build(workDir, token), nil
+	}
+	key := standbyKey(build(standbyKeyDir, standbyKeyToken))
+	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
+	process := execStandby.take(key, idle)
+	execStandby.refill(key, makeToolSmithPrivateDir, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	return process
+}
+
+// makeToolSmithPrivateDir is the private (0700) work directory of one run or standby.
+func makeToolSmithPrivateDir() (string, error) {
+	dir, err := makeToolSmithWorkDir(os.TempDir(), toolSmithShortTempDir)
+	if err != nil {
+		return "", err
+	}
+	if err := requirePrivateDirectory(dir); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("the working directory is not private: %w", err)
+	}
+	return dir, nil
 }
 
 // toolSmithMaxSocketPath stays under sun_path (107 bytes on Linux, 103 on macOS).

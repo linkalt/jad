@@ -90,11 +90,11 @@ func TestNormalizeNativeToolSmithSettingsInterpreter(t *testing.T) {
 }
 
 func TestNormalizeNativeToolSmithSettingsOverrides(t *testing.T) {
-	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"]}}`)
+	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"],"standby_pool":2,"standby_idle_ms":5000,"standby_max":3}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}}
+	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}, StandbyPool: 2, StandbyIdleMs: 5000, StandbyMax: 3}
 	if got.Child.TimeoutMs != 1000 || got.Child.MaxTimeoutMs != 2000 {
 		t.Fatalf("child timeouts = %d, %d", got.Child.TimeoutMs, got.Child.MaxTimeoutMs)
 	}
@@ -256,5 +256,25 @@ func TestNativeToolSmithExcludedToolsIsACopy(t *testing.T) {
 	got[0] = "changed"
 	if nativeToolSmithExcludedTools[0] == "changed" {
 		t.Fatal("the exported list aliases the internal one")
+	}
+}
+
+func TestNativeToolSmithStandbyDefaultsAndBounds(t *testing.T) {
+	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StandbyPool != 1 || got.StandbyIdleMs != 300000 || got.StandbyMax != 8 {
+		t.Fatalf("standby defaults = pool %d idle %d max %d", got.StandbyPool, got.StandbyIdleMs, got.StandbyMax)
+	}
+	for native, want := range map[string]string{
+		`{"tool_smith":{"standby_pool":17}}`:     "standby_pool must be a safe integer between 0 and 16",
+		`{"tool_smith":{"standby_idle_ms":999}}`: "standby_idle_ms must be a safe integer between 1000 and 21600000",
+		`{"tool_smith":{"standby_max":0}}`:       "standby_max must be a safe integer between 1 and 256",
+		`{"tool_smith":{"standby_pool":"many"}}`: "standby_pool must be a safe integer",
+	} {
+		if _, err := normalizeToolSmithForTest(t, native); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error = %v, want %q", native, err, want)
+		}
 	}
 }

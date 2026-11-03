@@ -19,7 +19,9 @@ import (
 // shim, which reads the call's code from fd 3 and answers on fd 4: R when it runs the code, F
 // when it cannot run it the way a fresh interpreter would. A pipe standby has no shim: a mode
 // file runner starts with its usual argv while its code file is a named pipe, and the
-// interpreter reads the call's code from it. A call that takes a standby skips the
+// interpreter reads the call's code from it. A gate standby (tool_smith) has fd 3 only: it
+// loads what it can before the call and goes on when fd 3 ends, once the call's files are
+// written; it does not answer. A call that takes a standby skips the
 // interpreter's start-up; each standby still runs one call and ends with it, so a program sees
 // no state of another call.
 const (
@@ -71,6 +73,11 @@ type standbySpawn struct {
 	files []standbyFile
 	// pipe is the code file of a pipe standby, made a named pipe before it starts.
 	pipe string
+	// gate gives the standby fd 3 and no fd 4: it waits for fd 3 to end and does not answer.
+	gate bool
+	// token is a secret in the environment that the call must use (tool_smith's bridge token);
+	// it is not part of the key.
+	token string
 }
 
 type standbyFile struct {
@@ -95,6 +102,11 @@ func standbyKey(spawn standbySpawn) string {
 	field(spawn.file)
 	field(spawn.cwd)
 	field(spawn.pipe)
+	if spawn.gate {
+		count(1)
+	} else {
+		count(0)
+	}
 	for _, list := range [][]string{spawn.argv, spawn.environment} {
 		count(len(list))
 		for _, item := range list {
@@ -125,6 +137,8 @@ type standbyProcess struct {
 	code    *os.File
 	control *os.File
 	timer   *time.Timer
+	// token is the secret the standby was started with (standbySpawn.token).
+	token string
 }
 
 // stop ends a standby no call ran in. Its directory stays: a call that took it owns the
@@ -212,7 +226,7 @@ func (pool *standbyPool) take(key string, idle time.Duration) *standbyProcess {
 
 // refill starts standbys for key in the background until want wait or start, unless the
 // backend already holds max or the key is held back.
-func (pool *standbyPool) refill(key string, spawn func(workDir string) (standbySpawn, error), want, max int, idle time.Duration) {
+func (pool *standbyPool) refill(key string, makeDir func() (string, error), spawn func(workDir string) (standbySpawn, error), want, max int, idle time.Duration) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	if until, broken := pool.brokenUntil[key]; broken {
@@ -224,12 +238,12 @@ func (pool *standbyPool) refill(key string, spawn func(workDir string) (standbyS
 	for len(pool.idle[key])+pool.starting[key] < want && pool.count < max {
 		pool.starting[key]++
 		pool.count++
-		go pool.launch(key, spawn, idle)
+		go pool.launch(key, makeDir, spawn, idle)
 	}
 }
 
-func (pool *standbyPool) launch(key string, spawn func(workDir string) (standbySpawn, error), idle time.Duration) {
-	process, err := pool.startIn(spawn)
+func (pool *standbyPool) launch(key string, makeDir func() (string, error), spawn func(workDir string) (standbySpawn, error), idle time.Duration) {
+	process, err := pool.startIn(makeDir, spawn)
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	pool.starting[key]--
@@ -250,8 +264,9 @@ func (pool *standbyPool) launch(key string, spawn func(workDir string) (standbyS
 	}()
 }
 
-func (pool *standbyPool) startIn(spawn func(workDir string) (standbySpawn, error)) (*standbyProcess, error) {
-	workDir, err := os.MkdirTemp("", "exec-")
+// startIn makes the standby's own directory and starts it there.
+func (pool *standbyPool) startIn(makeDir func() (string, error), spawn func(workDir string) (standbySpawn, error)) (*standbyProcess, error) {
+	workDir, err := makeDir()
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +283,7 @@ func (pool *standbyPool) startIn(spawn func(workDir string) (standbySpawn, error
 		return nil, err
 	}
 	process.workDir = workDir
+	process.token = launch.token
 	return process, nil
 }
 
@@ -414,8 +430,10 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 		if codeReader, codeWriter, err = pipe(); err != nil {
 			return fail(err)
 		}
-		if controlReader, controlWriter, err = pipe(); err != nil {
-			return fail(err)
+		if !spawn.gate {
+			if controlReader, controlWriter, err = pipe(); err != nil {
+				return fail(err)
+			}
 		}
 	}
 	resolved, err := resolveBashExecutable(spawn.file, spawn.environment, spawn.cwd)
@@ -429,7 +447,11 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 	command.Stdout = stdoutWriter
 	command.Stderr = stderrWriter
 	childEnds := []*os.File{stdoutWriter, stderrWriter, stdinReader}
-	if spawn.pipe == "" {
+	switch {
+	case spawn.gate:
+		command.ExtraFiles = []*os.File{codeReader}
+		childEnds = append(childEnds, codeReader)
+	case spawn.pipe == "":
 		// ExtraFiles[i] is fd 3+i in the child.
 		command.ExtraFiles = []*os.File{codeReader, controlWriter}
 		childEnds = append(childEnds, codeReader, controlWriter)
@@ -464,7 +486,8 @@ func runStandbyCommand(ctx context.Context, request bashChildRequest, process *s
 	defer process.code.Close()
 	answer := make(chan bool, 1)
 	if process.control == nil {
-		// A pipe standby is the runner's own argv reading its own code file: nothing to decline.
+		// A pipe standby is the runner's own argv reading its own code file, and a gate
+		// standby runs what a fresh start runs: nothing to decline.
 		answer <- true
 	} else {
 		go func() {

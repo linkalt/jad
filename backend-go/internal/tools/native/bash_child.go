@@ -54,6 +54,8 @@ type bashChildRequest struct {
 	// stdin is written to the child's standard input, which is then closed.
 	// Empty leaves the input closed from the start (/dev/null).
 	stdin string
+	// extraFiles are the child's fd 3 and up; the caller closes its copies.
+	extraFiles []*os.File
 }
 
 type bashChildResult struct {
@@ -117,6 +119,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	command.Env = request.environment
 	command.Stdout = stdoutWriter
 	command.Stderr = stderrWriter
+	command.ExtraFiles = request.extraFiles
 	// An own pipe, not exec's copier: Wait must never block on a descendant that
 	// keeps the read end open and never reads it.
 	var stdinReader, stdinWriter *os.File
