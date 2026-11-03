@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -100,6 +101,13 @@ func TestProfileMessageQueuedCompactAfterRaisedInTheSameCallerRunStillCompacts(t
 		settings.CompactAfter = 10
 	})
 	calls := countCompactions(p.f)
+	// servedAtCompaction records how many messages the target had served when each compaction ran.
+	var servedAtCompaction []int
+	compact := p.f.service.resolver.compactProfile
+	p.f.service.resolver.compactProfile = func(ctx context.Context, session, profile string) error {
+		servedAtCompaction = append(servedAtCompaction, len(p.order.served()))
+		return compact(ctx, session, profile)
+	}
 	// beforeRun reads the usage once per queued message, when the pump starts it. The first
 	// message reads 5 tokens, at or below compact_after; by the second the target has grown to 50.
 	var reads atomic.Int64
@@ -129,7 +137,11 @@ func TestProfileMessageQueuedCompactAfterRaisedInTheSameCallerRunStillCompacts(t
 		}
 	}
 	if len(*calls) != 1 || (*calls)[0] != "review/reviewer" {
-		t.Fatalf("compactions %v, want one of review/reviewer for the second queued message", *calls)
+		t.Errorf("compactions %v, want one of review/reviewer for the second queued message", *calls)
+	}
+	// The compaction must run after the first message is served and before the second is, so exactly one has been served.
+	if !reflect.DeepEqual(servedAtCompaction, []int{1}) {
+		t.Fatalf("served at compaction %v, want [1]: compaction must run after the first message is served and before the second", servedAtCompaction)
 	}
 }
 
