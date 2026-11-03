@@ -130,6 +130,11 @@ func TestProfileMessageQueuedCompactAfterRaisedInTheSameCallerRunStillCompacts(t
 	}
 	first := queuedSend("alpha-1 please")
 	second := queuedSend("alpha-2 please")
+	// Nothing reads the target's usage while the transcript is held: the pump starts the queued
+	// messages only after release, so a read during sending means the first message ran early.
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("usage read %d times before the target was released, want 0: the queued message's compaction check must wait for the pump", got)
+	}
 	release()
 	for id, want := range map[string]string{first: "answer for alpha-1", second: "answer for alpha-2"} {
 		if got := p.wait(t, id); !strings.Contains(got, want) {
