@@ -1347,8 +1347,9 @@ The cleanup of the remote tests waits for the manager's remote goroutines (`remo
 On expiry the test fails with "a remote goroutine did not return within 40s; a Done is missing or a
 run never ended". The bound is a test constant, not a product setting; `RemoteTimeoutMs` is unchanged.
 
-- **Filter span:** `-run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'` is a substring match on test
-  names, not an anchored one. `go test -list` selects 25 top-level tests from three files:
+- **Filter span:** `-run 'RemoteSubagent|RemoteRun|RemoteSync|RemoteAsync'` is an unanchored regular
+  expression (`go test -run`), so the `|` separators are alternation and each part matches anywhere in a
+  test name. `go test -list` selects 25 top-level tests from three files:
   `subagent_remote_test.go` (22), `profile_message_remote_test.go` (2) and `async_latest_test.go` (1).
   `RemoteRun` also matches `TestRemoteInlineAndAsyncNameTheRemoteRunTheSameWay`, because its name
   contains "RemoteRun". The resume tests in `subagent_remote_resume_test.go` are not selected.
@@ -1366,8 +1367,10 @@ run never ended". The bound is a test constant, not a product setting; `RemoteTi
     waits up to one drain bound (40s). Worst case 50s.
   - Async seam test: the body waits up to 10s for its seam, then up to 10s more in the `wait` call
     (`wait_ms` 10000), then `releaseSeamVars` waits up to one drain bound (40s). Worst case 60s.
-  - The measured longest drain for a test with no seams is 20.0s, the run that stays open to
-    `RemoteTimeoutMs`. This is a measurement, not a stated worst case.
+  - The measured longest drain for a test with no seams is 20.0s, in
+    `TestRemoteSubagentNeverChangesLocalCheckpointOrLimits` (no seam setup), the run that stays open to
+    `RemoteTimeoutMs`. Measured in the `-race -json -count=3` run above. This is a measurement, not a
+    stated worst case.
 - **Failing runs:** the fixture cleanup skips its drain wait whenever `t.Failed()` is true, for any
   reason. `releaseSeamVars` does not check `t.Failed()` and always waits. In a failing run a late
   goroutine can still read a later test's seam; this can only change the result of a run that is
