@@ -44,6 +44,8 @@ type Config struct {
 	Roots                      []sessionfs.Root
 	// RootSettingWarnings are the notices of the root setting load: keys it does not read.
 	RootSettingWarnings []string
+	// MaxLeafCalls is server.max_leaf_calls: the leaf tool calls that may run at once in the process.
+	MaxLeafCalls int
 	// RemoteAPI is server.remote_api.
 	RemoteAPI          sessionfs.RemoteAPISettings
 	HTTP               httpapi.Config
@@ -99,6 +101,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
 		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
+		MaxLeafCalls:               loaded.Server.MaxLeafCalls,
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),

@@ -152,6 +152,8 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"max_request_files", "9", "server.max_request_files must be a safe integer between 0 and 8"},
 		{"max_concurrent_runs", "-1", "server.max_concurrent_runs must be a safe integer between 0 and 1024"},
 		{"max_concurrent_runs", "1025", "server.max_concurrent_runs must be a safe integer between 0 and 1024"},
+		{"max_leaf_calls", "0", "server.max_leaf_calls must be a safe integer between 1 and 1024"},
+		{"max_leaf_calls", "1025", "server.max_leaf_calls must be a safe integer between 1 and 1024"},
 		{"max_request_file_bytes", "0", "server.max_request_file_bytes must be a safe integer between 1 and 26214400"},
 		{"max_request_file_bytes", "26214401", "server.max_request_file_bytes must be a safe integer between 1 and 26214400"},
 		{"idle_timeout_ms", "1.5", "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},

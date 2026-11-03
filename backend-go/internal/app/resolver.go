@@ -24,6 +24,7 @@ import (
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/openaiapi"
 	"jad/backend-go/internal/remote"
+	"jad/backend-go/internal/serverconfig"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessiongate"
@@ -251,7 +252,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		option(&resolverOptions)
 	}
 	if resolverOptions.leafBudget == nil {
-		resolverOptions.leafBudget = tools.NewLeafBudget(tools.LeafBudgetSize)
+		resolverOptions.leafBudget = tools.NewLeafBudget(serverconfig.DefaultMaxLeafCalls)
 	}
 	return &Resolver{
 		logger:            resolverOptions.logger,

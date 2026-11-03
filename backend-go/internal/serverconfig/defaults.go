@@ -57,6 +57,14 @@ const (
 	RunCapRetryAfterSeconds = 5
 )
 
+// Leaf tool calls that may run at once in the process (server.max_leaf_calls). 256 is four
+// full batches of the largest per-response limit (64), so a few runs overlap at full fan-out
+// while the process stays bounded.
+const (
+	DefaultMaxLeafCalls = 256
+	MaxMaxLeafCalls     = 1024
+)
+
 // How long shutdown waits for in-flight requests before it closes their connections
 // (server.shutdown_timeout_ms). 0 waits without a limit.
 const (

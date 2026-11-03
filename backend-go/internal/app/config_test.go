@@ -93,6 +93,21 @@ func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigPassesMaxLeafCallsToTheConfig(t *testing.T) {
+	cwd := t.TempDir()
+	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_leaf_calls":9}}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxLeafCalls != 9 {
+		t.Fatalf("MaxLeafCalls = %d, want 9 from server.max_leaf_calls", config.MaxLeafCalls)
+	}
+}
+
 // The remote API's bearer token travels in clear text over TCP, so its listener names one
 // address: the default loopback, or the VPN address a peer reaches. Every spelling of "every
 // interface" is refused, and so is anything that is not an address or a plain hostname; with
@@ -144,4 +159,44 @@ func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 	}
 	// Without the remote API a wildcard host is fine: the UI listener is another matter.
 	accepted("0.0.0.0", `{"session_roots":[],"server":{}}`)
+}
+
+// NewService builds the leaf budget from server.max_leaf_calls: exactly that many leaf calls
+// take a token, and the next one waits.
+func TestNewServiceSizesTheLeafBudgetFromMaxLeafCalls(t *testing.T) {
+	cwd := t.TempDir()
+	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_leaf_calls":3}}`
+	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Close)
+	budget := service.resolver.leafBudget
+	for range 3 {
+		budget.Acquire()
+	}
+	acquired := make(chan struct{})
+	go func() {
+		budget.Acquire()
+		close(acquired)
+	}()
+	// Free the blocked caller before the budget is dropped, so it does not outlive the test.
+	t.Cleanup(func() {
+		for range 3 {
+			budget.Release()
+		}
+		<-acquired
+	})
+	select {
+	case <-acquired:
+		t.Fatal("a fourth leaf call took a token of a budget of 3")
+	case <-time.After(50 * time.Millisecond):
+	}
 }

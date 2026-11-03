@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"jad/backend-go/internal/serverconfig"
 	"jad/backend-go/internal/tools"
 )
 
@@ -107,7 +108,7 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 	scaleSkipUnlessMeasured(t)
 	const callsPerRun = 64
 	// The process budget, as production builds it: every run of the process shares it.
-	budget := tools.NewLeafBudget(tools.LeafBudgetSize)
+	budget := tools.NewLeafBudget(serverconfig.DefaultMaxLeafCalls)
 	var baselineLatency, baselineGoroutines float64
 	for index, runs := range []int{100, 500, 1000} {
 		idle := runtime.NumGoroutine()
@@ -152,7 +153,7 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 		}
 		// The process budget caps the leaves that run at once, so a run of many batches
 		// settles at the budget, not at every call: wait for that peak.
-		want := int64(min(runs*callsPerRun, tools.LeafBudgetSize))
+		want := int64(min(runs*callsPerRun, serverconfig.DefaultMaxLeafCalls))
 		deadline := time.Now().Add(30 * time.Second)
 		for active.Load() < want && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
@@ -187,7 +188,7 @@ func TestScaleToolBatchFanOut(t *testing.T) {
 func TestScaleToolBatchFanOutThroughExecuteToolRound(t *testing.T) {
 	scaleSkipUnlessMeasured(t)
 	const callsPerRun = 64
-	budget := tools.NewLeafBudget(tools.LeafBudgetSize)
+	budget := tools.NewLeafBudget(serverconfig.DefaultMaxLeafCalls)
 	schema := json.RawMessage(`{"type":"object","additionalProperties":false}`)
 	validator, err := tools.CompileSchema(schema)
 	if err != nil {
@@ -233,7 +234,7 @@ func TestScaleToolBatchFanOutThroughExecuteToolRound(t *testing.T) {
 				}
 			}()
 		}
-		want := int64(min(runs*callsPerRun, tools.LeafBudgetSize))
+		want := int64(min(runs*callsPerRun, serverconfig.DefaultMaxLeafCalls))
 		deadline := time.Now().Add(30 * time.Second)
 		for active.Load() < want && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)

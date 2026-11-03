@@ -34,7 +34,7 @@ type Service struct {
 // NewService wires validated runtime configuration into the injectable HTTP
 // handler and filesystem-backed session resolver.
 func NewService(config Config) (*Service, error) {
-	return newServiceWithBudget(config, tools.NewLeafBudget(tools.LeafBudgetSize))
+	return newServiceWithBudget(config, tools.NewLeafBudget(config.MaxLeafCalls))
 }
 
 // newServiceWithBudget is NewService with the budget of leaf tool calls the service's

@@ -93,7 +93,9 @@ type ServerSettings struct {
 	MaxRequestFileBytes int64
 	// MaxConcurrentRuns is the most runs that may be running at once across all
 	// sessions; 0 means no cap.
-	MaxConcurrentRuns     int
+	MaxConcurrentRuns int
+	// MaxLeafCalls is the most leaf tool calls that may run at once in the process.
+	MaxLeafCalls          int
 	RunContentMemoryBytes int
 	// RunContentFallbackMaxBytes caps the in-memory fallback of the run content cache.
 	RunContentFallbackMaxBytes int
@@ -191,6 +193,7 @@ func Defaults() ServerSettings {
 		MaxRequestImageBytes:       serverconfig.DefaultMaxRequestImageBytes,
 		MaxRequestFiles:            serverconfig.DefaultMaxRequestFiles,
 		MaxConcurrentRuns:          serverconfig.DefaultMaxConcurrentRuns,
+		MaxLeafCalls:               serverconfig.DefaultMaxLeafCalls,
 		MaxRequestFileBytes:        serverconfig.DefaultMaxRequestFileBytes,
 		RunContentMemoryBytes:      serverconfig.DefaultRunContentMemoryBytes,
 		RunContentFallbackMaxBytes: serverconfig.DefaultRunContentFallbackMaxBytes,
@@ -700,6 +703,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.MaxConcurrentRuns = int(concurrentRuns)
+	leafCalls := int64(settings.MaxLeafCalls)
+	if err := readInt("max_leaf_calls", &leafCalls, 1, serverconfig.MaxMaxLeafCalls); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.MaxLeafCalls = int(leafCalls)
 	runContentMemoryBytes := int64(settings.RunContentMemoryBytes)
 	if err := readInt("run_content_memory_bytes", &runContentMemoryBytes, 0, serverconfig.MaxRunContentMemoryBytes); err != nil {
 		return ServerSettings{}, err
