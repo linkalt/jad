@@ -104,7 +104,7 @@ func TestUserStopResetAndDeleteReachProcessAndSubagentHandles(t *testing.T) {
 		}
 		waitForState(t, m.host, "sess|a", p1, asyncmgr.StateStopped)
 		waitForState(t, m.host, "sess|a", r1, asyncmgr.StateStopped)
-		if got := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "block_ms": json.Number("0")}); !strings.Contains(got, p1) || !strings.Contains(got, r1) || !strings.Contains(got, "user_stop") {
+		if got := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "wait_ms": json.Number("0")}); !strings.Contains(got, p1) || !strings.Contains(got, r1) || !strings.Contains(got, "user_stop") {
 			t.Errorf("wait after a user stop:\n%s", got)
 		}
 
@@ -116,7 +116,7 @@ func TestUserStopResetAndDeleteReachProcessAndSubagentHandles(t *testing.T) {
 		}
 		waitForState(t, m.host, "sess|b", p2, asyncmgr.StateStopped)
 		waitForState(t, m.host, "sess|b", r2, asyncmgr.StateStopped)
-		if got := callAsync(t, m.async, "sess|b", map[string]any{"action": "wait", "block_ms": json.Number("0")}); strings.Contains(got, p2) || strings.Contains(got, r2) {
+		if got := callAsync(t, m.async, "sess|b", map[string]any{"action": "wait", "wait_ms": json.Number("0")}); strings.Contains(got, p2) || strings.Contains(got, r2) {
 			t.Errorf("wait after a reset delivered a signal:\n%s", got)
 		}
 

@@ -141,9 +141,10 @@ func (m *Manager) List(q ListQuery) (ListResult, error) {
 	return result, nil
 }
 
-// Status returns the entry of one handle without consuming its signal. A driver's
-// summary comes from its driver (Detailer) when it has one. The summary is cut to
-// status_summary_max_bytes and to the response budget.
+// Status returns the entry of one handle without consuming its signal. A handle whose record
+// holds a stored result (Detail) shows it, cut to the response budget like wait; otherwise its
+// summary comes from its driver (Detailer) when it has one, cut to status_summary_max_bytes and
+// to the response budget.
 func (m *Manager) Status(owner, id string) (Entry, error) {
 	m.mu.Lock()
 	r := m.rows[id]
@@ -168,7 +169,9 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 		}
 	}
 	limit := int(m.cfg.StatusSummaryBytes)
-	if detailer, ok := driver.(Detailer); ok {
+	// The result a driver stored in the record outranks its live view: the view is cut to the
+	// status limit, the stored result only to the response budget, as wait delivers it.
+	if detailer, ok := driver.(Detailer); ok && rec.Detail == "" {
 		if text := detailer.Detail(id, limit); text != "" {
 			rec.Summary, rec.Detail = text, ""
 		}

@@ -55,7 +55,7 @@ func TestTurnEndsWithProcessAndSubagentRunningAndTheNextWaitCollectsBoth(t *test
 		waitForState(t, m.host, "sess|a", processID, asyncmgr.StateDone)
 		waitForState(t, m.host, "sess|a", secondID, asyncmgr.StateDone)
 
-		got := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "block_ms": json.Number("5000")})
+		got := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "wait_ms": json.Number("5000")})
 		if !strings.Contains(got, processID) || !strings.Contains(got, secondID) || strings.Contains(got, runID) {
 			t.Fatalf("one wait did not return both completions:\n%s", got)
 		}
@@ -63,7 +63,7 @@ func TestTurnEndsWithProcessAndSubagentRunningAndTheNextWaitCollectsBoth(t *test
 		if err != nil || entry.OK || entry.Code != "3" {
 			t.Fatalf("the process completion = %+v, %v; want ok false and exit code 3", entry, err)
 		}
-		again := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "block_ms": json.Number("0")})
+		again := callAsync(t, m.async, "sess|a", map[string]any{"action": "wait", "wait_ms": json.Number("0")})
 		if strings.Contains(again, processID) || strings.Contains(again, secondID) {
 			t.Fatalf("a collected signal was delivered twice:\n%s", again)
 		}

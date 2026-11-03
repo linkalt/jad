@@ -73,6 +73,7 @@ func NewAsyncTool(host *AsyncHost) (tools.Tool, error) {
 		ReadOnly:           true,
 		MayChangeFiles:     func(arguments map[string]any) bool { return asyncActionFor(arguments) == asyncActionStop },
 		NormalizeArguments: normalizeAsyncArguments,
+		RejectedProperties: map[string]string{asyncBlockAlias: "async takes wait_ms; block_ms is the start tools' name for it. Send wait_ms only."},
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return executeAsync(ctx, host, arguments, execution)
 		},
@@ -81,10 +82,20 @@ func NewAsyncTool(host *AsyncHost) (tools.Tool, error) {
 
 const asyncDescription = "Manage background work started by other tools. wait: block until at least one handle finishes and return every finished one. list: your handles, active by default. status: one handle. stop: end one handle. A start that returned a handle id is still running; collect it with wait in a later call."
 
+// asyncBlockAlias is the start tools' block_ms. A wait that sends it means wait_ms, so it is
+// taken as wait_ms; sent beside wait_ms it is refused with a hint rather than one value chosen.
+const asyncBlockAlias = "block_ms"
+
 func normalizeAsyncArguments(arguments map[string]any) map[string]any {
 	normalized := make(map[string]any, len(arguments))
 	for key, value := range arguments {
 		normalized[key] = value
+	}
+	if value, ok := normalized[asyncBlockAlias]; ok {
+		if _, both := normalized["wait_ms"]; !both {
+			delete(normalized, asyncBlockAlias)
+			normalized["wait_ms"] = value
+		}
 	}
 	for _, key := range []string{"action", "id", "state", "kind", "cursor"} {
 		if value, ok := normalized[key].(string); ok {

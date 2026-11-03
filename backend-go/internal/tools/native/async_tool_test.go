@@ -257,3 +257,44 @@ func TestAsyncToolWaitEndsWhenTheCallIsCancelled(t *testing.T) {
 		t.Fatalf("cancelled wait changed the handle: %+v", c)
 	}
 }
+
+// TestAsyncToolTakesBlockMsAsWaitMs: block_ms is what every start tool calls its wait, so a
+// wait that sends it gets that wait instead of a bare schema refusal (and, through Execute,
+// instead of the default wait). Sent beside wait_ms it is refused with a hint naming wait_ms.
+func TestAsyncToolTakesBlockMsAsWaitMs(t *testing.T) {
+	tool, host, _ := newAsyncToolFixture(t)
+	if err := host.Manager().Register(asyncmgr.Registration{ID: "j", Owner: "s1", Kind: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(arguments string) string {
+		t.Helper()
+		item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c1", "name": "async", "arguments": arguments})
+		raw, err := catalog.ExecuteFunctionCall(context.Background(), item, tools.ExecutionContext{SessionKey: "s1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output struct {
+			Output string `json:"output"`
+		}
+		if err := json.Unmarshal(raw, &output); err != nil {
+			t.Fatal(err)
+		}
+		return output.Output
+	}
+	for _, arguments := range []string{`{"action":"wait","block_ms":50}`, `{"block_ms":50}`} {
+		start := time.Now()
+		out := call(arguments)
+		// The default wait is 10 s; the handle never ends, so only block_ms ends this one.
+		if elapsed := time.Since(start); elapsed > 5*time.Second || !strings.Contains(out, "0 signal(s), 1 pending") {
+			t.Errorf("%s took %v:\n%s", arguments, elapsed, out)
+		}
+	}
+	out := call(`{"action":"wait","wait_ms":50,"block_ms":50}`)
+	if !strings.Contains(out, "invalid_input") || !strings.Contains(out, "async takes wait_ms") {
+		t.Errorf("block_ms beside wait_ms:\n%s", out)
+	}
+}

@@ -51,8 +51,8 @@ func (h *subagentAsyncHandle) end(run subagentRunView, ref string) {
 func (h *subagentAsyncHandle) markRead(id string) { h.host.Manager().MarkRead(h.owner, id) }
 
 // subagentAsyncResult maps a run's final state to the unified one. ok means the run is
-// done; every other state keeps its own name with ok false. The summary is the answer,
-// or the partial text a cut-off child left, or the failure reason.
+// done; every other state keeps its own name with ok false. The summary and the detail are
+// the answer, or the partial text a cut-off child left, or the failure reason.
 func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	result := subagentAsyncOutcome(run)
 	// The files a writer changed come first, so the summary's cut keeps them. The answer
@@ -61,6 +61,9 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 		answer, _ := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
 		result.Summary = strings.TrimSpace(files + "\n" + answer)
 	}
+	// The record keeps the whole text, as profile_message and a remote run do, so wait and
+	// status deliver the answer (to the response budget) instead of its summary_max_bytes head.
+	result.Detail = result.Summary
 	return result
 }
 
