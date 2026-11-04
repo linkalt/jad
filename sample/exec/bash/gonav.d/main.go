@@ -3012,6 +3012,7 @@ func (se *session) implAnswer(ans *typeAnswer, ck *checker, ld *loader, want tar
 		return ans
 	}
 	// checkAll type-checks every variant of the candidate packages and hands each package to fn.
+	skipped := 0
 	checkAll := func(bases []string, fn func(ch *checkedPkg)) {
 		for _, base := range bases {
 			kinds := []string{"prod"}
@@ -3021,10 +3022,13 @@ func (se *session) implAnswer(ans *typeAnswer, ck *checker, ld *loader, want tar
 			for _, kind := range kinds {
 				lp := ld.variant(base, kind)
 				if lp == nil {
+					skipped++
 					continue
 				}
 				if ch := ck.check(lp); ch != nil && ch.pkg != nil {
 					fn(ch)
+				} else {
+					skipped++
 				}
 			}
 		}
@@ -3062,7 +3066,13 @@ func (se *session) implAnswer(ans *typeAnswer, ck *checker, ld *loader, want tar
 				if candNamed.Obj().Name() == def.Name && candNamed.Obj().Pkg() != nil && baseImportPath(candNamed.Obj().Pkg().Path()) == want.basePkg {
 					continue
 				}
-				sat := satisfies(candNamed, iface)
+				// Compare with the export-data twin, the identity the interface was read with: a source-checked
+				// named type never satisfies it when its signatures mention another named type of the package.
+				implType := types.Type(candNamed)
+				if twin := ck.exportedType(ch.pkg.Path(), name); twin != nil {
+					implType = twin
+				}
+				sat := satisfies(implType, iface)
 				if sat == "" {
 					continue
 				}
@@ -3122,7 +3132,9 @@ func (se *session) implAnswer(ans *typeAnswer, ck *checker, ld *loader, want tar
 	}
 	ans.impls = dedupeImpls(ans.impls)
 	if len(ans.impls) == 0 && ans.typesState == typesOK {
-		if isInterface {
+		if isInterface && skipped > 0 {
+			ans.note = plural(skipped, "candidate package") + " could not be type-checked, so no implementer is claimed"
+		} else if isInterface {
 			ans.note = "no type among the packages that declare a method of that name implements it"
 		} else {
 			ans.note = "no interface among the packages that declare those method names is satisfied by " + def.Name

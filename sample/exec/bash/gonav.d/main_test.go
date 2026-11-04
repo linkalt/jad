@@ -1415,3 +1415,31 @@ func Twice() int { return Target() + Target() }
 		t.Fatalf("callers in Twice = %v, want one row for the line", lines)
 	}
 }
+
+// The interface's method returns a named type from its own package, so the implementer's signature must
+// be compared with the same identity: a source-checked type never matches the export-data interface.
+func TestImplMatchesNamedResultTypeAcrossIdentities(t *testing.T) {
+	root := writeModule(t, `package a
+
+type Snapshot struct{ ID string }
+
+type Source interface {
+	Recover() error
+	List(filter string) []Snapshot
+}
+
+type Manager struct{}
+
+func (m *Manager) Recover() error { return nil }
+
+func (m *Manager) List(filter string) []Snapshot { return nil }
+`)
+	got := refsJSON(t, root, "impl", "a.Source")
+	impls := rows(got["impls"])
+	if len(impls) != 1 || impls[0]["name"] != "Manager" || impls[0]["satisfies"] != "pointer" {
+		t.Fatalf("implementers of a.Source = %v, want a.Manager through *Manager", impls)
+	}
+	if note, _ := got["note"].(string); strings.Contains(note, "no type among") {
+		t.Fatalf("note %q claims no implementer while one exists", note)
+	}
+}
