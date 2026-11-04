@@ -33,13 +33,17 @@ const (
 	defaultTriggerNotifyRetryDelayMS int64 = 2_000
 	maxTriggerNotifyRetryDelayMS     int64 = 600_000
 	maxTriggerNotifyAnswerBytes      int64 = 65_536
-	maxTriggerNotifiers                    = 16
+	// maxTriggerNotifyTemplateBytes bounds a notifier's template.
+	maxTriggerNotifyTemplateBytes = 16_384
+	maxTriggerNotifiers           = 16
 )
 
 // Formats of a trigger notification body.
 const (
 	TriggerNotifyFormatJSON = "json"
 	TriggerNotifyFormatText = "text"
+	// TriggerNotifyFormatSlack posts {"text": ...} as a Slack incoming webhook takes it.
+	TriggerNotifyFormatSlack = "slack"
 )
 
 // TriggerNotifyStatuses are the statuses a trigger run can end with, the values of a
@@ -50,7 +54,7 @@ var TriggerNotifyStatuses = []string{"completed", "failed", "timed_out", "aborte
 // one every firing.
 var defaultTriggerNotifyOn = []string{"completed", "failed", "timed_out", "aborted", "refused"}
 
-var triggerNotifyKeys = []string{"url", "url_env", "format", "headers", "headers_env", "on", "timeout_ms", "retries", "retry_delay_ms", "answer_bytes"}
+var triggerNotifyKeys = []string{"url", "url_env", "format", "template", "headers", "headers_env", "on", "timeout_ms", "retries", "retry_delay_ms", "answer_bytes"}
 
 // triggerHeaderPattern is an HTTP header name (an RFC 9110 token).
 var triggerHeaderPattern = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
@@ -80,8 +84,9 @@ type TriggerSettings struct {
 }
 
 // TriggerNotifier is one place a finished trigger run is reported to: an HTTP POST of the
-// run's record (format json) or of a short text (format text, which ntfy-style services
-// show as the message).
+// run's record (format json), of a short text (format text, which ntfy-style services
+// show as the message) or of a Slack message (format slack). Template, when set, renders
+// the body instead.
 type TriggerNotifier struct {
 	Name string
 	// URL is the address; URLEnv instead names the environment variable that holds it, for
@@ -89,6 +94,10 @@ type TriggerNotifier struct {
 	URL    string
 	URLEnv string
 	Format string
+	// Template is a Go text/template the body is rendered from in place of the format's
+	// own; the format then only sets the content type, and with json or slack the
+	// rendered body must be JSON. Empty uses the format's body.
+	Template string
 	// Headers are sent as written; HeadersEnv maps a header to the environment variable
 	// that holds its value (a token). Both are keyed by canonical header name.
 	Headers    map[string]string
@@ -343,8 +352,16 @@ func normalizeTriggerNotifier(name string, raw json.RawMessage, path string) (Tr
 	if notifier.Format, err = bashString(fields, "format", TriggerNotifyFormatJSON, prefix, false); err != nil {
 		return TriggerNotifier{}, err
 	}
-	if notifier.Format != TriggerNotifyFormatJSON && notifier.Format != TriggerNotifyFormatText {
-		return TriggerNotifier{}, fmt.Errorf("%s.format must be json or text", prefix)
+	if notifier.Format != TriggerNotifyFormatJSON && notifier.Format != TriggerNotifyFormatText && notifier.Format != TriggerNotifyFormatSlack {
+		return TriggerNotifier{}, fmt.Errorf("%s.format must be json, text or slack", prefix)
+	}
+	if rawTemplate, exists := fields["template"]; exists && string(rawTemplate) != "null" {
+		if json.Unmarshal(rawTemplate, &notifier.Template) != nil || strings.TrimSpace(notifier.Template) == "" || len(notifier.Template) > maxTriggerNotifyTemplateBytes {
+			return TriggerNotifier{}, fmt.Errorf("%s.template must be a non-empty string of at most %d bytes", prefix, maxTriggerNotifyTemplateBytes)
+		}
+		if _, err := ParseTriggerNotifyTemplate(name, notifier.Template); err != nil {
+			return TriggerNotifier{}, fmt.Errorf("%s.template: %v", prefix, err)
+		}
 	}
 	if notifier.Headers, err = triggerNotifyHeaders(fields["headers"], prefix+".headers", false); err != nil {
 		return TriggerNotifier{}, err

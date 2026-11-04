@@ -33,7 +33,11 @@ var defaultSandboxTools = []string{"bash", "exec", "process", "tool_smith"}
 // and exec and tool_smith keep their code, result and socket files under the temp folder.
 var defaultSandboxWritablePaths = []string{"{workspace}", "{git_common_dir}", "{tmp}"}
 
-var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "writable_paths", "hide_paths", "command", "check_timeout_ms"}
+// defaultSandboxPlanWritablePaths keep only the temp folder writable in a plan-mode run, where
+// exec and tool_smith still need their files: the project and its git directory are read-only.
+var defaultSandboxPlanWritablePaths = []string{"{tmp}"}
+
+var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "writable_paths", "plan_writable_paths", "hide_paths", "command", "check_timeout_ms"}
 
 var sandboxPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
@@ -55,8 +59,12 @@ type SandboxSettings struct {
 	Executable    string
 	Network       bool
 	WritablePaths []string
-	HidePaths     []string
-	Command       []string
+	// PlanWritablePaths replace WritablePaths for the calls of a plan-mode run (backend
+	// bwrap), so a tool kept in plan mode cannot change the project even if it was wrongly
+	// marked read-only or an allow entry kept it.
+	PlanWritablePaths []string
+	HidePaths         []string
+	Command           []string
 	// CheckTimeoutMs bounds the trial start "jad check" makes to see that the sandbox works.
 	CheckTimeoutMs int64
 }
@@ -119,6 +127,9 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 		return nil, err
 	}
 	if settings.WritablePaths, err = sandboxPaths(fields, "writable_paths", defaultSandboxWritablePaths, path, section); err != nil {
+		return nil, err
+	}
+	if settings.PlanWritablePaths, err = sandboxPaths(fields, "plan_writable_paths", defaultSandboxPlanWritablePaths, path, section); err != nil {
 		return nil, err
 	}
 	if settings.HidePaths, err = sandboxPaths(fields, "hide_paths", nil, path, section); err != nil {
@@ -195,6 +206,18 @@ func checkSandboxPlaceholders(value string) error {
 		}
 	}
 	return nil
+}
+
+// ForPlanMode returns the sandbox a plan-mode run's calls start in: with backend bwrap, the
+// same sandbox with PlanWritablePaths as its writable paths. A command backend is the
+// person's own program and is returned unchanged, as is no sandbox.
+func (s *SandboxSettings) ForPlanMode() *SandboxSettings {
+	if s == nil || s.Backend != SandboxBackendBwrap {
+		return s
+	}
+	plan := *s
+	plan.WritablePaths = append([]string(nil), s.PlanWritablePaths...)
+	return &plan
 }
 
 // applySandbox hands an enabled sandbox to each enabled tool it covers, and to the hooks

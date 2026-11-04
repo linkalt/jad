@@ -656,6 +656,13 @@
           "default": ["{workspace}", "{git_common_dir}", "{tmp}"],
           "description": "Backend bwrap: paths bound read-write; everything else is read-only. Absolute paths or paths starting with a placeholder. exec and tool_smith keep their code, result and socket files under {tmp}, so leave it in unless TMPDIR points elsewhere that is writable."
         },
+        "plan_writable_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "pattern": "^(/|\\{)"},
+          "default": ["{tmp}"],
+          "description": "Backend bwrap: the paths bound read-write for the calls of a plan-mode run, in place of writable_paths, so a tool plan mode keeps cannot change the project. Leave {tmp} in for exec and tool_smith."
+        },
         "hide_paths": {
           "type": "array",
           "maxItems": 64,

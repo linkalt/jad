@@ -26,7 +26,10 @@ type Definition struct {
 // ExecutionContext carries per-call filesystem roots without coupling tools to
 // the HTTP or session packages.
 type ExecutionContext struct {
-	CallID        string
+	CallID string
+	// PlanMode is set for the calls of a plan-mode run. A tool that starts child processes
+	// in a sandbox starts them in the sandbox's plan-mode form (read-only project).
+	PlanMode      bool
 	ToolName      string
 	WorkspaceRoot string
 	// WorkspaceOrigin, when set, is the session's own working directory and WorkspaceRoot

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/plugins"
@@ -14,6 +16,7 @@ import (
 )
 
 const pluginUsage = `usage: jad plugin install [--force] <folder>
+       jad plugin install [--force] [--ref <branch|tag|commit>] [--subdir <folder>] [--timeout <duration>] <git URL>
        jad plugin remove  [--force] <name>
        jad plugin list
 
@@ -32,6 +35,13 @@ A file that exists and is not the plugin's is never overwritten. A file the plug
 installed and that was changed since stops install and remove unless --force is given.
 remove refuses, and changes nothing, while a session or another file still needs a profile,
 toolset, MCP server or model of the plugin.
+
+A git URL (https://, http://, ssh://, git://, file:// or user@host:path) is cloned into a
+temporary folder with git, which never asks for a password here: use an SSH key or a
+credential helper for a private repository. --ref picks a branch, tag or commit (the default
+branch otherwise), --subdir the plugin's folder in the repository, and --timeout bounds the
+clone (default 5m). The plugin list shows the URL without credentials, the ref, the folder
+and the commit installed.
 `
 
 func runPluginCommand(args []string, streams commandStreams) error {
@@ -50,8 +60,14 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	flags := flag.NewFlagSet("jad plugin "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	force := false
+	var git plugins.GitSource
 	if action != "list" {
 		flags.BoolVar(&force, "force", false, "overwrite or remove files changed since they were installed")
+	}
+	if action == "install" {
+		flags.StringVar(&git.Ref, "ref", "", "branch, tag or commit of a git URL")
+		flags.StringVar(&git.Subdir, "subdir", "", "the plugin's folder in a git repository")
+		flags.DurationVar(&git.Timeout, "timeout", 5*time.Minute, "how long the git clone may take")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -67,6 +83,19 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	if flags.NArg() != want {
 		return usageError("%s", pluginUsage)
 	}
+	fromGit := false
+	if action == "install" {
+		// An existing folder is a folder, whatever its name looks like.
+		if _, err := os.Stat(flags.Arg(0)); err != nil && plugins.IsGitURL(flags.Arg(0)) {
+			fromGit, git.URL = true, flags.Arg(0)
+		}
+		if !fromGit && (git.Ref != "" || git.Subdir != "") {
+			return usageError("--ref and --subdir go with a git URL\n\n%s", pluginUsage)
+		}
+		if git.Timeout < 0 {
+			return usageError("--timeout cannot be negative\n\n%s", pluginUsage)
+		}
+	}
 	target, err := pluginTarget()
 	if err != nil {
 		return &exitError{code: exitFailed, err: err}
@@ -75,7 +104,12 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	defer stop()
 	switch action {
 	case "install":
-		result, err := target.Install(ctx, flags.Arg(0), force)
+		var result plugins.InstallResult
+		if fromGit {
+			result, err = target.InstallGit(ctx, git, force)
+		} else {
+			result, err = target.Install(ctx, flags.Arg(0), force)
+		}
 		if err != nil {
 			return &exitError{code: exitFailed, err: err}
 		}

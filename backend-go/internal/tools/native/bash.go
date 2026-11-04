@@ -280,7 +280,7 @@ func runShellChildDetailed(
 		spill:                    spillWriters,
 		stdin:                    run.stdin,
 		extraFiles:               run.extraFiles,
-		sandbox:                  settings.Sandbox,
+		sandbox:                  callSandbox(settings.Sandbox, execution),
 		workspace:                execution.WorkspaceRoot,
 	}
 	var child bashChildResult

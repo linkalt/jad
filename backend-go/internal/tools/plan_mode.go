@@ -12,7 +12,9 @@ const PlanModeErrorCode = "plan_mode"
 // ones an allow entry covers. A ReadOnly tool that decides per call whether it changes
 // files (MayChangeFiles, such as a sub-agent that may write) stays listed, but a call
 // that would change files is refused with status forbidden and error_code plan_mode.
-// An allow entry keeps a tool whole, with no such refusal. The receiver is unchanged.
+// An allow entry keeps a tool whole, with no such refusal. Every kept tool's calls carry
+// ExecutionContext.PlanMode, so a sandboxed child starts with the project read-only. The
+// receiver is unchanged.
 func (c *Catalog) PlanMode(allow []string) (*Catalog, error) {
 	if c == nil {
 		return nil, nil
@@ -21,11 +23,11 @@ func (c *Catalog) PlanMode(allow []string) (*Catalog, error) {
 	for _, tool := range c.tools {
 		switch {
 		case AnyEntryMatches(allow, tool.Definition):
-			kept = append(kept, tool)
+			kept = append(kept, planModeCalls(tool))
 		case tool.ReadOnly && tool.MayChangeFiles != nil:
-			kept = append(kept, planModeGuard(tool))
+			kept = append(kept, planModeCalls(planModeGuard(tool)))
 		case tool.ReadOnly:
-			kept = append(kept, tool)
+			kept = append(kept, planModeCalls(tool))
 		}
 	}
 	return NewCatalog(kept)
@@ -46,6 +48,23 @@ func (c *Catalog) Only(entries []string) (*Catalog, error) {
 		}
 	}
 	return NewCatalog(kept)
+}
+
+// planModeCalls marks every call of tool as a plan-mode call.
+func planModeCalls(tool Tool) Tool {
+	if execute := tool.Execute; execute != nil {
+		tool.Execute = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (string, error) {
+			execution.PlanMode = true
+			return execute(ctx, arguments, execution)
+		}
+	}
+	if execute := tool.ExecuteOutput; execute != nil {
+		tool.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
+			execution.PlanMode = true
+			return execute(ctx, arguments, execution)
+		}
+	}
+	return tool
 }
 
 // planModeGuard wraps a tool whose calls may or may not change files, so the ones that

@@ -287,3 +287,65 @@ func TestNewNeedsEveryNotifierVariable(t *testing.T) {
 		}
 	}
 }
+
+// A slack notifier posts {"text": ...} with &, < and > escaped; a template renders any other
+// body, reading the record's fields; a template whose output is not JSON fails without a
+// retry and nothing is sent.
+func TestSlackFormatAndTemplates(t *testing.T) {
+	slackSink, discordSink, textSink, brokenSink := newNotifySink(t), newNotifySink(t), newNotifySink(t), newNotifySink(t)
+	slack := testNotifier("slack", slackSink.server.URL)
+	slack.Format, slack.AnswerBytes = sessionfs.TriggerNotifyFormatSlack, 100
+	discord := testNotifier("discord", discordSink.server.URL)
+	discord.Template = `{"content": {{json .Text}}, "status": {{json .Status}}, "answer": {{json .Answer}}}`
+	discord.AnswerBytes = 100
+	text := testNotifier("text", textSink.server.URL)
+	text.Format, text.Template = sessionfs.TriggerNotifyFormatText, `{{.Trigger}} is {{.Status}}{{if .CostUSD}} for ${{printf "%.2f" .CostUSD}}{{end}}: {{slack .Answer}}`
+	text.AnswerBytes = 100
+	broken := testNotifier("broken", brokenSink.server.URL)
+	broken.Template, broken.Retries = `status={{.Status}}`, 3
+	runner := newFakeRunner()
+	cost := 1.5
+	runner.result = headless.Result{Status: headless.StatusCompleted, TurnID: "t1", Text: "a < b & \"c\"", CostUSD: &cost}
+	entry := webhookEntry()
+	entry.Notify = []string{"broken", "discord", "slack", "text"}
+	manager := notifyManager(t, runner, []sessionfs.TriggerNotifier{broken, discord, slack, text}, nil, entry)
+	handler := manager.Wrap(http.NotFoundHandler())
+	body := `{"x":1}`
+	if response := post(handler, "/api/triggers/ci", body, sign("s3cret", body)); response.Code != http.StatusAccepted {
+		t.Fatalf("webhook: %d %s", response.Code, response.Body)
+	}
+	close(runner.release)
+	run := waitNotified(t, handler)
+	byName := map[string]Notification{}
+	for _, notification := range run.Notifications {
+		byName[notification.Notifier] = notification
+	}
+	if got := byName["broken"]; got.Status != NotifyFailed || got.Attempts != 0 || !strings.Contains(got.Error, "did not produce JSON") {
+		t.Fatalf("broken template notification = %+v", got)
+	}
+	if requests, _ := brokenSink.received(); len(requests) != 0 {
+		t.Fatalf("a broken template sent %d requests", len(requests))
+	}
+	for _, name := range []string{"discord", "slack", "text"} {
+		if byName[name].Status != NotifySent {
+			t.Fatalf("%s notification = %+v", name, byName[name])
+		}
+	}
+
+	_, bodies := slackSink.received()
+	var slackBody map[string]string
+	if err := json.Unmarshal([]byte(bodies[0]), &slackBody); err != nil || len(slackBody) != 1 ||
+		slackBody["text"] != "jad trigger ci completed (session demo, webhook, 0s, $1.5000)\n\na &lt; b &amp; \"c\"" {
+		t.Fatalf("slack body = %s", bodies[0])
+	}
+	_, bodies = discordSink.received()
+	var discordBody map[string]string
+	if err := json.Unmarshal([]byte(bodies[0]), &discordBody); err != nil ||
+		discordBody["content"] != "jad trigger ci completed (session demo, webhook, 0s, $1.5000)" || discordBody["status"] != "completed" || discordBody["answer"] != `a < b & "c"` {
+		t.Fatalf("template body = %s", bodies[0])
+	}
+	requests, bodies := textSink.received()
+	if bodies[0] != `ci is completed for $1.50: a &lt; b &amp; "c"` || !strings.HasPrefix(requests[0].Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("text template body = %q", bodies[0])
+	}
+}

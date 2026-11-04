@@ -247,9 +247,18 @@ type InstallResult struct {
 // catalog file is checked with the loader's rules as it is written, and a skill is read the
 // way the skill tool reads it; any failure undoes the whole install.
 func (t Target) Install(ctx context.Context, source string, force bool) (result InstallResult, err error) {
+	return t.install(ctx, source, "", force)
+}
+
+// install installs the plugin in the folder source; label, when set, is the source the
+// record keeps in place of the folder (a git URL and commit for a clone).
+func (t Target) install(ctx context.Context, source, label string, force bool) (result InstallResult, err error) {
 	found, err := readBundle(source)
 	if err != nil {
 		return InstallResult{}, err
+	}
+	if label != "" {
+		found.source = label
 	}
 	name := found.manifest.Name
 	lock, err := t.lock(ctx, name)

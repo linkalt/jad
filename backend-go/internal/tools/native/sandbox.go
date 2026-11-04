@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // sandboxPlace is where a sandboxed child runs: the call's workspace root and working
@@ -23,6 +25,15 @@ type sandboxLaunch struct {
 	configured string
 	resolved   string
 	args       []string
+}
+
+// callSandbox is the sandbox one call's children start in: its plan-mode form for a call of
+// a plan-mode run, else the configured one.
+func callSandbox(sandbox *sessionfs.SandboxSettings, execution tools.ExecutionContext) *sessionfs.SandboxSettings {
+	if execution.PlanMode {
+		return sandbox.ForPlanMode()
+	}
+	return sandbox
 }
 
 // sandboxed returns how to start program (configured as configured, resolved to resolved)
@@ -176,6 +187,9 @@ func sandboxDescription(sandbox *sessionfs.SandboxSettings) string {
 	}
 	text := " Sandbox: every call runs in a bubblewrap sandbox. Writable: " + sandboxPathList(sandbox.WritablePaths) +
 		"; everything else is read-only, so a write elsewhere fails with \"Read-only file system\"."
+	if !slices.Equal(sandbox.PlanWritablePaths, sandbox.WritablePaths) {
+		text += " In plan mode, writable: " + sandboxPathList(sandbox.PlanWritablePaths) + "."
+	}
 	if len(sandbox.HidePaths) > 0 {
 		text += " Hidden (empty): " + sandboxPathList(sandbox.HidePaths) + "."
 	}

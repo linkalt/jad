@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,40 @@ func TestOnlyNarrowsToTheEntries(t *testing.T) {
 	}
 	if names(catalog) != "read,write,mcp_docs_search,mcp_git_log" {
 		t.Fatal("Only changed the receiver")
+	}
+}
+
+// Every tool a plan-mode catalog keeps sees PlanMode on its calls; the full catalog's do not.
+func TestPlanModeMarksTheCallsOfKeptTools(t *testing.T) {
+	var seen []bool
+	base := testTool(t)
+	record := func(name string, readOnly bool) Tool {
+		tool := namedTool(t, base, "native."+name, name)
+		tool.ReadOnly = readOnly
+		tool.ExecuteOutput = nil
+		tool.Execute = func(_ context.Context, _ map[string]any, execution ExecutionContext) (string, error) {
+			seen = append(seen, execution.PlanMode)
+			return `{"status":"ok"}`, nil
+		}
+		return tool
+	}
+	catalog, err := NewCatalog([]Tool{record("look", true), record("shell", false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := catalog.PlanMode([]string{"shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"look", "shell"} {
+		if _, err := plan.ExecuteFunctionCall(context.Background(), callJSON(t, "p-"+name, name, `{"command":"x"}`), ExecutionContext{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.ExecuteFunctionCall(context.Background(), callJSON(t, "w-"+name, name, `{"command":"x"}`), ExecutionContext{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(seen, []bool{true, false, true, false}) {
+		t.Fatalf("PlanMode seen = %v", seen)
 	}
 }
