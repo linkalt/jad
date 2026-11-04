@@ -280,6 +280,8 @@ func runShellChildDetailed(
 		spill:                    spillWriters,
 		stdin:                    run.stdin,
 		extraFiles:               run.extraFiles,
+		sandbox:                  settings.Sandbox,
+		workspace:                execution.WorkspaceRoot,
 	}
 	var child bashChildResult
 	if run.standby != nil {

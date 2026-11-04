@@ -390,7 +390,8 @@
           "cwd",
           "env_file",
           "tool_storage_dir",
-          "session_files"
+          "session_files",
+          "sandbox"
         ]
       },
       "properties": {
@@ -453,6 +454,9 @@
         },
         "session_files": {
           "$ref": "#/properties/session_files"
+        },
+        "sandbox": {
+          "$ref": "#/properties/sandbox"
         },
         "cwd": {
           "type": "string",
@@ -617,6 +621,48 @@
           "description": "How long requests skip the session's model after it failed one; 0 always tries it first."
         }
       }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Sandbox for the child processes of bash, exec, process and tool_smith. Off by default; while disabled every child starts as before. With backend bwrap (Linux, bubblewrap installed) each child runs with the whole file system read-only except writable_paths, a fresh /dev and /proc, hide_paths covered, every namespace new (user, pid, ipc, uts, cgroup) and no network unless network is true. With backend command, command is put in front of the program and its arguments (for example a sandbox-exec or firejail call). An enabled sandbox whose program cannot be run is refused at load, so a session never runs without the sandbox it asked for. Paths and command parts may use {workspace} (the call's workspace root; a writer sub-agent's worktree), {cwd} (the call's working directory), {git_common_dir} (the git directory shared by the workspace's repository and its worktrees), {tmp} (the system temp folder) and {home}; a path whose placeholder names nothing, or that does not exist, is left out. Under bwrap, a command killed by a signal reports exit code 128+signal. Hooks, glob and MCP servers are not sandboxed. Tool descriptions are unchanged.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
+        "tools": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["bash", "exec", "process", "tool_smith"]},
+          "default": ["bash", "exec", "process", "tool_smith"],
+          "description": "Tools whose child processes start in the sandbox."
+        },
+        "backend": {"enum": ["bwrap", "command"], "default": "bwrap", "description": "bwrap builds a bubblewrap call from the settings below; command uses command as given."},
+        "executable": {"type": "string", "pattern": "\\S", "default": "bwrap", "description": "bubblewrap program for backend bwrap: a PATH name or an absolute path."},
+        "network": {"type": "boolean", "default": false, "description": "Backend bwrap: keep the host network. False gives the child a network namespace with only loopback; Unix sockets on the file system still work."},
+        "writable_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "pattern": "^(/|\\{)"},
+          "default": ["{workspace}", "{git_common_dir}", "{tmp}"],
+          "description": "Backend bwrap: paths bound read-write; everything else is read-only. Absolute paths or paths starting with a placeholder. exec and tool_smith keep their code, result and socket files under {tmp}, so leave it in unless TMPDIR points elsewhere that is writable."
+        },
+        "hide_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "pattern": "^(/|\\{)"},
+          "default": [],
+          "description": "Backend bwrap: paths the child sees empty: a folder becomes an empty tmpfs, a file an empty file (for example {home}/.ssh or a credentials file)."
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"},
+          "description": "Backend command (required there, refused with bwrap): the program and arguments put in front of the child's resolved program and its arguments. Placeholders are filled in per call."
+        }
+      },
+      "if": {"properties": {"backend": {"const": "command"}}, "required": ["backend"]},
+      "then": {"required": ["command"], "not": {"required": ["executable"]}},
+      "else": {"not": {"required": ["command"]}}
     },
     "checkpoint": {
       "type": "object",

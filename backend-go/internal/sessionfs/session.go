@@ -224,6 +224,9 @@ type SessionConfig struct {
 	// ModelFallback lists the models a request goes to when the session's model fails
 	// it; nil means none.
 	ModelFallback *ModelFallbackSettings
+	// Sandbox is the sandbox setting when enabled: the tools it covers carry it in their
+	// own settings too. Nil runs every child without one, which is the default.
+	Sandbox *SandboxSettings
 	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
 	// before it starts another provider round; zero means no cap.
 	MaxRunCostUSD float64
@@ -372,6 +375,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	maxRunCost, err := normalizeMaxRunCost(setting["max_run_cost_usd"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	sandbox, err := normalizeSandbox(setting["sandbox"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -536,6 +543,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	applySandbox(sandbox, nativeBash, nativeExec, nativeToolSmith, nativeProcess)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
@@ -681,6 +689,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		OpenAIOAuth:              openAIOAuth,
 		MaxRunTokens:             maxRunTokens,
 		ModelFallback:            modelFallback,
+		Sandbox:                  sandbox,
 		MaxRunCostUSD:            maxRunCost,
 		Checkpoint:               checkpoint,
 		Hooks:                    hooks,

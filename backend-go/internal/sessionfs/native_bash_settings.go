@@ -97,6 +97,9 @@ type NativeBashSettings struct {
 	EnvFile       string
 	Env           map[string]string
 	EnvDeny       []string
+	// Sandbox, when set, is the sandbox every child of this tool starts in (the sandbox
+	// setting, for a tool it covers).
+	Sandbox *SandboxSettings
 }
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and

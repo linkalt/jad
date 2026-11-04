@@ -158,6 +158,7 @@ func executeNativeProcessAsync(
 	snapshot, err := manager.Start(ProcessStartRequest{
 		CWD:         resolved.realPath,
 		DisplayCWD:  resolved.displayPath,
+		Workspace:   execution.WorkspaceRoot,
 		Command:     command,
 		Stdin:       stdin,
 		Policy:      settings,

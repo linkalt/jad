@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"sync/atomic"
 	"time"
+
+	"jad/backend-go/internal/sessionfs"
 )
 
 const (
@@ -56,6 +58,10 @@ type bashChildRequest struct {
 	stdin string
 	// extraFiles are the child's fd 3 and up; the caller closes its copies.
 	extraFiles []*os.File
+	// sandbox, when set, is the sandbox the child starts in; workspace is the call's
+	// workspace root, which its {workspace} placeholder names.
+	sandbox   *sessionfs.SandboxSettings
+	workspace string
 }
 
 type bashChildResult struct {
@@ -107,6 +113,10 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
 	resolvedFile, err := resolveBashExecutable(request.file, request.environment, request.cwd)
+	var launch sandboxLaunch
+	if err == nil {
+		launch, err = sandboxed(request.sandbox, sandboxPlace{workspace: request.workspace, cwd: request.cwd}, request.file, resolvedFile, request.args)
+	}
 	if err != nil {
 		_ = stdoutReader.Close()
 		_ = stdoutWriter.Close()
@@ -114,7 +124,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		_ = stderrWriter.Close()
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
-	command := newBashCommand(request.file, resolvedFile, request.args...)
+	command := newBashCommand(launch.configured, launch.resolved, launch.args...)
 	command.Dir = request.cwd
 	command.Env = request.environment
 	command.Stdout = stdoutWriter

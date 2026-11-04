@@ -408,12 +408,12 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 			// start of this call would have; only the code file is a named pipe for now.
 			launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
 			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
-			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path}, nil
+			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: settings.Child.Sandbox, workspace: execution.WorkspaceRoot}, nil
 		}
 		launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
 		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
 		files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
-		return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files}, nil
+		return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: settings.Child.Sandbox, workspace: execution.WorkspaceRoot}, nil
 	}
 	keyed, _ := spawn(standbyKeyDir)
 	key := standbyKey(keyed)

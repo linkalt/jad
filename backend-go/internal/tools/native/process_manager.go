@@ -80,7 +80,9 @@ type ProcessStreamLimits struct {
 type ProcessStartRequest struct {
 	CWD        string
 	DisplayCWD string
-	Command    string
+	// Workspace is the call's workspace root, which a sandbox's {workspace} names.
+	Workspace string
+	Command   string
 	// Stdin is written once to the process's standard input, which is then
 	// closed. It is never stored. Empty leaves the input closed from the start.
 	Stdin       string
@@ -358,7 +360,12 @@ func (manager *ManagedProcessManager) Start(request ProcessStartRequest) (Proces
 	if request.Policy.LoginShell {
 		arguments = []string{"-l", "-c", request.Command}
 	}
-	command := newInterpreterCommand(request.Policy.Shell, resolvedShell, arguments...)
+	launch, err := sandboxed(request.Policy.Sandbox, sandboxPlace{workspace: request.Workspace, cwd: request.CWD}, request.Policy.Shell, resolvedShell, arguments)
+	if err != nil {
+		manager.failProcess(entry, err.Error())
+		return manager.snapshotEntry(entry), nil
+	}
+	command := newInterpreterCommand(launch.configured, launch.resolved, launch.args...)
 	command.Dir = request.CWD
 	command.Env = environment
 	command.Stdout = processStreamWriter{entry: entry, stream: bashStdout}

@@ -45,7 +45,9 @@ type NativeProcessStateContextSettings struct {
 // NativeProcessSettings contains process lifecycle, output, environment, and
 // storage policy for native.process.
 type NativeProcessSettings struct {
-	Policy      NativePathPolicy
+	Policy NativePathPolicy
+	// Sandbox, when set, is the sandbox every process starts in (the sandbox setting).
+	Sandbox     *SandboxSettings
 	Shell       string
 	LoginShell  bool
 	KillGraceMs int64
