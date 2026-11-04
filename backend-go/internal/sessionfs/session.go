@@ -109,7 +109,16 @@ type Model struct {
 	// Pricing is what the model costs per million tokens; nil means unknown, and its runs
 	// report no cost.
 	Pricing *ModelPricing
+	// PromptCacheKey is PromptCacheKeyOff (the default) or PromptCacheKeySession: every
+	// request of a session then carries the same prompt_cache_key, derived from the session.
+	PromptCacheKey string
 }
+
+// Values of a model file's prompt_cache_key.
+const (
+	PromptCacheKeyOff     = "off"
+	PromptCacheKeySession = "session"
+)
 
 // Provider protocols a model file can name in api.
 const (
@@ -1083,7 +1092,12 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if err != nil {
 		return Model{}, err
 	}
+	promptCacheKey, err := promptCacheKeyField(fields, path, api, request)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
+		PromptCacheKey:  promptCacheKey,
 		Pricing:         pricing,
 		Efforts:         efforts,
 		Provider:        provider,
@@ -1100,6 +1114,32 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 		Anthropic:       anthropicConfig,
 		ChatCompletions: chatConfig,
 	}, nil
+}
+
+// promptCacheKeyField reads prompt_cache_key: "off" (the default) or "session". It is an
+// OpenAI Responses field, so it needs api responses, and it cannot be set twice: a
+// request.prompt_cache_key already sends a fixed key.
+func promptCacheKeyField(fields map[string]json.RawMessage, path, api string, request json.RawMessage) (string, error) {
+	mode, err := stringField(fields, "prompt_cache_key", PromptCacheKeyOff, path)
+	if err != nil {
+		return "", err
+	}
+	if mode != PromptCacheKeyOff && mode != PromptCacheKeySession {
+		return "", configError("%s: prompt_cache_key must be %q or %q", path, PromptCacheKeyOff, PromptCacheKeySession)
+	}
+	if mode == PromptCacheKeyOff {
+		return mode, nil
+	}
+	if api != APIResponses {
+		return "", configError("%s: prompt_cache_key %q needs api responses", path, mode)
+	}
+	var requestFields map[string]json.RawMessage
+	if json.Unmarshal(request, &requestFields) == nil {
+		if _, exists := requestFields["prompt_cache_key"]; exists {
+			return "", configError("%s: prompt_cache_key %q and request.prompt_cache_key both set the key; keep one", path, mode)
+		}
+	}
+	return mode, nil
 }
 
 // hostedToolsField reads hosted_tools: an optional array of tool objects the provider

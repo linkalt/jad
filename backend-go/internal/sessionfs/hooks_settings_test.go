@@ -17,6 +17,7 @@ func defaultHooksWant() HooksSettings {
 		TimeoutMS: 60_000, MaxOutputBytes: 8192, MaxPayloadBytes: 65_536,
 		KillGraceMs: 2000, KillDeadlineMs: 2000, DrainAfterExitMs: 500, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
 		Env: map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}, EnvDeny: []string{},
+		PromptContextRole: "developer",
 	}
 }
 
@@ -276,11 +277,13 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 		entryKeys = append(entryKeys, key)
 	}
 	for list, loader := range map[string][]string{
-		"pre_tool":    preToolHookKeys,
-		"post_tool":   toolEventHookKeys,
-		"run_start":   runEventHookKeys,
-		"run_end":     runEventHookKeys,
-		"pre_compact": runEventHookKeys,
+		"pre_tool":      preToolHookKeys,
+		"post_tool":     toolEventHookKeys,
+		"run_start":     runEventHookKeys,
+		"run_end":       runEventHookKeys,
+		"pre_compact":   preCompactHookKeys,
+		"prompt_submit": promptHookKeys,
+		"subagent_stop": runEventHookKeys,
 	} {
 		got := sortedItemKeys(schema.Properties.Hooks.Properties[list].Items.Properties)
 		want := append([]string(nil), loader...)

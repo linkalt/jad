@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/httpapi"
@@ -113,7 +114,11 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 		return result, mapSessionError(err)
 	}
 	m.shared.invalidateTurnStarts()
-	fireSessionHook(ctx, m.logger, m.reference, m.config, native.RunEvent{Event: native.HookEventPreCompact, Trigger: native.CompactTriggerManual}, nil)
+	hooked := fireSessionHook(ctx, m.logger, m.reference, m.config, native.RunEvent{Event: native.HookEventPreCompact, Trigger: native.CompactTriggerManual}, nil)
+	if hooked.BlockedBy != "" {
+		blocked := native.HookBlockedError{Event: native.HookEventPreCompact, Hook: hooked.BlockedBy}
+		return result, &httpapi.StatusError{Code: http.StatusConflict, Message: blocked.ClientMessage()}
+	}
 	compacted, err := m.shared.compactPreservingUsage(m.config, transcript.CompactionOptions{
 		TurnType:       m.config.Compaction.TurnType,
 		KeepTurns:      m.config.Compaction.KeepTurns,

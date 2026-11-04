@@ -76,6 +76,10 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	// still fail (an unreadable model file, an unreachable tool server, a missing
 	// credential): the message is not lost, and the next run repairs and continues
 	// from it. A run that gives up while waiting for the lock stores nothing.
+	// The prompt_submit commands run first: one that blocks leaves nothing stored.
+	if input, err = r.promptSubmitInput(ctx, input, options.TurnID, options.OnHookReport); err != nil {
+		return session.RunResult{}, err
+	}
 	persisted, err := session.PersistInputWithImages(r.shared.store, input, nextSessionTurn, newImageStore(r.config.ImageStore))
 	if err != nil {
 		return session.RunResult{}, err
@@ -117,7 +121,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	}
 	options.NextSessionTurn = nextSessionTurn
 	options.CompactHistory = func(compaction transcript.CompactionOptions) (transcript.CompactionResult, error) {
-		r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventPreCompact, TurnID: options.TurnID, Trigger: native.CompactTriggerAutomatic}, options.OnHookReport)
+		hooked := fireSessionHook(ctx, r.resolver.logger, r.reference, r.config, native.RunEvent{Event: native.HookEventPreCompact, TurnID: options.TurnID, Trigger: native.CompactTriggerAutomatic}, options.OnHookReport)
+		if hooked.BlockedBy != "" {
+			// A blocked automatic compaction is skipped, and the run goes on uncompacted.
+			return transcript.CompactionResult{}, nil
+		}
 		return r.shared.compactPreservingUsage(r.config, compaction)
 	}
 	options.RefreshStateContext = func(context.Context) ([]session.StateContextPrompt, error) {

@@ -111,7 +111,8 @@ func TestHooksPreCompactRejectsBadValues(t *testing.T) {
 		{"object", map[string]any{"pre_compact": map[string]any{}}, "hooks.pre_compact must be a list"},
 		{"too long", map[string]any{"pre_compact": make([]any, 33)}, "hooks.pre_compact must be a list of at most 32"},
 		{"match", map[string]any{"pre_compact": []any{entry(map[string]any{"match": "*"})}}, "hooks.pre_compact[0].match is not supported"},
-		{"blocking", map[string]any{"pre_compact": []any{entry(map[string]any{"blocking": true})}}, "hooks.pre_compact[0].blocking is not supported"},
+		{"blocking not a boolean", map[string]any{"pre_compact": []any{entry(map[string]any{"blocking": "yes"})}}, "hooks.pre_compact[0].blocking must be a boolean"},
+		{"context", map[string]any{"pre_compact": []any{entry(map[string]any{"context": true})}}, "hooks.pre_compact[0].context is not supported"},
 		{"duplicate", map[string]any{"pre_compact": []any{entry(nil), entry(nil)}}, `hooks.pre_compact[1].name "a" is used twice`},
 		{"run_start blocking", map[string]any{"run_start": []any{entry(map[string]any{"blocking": true})}}, "hooks.run_start[0].blocking is not supported"},
 		{"post_tool blocking", map[string]any{"post_tool": []any{entry(map[string]any{"blocking": true})}}, "hooks.post_tool[0].blocking is not supported"},
@@ -149,5 +150,90 @@ func TestHooksPreToolBlockingLoads(t *testing.T) {
 	_, err = loadSetting(t, map[string]any{"hooks": map[string]any{"pre_tool": []any{map[string]any{"name": "a", "argv": []any{"a"}, "blocking": nil}}}})
 	if err == nil || !strings.Contains(err.Error(), "hooks.pre_tool[0].blocking must be a boolean") {
 		t.Fatalf("null blocking: error = %v", err)
+	}
+}
+
+func TestHooksPreCompactBlockingLoads(t *testing.T) {
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled":     true,
+		"pre_compact": []any{map[string]any{"name": "keep", "argv": []any{"keep"}, "blocking": true}, map[string]any{"name": "log", "argv": []any{"log"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RunEventHook{{Name: "keep", Argv: []string{"keep"}, Blocking: true}, {Name: "log", Argv: []string{"log"}}}
+	if !reflect.DeepEqual(config.Hooks.PreCompact, want) {
+		t.Fatalf("pre_compact = %+v, want %+v", config.Hooks.PreCompact, want)
+	}
+}
+
+func TestHooksPromptSubmitAndSubagentStopLoad(t *testing.T) {
+	config, err := loadSetting(t, map[string]any{"hooks": map[string]any{
+		"enabled":             true,
+		"prompt_context_role": "system",
+		"prompt_submit": []any{
+			map[string]any{"name": "gate", "argv": []any{"gate"}, "blocking": true},
+			map[string]any{"name": "notes", "argv": []any{"notes"}, "context": true, "on_failure_only": true},
+		},
+		"subagent_stop": []any{map[string]any{"name": "done", "argv": []any{"done"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := defaultHooksWant()
+	want.Enabled = true
+	want.PromptContextRole = "system"
+	want.PromptSubmit = []RunEventHook{
+		{Name: "gate", Argv: []string{"gate"}, Blocking: true},
+		{Name: "notes", Argv: []string{"notes"}, Context: true, OnFailureOnly: true},
+	}
+	want.SubagentStop = []RunEventHook{{Name: "done", Argv: []string{"done"}}}
+	if !reflect.DeepEqual(config.Hooks, want) || !config.Hooks.RunEventsActive() || config.Hooks.ToolEventsActive() {
+		t.Fatalf("hooks = %+v, want %+v", config.Hooks, want)
+	}
+	for _, only := range []map[string]any{
+		{"enabled": true, "prompt_submit": []any{map[string]any{"name": "a", "argv": []any{"a"}}}},
+		{"enabled": true, "subagent_stop": []any{map[string]any{"name": "a", "argv": []any{"a"}}}},
+	} {
+		config, err := loadSetting(t, map[string]any{"hooks": only})
+		if err != nil || !config.Hooks.RunEventsActive() {
+			t.Fatalf("hooks %v: err=%v active=%v", only, err, config.Hooks.RunEventsActive())
+		}
+	}
+}
+
+func TestHooksPromptSubmitAndSubagentStopRejectBadValues(t *testing.T) {
+	entry := func(extra map[string]any) map[string]any {
+		value := map[string]any{"name": "a", "argv": []any{"a"}}
+		for key, item := range extra {
+			value[key] = item
+		}
+		return value
+	}
+	cases := []struct {
+		name  string
+		hooks map[string]any
+		want  string
+	}{
+		{"prompt_submit object", map[string]any{"prompt_submit": map[string]any{}}, "hooks.prompt_submit must be a list"},
+		{"prompt_submit match", map[string]any{"prompt_submit": []any{entry(map[string]any{"match": "*"})}}, "hooks.prompt_submit[0].match is not supported"},
+		{"prompt_submit context", map[string]any{"prompt_submit": []any{entry(map[string]any{"context": "yes"})}}, "hooks.prompt_submit[0].context must be a boolean"},
+		{"prompt_submit context null", map[string]any{"prompt_submit": []any{entry(map[string]any{"context": nil})}}, "hooks.prompt_submit[0].context must be a boolean"},
+		{"prompt_submit duplicate", map[string]any{"prompt_submit": []any{entry(nil), entry(nil)}}, `hooks.prompt_submit[1].name "a" is used twice`},
+		{"subagent_stop too long", map[string]any{"subagent_stop": make([]any, 33)}, "hooks.subagent_stop must be a list of at most 32"},
+		{"subagent_stop blocking", map[string]any{"subagent_stop": []any{entry(map[string]any{"blocking": true})}}, "hooks.subagent_stop[0].blocking is not supported"},
+		{"subagent_stop context", map[string]any{"subagent_stop": []any{entry(map[string]any{"context": true})}}, "hooks.subagent_stop[0].context is not supported"},
+		{"pre_tool context", map[string]any{"pre_tool": []any{entry(map[string]any{"context": true})}}, "hooks.pre_tool[0].context is not supported"},
+		{"run_end context", map[string]any{"run_end": []any{entry(map[string]any{"context": true})}}, "hooks.run_end[0].context is not supported"},
+		{"context role", map[string]any{"prompt_context_role": "user"}, `hooks.prompt_context_role must be "developer" or "system"`},
+		{"context role null", map[string]any{"prompt_context_role": nil}, `hooks.prompt_context_role must be "developer" or "system"`},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadSetting(t, map[string]any{"hooks": test.hooks})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want one containing %q", err, test.want)
+			}
+		})
 	}
 }

@@ -118,6 +118,13 @@ func runHookChild(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv,
 // runHookChildPassed is runHookChild that also says whether the command exited 0. A command
 // that could not start, was stopped, timed out or was killed by a signal did not pass.
 func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot string, hook hookChild) (string, bool) {
+	section, passed, _ := runHookChildOutput(ctx, hooks, apiKeyEnv, workspaceRoot, hook)
+	return section, passed
+}
+
+// runHookChildOutput is runHookChildPassed that also returns the command's standard output,
+// as cut to hooks.max_output_bytes, for a command whose output is its answer.
+func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot string, hook hookChild) (string, bool, bashStreamOutput) {
 	before := ""
 	if hook.watched != "" {
 		before = fileDigest(hook.watched)
@@ -150,11 +157,11 @@ func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))
 	switch {
 	case child.spawnError != nil:
-		return label + "could not start: " + child.spawnError.Error() + " (setting: " + hook.setting + ")", false
+		return label + "could not start: " + child.spawnError.Error() + " (setting: " + hook.setting + ")", false, bashStreamOutput{}
 	case child.aborted:
-		return label + "stopped before it finished", false
+		return label + "stopped before it finished", false, bashStreamOutput{}
 	case child.timedOut:
-		return label + fmt.Sprintf("timed out after %d ms (setting: hooks.timeout_ms)", hooks.TimeoutMS) + hookOutputBlock(child.output, maximum), false
+		return label + fmt.Sprintf("timed out after %d ms (setting: hooks.timeout_ms)", hooks.TimeoutMS) + hookOutputBlock(child.output, maximum), false, bashStreamOutput{}
 	}
 	changedNote := ""
 	if hook.watched != "" && fileDigest(hook.watched) != before {
@@ -162,9 +169,9 @@ func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 	}
 	if child.hasExitCode && child.exitCode == 0 {
 		if hook.onFailureOnly && changedNote == "" {
-			return "", true
+			return "", true, child.output.stdout
 		}
-		return label + "passed (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), true
+		return label + "passed (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), true, child.output.stdout
 	}
 	status := "failed"
 	if child.signal != "" {
@@ -172,7 +179,7 @@ func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 	} else if child.hasExitCode {
 		status += fmt.Sprintf(", exit %d", child.exitCode)
 	}
-	return label + status + " (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), false
+	return label + status + " (" + timing + ")" + changedNote + hookOutputBlock(child.output, maximum), false, bashStreamOutput{}
 }
 
 // hookWorkingDirectory resolves the check's directory. found is false only for a

@@ -218,7 +218,16 @@ type streamIdleError interface{ IdleTimeout() time.Duration }
 // the provider's HTTP status when there was one, otherwise a generic line. The
 // detail (a response body, a path, a tool server's message) stays in the server
 // log. The wording matches the TypeScript backend.
+// clientMessageError is an error whose ClientMessage holds nothing a client may not read.
+type clientMessageError interface {
+	ClientMessage() string
+}
+
 func clientRunErrorMessage(err error) string {
+	var safe clientMessageError
+	if errors.As(err, &safe) {
+		return safe.ClientMessage()
+	}
 	// Its text holds only numbers the harness counted, so a client may read it.
 	var tokenLimit *session.RunTokenLimitError
 	if errors.As(err, &tokenLimit) {

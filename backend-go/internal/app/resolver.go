@@ -495,11 +495,12 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	runner := shared.runners[runnerKey]
 	if runner == nil {
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
-			Model:       config.Model.Name,
-			Request:     config.Model.Request,
-			HostedTools: config.Model.HostedTools,
-			PromptRole:  config.Model.PromptRole,
-			PromptText:  config.Model.PromptText,
+			Model:          config.Model.Name,
+			Request:        config.Model.Request,
+			HostedTools:    config.Model.HostedTools,
+			PromptRole:     config.Model.PromptRole,
+			PromptText:     config.Model.PromptText,
+			PromptCacheKey: promptCacheKey(config.Model, config.MessagesPath),
 		})
 		if err != nil {
 			return preparedRun{}, fmt.Errorf("create session runner: %w", err)
@@ -1246,7 +1247,10 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		ChatCompletions json.RawMessage
 		// The priced wrapper holds the pricing.
 		Pricing *sessionfs.ModelPricing
+		// The runner's model settings hold the prompt cache key.
+		PromptCacheKey string
 	}{
+		PromptCacheKey:  config.Model.PromptCacheKey,
 		ModelPath:       config.ModelPath,
 		Provider:        config.Model.Provider,
 		Model:           config.Model.Name,

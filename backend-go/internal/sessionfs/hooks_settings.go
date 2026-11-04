@@ -15,6 +15,8 @@ const (
 	HookCwdWorkspace     = "workspace"
 	HookCwdNearestPrefix = "nearest:"
 
+	defaultHooksPromptContextRole = "developer"
+
 	defaultHooksTimeoutMS       int64 = 60_000
 	minHooksTimeoutMS           int64 = 1_000
 	maxHooksTimeoutMS           int64 = 600_000
@@ -32,11 +34,13 @@ const (
 )
 
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_deadline_ms", "drain_after_exit_ms", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "run_end", "run_start", "strip_ansi", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_deadline_ms", "drain_after_exit_ms", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "prompt_context_role", "prompt_submit", "run_end", "run_start", "strip_ansi", "subagent_stop", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
 	preToolHookKeys    = []string{"argv", "blocking", "match", "name", "on_failure_only"}
 	runEventHookKeys   = []string{"argv", "name", "on_failure_only"}
+	preCompactHookKeys = []string{"argv", "blocking", "name", "on_failure_only"}
+	promptHookKeys     = []string{"argv", "blocking", "context", "name", "on_failure_only"}
 	hookMatchPattern   = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\*|[A-Za-z0-9_.-]{1,128}))$`)
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	hookExtPattern     = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -63,7 +67,17 @@ type HooksSettings struct {
 	RunStart []RunEventHook
 	RunEnd   []RunEventHook
 	// PreCompact runs before every compaction attempt of the session, automatic or manual.
+	// A blocking entry that does not exit 0 skips that attempt.
 	PreCompact []RunEventHook
+	// PromptSubmit runs before the input of every run of the session itself is stored. A
+	// blocking entry that does not exit 0 refuses the run and stores nothing; the standard
+	// output of a context entry that exits 0 is stored after the input, for the model.
+	PromptSubmit []RunEventHook
+	// PromptContextRole is the role of the message that carries the prompt_submit context:
+	// "developer" (the default) or "system".
+	PromptContextRole string
+	// SubagentStop runs in the parent session each time a sub-agent run of the subagent tool ends.
+	SubagentStop []RunEventHook
 	// MaxPayloadBytes cuts the event JSON a command reads on stdin.
 	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
@@ -109,6 +123,8 @@ type ToolEventHook struct {
 	// Blocking (pre_tool only) stops the call when the command does not exit 0: a non-zero
 	// exit, a signal, a timeout or a command that could not start.
 	Blocking bool
+	// Context is read for prompt_submit entries only (see RunEventHook).
+	Context bool
 }
 
 // RunEventHook is one command run at the start or the end of a run, or before a compaction. It reads the event as
@@ -119,6 +135,11 @@ type RunEventHook struct {
 	Argv []string
 	// OnFailureOnly leaves a passing command out of the log.
 	OnFailureOnly bool
+	// Blocking (prompt_submit and pre_compact only) stops the run or the compaction when the
+	// command does not exit 0; the commands after it are not started.
+	Blocking bool
+	// Context (prompt_submit only) hands the standard output of a command that exits 0 to the model.
+	Context bool
 }
 
 // Active reports whether any check can run.
@@ -126,9 +147,11 @@ func (settings HooksSettings) Active() bool {
 	return settings.PostEditActive() || settings.ToolEventsActive() || settings.RunEventsActive()
 }
 
-// RunEventsActive reports whether a run_start, run_end or pre_compact command can run.
+// RunEventsActive reports whether a run_start, run_end, pre_compact, prompt_submit or
+// subagent_stop command can run.
 func (settings HooksSettings) RunEventsActive() bool {
-	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0 || len(settings.PreCompact) > 0)
+	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0 || len(settings.PreCompact) > 0 ||
+		len(settings.PromptSubmit) > 0 || len(settings.SubagentStop) > 0)
 }
 
 // PostEditActive reports whether a post_edit check can run.
@@ -144,7 +167,7 @@ func (settings HooksSettings) ToolEventsActive() bool {
 // normalizeHooksSettings reads the `hooks` node. Only an absent key takes a default; a
 // null or misspelt value is an error so a typo cannot quietly turn a check off.
 func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string) (HooksSettings, error) {
-	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes, MaxPayloadBytes: defaultHooksMaxPayloadBytes}
+	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes, MaxPayloadBytes: defaultHooksMaxPayloadBytes, PromptContextRole: defaultHooksPromptContextRole}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -221,6 +244,19 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 	}
 	if settings.PreCompact, err = normalizeRunEventHooks(fields, "pre_compact", settingPath); err != nil {
 		return HooksSettings{}, err
+	}
+	if settings.PromptSubmit, err = normalizeRunEventHooks(fields, "prompt_submit", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.SubagentStop, err = normalizeRunEventHooks(fields, "subagent_stop", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if value, exists := fields["prompt_context_role"]; exists {
+		role := ""
+		if json.Unmarshal(value, &role) != nil || (role != "developer" && role != "system") {
+			return HooksSettings{}, configError("%s: hooks.prompt_context_role must be \"developer\" or \"system\"", settingPath)
+		}
+		settings.PromptContextRole = role
 	}
 	return settings, nil
 }
@@ -328,12 +364,13 @@ func normalizeToolEventHooks(fields map[string]json.RawMessage, event, settingPa
 	return normalizeEventHookList(fields, event, settingPath, maxHooksToolEvent)
 }
 
-// normalizeRunEventHooks reads run_start, run_end or pre_compact: the entries of a tool event without match.
+// normalizeRunEventHooks reads run_start, run_end, pre_compact, prompt_submit or subagent_stop:
+// the entries of a tool event without match.
 func normalizeRunEventHooks(fields map[string]json.RawMessage, event, settingPath string) ([]RunEventHook, error) {
 	entries, err := normalizeEventHookList(fields, event, settingPath, maxHooksRunEvent)
 	var hooks []RunEventHook
 	for _, entry := range entries {
-		hooks = append(hooks, RunEventHook{Name: entry.Name, Argv: entry.Argv, OnFailureOnly: entry.OnFailureOnly})
+		hooks = append(hooks, RunEventHook{Name: entry.Name, Argv: entry.Argv, OnFailureOnly: entry.OnFailureOnly, Blocking: entry.Blocking, Context: entry.Context})
 	}
 	return hooks, err
 }
@@ -373,8 +410,12 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	switch event {
 	case "pre_tool":
 		allowed = preToolHookKeys
-	case "run_start", "run_end", "pre_compact":
+	case "run_start", "run_end", "subagent_stop":
 		allowed = runEventHookKeys
+	case "pre_compact":
+		allowed = preCompactHookKeys
+	case "prompt_submit":
+		allowed = promptHookKeys
 	}
 	for key := range fields {
 		if !containsString(allowed, key) {
@@ -415,6 +456,11 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	if value, exists := fields["blocking"]; exists {
 		if json.Unmarshal(value, &hook.Blocking) != nil || strings.TrimSpace(string(value)) == "null" {
 			return ToolEventHook{}, configError("%s.blocking must be a boolean", path)
+		}
+	}
+	if value, exists := fields["context"]; exists {
+		if json.Unmarshal(value, &hook.Context) != nil || strings.TrimSpace(string(value)) == "null" {
+			return ToolEventHook{}, configError("%s.context must be a boolean", path)
 		}
 	}
 	return hook, nil

@@ -41,6 +41,8 @@ type ModelSettings struct {
 	HostedTools []json.RawMessage
 	PromptRole  string
 	PromptText  string
+	// PromptCacheKey, when set, is sent as the request's prompt_cache_key.
+	PromptCacheKey string
 }
 
 type inputTextContent struct {
@@ -382,6 +384,11 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 	}
 	requestFields["model"] = modelJSON
 	requestFields["input"] = inputJSON
+	if settings.PromptCacheKey != "" {
+		if requestFields["prompt_cache_key"], err = json.Marshal(settings.PromptCacheKey); err != nil {
+			return nil, fmt.Errorf("serialize prompt cache key: %w", err)
+		}
+	}
 	requestFields["stream"] = json.RawMessage("true")
 	if allTools := appendHostedTools(responseTools, settings.HostedTools); len(allTools) > 0 {
 		encodedTools, err := json.Marshal(allTools)

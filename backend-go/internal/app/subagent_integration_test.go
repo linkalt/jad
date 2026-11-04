@@ -100,6 +100,8 @@ type providerRequest struct {
 	Authorization string
 	// ToolTypes lists the type of every tool in the request, function or hosted.
 	ToolTypes []string
+	// PromptCacheKey is the request's prompt_cache_key, "" when it has none.
+	PromptCacheKey string
 }
 
 func (p *subagentProvider) handler(t *testing.T) http.Handler {
@@ -109,15 +111,16 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			return
 		}
 		var body struct {
-			Model string            `json:"model"`
-			Tools []json.RawMessage `json:"tools"`
-			Input []json.RawMessage `json:"input"`
+			Model          string            `json:"model"`
+			Tools          []json.RawMessage `json:"tools"`
+			Input          []json.RawMessage `json:"input"`
+			PromptCacheKey string            `json:"prompt_cache_key"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid Responses request", http.StatusBadRequest)
 			return
 		}
-		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization")}
+		record := providerRequest{Model: body.Model, Input: body.Input, Authorization: r.Header.Get("Authorization"), PromptCacheKey: body.PromptCacheKey}
 		for _, tool := range body.Tools {
 			var named struct {
 				Type        string          `json:"type"`

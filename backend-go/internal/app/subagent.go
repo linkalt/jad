@@ -67,6 +67,8 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 		HostedTools: config.Model.HostedTools,
 		PromptRole:  config.Model.PromptRole,
 		PromptText:  config.Model.PromptText,
+		// The children of one agent share a key: they share the agent's prompt and tools.
+		PromptCacheKey: promptCacheKey(config.Model, l.parent.MessagesPath+"\x00"+request.Agent.Name),
 	})
 	if err != nil {
 		return native.SubagentResult{}, fmt.Errorf("create sub-agent runner: %w", err)
@@ -110,10 +112,39 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	outcome := native.SubagentResult{Rounds: int(rounds.Load()), Tokens: tokens.Load()}
 	if runErr != nil {
 		outcome.Text, _ = lastText.Load().(string)
-		return outcome, runErr
+	} else {
+		outcome.Text = native.SubagentAnswerText(result.Event)
 	}
-	outcome.Text = native.SubagentAnswerText(result.Event)
-	return outcome, nil
+	l.subagentStopHook(ctx, request, outcome, runErr)
+	return outcome, runErr
+}
+
+// subagentStopHook reports the end of one child run to the parent session's subagent_stop
+// commands. Like run_end, it runs on a context the stop cannot cancel, so a child that was
+// stopped or timed out still reports; its reports go to the server log only.
+func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.SubagentRequest, outcome native.SubagentResult, runErr error) {
+	hooks := l.parent.Hooks
+	if !hooks.Enabled || len(hooks.SubagentStop) == 0 {
+		return
+	}
+	event := native.RunEvent{
+		Event:  native.HookEventSubagentStop,
+		Agent:  request.Agent.Name,
+		CallID: request.CallID,
+		Rounds: outcome.Rounds,
+		Tokens: outcome.Tokens,
+		Answer: outcome.Text,
+	}
+	switch {
+	case runErr == nil:
+		event.Outcome = native.RunOutcomeOK
+	case errors.Is(runErr, context.Canceled):
+		event.Outcome = native.RunOutcomeCancelled
+	default:
+		event.Outcome, event.Error = native.RunOutcomeError, runErr.Error()
+	}
+	reference, _, _ := strings.Cut(request.Execution.SessionKey, "\x00")
+	fireSessionHook(context.WithoutCancel(ctx), l.resolver.logger, reference, l.parent, event, nil)
 }
 
 // compactionFor is the automatic compaction of one child. The agent's own trigger and
