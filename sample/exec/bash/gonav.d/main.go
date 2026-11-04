@@ -2837,9 +2837,6 @@ func (se *session) typedAnswer(spec string, callsOnly bool) *typeAnswer {
 		}
 	}
 	for _, imp := range ld.importersOf(base) {
-		if cfg.noTests && imp.ForTest != "" {
-			continue
-		}
 		if seenVariant[imp.ImportPath] {
 			continue
 		}
@@ -2922,12 +2919,8 @@ func (ck *checker) buildTagged(ld *loader, scope []*listPackage, want targetSpec
 	var out []Site
 	seen := map[string]bool{}
 	for _, lp := range scope {
-		compiled := map[string]bool{}
-		for _, f := range lp.CompiledGoFiles {
-			compiled[filepath.Base(f)] = true
-		}
 		for _, name := range lp.IgnoredGoFiles {
-			if compiled[filepath.Base(name)] || !strings.HasSuffix(name, ".go") {
+			if !strings.HasSuffix(name, ".go") {
 				continue
 			}
 			abs := name
