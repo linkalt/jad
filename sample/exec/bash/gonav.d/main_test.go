@@ -464,3 +464,248 @@ func TestUnknownCommandAndMissingSymbolFail(t *testing.T) {
 		t.Fatal("source without ranges must fail")
 	}
 }
+
+// fixture2 covers struct fields, const/var uses, same-name symbols in two packages and test-only definitions.
+func fixture2(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"backend-go/p/p.go": `package p
+
+const Limit = 10
+
+var counter int
+
+type Config struct {
+	maxLines int
+	Name     string
+}
+
+func (c *Config) Lines() int {
+	if c.maxLines > Limit {
+		counter++
+	}
+	return c.maxLines
+}
+
+func New() Config {
+	return Config{maxLines: Limit}
+}
+
+func wait() int { return Limit }
+
+func useWait() int { return wait() }
+`,
+		"backend-go/p/p_test.go": `package p
+
+import "testing"
+
+type fixture struct{}
+
+func (fixture) helperOnlyInTests() int { return Limit }
+
+func wait2() int { return 0 }
+
+func TestLimit(t *testing.T) {
+	if New().maxLines != Limit {
+		t.Fatal("x")
+	}
+}
+`,
+		"backend-go/q/q.go": `package q
+
+import "jad/backend-go/p"
+
+func wait() int { return p.Limit }
+
+func useWait() int { return wait() }
+
+func useCounter() int { return p.Limit + 1 }
+`,
+	}
+	for rel, body := range files {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func textOf(t *testing.T, root string, cfg config) string {
+	t.Helper()
+	cfg.root = root
+	if cfg.path == "" {
+		cfg.path = "backend-go"
+	}
+	if cfg.max == 0 {
+		cfg.max = defaultMax
+	}
+	if cfg.maxLines == 0 {
+		cfg.maxLines = defaultMaxLine
+	}
+	text, err := executeText(cfg, time.Now())
+	if err != nil {
+		if pe, ok := err.(*resultError); ok {
+			return pe.value["text"].(string)
+		}
+		t.Fatalf("executeText: %v", err)
+	}
+	return text
+}
+
+func TestFieldIsIndexedAndItsUsesAreFound(t *testing.T) {
+	root := fixture2(t)
+	got := answer(t, root, "navigate", "Config.maxLines")
+	defs := rows(got["definitions"])
+	if len(defs) != 1 || defs[0]["kind"] != "field" || number(defs[0]["start_line"]) != 8 {
+		t.Fatalf("definitions = %v, want the maxLines field at line 8", defs)
+	}
+	callers := rows(got["callers"])
+	var in []string
+	for _, c := range callers {
+		in = append(in, c["in"].(string))
+	}
+	if strings.Join(in, ",") != "Config.Lines,Config.Lines,New" && strings.Join(in, ",") != "Config.Lines,New" {
+		t.Fatalf("callers = %v, want Config.Lines and New", in)
+	}
+	if bare := answer(t, root, "symbol", "maxLines"); number(bare["count"]) != 1 {
+		t.Fatalf("bare field name must resolve: %v", bare)
+	}
+}
+
+func TestConstAndVarUsesAreCollected(t *testing.T) {
+	root := fixture2(t)
+	got := answer(t, root, "navigate", "p.Limit")
+	files := map[string]bool{}
+	for _, c := range rows(got["callers"]) {
+		files[c["file"].(string)] = true
+	}
+	if !files["backend-go/p/p.go"] || !files["backend-go/q/q.go"] {
+		t.Fatalf("callers = %v, want uses in p.go and (through the import) q.go", got["callers"])
+	}
+	if len(rows(got["tests"])) == 0 {
+		t.Fatalf("tests = %v, want the use in p_test.go", got["tests"])
+	}
+	counter := answer(t, root, "navigate", "counter")
+	if number(counter["counts"].(map[string]any)["callers"]) != 1 {
+		t.Fatalf("var counter uses = %v, want 1", counter["counts"])
+	}
+}
+
+func TestSameNameInDifferentPackagesIsNotMerged(t *testing.T) {
+	root := fixture2(t)
+	got := answer(t, root, "navigate", "wait")
+	if got["ambiguous"] != true || len(rows(got["candidates"])) != 2 {
+		t.Fatalf("want 2 candidates, got %v", got)
+	}
+	one := answer(t, root, "navigate", "q.wait")
+	if one["ambiguous"] == true || len(rows(one["definitions"])) != 1 {
+		t.Fatalf("q.wait must resolve to one definition: %v", one)
+	}
+	callers := rows(one["callers"])
+	if len(callers) != 1 || callers[0]["file"] != "backend-go/q/q.go" {
+		t.Fatalf("q.wait callers = %v, want only the q package use", callers)
+	}
+	m := answer(t, root, "symbol", "Config.Lines")
+	if number(m["count"]) != 1 {
+		t.Fatalf("Type.Method must resolve: %v", m)
+	}
+}
+
+func TestNoTestsDropsDefinitionsInTestFiles(t *testing.T) {
+	root := fixture2(t)
+	with := answer(t, root, "symbol", "wait2")
+	if number(with["count"]) != 1 {
+		t.Fatalf("wait2 should be defined in the test file: %v", with)
+	}
+	without := answer(t, root, "symbol", "wait2", func(c *config) { c.noTests = true })
+	if without["ok"] != false {
+		t.Fatalf("--no-tests must drop test-file definitions: %v", without)
+	}
+	if text := textOf(t, root, config{cmd: "symbol", symbol: "helperOnlyInTests", noTests: true}); !strings.HasPrefix(text, "error:") {
+		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestMultiSymbolInOneCall(t *testing.T) {
+	root := fixture2(t)
+	got := answer(t, root, "symbol", "", func(c *config) { c.symbols = splitSymbols("Limit|counter,Nope") })
+	results := rows(got["results"])
+	if len(results) != 3 || results[2]["ok"] != false || number(results[0]["count"]) != 1 {
+		t.Fatalf("results = %v", got["results"])
+	}
+	cfg, err := parseArgs([]string{"symbol", "a|b", "c"})
+	if err != nil || strings.Join(cfg.symbols, ",") != "a,b,c" {
+		t.Fatalf("cfg = %+v err = %v", cfg, err)
+	}
+}
+
+func TestShowPrintsTheBodyInOneCall(t *testing.T) {
+	root := fixture2(t)
+	got := textOf(t, root, config{cmd: "show", symbol: "p.New", symbols: []string{"p.New"}})
+	want := "backend-go/p/p.go:19-21\n19\tfunc New() Config {\n20\t\treturn Config{maxLines: Limit}\n21\t}\n"
+	if got != want {
+		t.Fatalf("show =\n%q\nwant\n%q", got, want)
+	}
+	bounded := textOf(t, root, config{cmd: "show", symbols: []string{"Config.Lines"}, maxLines: 2})
+	if !strings.Contains(bounded, "... truncated: ") || strings.Count(bounded, "\n") != 4 {
+		t.Fatalf("show must honor max-lines: %q", bounded)
+	}
+	j := answer(t, root, "show", "p.New")
+	if !strings.Contains(j["text"].(string), "backend-go/p/p.go:19\tfunc New() Config {") {
+		t.Fatalf("json show = %v", j)
+	}
+}
+
+func TestTextFormatGolden(t *testing.T) {
+	root := fixture(t)
+	got := textOf(t, root, config{cmd: "navigate", symbol: "Target", symbols: []string{"Target"}})
+	want := "navigate Target: defs=1 callers=2 callees=1 types=0 tests=2 files=4 mentions=4\n" +
+		"backend-go/a/a.go:6-8\tfunc\ta.Target\tfunc(width int) int\n" +
+		"backend-go/a/a.go:33-35\tcaller\twithinA L34 same_package\n" +
+		"backend-go/b/b.go:6-9\tcaller\tCaller L8 import\n" +
+		"backend-go/a/a.go:10-13\tcallee:func\ta.helper\tfunc(width int) int\n" +
+		"backend-go/a/a_test.go:5-9\ttest\tTestTargetIsOneWider\n" +
+		"backend-go/a/a_test.go:5-9\ttest\tTestTargetIsOneWider L6 same_package\n"
+	if got != want {
+		t.Fatalf("navigate text =\n%s\nwant\n%s", got, want)
+	}
+	sym := textOf(t, root, config{cmd: "symbol", symbols: []string{"Opts"}})
+	if sym != "symbol Opts: 1 definitions\nbackend-go/a/a.go:16-18\tstruct\ta.Opts\tfields=1\n" {
+		t.Fatalf("symbol text = %q", sym)
+	}
+	src := textOf(t, root, config{cmd: "source", file: "backend-go/a/a.go", startLine: 6, endLine: 7})
+	if src != "backend-go/a/a.go:6-7\n6\tfunc Target(width int) int {\n7\t\treturn helper(width) + 1\n" {
+		t.Fatalf("source text = %q", src)
+	}
+	if strings.Contains(got, "ranges") {
+		t.Fatal("text output must not carry a ranges section")
+	}
+}
+
+func TestTextOutputIsCappedWithExactTotals(t *testing.T) {
+	root := fixture(t)
+	got := textOf(t, root, config{cmd: "navigate", symbols: []string{"Target"}, maxBytes: 200})
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "... truncated: showing ") || !strings.Contains(last, " of ") || !strings.Contains(last, "--path DIR") {
+		t.Fatalf("last line = %q", last)
+	}
+	if len(got) > 200+len(last)+1 {
+		t.Fatalf("output %d bytes exceeds the cap", len(got))
+	}
+}
+
+func TestAmbiguousTextListsEachCandidateWithItsKey(t *testing.T) {
+	got := textOf(t, fixture2(t), config{cmd: "symbol", symbols: []string{"wait"}})
+	want := "symbol wait: ambiguous, 2 candidates; pass one key (pkg.Name or Type.Method)\n" +
+		"backend-go/p/p.go:23-23\tfunc\tp.wait\tfunc() int\n" +
+		"backend-go/q/q.go:5-5\tfunc\tq.wait\tfunc() int\n"
+	if got != want {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}

@@ -62,6 +62,7 @@ const (
 	defaultMax     = 40
 	maxCap         = 200
 	defaultMaxLine = 400
+	textCapBytes   = 4096
 	maxSuggestions = 8
 	maxCallersPer  = 40
 )
@@ -69,6 +70,9 @@ const (
 type config struct {
 	cmd       string
 	symbol    string
+	symbols   []string
+	json      bool
+	maxBytes  int
 	path      string
 	receiver  string
 	max       int
@@ -85,7 +89,25 @@ func main() {
 	started := time.Now()
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
+		if !cfg.json {
+			fmt.Printf("error: %v\n", err)
+			os.Exit(1)
+		}
 		fail(cfg.cmd, err)
+	}
+	if !cfg.json {
+		text, err := executeText(cfg, started)
+		if err != nil {
+			var payload *resultError
+			if errors.As(err, &payload) {
+				fmt.Print(capText(renderError(payload.value), cfg, ""))
+				os.Exit(1)
+			}
+			fmt.Printf("error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(text)
+		return
 	}
 	value, err := execute(cfg, started)
 	if err != nil {
@@ -105,10 +127,12 @@ func execute(cfg config, started time.Time) (any, error) {
 	switch cfg.cmd {
 	case "navigate", "symbol", "impact":
 		return symbolResult(cfg, started)
+	case "show":
+		return showResult(cfg, started)
 	case "source":
 		return sourceResult(cfg, started)
 	}
-	return nil, fmt.Errorf("unknown command %q; use navigate, symbol, impact or source", cfg.cmd)
+	return nil, fmt.Errorf("unknown command %q; use navigate, symbol, impact, show or source", cfg.cmd)
 }
 
 // resultError is a complete answer that reports its own failure, such as a symbol that does not exist.
@@ -191,10 +215,22 @@ func parseArgs(args []string) (config, error) {
 				return cfg, fmt.Errorf("--max-lines needs a positive integer")
 			}
 			cfg.maxLines = n
+		case "--max-bytes":
+			v, err := value()
+			if err != nil {
+				return cfg, err
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return cfg, fmt.Errorf("--max-bytes needs a positive integer")
+			}
+			cfg.maxBytes = n
 		case "--no-tests":
 			cfg.noTests = true
+		case "--json":
+			cfg.json = true
 		case "--help", "-h":
-			return cfg, fmt.Errorf("usage: gonav navigate|symbol|impact SYMBOL [--path DIR] [--receiver R] [--max N] [--no-tests] | gonav source [FILE START END] (JSON ranges on stdin)")
+			return cfg, fmt.Errorf("usage: gonav navigate|symbol|impact|show SYM [SYM...] (SYM: Name, Type.Field, Type.Method, pkg.Name; a|b|c ok) [--path DIR] [--receiver R] [--max N] [--max-lines N] [--max-bytes N] [--no-tests] [--json] | gonav source [FILE START END] (JSON ranges on stdin)")
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return cfg, fmt.Errorf("unknown flag %q", a)
@@ -242,11 +278,11 @@ func applyPositional(cfg *config, positional []string) error {
 			cfg.endLine = n
 		}
 	default:
-		if len(positional) > 1 {
-			cfg.symbol = positional[1]
+		for _, arg := range positional[1:] {
+			cfg.symbols = append(cfg.symbols, splitSymbols(arg)...)
 		}
-		if len(positional) > 2 {
-			return fmt.Errorf("unexpected argument %q", positional[2])
+		if len(cfg.symbols) > 0 {
+			cfg.symbol = cfg.symbols[0]
 		}
 	}
 	return nil
@@ -263,20 +299,23 @@ func applyStdin(cfg *config) error {
 		return nil
 	}
 	var in struct {
-		Cmd       string  `json:"cmd"`
-		Action    string  `json:"action"`
-		Symbol    string  `json:"symbol"`
-		Name      string  `json:"name"`
-		Path      string  `json:"path"`
-		Receiver  string  `json:"receiver"`
-		Max       int     `json:"max"`
-		MaxLines  int     `json:"max_lines"`
-		NoTests   bool    `json:"no_tests"`
-		File      string  `json:"file"`
-		StartLine int     `json:"start_line"`
-		EndLine   int     `json:"end_line"`
-		Range     *Range  `json:"range"`
-		Ranges    []Range `json:"ranges"`
+		Cmd       string   `json:"cmd"`
+		Action    string   `json:"action"`
+		Symbol    string   `json:"symbol"`
+		Symbols   []string `json:"symbols"`
+		JSON      bool     `json:"json"`
+		MaxBytes  int      `json:"max_bytes"`
+		Name      string   `json:"name"`
+		Path      string   `json:"path"`
+		Receiver  string   `json:"receiver"`
+		Max       int      `json:"max"`
+		MaxLines  int      `json:"max_lines"`
+		NoTests   bool     `json:"no_tests"`
+		File      string   `json:"file"`
+		StartLine int      `json:"start_line"`
+		EndLine   int      `json:"end_line"`
+		Range     *Range   `json:"range"`
+		Ranges    []Range  `json:"ranges"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return fmt.Errorf("stdin is not a JSON object: %v", err)
@@ -284,8 +323,20 @@ func applyStdin(cfg *config) error {
 	if cfg.cmd == "" {
 		cfg.cmd = firstNonEmpty(in.Cmd, in.Action)
 	}
-	if cfg.symbol == "" {
+	if cfg.symbol == "" && len(cfg.symbols) == 0 {
 		cfg.symbol = firstNonEmpty(in.Symbol, in.Name)
+		for _, s := range append([]string{cfg.symbol}, in.Symbols...) {
+			cfg.symbols = append(cfg.symbols, splitSymbols(s)...)
+		}
+		if len(cfg.symbols) > 0 {
+			cfg.symbol = cfg.symbols[0]
+		}
+	}
+	if in.JSON {
+		cfg.json = true
+	}
+	if cfg.maxBytes == 0 && in.MaxBytes > 0 {
+		cfg.maxBytes = in.MaxBytes
 	}
 	if cfg.path == "" {
 		cfg.path = in.Path
@@ -496,6 +547,7 @@ func (ix *index) addDecls(file *ast.File, fact fileFact) {
 					case *ast.StructType:
 						decl.Kind = "struct"
 						decl.Fields = fieldCount(t)
+						ix.addFields(t, s.Name.Name, fact)
 					case *ast.InterfaceType:
 						decl.Kind = "interface"
 						var names []string
@@ -526,6 +578,57 @@ func (ix *index) addDecls(file *ast.File, fact fileFact) {
 			}
 		}
 	}
+}
+
+// addFields indexes the direct fields of a named struct; embedded fields are named after their type.
+func (ix *index) addFields(st *ast.StructType, owner string, fact fileFact) {
+	for _, f := range st.Fields.List {
+		var names []string
+		for _, n := range f.Names {
+			names = append(names, n.Name)
+		}
+		if len(names) == 0 {
+			if name := embeddedName(f.Type); name != "" {
+				names = append(names, name)
+			}
+		}
+		for _, name := range names {
+			ix.decls = append(ix.decls, Decl{
+				Name:      name,
+				Kind:      "field",
+				Package:   fact.pkg,
+				Receiver:  owner,
+				Signature: ix.exprText(f.Type),
+				Doc:       firstLine(firstDoc(f.Doc, f.Comment)),
+				Range:     Range{File: fact.rel, Start: ix.line(f.Pos()), End: ix.line(f.End())},
+			})
+		}
+	}
+}
+
+func embeddedName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return embeddedName(t.X)
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	case *ast.IndexExpr:
+		return embeddedName(t.X)
+	case *ast.IndexListExpr:
+		return embeddedName(t.X)
+	}
+	return ""
+}
+
+func firstDoc(docs ...*ast.CommentGroup) *ast.CommentGroup {
+	for _, doc := range docs {
+		if doc != nil {
+			return doc
+		}
+	}
+	return nil
 }
 
 func specDoc(gen *ast.GenDecl, docs ...*ast.CommentGroup) *ast.CommentGroup {
@@ -663,11 +766,13 @@ func (ix *index) importDir(importPath string) (string, bool) {
 // ---------- index (pass 2: references, only for one query) ----------
 
 type target struct {
-	name    string
-	defs    []Range
-	declSet map[string]bool
-	typeSet map[string]bool
-	refs    bool // a type is also used as a type, not only called
+	name      string
+	defs      []Range
+	declSet   map[string]bool
+	typeSet   map[string]bool
+	refs      bool // a type, const, var or field is also used by name, not only called
+	defLine   map[string]bool
+	fieldOnly bool
 }
 
 // hit is one raw call site. Resolution happens afterwards because it needs the calling file's
@@ -791,6 +896,8 @@ func scanFile(fset *token.FileSet, file *ast.File, rel string, tg target) (hits,
 			hintList = append(hintList, name)
 		}
 		called := map[token.Pos]bool{}
+		selIdents := map[token.Pos]bool{}
+		keyIdents := map[token.Pos]bool{}
 		ast.Inspect(node, func(n ast.Node) bool {
 			switch t := n.(type) {
 			case *ast.CallExpr:
@@ -808,16 +915,24 @@ func scanFile(fset *token.FileSet, file *ast.File, rel string, tg target) (hits,
 				if name == tg.name {
 					hits = append(hits, hit{name: name, kind: kind, qualifier: qual, file: rel, importsAt: importsAt, rng: fnRange, in: fn, line: line(t.Pos())})
 				}
+			case *ast.KeyValueExpr:
+				if id, ok := t.Key.(*ast.Ident); ok {
+					keyIdents[id.Pos()] = true
+				}
 			case *ast.Ident:
 				if t.Name != tg.name {
 					return true
 				}
 				mentions++
-				if !inTarget && tg.refs && !called[t.Pos()] {
+				if tg.fieldOnly && !keyIdents[t.Pos()] {
+					return true
+				}
+				if !inTarget && tg.refs && !called[t.Pos()] && !selIdents[t.Pos()] && !tg.defLine[fmt.Sprintf("%s#%d", rel, line(t.Pos()))] {
 					hits = append(hits, hit{name: t.Name, kind: "ref", file: rel, importsAt: importsAt, rng: fnRange, in: fn, line: line(t.Pos())})
 				}
 			case *ast.SelectorExpr:
-				if t.Sel.Name != tg.name || inTarget || !tg.refs || called[t.Pos()] {
+				selIdents[t.Sel.Pos()] = true
+				if t.Sel.Name != tg.name || inTarget || !tg.refs || called[t.Pos()] || tg.defLine[fmt.Sprintf("%s#%d", rel, line(t.Sel.Pos()))] {
 					return true
 				}
 				qual := ""
@@ -869,7 +984,7 @@ func collectTypeNames(expr ast.Expr, typeSet map[string]bool, into map[string]bo
 // resolveHits keeps only hits that can reach a definition of the symbol, and says how it knows:
 // same_package (unqualified call in a package that declares it), import (pkg-qualified call resolved
 // through the file's imports) or name_only (call on a value; no type checker, so the name is all there is).
-func (ix *index) resolveHits(hits []hit, defDirs map[string]bool, isMethod bool) []Site {
+func (ix *index) resolveHits(hits []hit, defDirs map[string]bool, isMethod, isField bool) []Site {
 	var out []Site
 	for _, h := range hits {
 		confidence := ""
@@ -884,6 +999,8 @@ func (ix *index) resolveHits(hits []hit, defDirs map[string]bool, isMethod bool)
 					confidence = "import"
 				}
 			} else if h.kind == "selector_call" && isMethod {
+				confidence = "name_only"
+			} else if isField && (h.kind == "selector_call" || h.kind == "selector_ref") && (isExported(h.name) || defDirs[dirOf(h.file)]) {
 				confidence = "name_only"
 			}
 		}
@@ -930,14 +1047,14 @@ func (ix *index) resolveCallees(hits []hit) []Decl {
 		case "call":
 			dir := dirOf(h.file)
 			for _, id := range ix.byName[h.name] {
-				if dirOf(ix.decls[id].File) == dir {
+				if dirOf(ix.decls[id].File) == dir && ix.decls[id].Kind != "field" {
 					add(ix.decls[id])
 				}
 			}
 		case "selector_call":
 			if dir, ok := ix.importDir(h.importsAt[h.qualifier]); ok {
 				for _, id := range ix.byName[h.name] {
-					if dirOf(ix.decls[id].File) == dir {
+					if dirOf(ix.decls[id].File) == dir && ix.decls[id].Kind != "field" {
 						add(ix.decls[id])
 					}
 				}
@@ -1025,99 +1142,245 @@ func sortSites(sites []Site) {
 
 // ---------- commands ----------
 
-func symbolResult(cfg config, started time.Time) (map[string]any, error) {
-	cmd := cfg.cmd
-	if cmd == "" {
-		cmd = "navigate"
+// symAnswer is one symbol's typed result; JSON and text are both rendered from it.
+type symAnswer struct {
+	cmd        string
+	symbol     string
+	failure    map[string]any
+	defs       []Decl
+	callers    []Site
+	tests      []Site
+	callees    []Decl
+	related    []Decl
+	files      []Site
+	counts     map[string]int
+	truncated  map[string]bool
+	totals     map[string]int
+	wantsRefs  bool
+	candidates []candidate
+}
+
+type candidate struct {
+	Key     string `json:"key"`
+	Defs    []Decl `json:"definitions"`
+	Callers []Site `json:"callers,omitempty"`
+	Tests   []Site `json:"tests,omitempty"`
+}
+
+type session struct {
+	cfg     config
+	ix      *index
+	started time.Time
+	answers []*symAnswer
+}
+
+func splitSymbols(arg string) []string {
+	return strings.FieldsFunc(arg, func(r rune) bool { return r == '|' || r == ',' || r == ' ' || r == '\t' || r == '\n' })
+}
+
+func isExported(name string) bool { return name != "" && name[0] >= 'A' && name[0] <= 'Z' }
+
+func inTestFile(file string) bool { return strings.HasSuffix(file, "_test.go") }
+
+func symbolList(cfg config) []string {
+	if len(cfg.symbols) > 0 {
+		return cfg.symbols
 	}
-	if cfg.symbol == "" {
-		return nil, fmt.Errorf("no symbol given; usage: gonav %s SYMBOL", cmd)
+	if cfg.symbol != "" {
+		return splitSymbols(cfg.symbol)
 	}
+	return nil
+}
+
+func openIndex(cfg *config) (*index, error) {
 	if cfg.path == "" {
 		cfg.path = "backend-go"
 		if info, err := os.Stat(filepath.Join(cfg.root, cfg.path)); err != nil || !info.IsDir() {
 			cfg.path = "."
 		}
 	}
-	ix, err := newIndex(cfg.root, cfg.path)
+	return newIndex(cfg.root, cfg.path)
+}
+
+// lookup resolves Name, Type.Member, pkg.Name or pkg.Type.Member to declaration indices.
+func (ix *index) lookup(spec string, cfg config) []int {
+	name, qual := spec, ""
+	if i := strings.LastIndex(spec, "."); i > 0 {
+		qual, name = spec[:i], spec[i+1:]
+	}
+	var ids []int
+	for _, id := range ix.byName[name] {
+		d := ix.decls[id]
+		if cfg.noTests && inTestFile(d.File) {
+			continue
+		}
+		if cfg.receiver != "" && d.Receiver != "" && baseReceiver(d.Receiver) != cfg.receiver {
+			continue
+		}
+		if qual != "" {
+			recv := baseReceiver(d.Receiver)
+			if qual != d.Package && (recv == "" || (qual != recv && qual != d.Package+"."+recv)) {
+				continue
+			}
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+type group struct {
+	key   string
+	dir   string
+	defs  []Decl
+	dirs  map[string]bool
+	isMth bool
+	isFld bool
+}
+
+// groupDefs splits definitions by (package directory, receiver): same-named symbols in different
+// packages or on different types are different symbols.
+func groupDefs(defs []Decl) []*group {
+	byKey := map[string]*group{}
+	var order []*group
+	for _, d := range defs {
+		k := dirOf(d.File) + "|" + baseReceiver(d.Receiver)
+		g := byKey[k]
+		if g == nil {
+			g = &group{dir: dirOf(d.File), dirs: map[string]bool{dirOf(d.File): true}}
+			byKey[k] = g
+			order = append(order, g)
+		}
+		g.defs = append(g.defs, d)
+		g.isMth = g.isMth || d.Kind == "method"
+		g.isFld = g.isFld || d.Kind == "field"
+	}
+	count := map[string]int{}
+	for _, g := range order {
+		count[displayKey(g.defs[0], false)]++
+	}
+	for _, g := range order {
+		g.key = displayKey(g.defs[0], count[displayKey(g.defs[0], false)] > 1)
+	}
+	return order
+}
+
+func displayKey(d Decl, withPkg bool) string {
+	if r := baseReceiver(d.Receiver); r != "" {
+		if withPkg {
+			return d.Package + "." + r + "." + d.Name
+		}
+		return r + "." + d.Name
+	}
+	return d.Package + "." + d.Name
+}
+
+func wantsRefsKind(kind string) bool {
+	return isTypeKind(kind) || kind == "const" || kind == "var" || kind == "field"
+}
+
+func buildSession(cfg config, started time.Time) (*session, error) {
+	cmd := cfg.cmd
+	if cmd == "" {
+		cmd = "navigate"
+	}
+	cfg.cmd = cmd
+	specs := symbolList(cfg)
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("no symbol given; usage: gonav %s SYMBOL [SYMBOL...]", cmd)
+	}
+	ix, err := openIndex(&cfg)
 	if err != nil {
 		return nil, err
 	}
-	ids := ix.byName[cfg.symbol]
-	if cfg.receiver != "" {
-		var kept []int
-		for _, id := range ids {
-			d := ix.decls[id]
-			if d.Receiver == "" || baseReceiver(d.Receiver) == cfg.receiver {
-				kept = append(kept, id)
-			}
-		}
-		ids = kept
+	se := &session{cfg: cfg, ix: ix, started: started}
+	for _, spec := range specs {
+		se.answers = append(se.answers, se.resolve(spec))
 	}
+	return se, nil
+}
+
+func (se *session) resolve(spec string) *symAnswer {
+	cfg, ix, cmd := se.cfg, se.ix, se.cfg.cmd
+	ans := &symAnswer{cmd: cmd, symbol: spec, counts: map[string]int{}, truncated: map[string]bool{}}
+	ids := ix.lookup(spec, cfg)
 	if len(ids) == 0 {
-		return nil, &resultError{value: map[string]any{
+		name := spec
+		if i := strings.LastIndex(spec, "."); i > 0 {
+			name = spec[i+1:]
+		}
+		ans.failure = map[string]any{
 			"ok":          false,
 			"cmd":         cmd,
-			"symbol":      cfg.symbol,
-			"error":       "no declaration named " + cfg.symbol,
+			"symbol":      spec,
+			"error":       "no declaration named " + spec,
 			"scan":        map[string]any{"path": cfg.path, "files": len(ix.files)},
-			"suggestions": ix.suggest(cfg.symbol),
-		}}
+			"suggestions": ix.suggest(name),
+		}
+		return ans
 	}
-	defs := make([]Decl, 0, len(ids))
-	defDirs := map[string]bool{}
-	isMethod := false
 	for _, id := range ids {
-		d := ix.decls[id]
-		defs = append(defs, d)
-		defDirs[dirOf(d.File)] = true
-		if d.Kind == "method" {
-			isMethod = true
+		ans.defs = append(ans.defs, ix.decls[id])
+	}
+	groups := groupDefs(ans.defs)
+	if len(groups) > 1 {
+		for _, g := range groups {
+			ans.candidates = append(ans.candidates, candidate{Key: g.key, Defs: g.defs})
 		}
 	}
-	if cmd == "symbol" {
-		return map[string]any{
-			"ok":          true,
-			"cmd":         cmd,
-			"symbol":      cfg.symbol,
-			"definitions": defs,
-			"count":       len(defs),
-			"ranges":      rangesOf(defs),
-			"scan":        map[string]any{"path": cfg.path, "files": len(ix.files), "engine": "go/ast", "ms": time.Since(started).Milliseconds()},
-		}, nil
-	}
-	wantsRefs := false
-	for _, d := range defs {
-		if isTypeKind(d.Kind) {
-			wantsRefs = true
-		}
+	if cmd == "symbol" || cmd == "show" {
+		return ans
 	}
 	tg := target{
-		name:    cfg.symbol,
-		defs:    rangesOf(defs),
+		name:    spec,
+		defLine: map[string]bool{},
 		declSet: keysOf(ix.byName),
 		typeSet: keysOf(ix.typeIdx),
-		refs:    wantsRefs,
+	}
+	if i := strings.LastIndex(spec, "."); i > 0 {
+		tg.name = spec[i+1:]
+	}
+	tg.fieldOnly = true
+	for _, d := range ans.defs {
+		tg.defs = append(tg.defs, d.Range)
+		if wantsRefsKind(d.Kind) {
+			tg.refs = true
+			ans.wantsRefs = true
+		}
+		if d.Kind != "field" {
+			tg.fieldOnly = false
+		}
+		if d.Kind == "const" || d.Kind == "var" || d.Kind == "field" {
+			tg.defLine[fmt.Sprintf("%s#%d", d.File, d.Start)] = true
+		}
 	}
 	sc := ix.scanRefs(cfg, tg)
-
-	var tests []Site
-	var callers []Site
-	for _, site := range ix.resolveHits(sc.hits, defDirs, isMethod) {
-		if strings.HasSuffix(site.File, "_test.go") {
-			tests = append(tests, site)
-			continue
+	split := func(g *group) (callers, tests []Site) {
+		for _, site := range ix.resolveHits(sc.hits, g.dirs, g.isMth, g.isFld) {
+			if inTestFile(site.File) {
+				tests = append(tests, site)
+			} else {
+				callers = append(callers, site)
+			}
 		}
-		callers = append(callers, site)
+		return
 	}
-	if !cfg.noTests && cmd != "symbol" {
-		tests = append(tests, ix.testDecls(cfg.symbol)...)
+	if len(groups) > 1 {
+		for i, g := range groups {
+			c, t := split(g)
+			ans.candidates[i].Callers, ans.candidates[i].Tests = c, t
+		}
+		return ans
+	}
+	callers, tests := split(groups[0])
+	if !cfg.noTests {
+		tests = append(tests, ix.testDecls(tg.name)...)
 		sortSites(tests)
 	}
-	callees := ix.resolveCallees(sc.callees)
-	related := dedupeDecls(ix.resolveTypeDecls(unique(sc.types)))
-	if len(defs) == 1 && defs[0].Kind == "interface" {
-		related = dedupeDecls(append(related, ix.implementers(defs[0])...))
+	ans.callers, ans.tests = callers, tests
+	ans.callees = ix.resolveCallees(sc.callees)
+	ans.related = dedupeDecls(ix.resolveTypeDecls(unique(sc.types)))
+	if len(ans.defs) == 1 && ans.defs[0].Kind == "interface" {
+		ans.related = dedupeDecls(append(ans.related, ix.implementers(ans.defs[0])...))
 	}
 	files := make([]Site, 0, len(sc.perFile))
 	for file, n := range sc.perFile {
@@ -1129,40 +1392,77 @@ func symbolResult(cfg config, started time.Time) (map[string]any, error) {
 		}
 		return files[i].File < files[j].File
 	})
+	ans.files = files
+	ans.counts = map[string]int{
+		"definitions": len(ans.defs),
+		"callers":     len(callers),
+		"callees":     len(ans.callees),
+		"types":       len(ans.related),
+		"tests":       len(tests),
+		"files":       len(sc.perFile),
+		"mentions":    totalMentions(sc.perFile),
+	}
+	return ans
+}
 
+func (se *session) scanInfo() map[string]any {
+	return map[string]any{"path": se.cfg.path, "files": len(se.ix.files), "engine": "go/ast", "ms": time.Since(se.started).Milliseconds()}
+}
+
+func (se *session) toJSON(ans *symAnswer) map[string]any {
+	cfg, cmd := se.cfg, ans.cmd
+	if ans.failure != nil {
+		return ans.failure
+	}
+	if len(ans.candidates) > 0 {
+		return map[string]any{
+			"ok":          true,
+			"cmd":         cmd,
+			"symbol":      ans.symbol,
+			"ambiguous":   true,
+			"definitions": ans.defs,
+			"count":       len(ans.defs),
+			"candidates":  ans.candidates,
+			"ranges":      rangesOf(ans.defs),
+			"note":        "several definitions share this name; pass pkg.Name or Type.Method to pick one",
+			"scan":        se.scanInfo(),
+		}
+	}
+	if cmd == "symbol" {
+		return map[string]any{
+			"ok":          true,
+			"cmd":         cmd,
+			"symbol":      ans.symbol,
+			"definitions": ans.defs,
+			"count":       len(ans.defs),
+			"ranges":      rangesOf(ans.defs),
+			"scan":        se.scanInfo(),
+		}
+	}
 	result := map[string]any{
 		"ok":          true,
 		"cmd":         cmd,
-		"symbol":      cfg.symbol,
-		"definitions": defs,
-		"counts": map[string]int{
-			"definitions": len(defs),
-			"callers":     len(callers),
-			"callees":     len(callees),
-			"types":       len(related),
-			"tests":       len(tests),
-			"files":       len(sc.perFile),
-			"mentions":    totalMentions(sc.perFile),
-		},
-		"scan": map[string]any{"path": cfg.path, "files": len(ix.files), "engine": "go/ast", "ms": time.Since(started).Milliseconds()},
+		"symbol":      ans.symbol,
+		"definitions": ans.defs,
+		"counts":      ans.counts,
+		"scan":        se.scanInfo(),
 	}
 	truncated := map[string]bool{}
 	switch cmd {
-	case "symbol":
 	case "navigate":
-		result["callers"] = bound(cfg.max, callers, truncated, "callers")
-		result["callees"] = boundDecls(cfg.max, callees, truncated, "callees")
-		result["types"] = boundDecls(cfg.max, related, truncated, "types")
-		result["tests"] = bound(cfg.max, tests, truncated, "tests")
-		result["ranges"] = chainRanges(defs, callers, tests)
-		if wantsRefs {
-			result["note"] = "a type: callers are the places that name it (ref) or call through it (call)"
+		result["callers"] = bound(cfg.max, ans.callers, truncated, "callers")
+		result["callees"] = boundDecls(cfg.max, ans.callees, truncated, "callees")
+		result["types"] = boundDecls(cfg.max, ans.related, truncated, "types")
+		result["tests"] = bound(cfg.max, ans.tests, truncated, "tests")
+		result["ranges"] = chainRanges(ans.defs, ans.callers, ans.tests)
+		if ans.wantsRefs {
+			result["note"] = "callers are the places that name it (ref) or call through it (call)"
 		}
 	case "impact":
-		result["files"] = bound(cfg.max, files, truncated, "files")
-		result["callers"] = bound(cfg.max, callers, truncated, "callers")
-		result["tests"] = bound(cfg.max, tests, truncated, "tests")
-		result["ranges"] = chainRanges(defs, callers, tests)
+		result["files"] = bound(cfg.max, ans.files, truncated, "files")
+		result["callers"] = bound(cfg.max, ans.callers, truncated, "callers")
+		result["tests"] = bound(cfg.max, ans.tests, truncated, "tests")
+		result["ranges"] = chainRanges(ans.defs, ans.callers, ans.tests)
 	}
 	if _, set := result["note"]; !set {
 		result["note"] = "callers are call sites with their resolution (same_package, import or name_only); callees come from the definition body; no type checker runs, so verify a doubtful hit with its range."
@@ -1170,7 +1470,39 @@ func symbolResult(cfg config, started time.Time) (map[string]any, error) {
 	if len(truncated) > 0 {
 		result["truncated"] = truncated
 	}
-	return result, nil
+	return result
+}
+
+func (se *session) jsonResult() (any, error) {
+	if len(se.answers) == 1 {
+		ans := se.answers[0]
+		out := se.toJSON(ans)
+		if ans.failure != nil {
+			return nil, &resultError{value: out}
+		}
+		return out, nil
+	}
+	results := make([]map[string]any, 0, len(se.answers))
+	failed := 0
+	for _, ans := range se.answers {
+		if ans.failure != nil {
+			failed++
+		}
+		results = append(results, se.toJSON(ans))
+	}
+	out := map[string]any{"ok": failed < len(se.answers), "cmd": se.cfg.cmd, "results": results}
+	if failed == len(se.answers) {
+		return nil, &resultError{value: out}
+	}
+	return out, nil
+}
+
+func symbolResult(cfg config, started time.Time) (any, error) {
+	se, err := buildSession(cfg, started)
+	if err != nil {
+		return nil, err
+	}
+	return se.jsonResult()
 }
 
 func totalMentions(perFile map[string]int) int {
@@ -1509,7 +1841,47 @@ func abs(v int) int {
 	return v
 }
 
-func sourceResult(cfg config, started time.Time) (map[string]any, error) {
+type srcBlock struct {
+	rng   Range
+	err   string
+	lines []string
+}
+
+// readBlocks reads the ranges until maxLines is reached; it reports the lines it has not shown.
+func readBlocks(cfg config, ranges []Range) (blocks []srcBlock, shown, omitted int) {
+	for _, r := range ranges {
+		path := r.File
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(cfg.root, r.File)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			blocks = append(blocks, srcBlock{rng: r, err: fmt.Sprintf("%s: %v", r.File, err)})
+			continue
+		}
+		src := strings.Split(string(data), "\n")
+		start, end := r.Start, r.End
+		if start < 1 {
+			start = 1
+		}
+		if end == 0 || end > len(src) {
+			end = len(src)
+		}
+		blk := srcBlock{rng: Range{File: r.File, Start: start, End: end}}
+		for n := start; n <= end; n++ {
+			if shown >= cfg.maxLines {
+				omitted++
+				continue
+			}
+			blk.lines = append(blk.lines, src[n-1])
+			shown++
+		}
+		blocks = append(blocks, blk)
+	}
+	return
+}
+
+func sourceRanges(cfg config) ([]Range, error) {
 	ranges := cfg.ranges
 	if len(ranges) == 0 && cfg.file != "" {
 		start, end := cfg.startLine, cfg.endLine
@@ -1524,48 +1896,274 @@ func sourceResult(cfg config, started time.Time) (map[string]any, error) {
 	if len(ranges) == 0 {
 		return nil, fmt.Errorf(`no ranges; pass {"ranges":[{"file":"a.go","start_line":2,"end_line":9}]} on stdin, or FILE [START [END]]`)
 	}
+	return ranges, nil
+}
+
+func sourceResult(cfg config, started time.Time) (map[string]any, error) {
+	ranges, err := sourceRanges(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return sourceJSON(cfg, started, ranges), nil
+}
+
+func sourceJSON(cfg config, started time.Time, ranges []Range) map[string]any {
+	blocks, shown, omitted := readBlocks(cfg, ranges)
 	var b strings.Builder
-	lines := 0
-	truncated := false
 	var used []Range
-	for _, r := range ranges {
-		if truncated {
-			break
-		}
-		path := r.File
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(cfg.root, r.File)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintf(&b, "%s: %v\n", r.File, err)
+	for _, blk := range blocks {
+		if blk.err != "" {
+			b.WriteString(blk.err + "\n")
 			continue
 		}
-		src := strings.Split(string(data), "\n")
-		start, end := r.Start, r.End
-		if start < 1 {
-			start = 1
+		if len(blk.lines) == 0 {
+			continue
 		}
-		if end == 0 || end > len(src) {
-			end = len(src)
+		for i, l := range blk.lines {
+			fmt.Fprintf(&b, "%s:%d\t%s\n", blk.rng.File, blk.rng.Start+i, l)
 		}
-		for n := start; n <= end; n++ {
-			if lines >= cfg.maxLines {
-				truncated = true
-				break
-			}
-			fmt.Fprintf(&b, "%s:%d\t%s\n", r.File, n, src[n-1])
-			lines++
-		}
-		used = append(used, r)
+		used = append(used, blk.rng)
 	}
 	return map[string]any{
 		"ok":        true,
 		"cmd":       "source",
-		"lines":     lines,
+		"lines":     shown,
 		"ranges":    used,
-		"truncated": truncated,
+		"truncated": omitted > 0,
 		"ms":        time.Since(started).Milliseconds(),
 		"text":      b.String(),
-	}, nil
+	}
+}
+
+func renderBlocks(blocks []srcBlock, omitted int) string {
+	var b strings.Builder
+	for _, blk := range blocks {
+		if blk.err != "" {
+			b.WriteString(blk.err + "\n")
+			continue
+		}
+		if len(blk.lines) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s:%d-%d\n", blk.rng.File, blk.rng.Start, blk.rng.Start+len(blk.lines)-1)
+		for i, l := range blk.lines {
+			fmt.Fprintf(&b, "%d\t%s\n", blk.rng.Start+i, l)
+		}
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "... truncated: %d more lines not shown; raise --max-lines\n", omitted)
+	}
+	return b.String()
+}
+
+// showRanges resolves each symbol to the ranges to print; ambiguous or missing symbols come back as notes.
+func (se *session) showRanges() (ranges []Range, notes []string) {
+	for _, ans := range se.answers {
+		switch {
+		case ans.failure != nil:
+			notes = append(notes, renderError(ans.failure))
+		case len(ans.candidates) > 0:
+			var b strings.Builder
+			fmt.Fprintf(&b, "ambiguous %s: %d candidates; pass one of the keys below\n", ans.symbol, len(ans.candidates))
+			for _, c := range ans.candidates {
+				for _, d := range c.Defs {
+					fmt.Fprintf(&b, "%s:%d-%d\t%s\t%s\n", d.File, d.Start, d.End, d.Kind, c.Key)
+				}
+			}
+			notes = append(notes, b.String())
+		default:
+			ranges = append(ranges, rangesOf(ans.defs)...)
+		}
+	}
+	return
+}
+
+func showResult(cfg config, started time.Time) (map[string]any, error) {
+	se, err := buildSession(cfg, started)
+	if err != nil {
+		return nil, err
+	}
+	ranges, notes := se.showRanges()
+	out := sourceJSON(se.cfg, started, ranges)
+	if len(notes) > 0 {
+		out["notes"] = notes
+	}
+	out["cmd"] = "show"
+	return out, nil
+}
+
+// ---------- compact text output ----------
+
+func executeText(cfg config, started time.Time) (string, error) {
+	switch cfg.cmd {
+	case "source":
+		ranges, err := sourceRanges(cfg)
+		if err != nil {
+			return "", err
+		}
+		blocks, _, omitted := readBlocks(cfg, ranges)
+		return capText(renderBlocks(blocks, omitted), cfg, ""), nil
+	case "navigate", "symbol", "impact", "show", "":
+		se, err := buildSession(cfg, started)
+		if err != nil {
+			return "", err
+		}
+		if se.cfg.cmd == "show" {
+			ranges, notes := se.showRanges()
+			blocks, _, omitted := readBlocks(se.cfg, ranges)
+			return capText(strings.Join(notes, "")+renderBlocks(blocks, omitted), se.cfg, ""), nil
+		}
+		var b strings.Builder
+		failed := 0
+		for _, ans := range se.answers {
+			if ans.failure != nil {
+				failed++
+			}
+			b.WriteString(se.renderText(ans))
+		}
+		text := capText(b.String(), se.cfg, "narrow with pkg.Name or Type.Method, --no-tests, --path DIR or --max N")
+		if failed == len(se.answers) {
+			return "", &resultError{value: map[string]any{"text": text}}
+		}
+		return text, nil
+	}
+	return "", fmt.Errorf("unknown command %q; use navigate, symbol, impact, show or source", cfg.cmd)
+}
+
+func renderError(v map[string]any) string {
+	if text, ok := v["text"].(string); ok {
+		return text
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "error: %v\n", v["error"])
+	if sg, ok := v["suggestions"].([]string); ok && len(sg) > 0 {
+		fmt.Fprintf(&b, "suggestions: %s\n", strings.Join(sg, ", "))
+	}
+	return b.String()
+}
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func declLine(d Decl, key string, label ...string) string {
+	kind := d.Kind
+	if len(label) > 0 {
+		kind = label[0] + ":" + d.Kind
+	}
+	detail := ""
+	switch d.Kind {
+	case "struct", "interface":
+		if d.Fields > 0 {
+			detail = fmt.Sprintf("fields=%d", d.Fields)
+		}
+		if len(d.Methods) > 0 {
+			detail = "methods=" + strings.Join(d.Methods, ",")
+		}
+	default:
+		detail = clip(strings.ReplaceAll(d.Signature, "\n", " "), 100)
+	}
+	return strings.TrimRight(fmt.Sprintf("%s:%d-%d\t%s\t%s\t%s", d.File, d.Start, d.End, kind, key, detail), "\t") + "\n"
+}
+
+func siteLine(label string, s Site) string {
+	detail := s.In
+	if s.CallLine > 0 {
+		detail += fmt.Sprintf(" L%d", s.CallLine)
+	}
+	if s.Confidence != "" {
+		detail += " " + s.Confidence
+	}
+	return fmt.Sprintf("%s:%d-%d\t%s\t%s\n", s.File, s.Start, s.End, label, strings.TrimSpace(detail))
+}
+
+func (se *session) renderText(ans *symAnswer) string {
+	cfg := se.cfg
+	if ans.failure != nil {
+		return renderError(ans.failure)
+	}
+	var b strings.Builder
+	if len(ans.candidates) > 0 {
+		fmt.Fprintf(&b, "%s %s: ambiguous, %d candidates; pass one key (pkg.Name or Type.Method)\n", ans.cmd, ans.symbol, len(ans.candidates))
+		for _, c := range ans.candidates {
+			for _, d := range c.Defs {
+				b.WriteString(declLine(d, c.Key))
+			}
+		}
+		return b.String()
+	}
+	if ans.cmd == "symbol" {
+		fmt.Fprintf(&b, "symbol %s: %d definitions\n", ans.symbol, len(ans.defs))
+	} else {
+		fmt.Fprintf(&b, "%s %s: defs=%d callers=%d callees=%d types=%d tests=%d files=%d mentions=%d\n", ans.cmd, ans.symbol,
+			ans.counts["definitions"], ans.counts["callers"], ans.counts["callees"], ans.counts["types"], ans.counts["tests"], ans.counts["files"], ans.counts["mentions"])
+	}
+	for _, d := range ans.defs {
+		b.WriteString(declLine(d, displayKey(d, false)))
+	}
+	if ans.cmd == "symbol" {
+		return b.String()
+	}
+	section := func(label string, sites []Site) {
+		shown := limitSites(sites, cfg.max)
+		for _, s := range shown {
+			b.WriteString(siteLine(label, s))
+		}
+		if len(shown) < len(sites) {
+			fmt.Fprintf(&b, "... %s: showing %d of %d; use --max N\n", label, len(shown), len(sites))
+		}
+	}
+	decls := func(label string, list []Decl) {
+		for i, d := range list {
+			if i >= cfg.max {
+				fmt.Fprintf(&b, "... %s: showing %d of %d; use --max N\n", label, cfg.max, len(list))
+				break
+			}
+			b.WriteString(declLine(d, displayKey(d, false), label))
+		}
+	}
+	section("caller", ans.callers)
+	if ans.cmd == "navigate" {
+		decls("callee", ans.callees)
+		decls("type", ans.related)
+	}
+	if ans.cmd == "impact" {
+		for i, f := range ans.files {
+			if i >= cfg.max {
+				fmt.Fprintf(&b, "... files: showing %d of %d; use --max N\n", cfg.max, len(ans.files))
+				break
+			}
+			fmt.Fprintf(&b, "%s\tfile\tmentions=%d\n", f.File, f.Mentions)
+		}
+	}
+	section("test", ans.tests)
+	return b.String()
+}
+
+func limitSites(sites []Site, max int) []Site {
+	if len(sites) > max {
+		return sites[:max]
+	}
+	return sites
+}
+
+// capText enforces the byte cap on whole lines and says exactly what was cut.
+func capText(text string, cfg config, hint string) string {
+	limit := cfg.maxBytes
+	if limit == 0 {
+		limit = textCapBytes
+	}
+	if len(text) <= limit {
+		return text
+	}
+	totalLines := strings.Count(text, "\n")
+	cut := strings.LastIndex(text[:limit], "\n") + 1
+	shownLines := strings.Count(text[:cut], "\n")
+	if hint == "" {
+		hint = "raise --max-bytes, lower --max-lines or narrow the range"
+	}
+	return fmt.Sprintf("%s... truncated: showing %d of %d lines (%d of %d bytes); %s\n", text[:cut], shownLines, totalLines, cut, len(text), hint)
 }
