@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -33,6 +34,7 @@ type connection struct {
 	ctx                      context.Context
 	cancel                   context.CancelFunc
 	fingerprint              string
+	serverID                 string
 	session                  *mcpSDK.ClientSession
 	timeout                  time.Duration
 	maxResultBytes           int
@@ -306,7 +308,15 @@ func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs
 		}
 		return nil, configError(server.ConfigPath, "failed to list tools from MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
-	return m.toolsFromList(server, current, remoteTools)
+	loaded, err := m.toolsFromList(server, current, remoteTools)
+	if err != nil {
+		return nil, err
+	}
+	features, err := m.featureTools(server, current)
+	if err != nil {
+		return nil, err
+	}
+	return append(loaded, features...), nil
 }
 
 func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool) ([]tools.Tool, error) {
@@ -401,6 +411,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 
 	var transport mcpSDK.Transport
 	var stdioCommand *exec.Cmd
+	var stored *storedOAuth
 	if config.transport.stdio != nil {
 		stdio := config.transport.stdio
 		command, err := commandWithEnvironmentPath(stdio.command, stdio.env)
@@ -415,9 +426,15 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		transport = &mcpSDK.CommandTransport{Command: cmd}
 	} else {
 		httpConfig := config.transport.http
+		var handler auth.OAuthHandler
+		handler, stored, err = oauthHandler(httpConfig.oauth, httpConfig.endpoint, server.TokenPath, server.ConfigPath, config.timeout)
+		if err != nil {
+			return nil, err
+		}
 		transport = &mcpSDK.StreamableClientTransport{
-			Endpoint:   httpConfig.endpoint,
-			HTTPClient: newHeaderHTTPClient(httpConfig.endpoint, httpConfig.headers, config.maxResultBytes),
+			Endpoint:     httpConfig.endpoint,
+			OAuthHandler: handler,
+			HTTPClient:   newHeaderHTTPClient(httpConfig.endpoint, httpConfig.headers, config.maxResultBytes),
 			// The SDK copies this verbatim (it does not resolve 0 to a default) and
 			// treats a non-positive value as no cap, so a missing value would leave
 			// one streamable_http event unbounded. A result has to fit
@@ -439,6 +456,9 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 			_ = clientSession.Close()
 		}
 		killStdioProcessGroup(stdioCommand)
+		if stored != nil && stored.needLogin.Load() {
+			return nil, configError(server.ConfigPath, "MCP server %s needs an OAuth sign-in: run jad mcp login %s", server.ID, loginName(server.ConfigPath))
+		}
 		return nil, configError(server.ConfigPath, "failed to connect MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
 	connectionCtx, cancelConnection := context.WithCancel(context.Background())
@@ -446,6 +466,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		ctx:                      connectionCtx,
 		cancel:                   cancelConnection,
 		fingerprint:              config.fingerprint,
+		serverID:                 server.ID,
 		session:                  clientSession,
 		timeout:                  config.timeout,
 		maxResultBytes:           config.maxResultBytes,

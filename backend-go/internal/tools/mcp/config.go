@@ -40,6 +40,15 @@ const (
 	defaultMaxDescriptionBytes = 4_096
 	minMaxDescriptionBytes     = 1
 	maxMaxDescriptionBytes     = 65_536
+
+	// OAuth. The redirect address is where "jad mcp login" waits for the browser; a
+	// stored access token is refreshed this long before it expires.
+	defaultOAuthRedirectURL     = "http://127.0.0.1:47681/callback"
+	defaultOAuthRefreshMarginMS = 60_000
+	maxOAuthRefreshMarginMS     = 3_600_000
+	maxOAuthScopes              = 64
+	oauthGrantAuthorizationCode = "authorization_code"
+	oauthGrantClientCredentials = "client_credentials"
 )
 
 var (
@@ -57,6 +66,18 @@ type stdioConfig struct {
 type streamableHTTPConfig struct {
 	endpoint string
 	headers  map[string]string
+	oauth    *oauthConfig
+}
+
+// oauthConfig is transport.oauth of a streamable_http server. clientSecret is the value
+// of the variable client_secret_from names, resolved when the run starts.
+type oauthConfig struct {
+	grant         string
+	clientID      string
+	clientSecret  string
+	scopes        []string
+	redirectURL   string
+	refreshMargin time.Duration
 }
 
 type transportConfig struct {
@@ -256,14 +277,162 @@ func normalizeStreamableHTTP(fields map[string]json.RawMessage, path string, env
 		}
 		resolvedHeaders[header] = secret
 	}
+	oauth, err := normalizeOAuth(fields["oauth"], path, environment, atRun)
+	if err != nil {
+		return nil, nil, err
+	}
+	if oauth != nil {
+		for header := range headersFrom {
+			if strings.EqualFold(header, "Authorization") {
+				return nil, nil, configError(path, "transport.oauth and an Authorization header in transport.headers_from must not both be set")
+			}
+		}
+	}
 	endpointText := endpoint.String()
-	config := &streamableHTTPConfig{endpoint: endpointText, headers: resolvedHeaders}
+	config := &streamableHTTPConfig{endpoint: endpointText, headers: resolvedHeaders, oauth: oauth}
 	fingerprint := struct {
 		Type    string            `json:"type"`
 		URL     string            `json:"url"`
 		Headers map[string]string `json:"headers"`
+		OAuth   any               `json:"oauth,omitempty"`
 	}{Type: "streamable_http", URL: endpointText, Headers: resolvedHeaders}
+	if oauth != nil {
+		fingerprint.OAuth = struct {
+			Grant         string   `json:"grant"`
+			ClientID      string   `json:"client_id"`
+			ClientSecret  string   `json:"client_secret"`
+			Scopes        []string `json:"scopes"`
+			RedirectURL   string   `json:"redirect_url"`
+			RefreshMargin int64    `json:"refresh_margin_ms"`
+		}{oauth.grant, oauth.clientID, oauth.clientSecret, oauth.scopes, oauth.redirectURL, oauth.refreshMargin.Milliseconds()}
+	}
 	return config, fingerprint, nil
+}
+
+// normalizeOAuth reads transport.oauth. authorization_code (the default) uses the tokens
+// "jad mcp login" stored, registering a client dynamically when no client_id is given;
+// client_credentials needs a client_id and secret and no sign-in.
+func normalizeOAuth(raw json.RawMessage, path string, environment map[string]string, atRun bool) (*oauthConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	fields, err := objectFields(raw, path, "transport.oauth must be an object")
+	if err != nil {
+		return nil, err
+	}
+	for key := range fields {
+		switch key {
+		case "grant", "client_id", "client_secret_from", "scopes", "redirect_url", "refresh_margin_ms":
+		default:
+			return nil, configError(path, "transport.oauth.%s is not supported", key)
+		}
+	}
+	config := &oauthConfig{grant: oauthGrantAuthorizationCode, redirectURL: defaultOAuthRedirectURL}
+	if value, exists := fields["grant"]; exists {
+		if config.grant, err = requiredString(value, path+": transport.oauth.grant"); err != nil {
+			return nil, err
+		}
+		if config.grant != oauthGrantAuthorizationCode && config.grant != oauthGrantClientCredentials {
+			return nil, configError(path, "transport.oauth.grant must be authorization_code or client_credentials")
+		}
+	}
+	if value, exists := fields["client_id"]; exists {
+		if config.clientID, err = requiredString(value, path+": transport.oauth.client_id"); err != nil {
+			return nil, err
+		}
+	}
+	if value, exists := fields["client_secret_from"]; exists {
+		source, err := requiredString(value, path+": transport.oauth.client_secret_from")
+		if err != nil {
+			return nil, err
+		}
+		if !environmentNamePattern.MatchString(source) {
+			return nil, configError(path, "transport.oauth.client_secret_from must be an environment variable name")
+		}
+		if config.clientID == "" {
+			return nil, configError(path, "transport.oauth.client_secret_from needs transport.oauth.client_id")
+		}
+		secret, exists := environment[source]
+		if atRun && (!exists || secret == "") {
+			return nil, configError(path, "environment variable %s required by transport.oauth.client_secret_from is not set", source)
+		}
+		config.clientSecret = secret
+		// A file check has no environment: a placeholder stands for the secret, so the
+		// rules that need one still apply.
+		if !atRun {
+			config.clientSecret = "$" + source
+		}
+	}
+	if config.grant == oauthGrantClientCredentials && (config.clientID == "" || config.clientSecret == "") {
+		return nil, configError(path, "transport.oauth.grant client_credentials needs client_id and client_secret_from")
+	}
+	if value, exists := fields["scopes"]; exists {
+		scopes, err := stringArray(value, false, path+": transport.oauth.scopes")
+		if err != nil {
+			return nil, err
+		}
+		if len(scopes) == 0 || len(scopes) > maxOAuthScopes {
+			return nil, configError(path, "transport.oauth.scopes must list 1 to %d scopes", maxOAuthScopes)
+		}
+		seen := make(map[string]struct{}, len(scopes))
+		for _, scope := range scopes {
+			if scope == "" || strings.ContainsAny(scope, " \t\r\n\"\\") {
+				return nil, configError(path, "transport.oauth.scopes must be scope tokens without spaces or quotes")
+			}
+			if _, repeated := seen[scope]; repeated {
+				return nil, configError(path, "transport.oauth.scopes lists %s twice", scope)
+			}
+			seen[scope] = struct{}{}
+		}
+		config.scopes = scopes
+	}
+	if value, exists := fields["redirect_url"]; exists {
+		if config.redirectURL, err = requiredString(value, path+": transport.oauth.redirect_url"); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := loginRedirect(config.redirectURL); err != nil {
+		return nil, configError(path, "transport.oauth.redirect_url %v", err)
+	}
+	margin, err := configuredInteger(fields["refresh_margin_ms"], defaultOAuthRefreshMarginMS, 0, maxOAuthRefreshMarginMS, path, "transport.oauth.refresh_margin_ms")
+	if err != nil {
+		return nil, err
+	}
+	config.refreshMargin = time.Duration(margin) * time.Millisecond
+	if config.grant == oauthGrantClientCredentials {
+		for _, key := range []string{"scopes", "redirect_url", "refresh_margin_ms"} {
+			if _, set := fields[key]; set {
+				return nil, configError(path, "transport.oauth.%s applies only to grant authorization_code", key)
+			}
+		}
+	}
+	return config, nil
+}
+
+// loginRedirect checks a redirect address and reports whether "jad mcp login" can wait for
+// it itself: an http address on the loopback interface with a port. Any https address is
+// accepted too; the browser cannot reach the login there, so the address it was sent to
+// is pasted instead.
+func loginRedirect(raw string) (listen bool, err error) {
+	parsed, parseErr := url.Parse(raw)
+	if parseErr != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return false, fmt.Errorf("must be an absolute http(s) address without credentials, query or fragment")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return false, nil
+	case "http":
+		host := parsed.Hostname()
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			return false, fmt.Errorf("must be https, or http on 127.0.0.1, ::1 or localhost")
+		}
+		if parsed.Port() == "" {
+			return false, fmt.Errorf("on the loopback interface must name a port")
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("must be an absolute http(s) address without credentials, query or fragment")
+	}
 }
 
 func objectFields(raw json.RawMessage, path, message string) (map[string]json.RawMessage, error) {

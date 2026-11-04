@@ -14,6 +14,23 @@ type MCPServerReference struct {
 	ConfigPath string
 	Enabled    bool
 	DenyTools  []string
+	// Resources and Prompts add the tools that list and read the server's resources and
+	// prompts. Both are off unless the toolset entry turns them on.
+	Resources bool
+	Prompts   bool
+	// TokenPath is where "jad mcp login" stores the server's OAuth tokens; empty outside the
+	// catalog layout, where a server cannot use OAuth sign-in.
+	TokenPath string
+}
+
+// mcpOAuthDir is the folder under the state root that holds MCP OAuth tokens. The leading
+// dot keeps it apart from session folders, which are named by session ID.
+const mcpOAuthDir = ".mcp-oauth"
+
+// MCPTokenPath is where the OAuth tokens of the MCP server file <category>/<name> are kept:
+// <state>/.mcp-oauth/<category>/<name>.json. Every session of the layout shares them.
+func MCPTokenPath(layout Layout, id string) string {
+	return filepath.Join(layout.State, mcpOAuthDir, filepath.FromSlash(id)+".json")
 }
 
 var mcpServerIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -37,7 +54,7 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 		if err := rejectRemovedApproval(fields, fmt.Sprintf("mcp_servers[%d]", index), settingPath); err != nil {
 			return nil, err
 		}
-		if err := rejectUnknownKeys(fields, entryPath, []string{"id", "config_path", "enabled", "deny_tools"}); err != nil {
+		if err := rejectUnknownKeys(fields, entryPath, []string{"id", "config_path", "enabled", "deny_tools", "resources", "prompts", "token_path"}); err != nil {
 			return nil, err
 		}
 		id, err := mcpRequiredString(fields["id"], fmt.Sprintf("mcp_servers[%d].id", index), settingPath)
@@ -62,11 +79,28 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 		}
 		configPath = filepath.Clean(configPath)
 
-		enabled := false
-		if value, exists := fields["enabled"]; exists {
-			if err := json.Unmarshal(value, &enabled); err != nil || strings.TrimSpace(string(value)) == "null" {
-				return nil, configError("%s.enabled must be a boolean", entryPath)
+		enabled, err := mcpOptionalBool(fields, "enabled", entryPath)
+		if err != nil {
+			return nil, err
+		}
+		resources, err := mcpOptionalBool(fields, "resources", entryPath)
+		if err != nil {
+			return nil, err
+		}
+		prompts, err := mcpOptionalBool(fields, "prompts", entryPath)
+		if err != nil {
+			return nil, err
+		}
+		tokenPath := ""
+		if _, exists := fields["token_path"]; exists {
+			tokenPath, err = mcpRequiredString(fields["token_path"], fmt.Sprintf("mcp_servers[%d].token_path", index), settingPath)
+			if err != nil {
+				return nil, err
 			}
+			if !filepath.IsAbs(tokenPath) {
+				tokenPath = filepath.Join(cwd, tokenPath)
+			}
+			tokenPath = filepath.Clean(tokenPath)
 		}
 
 		denyTools := []string{}
@@ -89,7 +123,7 @@ func normalizeMCPServers(raw json.RawMessage, cwd, settingPath string) ([]MCPSer
 				denyTools = append(denyTools, name)
 			}
 		}
-		servers = append(servers, MCPServerReference{ID: id, ConfigPath: configPath, Enabled: enabled, DenyTools: denyTools})
+		servers = append(servers, MCPServerReference{ID: id, ConfigPath: configPath, Enabled: enabled, DenyTools: denyTools, Resources: resources, Prompts: prompts, TokenPath: tokenPath})
 	}
 	return servers, nil
 }
@@ -100,4 +134,17 @@ func mcpRequiredString(raw json.RawMessage, field, settingPath string) (string, 
 		return "", configError("%s: %s must be a non-empty string", settingPath, field)
 	}
 	return strings.TrimSpace(value), nil
+}
+
+// mcpOptionalBool reads an optional boolean key of an mcp_servers entry; a missing key is false.
+func mcpOptionalBool(fields map[string]json.RawMessage, key, entryPath string) (bool, error) {
+	value, exists := fields[key]
+	if !exists {
+		return false, nil
+	}
+	var result bool
+	if err := json.Unmarshal(value, &result); err != nil || strings.TrimSpace(string(value)) == "null" {
+		return false, configError("%s.%s must be a boolean", entryPath, key)
+	}
+	return result, nil
 }

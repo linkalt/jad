@@ -44,6 +44,24 @@
               "description": "Map HTTP header names to names of variables in the backend environment; secret values are not stored in this file.",
               "additionalProperties": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
               "default": {}
+            },
+            "oauth": {
+              "type": "object",
+              "description": "OAuth 2.1 for a server that asks for it. With grant authorization_code, sign in once with `jad mcp login <category>/<name>`: the tokens are kept in <state>/.mcp-oauth/<category>/<name>.json (mode 0600) and refreshed during runs; a run never starts a sign-in, and a server whose tokens are missing or can no longer be refreshed fails the run with the login command named. With grant client_credentials no sign-in is needed. Do not also set an Authorization header in headers_from.",
+              "properties": {
+                "grant": {"type": "string", "enum": ["authorization_code", "client_credentials"], "default": "authorization_code"},
+                "client_id": {"type": "string", "pattern": "\\S", "description": "A client registered with the authorization server. Without it, authorization_code registers a client dynamically at sign-in. Required for client_credentials."},
+                "client_secret_from": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Name of the backend environment variable that holds the client secret; needs client_id. Required for client_credentials."},
+                "scopes": {"type": "array", "items": {"type": "string", "pattern": "^[^\\s\"\\\\]+$"}, "minItems": 1, "maxItems": 64, "uniqueItems": true, "description": "Scopes to ask for at sign-in instead of the ones the server's metadata names. authorization_code only."},
+                "redirect_url": {"type": "string", "format": "uri", "default": "http://127.0.0.1:47681/callback", "description": "Where the browser is sent after sign-in. On an http loopback address with a port, jad mcp login waits for it there; with an https address, paste the address the browser was sent to. authorization_code only."},
+                "refresh_margin_ms": {"type": "integer", "minimum": 0, "maximum": 3600000, "default": 60000, "description": "Refresh the access token this long before it expires; at most half the token's lifetime is used. authorization_code only."}
+              },
+              "additionalProperties": false,
+              "allOf": [
+                {"if": {"properties": {"grant": {"const": "client_credentials"}}, "required": ["grant"]},
+                 "then": {"required": ["client_id", "client_secret_from"], "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["redirect_url"]}, {"required": ["refresh_margin_ms"]}]}}},
+                {"if": {"required": ["client_secret_from"]}, "then": {"required": ["client_id"]}}
+              ]
             }
           },
           "additionalProperties": false

@@ -195,3 +195,43 @@ func TestSubagentToolsetListWithAnUnknownSecondIDIsAnError(t *testing.T) {
 		t.Fatalf("err = %v, want an agent finder toolset error naming b/missing", err)
 	}
 }
+
+// resources and prompts in a toolset's mcp entry reach the server reference; a typo or a
+// value that is not a boolean is refused by the strict toolset reader.
+func TestToolsetMCPEntryTurnsOnResourcesAndPrompts(t *testing.T) {
+	spec := profileSpec([]string{"a/one"})
+	spec.MCP = map[string]map[string]any{"srv/files": {}}
+	config, err := loadToolsetSession(t, spec, map[string]string{
+		"a/one": `{"mcp":{"srv/files":{"resources":true,"prompts":true}}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.MCPServers) != 1 || !config.MCPServers[0].Resources || !config.MCPServers[0].Prompts {
+		t.Fatalf("MCPServers = %+v, want files with resources and prompts", config.MCPServers)
+	}
+	for _, text := range []string{
+		`{"mcp":{"srv/files":{"resource":true}}}`,
+		`{"mcp":{"srv/files":{"prompts":"yes"}}}`,
+	} {
+		if _, err := loadToolsetSession(t, spec, map[string]string{"a/one": text}); err == nil {
+			t.Errorf("toolset %s was accepted", text)
+		}
+	}
+}
+
+// The toolset schema accepts the same mcp entry keys as the loader.
+func TestToolsetSchemaMCPEntryMatchesTheLoader(t *testing.T) {
+	schema := compileSchema(t, "toolset.schema.json")
+	for text, want := range map[string]bool{
+		`{"mcp":{"srv/files":{"resources":true,"prompts":false}}}`:   true,
+		`{"mcp":{"srv/files":{"enabled":false,"deny_tools":["x"]}}}`: true,
+		`{"mcp":{"srv/files":{"resource":true}}}`:                    false,
+		`{"mcp":{"srv/files":{"prompts":"yes"}}}`:                    false,
+		`{"mcp":{"srv/files":{"token_path":"x"}}}`:                   false,
+	} {
+		if got := schemaAccepts(t, schema, text); got != want {
+			t.Errorf("toolset.schema.json accepts %s = %v, want %v", text, got, want)
+		}
+	}
+}

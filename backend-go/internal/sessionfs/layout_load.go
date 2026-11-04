@@ -621,12 +621,18 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 		}
 		ids[file.Name] = key
 		use := uses[key]
-		item := map[string]any{"id": file.Name, "config_path": file.Path, "enabled": true}
+		item := map[string]any{"id": file.Name, "config_path": file.Path, "enabled": true, "token_path": MCPTokenPath(c.layout, key)}
 		if use.Enabled != nil {
 			item["enabled"] = *use.Enabled
 		}
 		if use.DenyTools != nil {
 			item["deny_tools"] = use.DenyTools
+		}
+		if use.Resources != nil {
+			item["resources"] = *use.Resources
+		}
+		if use.Prompts != nil {
+			item["prompts"] = *use.Prompts
 		}
 		if use.Approval != nil {
 			return nil, configError("%s: mcp %q: approval was removed; %s", toolsetPath, key, removedApprovalHint)

@@ -49,6 +49,16 @@
             },
             "uniqueItems": true,
             "default": []
+          },
+          "resources": {
+            "type": "boolean",
+            "default": false,
+            "description": "Adds two tools for the server's resources: one lists them (or their URI templates) a page at a time, one reads a resource by URI. A server that does not offer resources fails the run with this key named."
+          },
+          "prompts": {
+            "type": "boolean",
+            "default": false,
+            "description": "Adds two tools for the server's prompt templates: one lists them with their arguments, one returns a prompt filled with its arguments. A server that does not offer prompts fails the run with this key named."
           }
         },
         "additionalProperties": false

@@ -32,7 +32,7 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 
 	const wantGrep = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","MaxResults":11,"MaxMatchesPerFile":20,"MaxBytes":65536,"MaxLineChars":240,"MaxFileBytes":8388608,"TimeoutMs":10000,"KillGraceMs":250,"KillDeadlineMs":1000,"DrainAfterExitMs":500}`
 	const wantGlob = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","IncludeHidden":true,"MaxResults":22,"MaxBytes":65536,"MaxLineChars":1000,"TimeoutMs":10000,"KillGraceMs":2000,"KillDeadlineMs":2000,"DrainAfterExitMs":500}`
-	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[]},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"]}]`
+	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[],"Resources":false,"Prompts":false,"TokenPath":""},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"],"Resources":false,"Prompts":false,"TokenPath":""}]`
 
 	assertJSON(t, "NativeGrep", config.NativeGrep, wantGrep)
 	assertJSON(t, "NativeGlob", config.NativeGlob, wantGlob)
@@ -44,6 +44,11 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 			t.Errorf("server %s ConfigPath = %q, want it to end with %q", servers[index].ID, servers[index].ConfigPath, wantSuffix)
 		}
 		servers[index].ConfigPath = ""
+		wantToken := filepath.FromSlash("/state/.mcp-oauth/srv/" + servers[index].ID + ".json")
+		if !strings.HasSuffix(servers[index].TokenPath, wantToken) {
+			t.Errorf("server %s TokenPath = %q, want it to end with %q", servers[index].ID, servers[index].TokenPath, wantToken)
+		}
+		servers[index].TokenPath = ""
 	}
 	assertJSON(t, "MCPServers", servers, wantServers)
 }

@@ -163,6 +163,8 @@ type layoutToolsetFile struct {
 type layoutToolsetMCP struct {
 	Enabled   *bool           `json:"enabled"`
 	DenyTools []string        `json:"deny_tools"`
+	Resources *bool           `json:"resources"`
+	Prompts   *bool           `json:"prompts"`
 	Approval  json.RawMessage `json:"approval"`
 }
 

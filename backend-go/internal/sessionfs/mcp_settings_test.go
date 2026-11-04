@@ -30,6 +30,23 @@ func TestNormalizeMCPServersDefaultsAndResolvesConfigPaths(t *testing.T) {
 	}
 }
 
+func TestNormalizeMCPServersReadsFeaturesAndTokenPath(t *testing.T) {
+	cwd := t.TempDir()
+	servers, err := normalizeMCPServers(json.RawMessage(`[
+		{"id":"plain","config_path":"a.json"},
+		{"id":"docs","config_path":"b.json","resources":true,"prompts":true,"token_path":"tokens/docs.json"}
+	]`), cwd, "/session/setting.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers[0].Resources || servers[0].Prompts || servers[0].TokenPath != "" {
+		t.Errorf("defaults = %+v, want no features and no token path", servers[0])
+	}
+	if !servers[1].Resources || !servers[1].Prompts || servers[1].TokenPath != filepath.Join(cwd, "tokens", "docs.json") {
+		t.Errorf("explicit = %+v", servers[1])
+	}
+}
+
 func TestNormalizeMCPServersRejectsInvalidReferences(t *testing.T) {
 	cwd := t.TempDir()
 	cases := []struct {
@@ -44,6 +61,9 @@ func TestNormalizeMCPServersRejectsInvalidReferences(t *testing.T) {
 		{name: "enabled is not boolean", raw: `[{"id":"one","config_path":"x","enabled":"yes"}]`, want: "enabled must be a boolean"},
 		{name: "deny tools is not array", raw: `[{"id":"one","config_path":"x","deny_tools":"dangerous"}]`, want: "deny_tools must be an array"},
 		{name: "duplicate denied tool", raw: `[{"id":"one","config_path":"x","deny_tools":["x","x"]}]`, want: "deny_tools must not contain duplicates"},
+		{name: "resources is not boolean", raw: `[{"id":"one","config_path":"x","resources":"yes"}]`, want: "resources must be a boolean"},
+		{name: "prompts is null", raw: `[{"id":"one","config_path":"x","prompts":null}]`, want: "prompts must be a boolean"},
+		{name: "token path is empty", raw: `[{"id":"one","config_path":"x","token_path":" "}]`, want: "token_path must be a non-empty string"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

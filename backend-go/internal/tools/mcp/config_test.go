@@ -218,3 +218,105 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 		t.Errorf("mcp-server.schema.json properties = %v, want %v", keys, documented)
 	}
 }
+
+func TestNormalizeOAuthDefaultsAndRefusals(t *testing.T) {
+	path := "/mcp/remote/docs.json"
+	http := func(oauth string) string {
+		return `{"transport":{"type":"streamable_http","url":"https://mcp.example/mcp","oauth":` + oauth + `}}`
+	}
+	config, err := normalizeConfig(json.RawMessage(http(`{}`)), sessionfs.MCPServerReference{ConfigPath: path}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oauth := config.transport.http.oauth
+	if oauth.grant != "authorization_code" || oauth.redirectURL != defaultOAuthRedirectURL || oauth.refreshMargin != defaultOAuthRefreshMarginMS*time.Millisecond || oauth.clientID != "" {
+		t.Fatalf("defaults = %+v", oauth)
+	}
+	withSecret, err := normalizeConfig(json.RawMessage(http(`{"client_id":"c","client_secret_from":"S"}`)), sessionfs.MCPServerReference{ConfigPath: path}, "", map[string]string{"S": "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := normalizeConfig(json.RawMessage(http(`{"client_id":"c","client_secret_from":"S"}`)), sessionfs.MCPServerReference{ConfigPath: path}, "", map[string]string{"S": "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withSecret.fingerprint == other.fingerprint || withSecret.fingerprint == config.fingerprint {
+		t.Fatal("the OAuth settings and secret do not change the connection fingerprint")
+	}
+	if err := ValidateServerFile(path, []byte(http(`{"grant":"client_credentials","client_id":"c","client_secret_from":"S"}`))); err != nil {
+		t.Fatalf("a file check refused client_credentials whose secret is in the environment: %v", err)
+	}
+	for _, test := range []struct{ oauth, want string }{
+		{`[]`, "transport.oauth must be an object"},
+		{`{"grants":"x"}`, "transport.oauth.grants is not supported"},
+		{`{"grant":"password"}`, "grant must be authorization_code or client_credentials"},
+		{`{"client_id":""}`, "client_id: must be a non-empty string"},
+		{`{"client_secret_from":"S"}`, "client_secret_from needs transport.oauth.client_id"},
+		{`{"client_id":"c","client_secret_from":"not-a-name"}`, "client_secret_from must be an environment variable name"},
+		{`{"client_id":"c","client_secret_from":"MISSING"}`, "MISSING required by transport.oauth.client_secret_from is not set"},
+		{`{"grant":"client_credentials","client_id":"c"}`, "client_credentials needs client_id and client_secret_from"},
+		{`{"grant":"client_credentials","client_id":"c","client_secret_from":"S","scopes":["a"]}`, "scopes applies only to grant authorization_code"},
+		{`{"scopes":[]}`, "scopes must list 1 to 64 scopes"},
+		{`{"scopes":["a b"]}`, "scope tokens without spaces"},
+		{`{"scopes":["a","a"]}`, "lists a twice"},
+		{`{"redirect_url":"http://example.com:80/cb"}`, "must be https, or http on 127.0.0.1"},
+		{`{"redirect_url":"http://127.0.0.1/cb"}`, "must name a port"},
+		{`{"redirect_url":"https://example.com/cb?x=1"}`, "without credentials, query or fragment"},
+		{`{"redirect_url":"ftp://example.com/cb"}`, "without credentials, query or fragment"},
+		{`{"refresh_margin_ms":-1}`, "refresh_margin_ms must be an integer from 0 to 3600000"},
+		{`{"refresh_margin_ms":3600001}`, "refresh_margin_ms must be an integer from 0 to 3600000"},
+	} {
+		_, err := normalizeConfig(json.RawMessage(http(test.oauth)), sessionfs.MCPServerReference{ConfigPath: path}, "", map[string]string{"S": "secret"})
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("oauth %s: error = %v, want %q", test.oauth, err, test.want)
+		}
+	}
+	both := `{"transport":{"type":"streamable_http","url":"https://mcp.example/mcp","headers_from":{"authorization":"TOKEN"},"oauth":{}}}`
+	if _, err := normalizeConfig(json.RawMessage(both), sessionfs.MCPServerReference{ConfigPath: path}, "", map[string]string{"TOKEN": "x"}); err == nil || !strings.Contains(err.Error(), "must not both be set") {
+		t.Errorf("oauth with an Authorization header: %v", err)
+	}
+}
+
+// The schema's transport.oauth accepts what the loader accepts, for every rule a schema can
+// state (the loopback rule of redirect_url is the loader's alone).
+func TestMCPConfigSchemaOAuthMatchesTheLoader(t *testing.T) {
+	data, err := os.ReadFile("../../../../sample/schemes/mcp-server.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := tools.CompileSchema(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := map[string]string{"S": "secret"}
+	for _, oauth := range []string{
+		`{}`,
+		`{"grant":"authorization_code","client_id":"c","client_secret_from":"S","scopes":["a","b:c"],"redirect_url":"https://example.com/cb","refresh_margin_ms":0}`,
+		`{"grant":"client_credentials","client_id":"c","client_secret_from":"S"}`,
+		`{"refresh_margin_ms":3600000}`,
+		`{"grant":"password"}`,
+		`{"grants":"x"}`,
+		`{"client_id":""}`,
+		`{"client_secret_from":"S"}`,
+		`{"client_id":"c","client_secret_from":"not-a-name"}`,
+		`{"grant":"client_credentials","client_id":"c"}`,
+		`{"grant":"client_credentials","client_id":"c","client_secret_from":"S","scopes":["a"]}`,
+		`{"grant":"client_credentials","client_id":"c","client_secret_from":"S","refresh_margin_ms":1}`,
+		`{"scopes":[]}`,
+		`{"scopes":["a b"]}`,
+		`{"scopes":["a","a"]}`,
+		`{"refresh_margin_ms":-1}`,
+		`{"refresh_margin_ms":3600001}`,
+		`{"refresh_margin_ms":1.5}`,
+	} {
+		raw := `{"transport":{"type":"streamable_http","url":"https://mcp.example/mcp","oauth":` + oauth + `}}`
+		issues, err := validator.Validate([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, loadErr := normalizeConfig(json.RawMessage(raw), sessionfs.MCPServerReference{ConfigPath: "x.json"}, "", environment)
+		if schemaOK, loaderOK := len(issues) == 0, loadErr == nil; schemaOK != loaderOK {
+			t.Errorf("oauth %s: schema accepts %v, loader accepts %v (%v)", oauth, schemaOK, loaderOK, loadErr)
+		}
+	}
+}

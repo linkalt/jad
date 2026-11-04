@@ -228,6 +228,12 @@ func TestLayoutMCPUseSettingsComeFromTheToolset(t *testing.T) {
 		if !server.Enabled {
 			t.Fatalf("%s should be enabled by default", id)
 		}
+		if server.Resources || server.Prompts {
+			t.Fatalf("%s should have resources and prompts off by default", id)
+		}
+		if !strings.Contains(server.TokenPath, string(filepath.Separator)+".mcp-oauth"+string(filepath.Separator)) {
+			t.Fatalf("%s token path = %q, want it under the state folder's .mcp-oauth", id, server.TokenPath)
+		}
 	}
 }
 
