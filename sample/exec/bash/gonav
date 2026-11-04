@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Deterministic Go navigation from go/ast: definitions, callers, callees, related types, tests and impact in ONE JSON answer whose ranges chain into `gonav source`.
-# input: {"cmd":"navigate","symbol":"wait","path":"backend-go"}  or  gonav navigate|symbol|impact SYMBOL [--path DIR] [--receiver R] [--max N] [--no-tests]  |  gonav source [FILE START END]
+# Deterministic Go navigation: exact type-checked refs/impl (engine B, go/types) plus go/ast navigation (engine A) for code that does not compile.
+# input: gonav navigate|symbol|impact|show|refs|callers|impl SYM [SYM...] [--path DIR] [--receiver R] [--max N] [--max-lines N] [--no-tests] [--calls] [--json]  |  gonav source [FILE START END]
 set -uo pipefail
 runner=${JAD_RUNNER_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 lib=$runner/gonav.d
@@ -8,4 +8,16 @@ if [ ! -d "$lib" ]; then printf 'gonav: missing %s\n' "$lib" >&2; exit 2; fi
 export GOTOOLCHAIN=local
 export GONAV_ROOT=${GONAV_ROOT:-$PWD}
 cd "$lib" || exit 2
-exec go run . "$@"
+# A cached binary instead of `go run` so the documented exit codes (0 found, 1 not found/ambiguous,
+# 2 usage) reach the caller: `go run` reports every non-zero exit as 1. The cache key covers the
+# sources, and a rebuild happens only when one of them changes.
+stamp=$(cksum go.mod *.go | cksum | tr -d ' ')
+cache=${TMPDIR:-/tmp}/jad-gonav-$(id -u)/$stamp
+bin=$cache/gonav
+if [ ! -x "$bin" ]; then
+	mkdir -p "$cache" || exit 2
+	tmp=$cache/.gonav.$$
+	if ! go build -o "$tmp" . ; then rm -f "$tmp"; exit 2; fi
+	mv -f "$tmp" "$bin" || exit 2
+fi
+exec "$bin" "$@"

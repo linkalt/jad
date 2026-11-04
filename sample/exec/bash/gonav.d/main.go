@@ -4,15 +4,19 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -51,6 +55,7 @@ type Site struct {
 	Kind       string `json:"kind,omitempty"`
 	Qualifier  string `json:"qualifier,omitempty"`
 	CallLine   int    `json:"call_line,omitempty"`
+	Col        int    `json:"col,omitempty"`
 	Mentions   int    `json:"mentions,omitempty"`
 	Confidence string `json:"confidence,omitempty"`
 	Range
@@ -78,6 +83,7 @@ type config struct {
 	max       int
 	maxLines  int
 	noTests   bool
+	calls     bool
 	file      string
 	startLine int
 	endLine   int
@@ -89,11 +95,8 @@ func main() {
 	started := time.Now()
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
-		if !cfg.json {
-			fmt.Printf("error: %v\n", err)
-			os.Exit(1)
-		}
-		fail(cfg.cmd, err)
+		// Every parse failure is a usage error, which exits 2.
+		exitFor(cfg, &usageError{err: err})
 	}
 	if !cfg.json {
 		text, err := executeText(cfg, started)
@@ -103,8 +106,7 @@ func main() {
 				fmt.Print(capText(renderError(payload.value), cfg, ""))
 				os.Exit(1)
 			}
-			fmt.Printf("error: %v\n", err)
-			os.Exit(1)
+			exitFor(cfg, err)
 		}
 		fmt.Print(text)
 		return
@@ -116,7 +118,7 @@ func main() {
 			emit(payload.value)
 			os.Exit(1)
 		}
-		fail(cfg.cmd, err)
+		exitFor(cfg, err)
 	}
 	emit(value)
 }
@@ -129,10 +131,21 @@ func execute(cfg config, started time.Time) (any, error) {
 		return symbolResult(cfg, started)
 	case "show":
 		return showResult(cfg, started)
+	case "refs", "callers", "impl":
+		return typedResult(cfg, started)
 	case "source":
 		return sourceResult(cfg, started)
 	}
-	return nil, fmt.Errorf("unknown command %q; use navigate, symbol, impact, show or source", cfg.cmd)
+	return nil, usagef("unknown command %q; use navigate, symbol, impact, show, refs, callers, impl or source", cfg.cmd)
+}
+
+// usageError is a bad invocation, which exits 2 and never becomes an answer.
+type usageError struct{ err error }
+
+func (e *usageError) Error() string { return e.err.Error() }
+
+func usagef(format string, args ...any) error {
+	return &usageError{err: fmt.Errorf(format, args...)}
 }
 
 // resultError is a complete answer that reports its own failure, such as a symbol that does not exist.
@@ -147,6 +160,21 @@ func emit(value any) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(value)
+}
+
+// exitFor maps an error to the documented exit codes: 2 for a bad invocation, 1 otherwise.
+func exitFor(cfg config, err error) {
+	code := 1
+	var usage *usageError
+	if errors.As(err, &usage) {
+		code = 2
+	}
+	if !cfg.json {
+		fmt.Printf("error: %v\n", err)
+		os.Exit(code)
+	}
+	emit(map[string]any{"ok": false, "cmd": cfg.cmd, "error": err.Error()})
+	os.Exit(code)
 }
 
 func fail(cmd string, err error) {
@@ -225,12 +253,14 @@ func parseArgs(args []string) (config, error) {
 				return cfg, fmt.Errorf("--max-bytes needs a positive integer")
 			}
 			cfg.maxBytes = n
+		case "--calls":
+			cfg.calls = true
 		case "--no-tests":
 			cfg.noTests = true
 		case "--json":
 			cfg.json = true
 		case "--help", "-h":
-			return cfg, fmt.Errorf("usage: gonav navigate|symbol|impact|show SYM [SYM...] (SYM: Name, Type.Field, Type.Method, pkg.Name; a|b|c ok) [--path DIR] [--receiver R] [--max N] [--max-lines N] [--max-bytes N] [--no-tests] [--json] | gonav source [FILE START END] (JSON ranges on stdin)")
+			return cfg, fmt.Errorf("usage: gonav navigate|symbol|impact|show|refs|callers|impl SYM [SYM...] (SYM: Name, Type.Field, Type.Method, pkg.Name; a|b|c ok) [--path DIR] [--receiver R] [--max N] [--max-lines N] [--max-bytes N] [--no-tests] [--calls] [--json] | gonav source [FILE START END] (JSON ranges on stdin)")
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return cfg, fmt.Errorf("unknown flag %q", a)
@@ -1202,30 +1232,37 @@ func openIndex(cfg *config) (*index, error) {
 	return newIndex(cfg.root, cfg.path)
 }
 
-// lookup resolves Name, Type.Member, pkg.Name or pkg.Type.Member to declaration indices.
+// lookup resolves Name, Type.Member, pkg.Name or pkg.Type.Member to declaration indices. A package
+// qualifier that names a package prefers that package's own declarations, so pkg.Name and Type.Method
+// never collide; a receiver qualifier picks the type's methods and fields.
 func (ix *index) lookup(spec string, cfg config) []int {
 	name, qual := spec, ""
 	if i := strings.LastIndex(spec, "."); i > 0 {
 		qual, name = spec[:i], spec[i+1:]
 	}
-	var ids []int
+	var loose []int
 	for _, id := range ix.byName[name] {
 		d := ix.decls[id]
 		if cfg.noTests && inTestFile(d.File) {
 			continue
 		}
-		if cfg.receiver != "" && d.Receiver != "" && baseReceiver(d.Receiver) != cfg.receiver {
+		recv := baseReceiver(d.Receiver)
+		if cfg.receiver != "" && recv != "" && recv != cfg.receiver {
 			continue
 		}
 		if qual != "" {
-			recv := baseReceiver(d.Receiver)
-			if qual != d.Package && (recv == "" || (qual != recv && qual != d.Package+"."+recv)) {
+			own := qual == d.Package && recv == ""
+			byType := recv != "" && (qual == recv || qual == d.Package+"."+recv)
+			if !own {
+				if byType {
+					loose = append(loose, id)
+				}
 				continue
 			}
 		}
-		ids = append(ids, id)
+		loose = append(loose, id)
 	}
-	return ids
+	return loose
 }
 
 type group struct {
@@ -1278,7 +1315,9 @@ func wantsRefsKind(kind string) bool {
 	return isTypeKind(kind) || kind == "const" || kind == "var" || kind == "field"
 }
 
-func buildSession(cfg config, started time.Time) (*session, error) {
+// openSession parses nothing twice: it normalises the command, checks that a symbol was given and
+// builds the engine A index. Both the fast lookups and engine B start here.
+func openSession(cfg config, started time.Time) (*session, []string, error) {
 	cmd := cfg.cmd
 	if cmd == "" {
 		cmd = "navigate"
@@ -1286,13 +1325,20 @@ func buildSession(cfg config, started time.Time) (*session, error) {
 	cfg.cmd = cmd
 	specs := symbolList(cfg)
 	if len(specs) == 0 {
-		return nil, fmt.Errorf("no symbol given; usage: gonav %s SYMBOL [SYMBOL...]", cmd)
+		return nil, nil, usagef("no symbol given; usage: gonav %s SYMBOL [SYMBOL...]", cmd)
 	}
 	ix, err := openIndex(&cfg)
 	if err != nil {
+		return nil, nil, err
+	}
+	return &session{cfg: cfg, ix: ix, started: started}, specs, nil
+}
+
+func buildSession(cfg config, started time.Time) (*session, error) {
+	se, specs, err := openSession(cfg, started)
+	if err != nil {
 		return nil, err
 	}
-	se := &session{cfg: cfg, ix: ix, started: started}
 	for _, spec := range specs {
 		se.answers = append(se.answers, se.resolve(spec))
 	}
@@ -2003,6 +2049,8 @@ func executeText(cfg config, started time.Time) (string, error) {
 		}
 		blocks, _, omitted := readBlocks(cfg, ranges)
 		return capText(renderBlocks(blocks, omitted), cfg, ""), nil
+	case "refs", "callers", "impl":
+		return typedText(cfg, started)
 	case "navigate", "symbol", "impact", "show", "":
 		se, err := buildSession(cfg, started)
 		if err != nil {
@@ -2027,7 +2075,7 @@ func executeText(cfg config, started time.Time) (string, error) {
 		}
 		return text, nil
 	}
-	return "", fmt.Errorf("unknown command %q; use navigate, symbol, impact, show or source", cfg.cmd)
+	return "", usagef("unknown command %q; use navigate, symbol, impact, show, refs, callers, impl or source", cfg.cmd)
 }
 
 func renderError(v map[string]any) string {
@@ -2166,4 +2214,1236 @@ func capText(text string, cfg config, hint string) string {
 		hint = "raise --max-bytes, lower --max-lines or narrow the range"
 	}
 	return fmt.Sprintf("%s... truncated: showing %d of %d lines (%d of %d bytes); %s\n", text[:cut], shownLines, totalLines, cut, len(text), hint)
+}
+
+// ---------- engine B: go/types over go list export data ----------
+
+// listPackage is the subset of "go list -json" this engine needs.
+type listPackage struct {
+	ImportPath      string
+	Name            string
+	Dir             string
+	ForTest         string
+	Standard        bool
+	DepOnly         bool
+	Export          string
+	GoFiles         []string
+	CompiledGoFiles []string
+	IgnoredGoFiles  []string
+	CgoFiles        []string
+	Imports         []string
+	ImportMap       map[string]string
+	Error           *struct{ Err string }
+	Module          *struct {
+		Path string
+		Dir  string
+		Main bool
+	}
+}
+
+// baseImportPath strips the " [x.test]" suffix go list puts on test variants.
+func baseImportPath(p string) string {
+	if i := strings.Index(p, " ["); i > 0 {
+		return p[:i]
+	}
+	return p
+}
+
+func testVariant(importPath, suffix string) string {
+	return baseImportPath(importPath) + " [" + baseImportPath(importPath) + ".test]" + suffix
+}
+
+func goTool() string {
+	if p, err := exec.LookPath("go"); err == nil {
+		return p
+	}
+	return "go"
+}
+
+func findModuleDir(start string) (string, bool) {
+	dir := start
+	for {
+		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// loader is one "go list -export -deps -json" result: every package (and, with tests, every test
+// variant) the module compiles, with the export data path each has.
+type loader struct {
+	root      string
+	dir       string
+	path      string
+	withTests bool
+	pkgs      []*listPackage
+	byPath    map[string]*listPackage
+	module    []*listPackage
+	base      map[string][]*listPackage
+	dirPath   map[string]string
+}
+
+func loadModule(root, scanDir string, withTests bool) (*loader, error) {
+	abs := scanDir
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(root, scanDir)
+	}
+	dir, ok := findModuleDir(abs)
+	if !ok {
+		return nil, fmt.Errorf("no go.mod above %s", scanDir)
+	}
+	args := []string{"list", "-e", "-export", "-deps", "-json", "-compiled"}
+	if withTests {
+		args = append(args, "-test")
+	}
+	args = append(args, "./...")
+	cmd := exec.Command(goTool(), args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return nil, fmt.Errorf("go list in %s: %v: %s", dir, err, strings.TrimSpace(stderr.String()))
+	}
+	ld := &loader{root: root, dir: dir, withTests: withTests, byPath: map[string]*listPackage{}, base: map[string][]*listPackage{}, dirPath: map[string]string{}}
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var p listPackage
+		if err := dec.Decode(&p); err != nil {
+			break
+		}
+		ld.pkgs = append(ld.pkgs, &p)
+	}
+	for _, p := range ld.pkgs {
+		ld.byPath[p.ImportPath] = p
+		if p.ImportPath == baseImportPath(p.ImportPath) {
+			ld.base[p.ImportPath] = append(ld.base[p.ImportPath], p)
+			if _, seen := ld.dirPath[p.Dir]; !seen {
+				ld.dirPath[p.Dir] = p.ImportPath
+			}
+		}
+		if p.Module != nil && p.Module.Main {
+			ld.module = append(ld.module, p)
+			ld.path = p.Module.Path
+		}
+	}
+	if len(ld.pkgs) == 0 {
+		return nil, fmt.Errorf("go list in %s returned no packages", dir)
+	}
+	return ld, nil
+}
+
+// variant finds one flavour of a package: "prod" is the plain build, "aug" the package plus its
+// internal test files, "xtest" the external (x_test) test package, all as go list -test names them.
+func (ld *loader) variant(base, kind string) *listPackage {
+	switch kind {
+	case "prod":
+		return ld.byPath[base]
+	case "aug":
+		return ld.byPath[base+" ["+base+".test]"]
+	case "xtest":
+		return ld.byPath[base+"_test ["+base+".test]"]
+	}
+	return nil
+}
+
+// importersOf lists the module packages that import base, test variants included, so the type-check
+// stays local instead of covering the whole module.
+func (ld *loader) importersOf(base string) []*listPackage {
+	var out []*listPackage
+	for _, p := range ld.module {
+		if baseImportPath(p.ImportPath) == base {
+			continue
+		}
+		for _, dep := range p.Imports {
+			if mapped, ok := p.ImportMap[dep]; ok {
+				dep = mapped
+			}
+			if baseImportPath(dep) == base {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (ld *loader) lookupExport(path string) (io.ReadCloser, error) {
+	if lp := ld.byPath[path]; lp != nil && lp.Export != "" {
+		return os.Open(lp.Export)
+	}
+	for _, lp := range ld.base[baseImportPath(path)] {
+		if lp.Export != "" {
+			return os.Open(lp.Export)
+		}
+	}
+	return nil, fmt.Errorf("no export data for %q", path)
+}
+
+type checkedPkg struct {
+	lp    *listPackage
+	pkg   *types.Package
+	info  *types.Info
+	files []*ast.File
+	model map[token.Pos]funcSpan
+}
+
+type funcSpan struct {
+	start, end token.Pos
+	name       string
+}
+
+type checker struct {
+	ld       *loader
+	fset     *token.FileSet
+	gc       types.Importer
+	packages map[string]*checkedPkg
+	partial  bool
+	problems []string
+}
+
+func newChecker(ld *loader) *checker {
+	ck := &checker{ld: ld, fset: token.NewFileSet(), packages: map[string]*checkedPkg{}}
+	ck.gc = importer.ForCompiler(ck.fset, "gc", ld.lookupExport)
+	return ck
+}
+
+func (ck *checker) problem(err error) {
+	ck.partial = true
+	if len(ck.problems) < 8 {
+		ck.problems = append(ck.problems, err.Error())
+	}
+}
+
+// variantImporter resolves every import through export data, always to the plain build of the package.
+// One path must mean one type identity for the whole run, so neither go list's test-variant remapping
+// (ImportMap) nor an in-memory copy may be substituted: a package's test files never declare anything
+// another package can import, and references are recognised by package, name and receiver.
+type variantImporter struct{ ck *checker }
+
+func (vi *variantImporter) Import(path string) (*types.Package, error) {
+	return vi.ck.gc.Import(baseImportPath(path))
+}
+
+// check type-checks one package variant from source. Errors are collected, never fatal: the answer
+// then says types=partial.
+func (ck *checker) check(lp *listPackage) *checkedPkg {
+	if ch, ok := ck.packages[lp.ImportPath]; ok {
+		return ch
+	}
+	ch := &checkedPkg{lp: lp, model: map[token.Pos]funcSpan{}}
+	ck.packages[lp.ImportPath] = ch
+	var files []*ast.File
+	for _, name := range lp.CompiledGoFiles {
+		p := name
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(lp.Dir, p)
+		}
+		f, err := parser.ParseFile(ck.fset, p, nil, 0)
+		if err != nil {
+			ck.problem(err)
+			continue
+		}
+		files = append(files, f)
+	}
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	conf := types.Config{
+		Importer: &variantImporter{ck: ck},
+		Error:    func(err error) { ck.problem(err) },
+	}
+	pkg, err := conf.Check(lp.ImportPath, ck.fset, files, info)
+	if err != nil && pkg == nil {
+		ck.problem(err)
+		return ch
+	}
+	ch.pkg, ch.info, ch.files = pkg, info, files
+	for _, f := range files {
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			name := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				name = baseReceiver(recvText(fn.Recv.List[0].Type)) + "." + name
+			}
+			ch.model[fn.Pos()] = funcSpan{start: fn.Pos(), end: fn.End(), name: name}
+		}
+	}
+	return ch
+}
+
+// enclosing names the function a position sits in, which is what makes a hit readable.
+func (ch *checkedPkg) enclosing(pos token.Pos) string {
+	best := funcSpan{}
+	for _, span := range ch.model {
+		if pos >= span.start && pos <= span.end && (best.name == "" || span.end-span.start < best.end-best.start) {
+			best = span
+		}
+	}
+	return best.name
+}
+
+func (ck *checker) rel(file string) string {
+	if rel, err := filepath.Rel(ck.ld.root, file); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(file)
+}
+
+// targetSpec is what a reference must denote: a name in one package, with the receiver when the symbol
+// is a method or a field. The rules are structural on purpose: the same object can reach an answer as a
+// source-checked declaration or through export data, and both must be recognised.
+type targetSpec struct {
+	basePkg string
+	name    string
+	class   string
+	recv    string
+}
+
+func newTargetSpec(base string, defs []Decl) targetSpec {
+	spec := targetSpec{basePkg: base}
+	for _, d := range defs {
+		spec.name = d.Name
+		spec.class = d.Kind
+		if recv := baseReceiver(d.Receiver); recv != "" {
+			spec.recv = recv
+		}
+	}
+	return spec
+}
+
+// match decides whether an object is the queried symbol.
+func (t targetSpec) match(ck *checker, obj types.Object) bool {
+	if obj == nil {
+		return false
+	}
+	if obj.Name() != t.name || obj.Pkg() == nil {
+		return false
+	}
+	if baseImportPath(obj.Pkg().Path()) != t.basePkg {
+		return false
+	}
+	switch t.class {
+	case "method":
+		fn, ok := obj.(*types.Func)
+		if !ok {
+			return false
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Recv() == nil {
+			return false
+		}
+		return baseReceiver(typeBaseName(sig.Recv().Type())) == t.recv
+	case "field":
+		v, ok := obj.(*types.Var)
+		if !ok || !v.IsField() {
+			return false
+		}
+		if owner := fieldOwner(obj); owner != "" && t.recv != "" {
+			return owner == t.recv
+		}
+		return true
+	case "func":
+		fn, ok := obj.(*types.Func)
+		if !ok {
+			return false
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		return ok && sig.Recv() == nil
+	case "const":
+		_, ok := obj.(*types.Const)
+		return ok
+	case "var":
+		v, ok := obj.(*types.Var)
+		return ok && !v.IsField()
+	}
+	return true
+}
+
+// fieldOwner names the struct type that declares a field, so a field is never confused with a field of
+// the same name on another type in the package.
+func fieldOwner(obj types.Object) string {
+	if obj.Pkg() == nil {
+		return ""
+	}
+	for _, name := range obj.Pkg().Scope().Names() {
+		tn, ok := obj.Pkg().Scope().Lookup(name).(*types.TypeName)
+		if !ok || tn.IsAlias() {
+			continue
+		}
+		st, ok := tn.Type().Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		for i := 0; i < st.NumFields(); i++ {
+			if st.Field(i) == obj {
+				return tn.Name()
+			}
+		}
+	}
+	return ""
+}
+
+func typeBaseName(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if named, ok := t.(*types.Named); ok {
+		return named.Obj().Name()
+	}
+	return ""
+}
+
+func objectClass(obj types.Object) string {
+	switch o := obj.(type) {
+	case *types.Func:
+		if sig, ok := o.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return "method"
+		}
+		return "func"
+	case *types.Const:
+		return "const"
+	case *types.Var:
+		if o.IsField() {
+			return "field"
+		}
+		return "var"
+	case *types.TypeName:
+		return "type"
+	}
+	return "ref"
+}
+
+// refsIn collects every exact use of the target inside one checked package.
+func (ck *checker) refsIn(ch *checkedPkg, spec targetSpec, callsOnly bool) []Site {
+	if ch.pkg == nil || ch.info == nil {
+		return nil
+	}
+	var out []Site
+	seen := map[token.Pos]bool{}
+	add := func(pos token.Pos, obj types.Object, call bool) {
+		if !pos.IsValid() || seen[pos] {
+			return
+		}
+		p := ck.fset.Position(pos)
+		kind := objectClass(obj)
+		if call {
+			kind = "call"
+		}
+		seen[pos] = true
+		out = append(out, Site{
+			In:         ch.enclosing(pos),
+			Kind:       kind,
+			CallLine:   p.Line,
+			Col:        p.Column,
+			Confidence: "exact",
+			Range:      Range{File: ck.rel(p.Filename), Start: p.Line, End: p.Line},
+		})
+	}
+	callPos := map[token.Pos]bool{}
+	for _, f := range ch.files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch fun := call.Fun.(type) {
+			case *ast.Ident:
+				callPos[fun.Pos()] = true
+			case *ast.SelectorExpr:
+				callPos[fun.Sel.Pos()] = true
+			case *ast.IndexExpr:
+				if id, ok := fun.X.(*ast.Ident); ok {
+					callPos[id.Pos()] = true
+				}
+			case *ast.IndexListExpr:
+				if id, ok := fun.X.(*ast.Ident); ok {
+					callPos[id.Pos()] = true
+				}
+			}
+			return true
+		})
+	}
+	for id, obj := range ch.info.Uses {
+		if !spec.match(ck, obj) {
+			continue
+		}
+		add(id.Pos(), obj, callPos[id.Pos()])
+	}
+	for expr, selection := range ch.info.Selections {
+		if selection == nil || !spec.match(ck, selection.Obj()) {
+			continue
+		}
+		add(expr.Sel.Pos(), selection.Obj(), callPos[expr.Sel.Pos()])
+	}
+	if callsOnly {
+		var kept []Site
+		for _, s := range out {
+			if s.Kind == "call" {
+				kept = append(kept, s)
+			}
+		}
+		out = kept
+	}
+	sortSites(out)
+	return out
+}
+
+// ---------- engine B: refs and impl answers ----------
+
+const (
+	typesOK      = "ok"
+	typesPartial = "partial"
+	typesNoTypes = "unavailable"
+)
+
+type implHit struct {
+	Decl
+	Satisfies string `json:"satisfies"`
+}
+
+// typeAnswer is one symbol's type-checked answer; JSON and text are both rendered from it.
+type typeAnswer struct {
+	cmd        string
+	symbol     string
+	failure    map[string]any
+	defs       []Decl
+	candidates []candidate
+	exact      []Site
+	tests      []Site
+	nameOnly   []Site
+	impls      []implHit
+	target     string
+	verb       string
+	typesState string
+	problems   []string
+	note       string
+	ms         int64
+}
+
+type typedSession struct {
+	se      *session
+	answers []*typeAnswer
+}
+
+func (ld *loader) relDir(importPath string) string {
+	for _, lp := range ld.base[baseImportPath(importPath)] {
+		if rel, err := filepath.Rel(ld.root, lp.Dir); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return ""
+}
+
+// variantFor picks the package variant that contains a declaration: the plain build, the package with
+// its internal test files, or the external (x_test) test package.
+func (ld *loader) variantFor(base string, d Decl) *listPackage {
+	if !inTestFile(d.File) {
+		return ld.variant(base, "prod")
+	}
+	pkgName := ""
+	for _, lp := range ld.base[base] {
+		pkgName = lp.Name
+		break
+	}
+	if d.Package != "" && pkgName != "" && d.Package != pkgName {
+		return ld.variant(base, "xtest")
+	}
+	return ld.variant(base, "prod")
+}
+
+func (ix *index) notFound(spec string, cfg config, cmd string) map[string]any {
+	name := spec
+	if i := strings.LastIndex(spec, "."); i > 0 {
+		name = spec[i+1:]
+	}
+	return map[string]any{
+		"ok":          false,
+		"cmd":         cmd,
+		"symbol":      spec,
+		"error":       "no declaration named " + spec,
+		"scan":        map[string]any{"path": cfg.path, "files": len(ix.files)},
+		"suggestions": ix.suggest(name),
+	}
+}
+
+func (se *session) typedAnswer(spec string, callsOnly bool) *typeAnswer {
+	cfg, ix := se.cfg, se.ix
+	ans := &typeAnswer{cmd: cfg.cmd, symbol: spec, typesState: typesNoTypes}
+	ids := ix.lookup(spec, cfg)
+	if len(ids) == 0 {
+		ans.failure = ix.notFound(spec, cfg, cfg.cmd)
+		return ans
+	}
+	for _, id := range ids {
+		ans.defs = append(ans.defs, ix.decls[id])
+	}
+	groups := groupDefs(ans.defs)
+	if len(groups) > 1 {
+		for _, g := range groups {
+			ans.candidates = append(ans.candidates, candidate{Key: g.key, Defs: g.defs})
+		}
+		return ans
+	}
+	ans.defs = groups[0].defs
+	ld, err := loadModule(cfg.root, cfg.path, !cfg.noTests)
+	if err != nil {
+		ans.note = fmt.Sprintf("engine B unavailable (%v); fell back to engine A, every hit is name_only", err)
+		return se.typedFallback(ans, callsOnly)
+	}
+	absDir := filepath.Join(cfg.root, dirOf(ans.defs[0].File))
+	base := ld.dirPath[absDir]
+	if base == "" {
+		ans.note = fmt.Sprintf("%s is not in a package go list compiles; fell back to engine A, every hit is name_only", dirOf(ans.defs[0].File))
+		return se.typedFallback(ans, callsOnly)
+	}
+	ck := newChecker(ld)
+	defer func() { ans.ms = time.Since(se.started).Milliseconds() }()
+	want := newTargetSpec(base, ans.defs)
+	if cfg.cmd == "impl" {
+		return se.implAnswer(ans, ck, ld, want)
+	}
+	var variants []*listPackage
+	if v := ld.variant(base, "prod"); v != nil {
+		variants = append(variants, v)
+	}
+	if !cfg.noTests {
+		for _, kind := range []string{"aug", "xtest"} {
+			if v := ld.variant(base, kind); v != nil {
+				variants = append(variants, v)
+			}
+		}
+	}
+	var scope []*listPackage
+	seenVariant := map[string]bool{}
+	for _, v := range variants {
+		if v != nil && !seenVariant[v.ImportPath] {
+			seenVariant[v.ImportPath] = true
+			scope = append(scope, v)
+		}
+	}
+	for _, imp := range ld.importersOf(base) {
+		if cfg.noTests && imp.ForTest != "" {
+			continue
+		}
+		if seenVariant[imp.ImportPath] {
+			continue
+		}
+		seenVariant[imp.ImportPath] = true
+		scope = append(scope, imp)
+	}
+	var hits []Site
+	for _, lp := range scope {
+		hits = append(hits, ck.refsIn(ck.check(lp), want, callsOnly)...)
+	}
+	ans.exact, ans.tests = splitTestSites(dedupeTypedSites(hits))
+	ans.nameOnly = ck.buildTagged(ld, scope, want)
+	ans.typesState = typesOK
+	if ck.partial {
+		ans.typesState = typesPartial
+		ans.problems = ck.problems
+	}
+	if len(ans.exact) == 0 && len(ans.tests) == 0 && len(ans.nameOnly) == 0 && !ck.partial {
+		ans.note = "no type-checked references in the defining package or its importers (scope: " + itoa(len(scope)) + " packages)"
+	}
+	return ans
+}
+
+// typedFallback answers with engine A when engine B cannot run, never silently: every hit is marked
+// name_only and the note says why.
+func (se *session) typedFallback(ans *typeAnswer, callsOnly bool) *typeAnswer {
+	cfg, ix := se.cfg, se.ix
+	tg := target{name: ans.defs[0].Name, defLine: map[string]bool{}, declSet: keysOf(ix.byName), typeSet: keysOf(ix.typeIdx), refs: true}
+	for _, d := range ans.defs {
+		tg.defs = append(tg.defs, d.Range)
+		if d.Kind == "const" || d.Kind == "var" || d.Kind == "field" {
+			tg.defLine[fmt.Sprintf("%s#%d", d.File, d.Start)] = true
+		}
+	}
+	sc := ix.scanRefs(cfg, tg)
+	var hits []Site
+	for _, site := range ix.resolveHits(sc.hits, map[string]bool{dirOf(ans.defs[0].File): true}, false, false) {
+		if callsOnly && site.Kind != "call" && site.Kind != "selector_call" {
+			continue
+		}
+		site.Confidence = "name_only"
+		hits = append(hits, site)
+	}
+	ans.exact, ans.tests = splitTestSites(dedupeTypedSites(hits))
+	ans.ms = time.Since(se.started).Milliseconds()
+	return ans
+}
+
+func splitTestSites(sites []Site) (prod, tests []Site) {
+	for _, s := range sites {
+		if inTestFile(s.File) {
+			tests = append(tests, s)
+			continue
+		}
+		prod = append(prod, s)
+	}
+	return
+}
+
+func dedupeTypedSites(in []Site) []Site {
+	seen := map[string]bool{}
+	var out []Site
+	for _, s := range in {
+		key := fmt.Sprintf("%s#%d#%d", s.File, s.CallLine, s.Col)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	sortSites(out)
+	return out
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// buildTagged scans the files go list excluded by build tags with engine A; those hits keep the name
+// they matched but cannot be typed, so they are reported separately as name_only.
+func (ck *checker) buildTagged(ld *loader, scope []*listPackage, want targetSpec) []Site {
+	var out []Site
+	seen := map[string]bool{}
+	for _, lp := range scope {
+		compiled := map[string]bool{}
+		for _, f := range lp.CompiledGoFiles {
+			compiled[filepath.Base(f)] = true
+		}
+		for _, name := range lp.IgnoredGoFiles {
+			if compiled[filepath.Base(name)] || !strings.HasSuffix(name, ".go") {
+				continue
+			}
+			abs := name
+			if !filepath.IsAbs(abs) {
+				abs = filepath.Join(lp.Dir, abs)
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, abs, nil, 0)
+			if err != nil {
+				continue
+			}
+			tg := target{name: want.name, refs: true}
+			hits, _, _, _ := scanFile(fset, file, ck.rel(abs), tg)
+			for _, h := range hits {
+				site := Site{Kind: "name_only", Confidence: "name_only", CallLine: h.line, Range: Range{File: ck.rel(abs), Start: h.line, End: h.line}, In: h.in}
+				key := fmt.Sprintf("%s#%d#%s", site.File, site.CallLine, site.In)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, site)
+			}
+		}
+	}
+	sortSites(out)
+	return out
+}
+
+// implAnswer answers impl in both directions: an interface lists its implementers, any other type
+// lists the interfaces it satisfies. types.Implements is asked for T and for *T.
+// implAnswer answers impl in both directions: an interface lists its implementers, any other type lists
+// the interfaces it satisfies. types.Implements decides, asked for T and for *T, and the packages that
+// are type-checked are only the ones engine A shows could possibly answer (a method or interface with a
+// matching name), so unexported types are seen without type-checking the whole module.
+func (se *session) implAnswer(ans *typeAnswer, ck *checker, ld *loader, want targetSpec) *typeAnswer {
+	cfg, ix := se.cfg, se.ix
+	def := ans.defs[0]
+	if !isTypeKind(def.Kind) {
+		ans.failure = map[string]any{
+			"ok": false, "cmd": "impl", "symbol": ans.symbol,
+			"error": fmt.Sprintf("impl needs a type or interface, %s is a %s", ans.symbol, def.Kind),
+		}
+		return ans
+	}
+	declFor := func(importPath, name string) (Decl, bool) {
+		dir := ld.relDir(importPath)
+		for _, id := range ix.byName[name] {
+			d := ix.decls[id]
+			if isTypeKind(d.Kind) && dirOf(d.File) == dir {
+				return d, true
+			}
+		}
+		return Decl{}, false
+	}
+	ans.typesState = typesOK
+	if ck.partial {
+		ans.typesState = typesPartial
+		ans.problems = ck.problems
+	}
+	// The target type is taken from export data so its signatures carry the same package identities
+	// every candidate sees; an unexported type is only visible in its own source-checked package.
+	target := ck.exportedType(want.basePkg, def.Name)
+	sourceChecked := false
+	if target == nil {
+		if ch := ck.check(ld.variantFor(want.basePkg, def)); ch != nil && ch.pkg != nil {
+			if obj := ch.pkg.Scope().Lookup(def.Name); obj != nil {
+				target = obj.Type()
+				sourceChecked = true
+			}
+		}
+	}
+	if sourceChecked {
+		ans.note = def.Name + " is not exported, so it was resolved from source: implementers outside its package may be missed"
+	}
+	if target == nil {
+		ans.impls = engineAImpls(ix.implementers(def))
+		ans.note = "no type information for " + def.Name + "; engine A implementers (by method name) marked name_only"
+		return ans
+	}
+	named, ok := target.(*types.Named)
+	if !ok {
+		ans.failure = map[string]any{"ok": false, "cmd": "impl", "symbol": ans.symbol, "error": def.Name + " is not a named type"}
+		return ans
+	}
+	iface, isInterface := named.Underlying().(*types.Interface)
+	if isInterface && iface.NumMethods() == 0 {
+		ans.verb = "implementer"
+		ans.note = def.Name + " is an empty interface: every type implements it, so impl does not list them"
+		return ans
+	}
+	// checkAll type-checks every variant of the candidate packages and hands each package to fn.
+	checkAll := func(bases []string, fn func(ch *checkedPkg)) {
+		for _, base := range bases {
+			kinds := []string{"prod"}
+			if !cfg.noTests {
+				kinds = append(kinds, "aug", "xtest")
+			}
+			for _, kind := range kinds {
+				lp := ld.variant(base, kind)
+				if lp == nil {
+					continue
+				}
+				if ch := ck.check(lp); ch != nil && ch.pkg != nil {
+					fn(ch)
+				}
+			}
+		}
+		if ck.partial {
+			ans.typesState = typesPartial
+			ans.problems = ck.problems
+		}
+	}
+	names := func(methods []string) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range methods {
+			out[m] = true
+		}
+		return out
+	}
+	if isInterface {
+		ans.verb = "implementer"
+		wanted := make([]string, 0, iface.NumMethods())
+		for i := 0; i < iface.NumMethods(); i++ {
+			wanted = append(wanted, iface.Method(i).Name())
+		}
+		byName := names(wanted)
+		// Only a package that declares a method of that name can declare an implementer.
+		candidates := ix.packagesDeclaring(ld, func(d Decl) bool { return d.Kind == "method" && byName[d.Name] })
+		checkAll(candidates, func(ch *checkedPkg) {
+			for _, name := range ch.pkg.Scope().Names() {
+				tn, ok := ch.pkg.Scope().Lookup(name).(*types.TypeName)
+				if !ok || tn.IsAlias() {
+					continue
+				}
+				candNamed, ok := tn.Type().(*types.Named)
+				if !ok {
+					continue
+				}
+				if candNamed.Obj().Name() == def.Name && candNamed.Obj().Pkg() != nil && baseImportPath(candNamed.Obj().Pkg().Path()) == want.basePkg {
+					continue
+				}
+				sat := satisfies(candNamed, iface)
+				if sat == "" {
+					continue
+				}
+				if d, ok := declFor(ch.pkg.Path(), name); ok {
+					ans.impls = append(ans.impls, implHit{Decl: d, Satisfies: sat})
+				}
+			}
+		})
+	} else {
+		ans.verb = "interface"
+		// Only an interface whose methods all appear on the type can be satisfied by it.
+		have := map[string]bool{}
+		collect := func(t types.Type) {
+			ms := types.NewMethodSet(t)
+			for i := 0; i < ms.Len(); i++ {
+				have[ms.At(i).Obj().Name()] = true
+			}
+		}
+		collect(named)
+		collect(types.NewPointer(named))
+		candidates := ix.packagesDeclaring(ld, func(d Decl) bool {
+			if d.Kind != "interface" || len(d.Methods) == 0 {
+				return false
+			}
+			for _, m := range d.Methods {
+				if !have[m] {
+					return false
+				}
+			}
+			return true
+		})
+		checkAll(candidates, func(ch *checkedPkg) {
+			for _, name := range ch.pkg.Scope().Names() {
+				tn, ok := ch.pkg.Scope().Lookup(name).(*types.TypeName)
+				if !ok || tn.IsAlias() {
+					continue
+				}
+				candIface, ok := tn.Type().Underlying().(*types.Interface)
+				if !ok || candIface.NumMethods() == 0 {
+					continue
+				}
+				// Prefer the exported twin: its signatures carry the identities candidates agree on.
+				if twin := ck.exportedType(ch.pkg.Path(), name); twin != nil {
+					if exported, ok := twin.Underlying().(*types.Interface); ok && exported.NumMethods() > 0 {
+						candIface = exported
+					}
+				}
+				sat := satisfies(named, candIface)
+				if sat == "" {
+					continue
+				}
+				if d, ok := declFor(ch.pkg.Path(), name); ok {
+					ans.impls = append(ans.impls, implHit{Decl: d, Satisfies: sat})
+				}
+			}
+		})
+	}
+	ans.impls = dedupeImpls(ans.impls)
+	if len(ans.impls) == 0 && ans.typesState == typesOK {
+		if isInterface {
+			ans.note = "no type among the packages that declare a method of that name implements it"
+		} else {
+			ans.note = "no interface among the packages that declare those method names is satisfied by " + def.Name
+		}
+	}
+	return ans
+}
+
+// exportedType looks a named type up in the export data of its package, the identity every candidate
+// package agrees on, and returns nil when the type is not exported.
+func (ck *checker) exportedType(base, name string) types.Type {
+	pkg, err := ck.gc.Import(base)
+	if err != nil || pkg == nil {
+		return nil
+	}
+	if obj := pkg.Scope().Lookup(name); obj != nil {
+		return obj.Type()
+	}
+	return nil
+}
+
+// packagesDeclaring lists the module package directories whose engine A declarations satisfy pred.
+func (ix *index) packagesDeclaring(ld *loader, pred func(Decl) bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range ix.decls {
+		if !pred(d) {
+			continue
+		}
+		dir := filepath.Join(ix.root, dirOf(d.File))
+		base, ok := ld.dirPath[dir]
+		if !ok || seen[base] {
+			continue
+		}
+		seen[base] = true
+		out = append(out, base)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// satisfies says how a type meets an interface: as a value, as a pointer, or both.
+// engineAImpls marks structural (name-only) implementers, so a fallback never looks exact.
+func engineAImpls(decls []Decl) []implHit {
+	out := make([]implHit, 0, len(decls))
+	for _, d := range decls {
+		out = append(out, implHit{Decl: d, Satisfies: "name_only"})
+	}
+	return out
+}
+
+func satisfies(t types.Type, iface *types.Interface) string {
+	value := types.Implements(t, iface)
+	pointer := types.Implements(types.NewPointer(t), iface)
+	switch {
+	case value && pointer:
+		return "both"
+	case pointer:
+		return "pointer"
+	case value:
+		return "value"
+	}
+	return ""
+}
+
+func dedupeImpls(in []implHit) []implHit {
+	seen := map[string]bool{}
+	var out []implHit
+	for _, h := range in {
+		key := declKey(h.Decl)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, h)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Start < out[j].Start
+	})
+	return out
+}
+
+// ---------- engine B: text and JSON output ----------
+
+func (ans *typeAnswer) subject() string {
+	d := ans.defs[0]
+	recv := baseReceiver(d.Receiver)
+	switch {
+	case recv != "":
+		return d.Name + " (*" + recv + ")"
+	case d.Kind != "func" && d.Kind != "method" && d.Package != "":
+		return d.Name + " (" + d.Package + ")"
+	}
+	return d.Name
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+func refLine(s Site) string {
+	at := fmt.Sprintf("%s:%d", s.File, s.CallLine)
+	if s.Col > 0 {
+		at = fmt.Sprintf("%s:%d:%d", s.File, s.CallLine, s.Col)
+	}
+	return fmt.Sprintf("%s\t%s\tin=%s\n", at, s.Kind, strings.TrimSpace(s.In))
+}
+
+func (ans *typeAnswer) summary() string {
+	total := len(ans.exact) + len(ans.tests)
+	switch ans.cmd {
+	case "impl":
+		return plural(len(ans.impls), ans.verb)
+	case "callers":
+		return plural(total, "caller")
+	}
+	return plural(total, "ref")
+}
+
+func (te *typedSession) renderText(ans *typeAnswer) string {
+	cfg := te.se.cfg
+	if ans.failure != nil {
+		return renderError(ans.failure)
+	}
+	if len(ans.candidates) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s %s: ambiguous, %d candidates; pass one key (pkg.Name or Type.Method)\n", ans.cmd, ans.symbol, len(ans.candidates))
+		for _, c := range ans.candidates {
+			for _, d := range c.Defs {
+				b.WriteString(declLine(d, c.Key))
+			}
+		}
+		return b.String()
+	}
+	var b strings.Builder
+	shown := len(ans.exact) + len(ans.tests)
+	if ans.cmd == "impl" {
+		shown = len(ans.impls)
+	}
+	scope := ""
+	if ans.cmd != "impl" && len(ans.tests) > 0 {
+		scope = fmt.Sprintf(", tests=%d", len(ans.tests))
+	}
+	fmt.Fprintf(&b, "# %s %s: %s, shown %d%s, types=%s, %dms\n", ans.cmd, ans.subject(), ans.summary(), shown, scope, ans.typesState, ans.ms)
+	if ans.cmd == "impl" {
+		for i, h := range ans.impls {
+			if i >= cfg.max {
+				fmt.Fprintf(&b, "... %d more %s; use --max N\n", len(ans.impls)-cfg.max, ans.verb+"s")
+				break
+			}
+			fmt.Fprintf(&b, "%s:%d-%d\t%s\t%s\tsatisfies=%s\n", h.File, h.Start, h.End, h.Kind, displayKey(h.Decl, false), h.Satisfies)
+		}
+	} else {
+		for i, s := range ans.exact {
+			if i >= cfg.max {
+				fmt.Fprintf(&b, "... %d more; use --max N\n", len(ans.exact)-cfg.max)
+				break
+			}
+			b.WriteString(refLine(s))
+		}
+		if len(ans.tests) > 0 {
+			fmt.Fprintf(&b, "# tests: %d (grouped; --no-tests skips them)\n", len(ans.tests))
+			for i, s := range ans.tests {
+				if i >= cfg.max {
+					fmt.Fprintf(&b, "... %d more test refs; use --max N\n", len(ans.tests)-cfg.max)
+					break
+				}
+				b.WriteString(refLine(s))
+			}
+		}
+		if len(ans.nameOnly) > 0 {
+			fmt.Fprintf(&b, "# name_only: %s in files excluded by build tags (engine A, no type info)\n", plural(len(ans.nameOnly), "hit"))
+			for i, s := range ans.nameOnly {
+				if i >= cfg.max {
+					fmt.Fprintf(&b, "... %d more name_only hits; use --max N\n", len(ans.nameOnly)-cfg.max)
+					break
+				}
+				b.WriteString(refLine(s))
+			}
+		}
+	}
+	if ans.note != "" {
+		fmt.Fprintf(&b, "# note: %s\n", ans.note)
+	}
+	for _, p := range ans.problems {
+		fmt.Fprintf(&b, "# types=%s: %s\n", ans.typesState, p)
+	}
+	return b.String()
+}
+
+func (te *typedSession) toJSON(ans *typeAnswer) map[string]any {
+	if ans.failure != nil {
+		return ans.failure
+	}
+	scan := map[string]any{"path": te.se.cfg.path, "files": len(te.se.ix.files), "engine": "go/types", "ms": ans.ms}
+	if len(ans.candidates) > 0 {
+		return map[string]any{
+			"ok":          true,
+			"cmd":         ans.cmd,
+			"symbol":      ans.symbol,
+			"ambiguous":   true,
+			"definitions": ans.defs,
+			"candidates":  ans.candidates,
+			"ranges":      rangesOf(ans.defs),
+			"note":        "several definitions share this name; pass pkg.Name or Type.Method to pick one",
+			"scan":        scan,
+		}
+	}
+	truncated := map[string]bool{}
+	out := map[string]any{
+		"ok":          true,
+		"cmd":         ans.cmd,
+		"symbol":      ans.symbol,
+		"engine":      "go/types",
+		"types":       ans.typesState,
+		"definitions": ans.defs,
+		"counts": map[string]int{
+			"refs":      len(ans.exact) + len(ans.tests),
+			"callers":   len(ans.exact),
+			"tests":     len(ans.tests),
+			"name_only": len(ans.nameOnly),
+			"impls":     len(ans.impls),
+		},
+		"scan": scan,
+	}
+	if ans.cmd == "impl" {
+		out["impls"] = ans.impls
+		out["direction"] = ans.verb
+	} else {
+		out["refs"] = bound(te.se.cfg.max, ans.exact, truncated, "refs")
+		out["tests"] = bound(te.se.cfg.max, ans.tests, truncated, "tests")
+		out["name_only"] = bound(te.se.cfg.max, ans.nameOnly, truncated, "name_only")
+		out["ranges"] = chainRanges(ans.defs, ans.exact, ans.tests)
+	}
+	if len(truncated) > 0 {
+		out["truncated"] = truncated
+	}
+	if ans.note != "" {
+		out["note"] = ans.note
+	}
+	if len(ans.problems) > 0 {
+		out["problems"] = ans.problems
+	}
+	return out
+}
+
+// ---------- engine B: entry points ----------
+
+func typedSessionOf(cfg config, started time.Time) (*typedSession, error) {
+	se, specs, err := openSession(cfg, started)
+	if err != nil {
+		return nil, err
+	}
+	ts := &typedSession{se: se}
+	callsOnly := se.cfg.cmdcalls()
+	for _, spec := range specs {
+		ts.answers = append(ts.answers, se.typedAnswer(spec, callsOnly))
+	}
+	return ts, nil
+}
+
+func (cfg config) cmdcalls() bool { return cfg.calls || cfg.cmd == "callers" }
+
+func (ts *typedSession) jsonResult() (any, error) {
+	results := make([]map[string]any, 0, len(ts.answers))
+	unresolved := 0
+	for _, ans := range ts.answers {
+		if ans.failure != nil || len(ans.candidates) > 0 {
+			unresolved++
+		}
+		results = append(results, ts.toJSON(ans))
+	}
+	if len(results) == 1 {
+		out := results[0]
+		if ts.answers[0].failure != nil || len(ts.answers[0].candidates) > 0 {
+			return nil, &resultError{value: out}
+		}
+		return out, nil
+	}
+	out := map[string]any{"ok": unresolved < len(results), "cmd": ts.se.cfg.cmd, "results": results}
+	if unresolved == len(results) {
+		return nil, &resultError{value: out}
+	}
+	return out, nil
+}
+
+func typedResult(cfg config, started time.Time) (any, error) {
+	ts, err := typedSessionOf(cfg, started)
+	if err != nil {
+		return nil, err
+	}
+	return ts.jsonResult()
+}
+
+func typedText(cfg config, started time.Time) (string, error) {
+	ts, err := typedSessionOf(cfg, started)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	unresolved := 0
+	for _, ans := range ts.answers {
+		if ans.failure != nil || len(ans.candidates) > 0 {
+			unresolved++
+		}
+		b.WriteString(ts.renderText(ans))
+	}
+	text := capText(b.String(), ts.se.cfg, "narrow with pkg.Name, --max N or --no-tests")
+	if unresolved == len(ts.answers) {
+		return "", &resultError{value: map[string]any{"text": text}}
+	}
+	return text, nil
 }
