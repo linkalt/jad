@@ -44,16 +44,37 @@ func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
 	}
 }
 
-// A profile whose allow omits load_tool is refused when it has lazy tools: load_tool is the only way to
-// load them, and the profile would otherwise run with them unreachable.
-func TestLoadToolHiddenByAllowRefusesALazyProfile(t *testing.T) {
-	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "lazy": []string{"read"}}, nil, nil)
+// A tools.lazy entry is allowed without an allow entry, and so is load_tool while the profile has lazy
+// tools: an allow that names neither still lists load_tool, keeps the lazy read unlisted until it is
+// loaded, and lists it once load_tool loads it.
+func TestLazyToolsNeedNoAllowEntry(t *testing.T) {
+	steps := []subagentStep{{"load_tool", `{"names":["read"]}`}}
+	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"mcp:fixture:lookup"}, "lazy": []string{"read"}}, nil, steps)
+	status, body := f.sessionTools(t)
+	if status != http.StatusOK {
+		t.Fatalf("a lazy profile whose allow names neither read nor load_tool was refused: %d %s", status, body)
+	}
+	if names := sessionToolNames(t, f); slices.Contains(names, "read") || !slices.Contains(names, "load_tool") {
+		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded read", names)
+	}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	if names := sessionToolNames(t, f); !slices.Contains(names, "read") {
+		t.Fatalf("after a load the route lists %v, want read", names)
+	}
+}
+
+// deny still wins over tools.lazy: a lazy profile whose deny names load_tool is refused, since load_tool
+// is the only way to load its lazy tools.
+func TestLoadToolHiddenByDenyRefusesALazyProfile(t *testing.T) {
+	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"deny": []string{"load_tool"}, "lazy": []string{"read"}}, nil, nil)
 	status, body := f.sessionTools(t)
 	if status == http.StatusOK {
-		t.Fatalf("a lazy profile whose allow hides load_tool was not refused: %s", body)
+		t.Fatalf("a lazy profile whose deny hides load_tool was not refused: %s", body)
 	}
-	if !strings.Contains(body, `hides \"load_tool\"`) {
-		t.Fatalf("refusal = %s, want it to name the hidden load_tool", body)
+	if !strings.Contains(body, `hides \"load_tool\"`) || !strings.Contains(body, "tools.deny") {
+		t.Fatalf("refusal = %s, want it to name the hidden load_tool and tools.deny", body)
 	}
 }
 

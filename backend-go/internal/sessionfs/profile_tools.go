@@ -27,8 +27,9 @@ type ProfileToolSettings struct {
 	Deny []string
 	// Lazy lists the tools the model sees by name and summary only; load_tool loads a tool,
 	// which the next request lists with its full definition, and a call to it is refused
-	// until then. Same entry
-	// forms as Allow and Deny. Nil when the block has no lazy list.
+	// until then. Same entry forms as Allow and Deny. A lazy entry counts as allowed, and
+	// so does load_tool while Lazy is non-empty, so neither needs an Allow entry; Deny
+	// still wins. Nil when the block has no lazy list.
 	Lazy []string
 	// LazySummaryBytes bounds the first line of a lazy tool's description that the
 	// model sees in place of the full description.

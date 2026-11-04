@@ -350,20 +350,21 @@ func TestRefusedLazyMCPCallFiresItsHookOnce(t *testing.T) {
 // A lazy entry the profile does not show is a configuration error: a denied lazy tool could
 // never be loaded or called, so it is refused rather than quietly absent. The check runs on
 // the registered definitions, so it is tested on them directly.
-// A profile with tools.lazy whose allow or deny hides load_tool could never load a lazy tool, and the
-// profile would run with the lazy tools unreachable. The profile is refused, and the error names load_tool.
-func TestLazyProfileWhoseAllowHidesLoadToolIsAConfigError(t *testing.T) {
+// A profile with tools.lazy whose deny hides load_tool could never load a lazy tool, and the profile
+// would run with the lazy tools unreachable. The profile is refused, and the error names load_tool. An
+// allow that leaves load_tool out does not hide it: tools.lazy shows load_tool.
+func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	registered := []tools.Definition{
 		{ID: "native.read", Source: "native", Name: "read"},
 		{ID: "native.load_tool", Source: "native", Name: "load_tool"},
 	}
 	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
 	for name, settings := range map[string]sessionfs.ProfileToolSettings{
-		"allow omits it": {Restricted: true, HasAllow: true, Allow: []string{"read"}, Lazy: []string{"read"}},
-		"deny names it":  {Restricted: true, Deny: []string{"load_tool"}, Lazy: []string{"read"}},
+		"deny names it":           {Restricted: true, Deny: []string{"load_tool"}, Lazy: []string{"read"}},
+		"deny names it, allow it": {Restricted: true, HasAllow: true, Allow: []string{"load_tool"}, Deny: []string{"load_tool"}, Lazy: []string{"read"}},
 	} {
 		err := checkLazyLoadToolShown(config, settings, registered)
-		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.lazy") {
+		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.lazy") || !strings.Contains(err.Error(), "tools.deny") {
 			t.Errorf("%s: err = %v, want the refusal naming tools.lazy and load_tool", name, err)
 		}
 	}
@@ -379,6 +380,8 @@ func TestLazyProfileWhoseAllowHidesLoadToolIsAConfigError(t *testing.T) {
 	for name, valid := range map[string]sessionfs.ProfileToolSettings{
 		"deny names another tool": {Restricted: true, Deny: []string{"mcp:fixture:hidden"}, Lazy: []string{"read"}},
 		"allow with a wildcard":   {Restricted: true, HasAllow: true, Allow: []string{"read", "mcp:fixture:*", "load_tool"}, Lazy: []string{"read"}},
+		"allow omits load_tool":   {Restricted: true, HasAllow: true, Allow: []string{"read"}, Lazy: []string{"read"}},
+		"empty allow":             {Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"read"}},
 	} {
 		if err := checkLazyLoadToolShown(config, valid, registered); err != nil {
 			t.Errorf("%s: a valid profile was refused: %v", name, err)
@@ -426,7 +429,9 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 		want     string
 	}{
 		"denied":          {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"read"}, Deny: []string{"read"}}, `tools.lazy[0] lists "read"`},
-		"outside allow":   {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"bash"}, Lazy: []string{"read"}}, `tools.lazy[0] lists "read"`},
+		"denied, allowed": {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read"}, Lazy: []string{"read"}, Deny: []string{"read"}}, `tools.lazy[0] lists "read"`},
+		"outside allow":   {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"bash"}, Lazy: []string{"read"}}, ""},
+		"empty allow":     {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"read"}}, ""},
 		"visible":         {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read"}, Lazy: []string{"read"}}, ""},
 		"no allow, shown": {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"bash"}}, ""},
 	} {
