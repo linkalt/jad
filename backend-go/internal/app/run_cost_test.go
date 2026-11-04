@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/headless"
+	"jad/backend-go/internal/sessionfs"
 )
 
 // costFixture is the layout fixture whose model is priced (when pricing is set), whose
@@ -102,5 +103,25 @@ func TestMaxRunCostNeedsPricing(t *testing.T) {
 	f.mu.Unlock()
 	if result.Status != headless.StatusFailed || requests != 0 {
 		t.Fatalf("result = %+v, provider requests %d", result, requests)
+	}
+}
+
+// The Anthropic translation reports cache writes; they are priced as writes, and a total
+// without the 5-minute/1-hour split counts as 5-minute writes.
+func TestResponseCostPricesCacheWrites(t *testing.T) {
+	streamer := &pricedStreamer{pricing: sessionfs.ModelPricing{InputPerMTok: 3, CachedInputPerMTok: 0.3, CacheWritePerMTok: 3.75, CacheWrite1hPerMTok: 6, OutputPerMTok: 15}}
+	for _, test := range []struct {
+		details string
+		want    float64
+	}{
+		{`{"cached_tokens":500000,"cache_creation_tokens":300000,"cache_creation_5m_tokens":200000,"cache_creation_1h_tokens":100000}`, 0.2*3 + 0.5*0.3 + 0.2*3.75 + 0.1*6},
+		{`{"cached_tokens":500000,"cache_creation_tokens":300000}`, 0.2*3 + 0.5*0.3 + 0.3*3.75},
+		{`{"cached_tokens":500000}`, 0.5*3 + 0.5*0.3},
+	} {
+		raw := `{"response":{"usage":{"input_tokens":1000000,"output_tokens":0,"input_tokens_details":` + test.details + `}}}`
+		got, ok := streamer.responseCost(json.RawMessage(raw))
+		if !ok || math.Abs(got-test.want) > 1e-9 {
+			t.Errorf("%s: cost %v (%v), want %v", test.details, got, ok, test.want)
+		}
 	}
 }

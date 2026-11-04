@@ -40,3 +40,31 @@ func TestParseEmbeddedConfigRefusals(t *testing.T) {
 		t.Errorf("a base URL that is not http: %v", err)
 	}
 }
+
+// A model jad serves in process caches by default: tools, system and the last conversation
+// block (not the state context after it). A cache object replaces the default as a whole.
+func TestEmbeddedConfigCachesByDefault(t *testing.T) {
+	for _, test := range []struct {
+		raw, want string
+	}{
+		{``, "tool1,system1,msg2.0"},
+		{`null`, "tool1,system1,msg2.0"},
+		{`{"default_max_tokens":1000}`, "tool1,system1,msg2.0"},
+		{`{"cache":{}}`, ""},
+		{`{"cache":{"automatic":true}}`, "top"},
+		{`{"cache":{"tools":true,"ttl":"1h"}}`, "tool1"},
+	} {
+		config, err := ParseEmbeddedConfig(json.RawMessage(test.raw), "")
+		if err != nil {
+			t.Fatalf("%s: %v", test.raw, err)
+		}
+		request := translateOK(t, config, cacheBody)
+		if got := strings.Join(markedPaths(t, request), ","); got != test.want {
+			t.Errorf("%q: marked %q, want %q", test.raw, got, test.want)
+		}
+	}
+	// The standalone adapter's default stays off.
+	if DefaultConfig().Cache != (CacheConfig{}) {
+		t.Fatalf("DefaultConfig().Cache = %+v", DefaultConfig().Cache)
+	}
+}

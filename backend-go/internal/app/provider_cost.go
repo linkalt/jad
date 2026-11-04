@@ -50,6 +50,11 @@ func (p *pricedStreamer) responseCost(raw json.RawMessage) (float64, bool) {
 				OutputTokens       int64 `json:"output_tokens"`
 				InputTokensDetails struct {
 					CachedTokens int64 `json:"cached_tokens"`
+					// The Anthropic translation reports cache writes; other providers leave
+					// them out, and then nothing is priced as a write.
+					CacheCreationTokens   int64 `json:"cache_creation_tokens"`
+					CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"`
+					CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"`
 				} `json:"input_tokens_details"`
 			} `json:"usage"`
 		} `json:"response"`
@@ -58,5 +63,15 @@ func (p *pricedStreamer) responseCost(raw json.RawMessage) (float64, bool) {
 		return 0, false
 	}
 	usage := envelope.Response.Usage
-	return p.pricing.CostUSD(usage.InputTokens, usage.InputTokensDetails.CachedTokens, usage.OutputTokens), true
+	details := usage.InputTokensDetails
+	write5m, write1h := details.CacheCreation5mTokens, details.CacheCreation1hTokens
+	// A total without the split (or with a split that misses part of it) counts the rest as
+	// 5-minute writes, the default lifetime.
+	if rest := details.CacheCreationTokens - write5m - write1h; rest > 0 {
+		write5m += rest
+	}
+	return p.pricing.Cost(sessionfs.TokenUsage{
+		InputTokens: usage.InputTokens, CachedTokens: details.CachedTokens,
+		CacheWriteTokens: write5m, CacheWrite1hTokens: write1h, OutputTokens: usage.OutputTokens,
+	}), true
 }

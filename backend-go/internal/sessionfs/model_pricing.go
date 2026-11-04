@@ -9,21 +9,43 @@ import (
 // maxModelPricePerMTok bounds a price, so a typo of a few orders of magnitude is caught.
 const maxModelPricePerMTok = 100_000.0
 
-var modelPricingKeys = []string{"input_per_mtok", "cached_input_per_mtok", "output_per_mtok"}
+var modelPricingKeys = []string{"input_per_mtok", "cached_input_per_mtok", "cache_write_per_mtok", "cache_write_1h_per_mtok", "output_per_mtok"}
 
 // ModelPricing is what a model costs, in US dollars per million tokens.
 type ModelPricing struct {
 	InputPerMTok       float64
 	CachedInputPerMTok float64
-	OutputPerMTok      float64
+	// CacheWritePerMTok and CacheWrite1hPerMTok price input tokens written to a prompt
+	// cache with the 5-minute and the 1-hour lifetime (Anthropic charges more for both).
+	CacheWritePerMTok   float64
+	CacheWrite1hPerMTok float64
+	OutputPerMTok       float64
 }
 
-// CostUSD is the price of one response's usage: cached input at its own price, the rest
-// of the input at the input price, and the output (reasoning included) at the output price.
+// TokenUsage is the token counts of one response that pricing reads. CacheWrite and
+// CacheWrite1h are parts of InputTokens, like Cached.
+type TokenUsage struct {
+	InputTokens, CachedTokens, CacheWriteTokens, CacheWrite1hTokens, OutputTokens int64
+}
+
+// CostUSD is the price of one response's usage without cache writes; see Cost.
 func (p ModelPricing) CostUSD(inputTokens, cachedTokens, outputTokens int64) float64 {
-	cachedTokens = min(max(cachedTokens, 0), max(inputTokens, 0))
-	fresh := max(inputTokens, 0) - cachedTokens
-	return (float64(fresh)*p.InputPerMTok + float64(cachedTokens)*p.CachedInputPerMTok + float64(max(outputTokens, 0))*p.OutputPerMTok) / 1_000_000
+	return p.Cost(TokenUsage{InputTokens: inputTokens, CachedTokens: cachedTokens, OutputTokens: outputTokens})
+}
+
+// Cost is the price of one response's usage: cached input, cache writes of each lifetime
+// and the rest of the input at their own prices, and the output (reasoning included) at the
+// output price. The parts are clamped so they never add up to more than the input.
+func (p ModelPricing) Cost(usage TokenUsage) float64 {
+	left := max(usage.InputTokens, 0)
+	take := func(count int64) int64 {
+		count = min(max(count, 0), left)
+		left -= count
+		return count
+	}
+	cached, write, write1h := take(usage.CachedTokens), take(usage.CacheWriteTokens), take(usage.CacheWrite1hTokens)
+	return (float64(left)*p.InputPerMTok + float64(cached)*p.CachedInputPerMTok + float64(write)*p.CacheWritePerMTok +
+		float64(write1h)*p.CacheWrite1hPerMTok + float64(max(usage.OutputTokens, 0))*p.OutputPerMTok) / 1_000_000
 }
 
 // modelPricingField reads a model file's pricing; absent or null is nil (unknown cost).
@@ -69,6 +91,16 @@ func modelPricingField(fields map[string]json.RawMessage, path string) (*ModelPr
 		return nil, err
 	} else if !has {
 		pricing.CachedInputPerMTok = pricing.InputPerMTok
+	}
+	if pricing.CacheWritePerMTok, has, err = price("cache_write_per_mtok"); err != nil {
+		return nil, err
+	} else if !has {
+		pricing.CacheWritePerMTok = pricing.InputPerMTok
+	}
+	if pricing.CacheWrite1hPerMTok, has, err = price("cache_write_1h_per_mtok"); err != nil {
+		return nil, err
+	} else if !has {
+		pricing.CacheWrite1hPerMTok = pricing.CacheWritePerMTok
 	}
 	return pricing, nil
 }

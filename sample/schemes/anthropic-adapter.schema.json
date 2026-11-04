@@ -157,7 +157,7 @@
     "cache": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Prompt-caching breakpoints. All off by default: a cache write costs 1.25x (5 minutes) or 2x (1 hour) the input price, so caching only pays when the same prefix is reused within the TTL. Anthropic allows 4 breakpoints per request; these four switches use at most 4. Prompts below the model's minimum cacheable length are processed without caching and without an error.",
+      "description": "Prompt-caching breakpoints. All off by default in the standalone adapter (a jad model file with api anthropic_messages and no cache object gets tools, system and history on instead): a cache write costs 1.25x (5 minutes) or 2x (1 hour) the input price, so caching only pays when the same prefix is reused within the TTL. Anthropic allows 4 breakpoints per request; these four switches use at most 4. Prompts below the model's minimum cacheable length are processed without caching and without an error.",
       "properties": {
         "automatic": { "type": "boolean", "default": false, "description": "Send the top-level cache_control, which marks the last cacheable block of the request." },
         "tools": { "type": "boolean", "default": false, "description": "Mark the last tool definition." },

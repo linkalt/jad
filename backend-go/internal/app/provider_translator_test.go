@@ -177,6 +177,21 @@ func TestAnthropicModelRunsAToolRoundInProcess(t *testing.T) {
 	if second.Model != "claude-test" || second.MaxTokens != 2048 || last.Role != "user" || last.Content[0]["type"] != "tool_result" || last.Content[0]["tool_use_id"] != "toolu_r" || !strings.Contains(fmt.Sprint(last.Content[0]["content"]), "file body 42") {
 		t.Fatalf("second request = %s", requests.bodies[1])
 	}
+	// The model file sets no cache, so the in-process default marks the last tool and the
+	// last conversation block (the tool result); nothing else.
+	var marks struct {
+		Tools []struct {
+			Name         string         `json:"name"`
+			CacheControl map[string]any `json:"cache_control"`
+		} `json:"tools"`
+	}
+	_ = json.Unmarshal([]byte(requests.bodies[1]), &marks)
+	if len(marks.Tools) == 0 || marks.Tools[len(marks.Tools)-1].CacheControl["type"] != "ephemeral" || last.Content[0]["cache_control"] == nil {
+		t.Fatalf("cache breakpoints missing: %s", requests.bodies[1])
+	}
+	if count := strings.Count(requests.bodies[1], `"cache_control"`); count > 4 {
+		t.Fatalf("%d breakpoints, Anthropic allows 4: %s", count, requests.bodies[1])
+	}
 }
 
 // An HTTP error from the provider reaches the run with its status, through the
