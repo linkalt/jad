@@ -1375,3 +1375,43 @@ func G() string {
 		t.Fatalf("refs = %v, want only the T.Name use in Use", refs)
 	}
 }
+
+// A partial answer with hits is still an answer: executeText returns no error (exit 0), and the header
+// names the state. The exit code is deliberately not 3; the header and problems carry the partial state.
+func TestPartialAnswerWithHitsExitsZeroAndSaysPartial(t *testing.T) {
+	root := writeModule(t, `package a
+
+func Target() int { return 1 }
+
+func U() int { return Target() }
+
+func Bad() int { return undefinedX }
+`)
+	text := refsText(t, root, "refs", "a.Target")
+	if !strings.Contains(text, "types=partial") {
+		t.Fatalf("header must say types=partial:\n%s", text)
+	}
+	if !strings.Contains(text, "in=U") {
+		t.Fatalf("a partial answer must still list its hits:\n%s", text)
+	}
+}
+
+// Engine A drops a repeat of the same call line: a line that calls the symbol twice is listed once.
+func TestCallersOnOneLineAreListedOnce(t *testing.T) {
+	root := writeModule(t, `package a
+
+func Target() int { return 1 }
+
+func Twice() int { return Target() + Target() }
+`)
+	got := answer(t, root, "navigate", "Target", func(cfg *config) { cfg.noTests = true; cfg.path = "." })
+	var lines []int
+	for _, caller := range rows(got["callers"]) {
+		if caller["in"] == "Twice" {
+			lines = append(lines, number(caller["call_line"]))
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("callers in Twice = %v, want one row for the line", lines)
+	}
+}

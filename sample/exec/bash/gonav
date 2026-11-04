@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Deterministic Go navigation: exact type-checked refs/impl (engine B, go/types) plus go/ast navigation (engine A) for code that does not compile.
 # input: gonav navigate|symbol|impact|show|refs|callers|impl SYM [SYM...] [--path DIR] [--receiver R] [--max N] [--max-lines N] [--no-tests] [--calls] [--json]  |  gonav source [FILE START END]
+# exit: 0 found (types=partial also exits 0; the header and problems name it), 1 not found or ambiguous, 2 usage or refused cache.
 set -uo pipefail
 runner=${JAD_RUNNER_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 lib=$runner/gonav.d
@@ -11,11 +12,22 @@ cd "$lib" || exit 2
 # A cached binary instead of `go run` so the documented exit codes (0 found, 1 not found/ambiguous,
 # 2 usage) reach the caller: `go run` reports every non-zero exit as 1. The cache key covers the
 # sources, and a rebuild happens only when one of them changes.
+# The cache is private to this user, so a binary planted by another user in a shared /tmp never runs:
+# the cache directories must be owned by this uid with no group or world write bit (else refuse, exit 2),
+# and a binary not owned by this uid is rebuilt.
+owner=$(id -u)
 stamp=$(cksum go.mod *.go | cksum | tr -d ' ')
-cache=${TMPDIR:-/tmp}/jad-gonav-$(id -u)/$stamp
+base=${TMPDIR:-/tmp}/jad-gonav-$owner
+cache=$base/$stamp
 bin=$cache/gonav
-if [ ! -x "$bin" ]; then
-	mkdir -p "$cache" || exit 2
+# mine DIR: DIR is a directory owned by this uid with mode bits 022 clear.
+mine() { [ -d "$1" ] && [ "$(stat -c %u -- "$1")" = "$owner" ] && [ $(( 8#$(stat -c %a -- "$1") & 022 )) -eq 0 ]; }
+mkdir -p -m 0700 "$base" "$cache" 2>/dev/null
+if ! mine "$base" || ! mine "$cache"; then
+	printf 'gonav: refusing cache %s: not a private directory owned by uid %s\n' "$cache" "$owner" >&2
+	exit 2
+fi
+if [ ! -x "$bin" ] || [ "$(stat -c %u -- "$bin")" != "$owner" ]; then
 	tmp=$cache/.gonav.$$
 	if ! go build -o "$tmp" . ; then rm -f "$tmp"; exit 2; fi
 	mv -f "$tmp" "$bin" || exit 2
