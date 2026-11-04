@@ -24,9 +24,9 @@ Recursively trace meaningful connections from the goal across relevant code, typ
 ## Default workflow
 
 1. **Find the code with the right tool:**
-   - Known symbol/call chain: Codebase Memory (`home-www-Downloads-tmp-myagent3`): `search_graph`, then `get_code_snippet` or `trace_path`.
+   - Go symbol, source, references, callers or implementers: `gonav navigate|show|refs|callers|impl SYM` (see the `code-navigation-workflow` skill); `read` the exact lines before editing.
    - Exact identifier, key or error: `grep` with narrow `path`, `include` and limit.
-   - Unknown concept/feature spanning code: `zvec_grep_search` with repo `root`, natural-language `query`, `limit: 5`; do not duplicate the query in `fts`. Check `freshness`; confirm stale results with `grep`.
+   - Unknown concept/feature spanning code: `grep` over the narrowest path, then the design docs (`design_*.md`, `DECISIONS.md`); once a Go symbol is known, use `gonav`.
    - More than ~3 searches or likely context-heavy (e.g. all callers/readers): delegate discovery to a subagent.
 2. **Read** only the relevant range with `read(offset, limit)`; read exact lines before editing.
 3. **Edit** existing files with `edit`; create or replace whole files with `write`.
