@@ -108,3 +108,104 @@ func TestTriggerSchemaAgreesWithTheLoader(t *testing.T) {
 		}
 	}
 }
+
+func TestTriggerNotifySettings(t *testing.T) {
+	settings, err := normalizeTriggers(json.RawMessage(`{"notify":{
+		"phone":{"url":"https://ntfy.example/jad","format":"text","headers":{"title":"jad"},"on":["failed","skipped"],"answer_bytes":200},
+		"ops":{"url_env":"OPS_HOOK","headers_env":{"authorization":"OPS_TOKEN"},"timeout_ms":500,"retries":0,"retry_delay_ms":0}},
+		"entries":{"ci":{"session":"s","prompt":"p","schedule":"@daily","notify":["phone","ops"]}}}`), "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.Notifiers) != 2 || settings.Notifiers[0].Name != "ops" || settings.Notifiers[1].Name != "phone" {
+		t.Fatalf("notifiers = %+v", settings.Notifiers)
+	}
+	ops, phone := settings.Notifiers[0], settings.Notifiers[1]
+	if ops.URLEnv != "OPS_HOOK" || ops.URL != "" || ops.Format != TriggerNotifyFormatJSON || ops.HeadersEnv["Authorization"] != "OPS_TOKEN" || ops.TimeoutMS != 500 || ops.Retries != 0 || ops.RetryDelayMS != 0 || ops.AnswerBytes != 0 ||
+		strings.Join(ops.On, ",") != "completed,failed,timed_out,aborted,refused" || ops.Wants("skipped") || !ops.Wants("completed") {
+		t.Fatalf("ops = %+v", ops)
+	}
+	if phone.URL != "https://ntfy.example/jad" || phone.Format != TriggerNotifyFormatText || phone.Headers["Title"] != "jad" || phone.AnswerBytes != 200 || phone.TimeoutMS != 10000 || phone.Retries != 2 || phone.RetryDelayMS != 2000 ||
+		!phone.Wants("skipped") || phone.Wants("completed") {
+		t.Fatalf("phone = %+v", phone)
+	}
+	if notify := settings.Entries[0].Notify; strings.Join(notify, ",") != "phone,ops" {
+		t.Fatalf("entry notify = %v", notify)
+	}
+
+	notifier := func(body string) string { return `{"notify":{"n":` + body + `}}` }
+	for name, test := range map[string]struct{ raw, want string }{
+		"not an object":       {`{"notify":[]}`, "notify must be an object of named notifiers"},
+		"bad name":            {`{"notify":{"N":{"url":"https://x"}}}`, `"N" must be 1-64`},
+		"unknown key":         {notifier(`{"url":"https://x","method":"PUT"}`), "notify.n.method is not a setting"},
+		"no address":          {notifier(`{}`), "needs exactly one of url and url_env"},
+		"both addresses":      {notifier(`{"url":"https://x","url_env":"X"}`), "needs exactly one of url and url_env"},
+		"not http":            {notifier(`{"url":"ftp://x/secret"}`), "must be an absolute http or https URL"},
+		"relative":            {notifier(`{"url":"/hook"}`), "must be an absolute http or https URL"},
+		"bad env":             {notifier(`{"url_env":"1X"}`), "url_env must name an environment variable"},
+		"bad format":          {notifier(`{"url":"https://x","format":"xml"}`), "format must be json or text"},
+		"host header":         {notifier(`{"url":"https://x","headers":{"host":"y"}}`), `"host" is not a header`},
+		"length header":       {notifier(`{"url":"https://x","headers":{"Content-Length":"1"}}`), "is not a header"},
+		"header with space":   {notifier(`{"url":"https://x","headers":{"X A":"1"}}`), "is not a header"},
+		"header twice":        {notifier(`{"url":"https://x","headers":{"x-a":"1","X-A":"2"}}`), "names X-A twice"},
+		"header two lines":    {notifier(`{"url":"https://x","headers":{"X-A":"1\r\nX-B: 2"}}`), "must be one line"},
+		"header env bad":      {notifier(`{"url":"https://x","headers_env":{"X-A":"not an env"}}`), "must name an environment variable"},
+		"header in both":      {notifier(`{"url":"https://x","headers":{"X-A":"1"},"headers_env":{"x-a":"A"}}`), "X-A is in both headers and headers_env"},
+		"on empty":            {notifier(`{"url":"https://x","on":[]}`), "on must be a non-empty array"},
+		"on unknown":          {notifier(`{"url":"https://x","on":["done"]}`), `"done" is not a status`},
+		"on twice":            {notifier(`{"url":"https://x","on":["failed","failed"]}`), "listed twice"},
+		"timeout zero":        {notifier(`{"url":"https://x","timeout_ms":0}`), "timeout_ms must be a safe integer between 1 and 120000"},
+		"retries too many":    {notifier(`{"url":"https://x","retries":11}`), "retries must be a safe integer between 0 and 10"},
+		"answer too large":    {notifier(`{"url":"https://x","answer_bytes":65537}`), "answer_bytes must be a safe integer between 0 and 65536"},
+		"entry unknown name":  {`{"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":["ops"]}}}`, `notify: "ops" is not in server.triggers.notify`},
+		"entry notify twice":  {`{"notify":{"ops":{"url":"https://x"}},"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":["ops","ops"]}}}`, `notify names "ops" twice`},
+		"entry notify string": {`{"notify":{"ops":{"url":"https://x"}},"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":"ops"}}}`, "notify must be an array"},
+	} {
+		_, err := normalizeTriggers(json.RawMessage(test.raw), "s")
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: error %v, want %q", name, err, test.want)
+		} else if strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s: the error repeats the address: %v", name, err)
+		}
+	}
+}
+
+// The schema and the loader take and refuse the same notifier settings, except what the
+// schema cannot say: a notify name missing from server.triggers.notify, Host and
+// Content-Length, and one header written in two cases.
+func TestTriggerNotifySchemaAgreesWithTheLoader(t *testing.T) {
+	schema := compileSchema(t, "root-setting.schema.json#/properties/server/properties/triggers")
+	for _, test := range []struct {
+		raw    string
+		accept bool
+	}{
+		{`{"notify":{}}`, true},
+		{`{"notify":{"a":{"url":"https://ntfy.sh/t","format":"text","headers":{"Title":"x"},"on":["skipped"],"timeout_ms":1,"retries":10,"retry_delay_ms":0,"answer_bytes":65536}}}`, true},
+		{`{"notify":{"a":{"url_env":"HOOK","headers_env":{"Authorization":"TOKEN"}}},"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":["a"]}}}`, true},
+		{`{"notify":{"a":{}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","url_env":"X"}}}`, false},
+		{`{"notify":{"a":{"url":"ftp://x"}}}`, false},
+		{`{"notify":{"a":{"url_env":"9X"}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","format":"xml"}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","headers":{"X A":"1"}}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","headers":{"X-A":"1\nX-B: 2"}}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","headers_env":{"X-A":"a b"}}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","on":[]}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","on":["done"]}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","on":["failed","failed"]}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","timeout_ms":120001}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","retries":-1}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","answer_bytes":65537}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","extra":1}}}`, false},
+		{`{"notify":{"A":{"url":"https://x"}}}`, false},
+		{`{"notify":{"a":{"url":"https://x"}},"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":["a","a"]}}}`, false},
+		{`{"notify":{"a":{"url":"https://x"}},"entries":{"t":{"session":"s","prompt":"p","schedule":"@daily","notify":"a"}}}`, false},
+	} {
+		if got := schemaAccepts(t, schema, test.raw); got != test.accept {
+			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
+		}
+		if _, err := normalizeTriggers(json.RawMessage(test.raw), "s"); (err == nil) != test.accept {
+			t.Errorf("loader accepts %s = %v (err %v), want %v", test.raw, err == nil, err, test.accept)
+		}
+	}
+}

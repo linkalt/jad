@@ -56,8 +56,11 @@ type Options struct {
 	// APIToken guards GET /api/triggers, as it guards the rest of the API.
 	APIToken string
 	Logger   *slog.Logger
-	Now      func() time.Time
-	After    func(time.Duration) <-chan time.Time
+	// HTTPClient sends notifications; nil uses a client with the default transport, which
+	// honours the proxy environment variables.
+	HTTPClient *http.Client
+	Now        func() time.Time
+	After      func(time.Duration) <-chan time.Time
 }
 
 // Record is one trigger run, as GET /api/triggers lists it.
@@ -74,18 +77,22 @@ type Record struct {
 	Error      string    `json:"error,omitempty"`
 	CostUSD    *float64  `json:"cost_usd,omitempty"`
 	DurationMS int64     `json:"duration_ms,omitempty"`
+	// Notifications are the deliveries to the trigger's notifiers, pending until each ends.
+	Notifications []Notification `json:"notifications,omitempty"`
 }
 
 // Manager owns the schedules, the webhook route and the history of trigger runs.
 type Manager struct {
-	settings sessionfs.TriggerSettings
-	entries  map[string]sessionfs.TriggerEntry
-	secrets  map[string][]byte
-	runner   Runner
-	token    string
-	logger   *slog.Logger
-	now      func() time.Time
-	after    func(time.Duration) <-chan time.Time
+	settings  sessionfs.TriggerSettings
+	entries   map[string]sessionfs.TriggerEntry
+	secrets   map[string][]byte
+	notifiers map[string]*notifier
+	client    *http.Client
+	runner    Runner
+	token     string
+	logger    *slog.Logger
+	now       func() time.Time
+	after     func(time.Duration) <-chan time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -107,8 +114,16 @@ func New(options Options) (*Manager, error) {
 	manager := &Manager{
 		settings: options.Settings, entries: map[string]sessionfs.TriggerEntry{}, secrets: map[string][]byte{},
 		runner: options.Runner, token: options.APIToken, logger: options.Logger, now: options.Now, after: options.After,
-		running: map[string]*Record{},
+		running: map[string]*Record{}, client: options.HTTPClient,
 	}
+	if manager.client == nil {
+		manager.client = &http.Client{}
+	}
+	notifiers, err := newNotifiers(options.Settings.Notifiers, options.Environment)
+	if err != nil {
+		return nil, err
+	}
+	manager.notifiers = notifiers
 	if manager.logger == nil {
 		manager.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -196,7 +211,10 @@ func (m *Manager) Fire(name, source string, payload []byte) (Record, error) {
 	}
 	if previous := m.running[name]; previous != nil {
 		record.Status, record.EndedAt, record.Error = StatusSkipped, now.UTC(), "run "+previous.ID+" has not ended"
+		record.Notifications = m.pendingNotifications(entry, record.Status)
 		m.remember(record)
+		// The previous run is still counted in m.wg, so adding to it here is safe.
+		m.notify(record, "")
 		m.mu.Unlock()
 		m.logger.Info("trigger skipped", slog.String("trigger", name), slog.String("source", source), slog.String("running", previous.ID))
 		return record, ErrBusy
@@ -228,9 +246,12 @@ func (m *Manager) run(entry sessionfs.TriggerEntry, record Record, input string)
 	default:
 		record.Status, record.Error, record.TurnID, record.CostUSD, record.DurationMS = result.Status, result.Error, result.TurnID, result.CostUSD, result.DurationMS
 	}
+	record.Notifications = m.pendingNotifications(entry, record.Status)
 	m.mu.Lock()
 	delete(m.running, entry.Name)
 	m.remember(record)
+	// This run is still counted in m.wg, so Close waits for the notifications too.
+	m.notify(record, result.Text)
 	m.mu.Unlock()
 	m.logger.Info("trigger run ended", slog.String("trigger", entry.Name), slog.String("run", record.ID), slog.String("status", record.Status), slog.String("error", record.Error))
 }
@@ -316,13 +337,14 @@ func (m *Manager) serveList(w http.ResponseWriter, r *http.Request) {
 		Timezone string     `json:"timezone,omitempty"`
 		NextRun  *time.Time `json:"next_run,omitempty"`
 		Webhook  bool       `json:"webhook"`
+		Notify   []string   `json:"notify,omitempty"`
 		Running  *Record    `json:"running,omitempty"`
 	}
 	now := m.now()
 	list := make([]trigger, 0, len(m.settings.Entries))
 	m.mu.Lock()
 	for _, entry := range m.settings.Entries {
-		item := trigger{Name: entry.Name, Session: entry.Session, Profile: entry.Profile, Model: entry.Model, Webhook: entry.WebhookSecretEnv != ""}
+		item := trigger{Name: entry.Name, Session: entry.Session, Profile: entry.Profile, Model: entry.Model, Webhook: entry.WebhookSecretEnv != "", Notify: entry.Notify}
 		if entry.Cron != nil {
 			item.Schedule, item.Timezone = entry.Schedule, entry.Timezone
 			if next := entry.Cron.Next(now.In(entry.Location)); !next.IsZero() {
