@@ -56,6 +56,13 @@ type Request struct {
 	// Plan starts the turn in plan mode: the model sees only the tools that never change
 	// anything, and the session's plan_mode instructions. /plan sets it too.
 	Plan bool
+	// Tools, when not nil, narrows the turn's tools to the ones these tools.allow entries
+	// cover. A custom command's allowed-tools sets it when it is nil.
+	Tools []string
+	// ExecutePlan carries out the plan the session's transcript ends with: the turn sends
+	// the session's plan_mode.execute_prompt, followed by Input when it has text. Input may
+	// be empty, and is not read for commands.
+	ExecutePlan bool
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -88,8 +95,12 @@ type Result struct {
 	// Request.Commands was set; CommandResult is the answer of an action's route.
 	Command       string          `json:"command,omitempty"`
 	CommandResult json.RawMessage `json:"command_result,omitempty"`
-	// Plan is set when the turn ran in plan mode.
-	Plan bool `json:"plan,omitempty"`
+	// Plan is set when the turn ran in plan mode, ExecutePlan when it carried out a plan.
+	Plan        bool `json:"plan,omitempty"`
+	ExecutePlan bool `json:"execute_plan,omitempty"`
+	// Model is the model the turn asked for (--model, or a custom command's front matter);
+	// empty for the profile's default.
+	Model string `json:"model,omitempty"`
 }
 
 // Runner sends headless turns to an API handler.
@@ -119,13 +130,16 @@ func (e *RequestError) Error() string {
 // run and returns an aborted result once the run has ended; the request's timeout does
 // the same with a timed_out result. The error is set only when no run was started.
 func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if strings.TrimSpace(request.Input) == "" {
+	if strings.TrimSpace(request.Input) == "" && !request.ExecutePlan {
 		return Result{}, errors.New("the prompt is empty")
+	}
+	if request.ExecutePlan && request.Plan {
+		return Result{}, errors.New("carrying out a plan cannot run in plan mode")
 	}
 	if strings.TrimSpace(request.Session) == "" {
 		return Result{}, errors.New("a session is required")
 	}
-	if request.Commands {
+	if request.Commands && !request.ExecutePlan {
 		if command, ok := ParseCommand(request.Input); ok {
 			if err := command.Check(request.Model, request.Output != nil, request.Plan); err != nil {
 				return Result{}, err
@@ -176,7 +190,9 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		Model        string          `json:"model,omitempty"`
 		OutputFormat json.RawMessage `json:"output_format,omitempty"`
 		Plan         bool            `json:"plan,omitempty"`
-	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan})
+		Tools        []string        `json:"tools,omitempty"`
+		ExecutePlan  bool            `json:"execute_plan,omitempty"`
+	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan, Tools: request.Tools, ExecutePlan: request.ExecutePlan})
 	if err != nil {
 		return Result{}, err
 	}
@@ -214,7 +230,7 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		return Result{}, &RequestError{Status: status, Message: errorMessage(raw)}
 	}
 
-	result := Result{Session: request.Session, Profile: request.Profile, Plan: request.Plan}
+	result := Result{Session: request.Session, Profile: request.Profile, Model: request.Model, Plan: request.Plan, ExecutePlan: request.ExecutePlan}
 	var timeout <-chan time.Time
 	if request.Timeout > 0 {
 		timer := time.NewTimer(request.Timeout)

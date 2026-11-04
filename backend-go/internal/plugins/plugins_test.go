@@ -28,6 +28,8 @@ func testTarget(t *testing.T) (Target, layouttest.Fixture) {
 		Roots:          loaded.Roots,
 		SkillDir:       filepath.Join(fixture.Root, "prompts", "skills"),
 		SkillMaxBytes:  1 << 20,
+		CommandDir:     filepath.Join(fixture.Root, "prompts", "commands"),
+		ReadCommands:   contentlibrary.CheckCommands,
 		ValidateServer: mcpclient.ValidateServerFile,
 		ReadSkill: func(ctx context.Context, directory, name string, maxBytes int64) error {
 			if _, ok, err := contentlibrary.ReadSkill(ctx, []string{directory}, name, maxBytes); err != nil || !ok {
@@ -281,11 +283,13 @@ func TestReadBundleRefusals(t *testing.T) {
 		{"unknown manifest key", map[string]string{"plugin.json": `{"schema_version":1,"name":"a","author":"x"}`}, "unknown field"},
 		{"bad version", map[string]string{"plugin.json": `{"schema_version":2,"name":"a"}`}, "schema_version must be 1"},
 		{"bad name", map[string]string{"plugin.json": `{"schema_version":1,"name":"a/b"}`}, "becomes the category"},
-		{"empty", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`}, "holds no catalog file and no skill"},
+		{"empty", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`}, "holds no catalog file, skill or command"},
 		{"stray part", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "agents/x.json": `{}`}, "is not a plugin part"},
 		{"nested catalog file", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "mcp/sub/x.json": `{}`}, "must be a file <name>.json"},
 		{"not json", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "tools/x.yaml": ``}, "must be a file <name>.json"},
 		{"skill without SKILL.md", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "skills/x/notes.md": ``}, "has no SKILL.md"},
+		{"commands not a folder", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "commands": "x"}, "commands must be a folder"},
+		{"command not markdown", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "commands/git/commit.txt": "x"}, "is not a command"},
 		{"placeholder without files", map[string]string{"plugin.json": `{"schema_version":1,"name":"a"}`, "mcp/x.json": `{"transport":{"type":"stdio","command":"${JAD_PLUGIN_FILES}/x"}}`}, "has no files folder"},
 	} {
 		if _, err := readBundle(writePlugin(t, test.files)); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -304,7 +308,7 @@ func TestReadBundleRefusals(t *testing.T) {
 // assertNoHiddenLeftovers fails when a staging or backup folder was left behind.
 func assertNoHiddenLeftovers(t *testing.T, target Target) {
 	t.Helper()
-	for _, folder := range []string{target.SkillDir, filepath.Join(target.Layout.State, ".plugins"), filepath.Join(target.Layout.State, ".plugins", "acme")} {
+	for _, folder := range []string{target.SkillDir, target.CommandDir, filepath.Join(target.Layout.State, ".plugins"), filepath.Join(target.Layout.State, ".plugins", "acme")} {
 		entries, err := os.ReadDir(folder)
 		if err != nil {
 			continue
@@ -348,5 +352,118 @@ func TestManifestSchemaMatchesTheReader(t *testing.T) {
 		if schemaOK, readerOK := len(issues) == 0, readErr == nil; schemaOK != readerOK {
 			t.Errorf("%s: schema accepts %v, reader accepts %v (%v)", manifest, schemaOK, readerOK, readErr)
 		}
+	}
+}
+
+// A plugin's commands/ folder becomes <command folder>/<plugin>, so its commands are
+// /<plugin>:<path>; it is checked as the "/" menu reads it, upgraded and removed like a skill.
+func TestInstallPlacesCommandsUnderThePluginsName(t *testing.T) {
+	target, _ := testTarget(t)
+	files := acmePlugin("1.0.0")
+	files["commands/review.md"] = "---\ndescription: Review a file.\nplan: true\nallowed-tools: [read, grep]\n---\nReview $ARGUMENTS.\n"
+	files["commands/git/commit.md"] = "Write a commit message.\n"
+	result, err := target.Install(context.Background(), writePlugin(t, files), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := filepath.Join(target.CommandDir, "acme")
+	var entry *Entry
+	for index := range result.Record.Entries {
+		if result.Record.Entries[index].Kind == "commands" {
+			entry = &result.Record.Entries[index]
+		}
+	}
+	if entry == nil || entry.ID != "acme" || entry.Path != installed {
+		t.Fatalf("commands entry = %+v in %+v", entry, result.Record.Entries)
+	}
+	count, err := contentlibrary.CheckCommands(context.Background(), target.CommandDir, "acme", target.SkillMaxBytes)
+	if err != nil || count != 2 {
+		t.Fatalf("installed commands = %d, %v", count, err)
+	}
+	for relative, want := range map[string]string{"acme/review.md": "acme:review", "acme/git/commit.md": "acme:git:commit"} {
+		if word, ok := contentlibrary.CommandWord(relative); !ok || word != want {
+			t.Errorf("CommandWord(%s) = %q, %v; want %q", relative, word, ok, want)
+		}
+	}
+
+	// A hand edit stops a plain upgrade; the forced upgrade that drops the commands
+	// removes the folder.
+	if err := os.WriteFile(filepath.Join(installed, "git", "commit.md"), []byte("Mine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := acmePlugin("2.0.0")
+	var changed *ChangedError
+	if _, err := target.Install(context.Background(), writePlugin(t, next), false); !errors.As(err, &changed) || changed.Entries[0].Kind != "commands" {
+		t.Fatalf("upgrade over an edited command = %v", err)
+	}
+	upgraded, err := target.Install(context.Background(), writePlugin(t, next), true)
+	if err != nil || len(upgraded.Removed) != 1 || upgraded.Removed[0].Kind != "commands" {
+		t.Fatalf("forced upgrade = %+v, %v", upgraded, err)
+	}
+	if _, err := os.Stat(installed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dropped commands are left: %v", err)
+	}
+
+	// Installed again and removed: nothing is left.
+	if _, err := target.Install(context.Background(), writePlugin(t, files), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Remove(context.Background(), "acme", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(installed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("commands are left after remove: %v", err)
+	}
+	assertNoHiddenLeftovers(t, target)
+}
+
+// A command the "/" menu would refuse fails the install, which is undone; so does a plugin
+// whose name is another kind's / word, and a commands folder of the user's at its path.
+func TestInstallRefusesCommandsTheMenuWouldNotTake(t *testing.T) {
+	target, _ := testTarget(t)
+	bad := acmePlugin("1.0.0")
+	bad["commands/review.md"] = "---\nplan: maybe\n---\nReview.\n"
+	if _, err := target.Install(context.Background(), writePlugin(t, bad), false); err == nil || !strings.Contains(err.Error(), "plan must be true or false") {
+		t.Fatalf("install of a command with a bad plan value = %v", err)
+	}
+	for _, path := range []string{filepath.Join(target.CommandDir, "acme"), filepath.Join(target.Layout.MCP, "acme"), filepath.Join(target.SkillDir, "acme-review")} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s is left after a failed install: %v", path, err)
+		}
+	}
+	empty := acmePlugin("1.0.0")
+	empty["commands/review.md"] = "---\ndescription: x\n---\n"
+	if _, err := target.Install(context.Background(), writePlugin(t, empty), false); err == nil || !strings.Contains(err.Error(), "has no text") {
+		t.Fatalf("install of an empty command = %v", err)
+	}
+	reserved := writePlugin(t, map[string]string{"plugin.json": `{"schema_version":1,"name":"mcp"}`, "commands/x.md": "x"})
+	if _, err := target.Install(context.Background(), reserved, false); err == nil || !strings.Contains(err.Error(), "belongs to a built-in command or another kind") {
+		t.Fatalf("install of commands under a reserved name = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(target.CommandDir, "acme"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target.CommandDir, "acme", "mine.md"), []byte("Mine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := acmePlugin("1.0.0")
+	good["commands/review.md"] = "Review.\n"
+	if _, err := target.Install(context.Background(), writePlugin(t, good), true); err == nil || !strings.Contains(err.Error(), "was not installed by this plugin") {
+		t.Fatalf("install over the user's commands folder = %v", err)
+	}
+	assertNoHiddenLeftovers(t, target)
+}
+
+// Without a command folder a plugin with commands is refused before anything is written.
+func TestInstallNeedsACommandFolderForCommands(t *testing.T) {
+	target, _ := testTarget(t)
+	target.CommandDir = ""
+	files := acmePlugin("1.0.0")
+	files["commands/review.md"] = "Review.\n"
+	if _, err := target.Install(context.Background(), writePlugin(t, files), false); err == nil || !strings.Contains(err.Error(), "libraries.command_dirs") {
+		t.Fatalf("install without a command folder = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target.Layout.MCP, "acme")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a refused install wrote a catalog file")
 	}
 }

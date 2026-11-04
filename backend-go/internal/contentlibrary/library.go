@@ -46,6 +46,23 @@ type CommandFields struct {
 	ArgumentHint string `json:"argument_hint,omitempty"`
 	// TakesArguments is true when the text has $ARGUMENTS or $1 to $9.
 	TakesArguments bool `json:"takes_arguments,omitempty"`
+	CommandOptions
+	// Invalid says what is wrong with the front matter's run options; such a command is
+	// listed, so the person sees it, but expanding it is refused with this text.
+	Invalid string `json:"invalid,omitempty"`
+}
+
+// CommandOptions are how a command's front matter asks its turn to run. A client that
+// sends the command applies them unless the person chose otherwise for that run.
+type CommandOptions struct {
+	// Model is a model reference (<category>/<name>, optionally @<effort>).
+	Model string `json:"model,omitempty"`
+	// Profile is the profile to run in, <category>/<name> or a path profile's name.
+	Profile string `json:"profile,omitempty"`
+	// Plan runs the turn in plan mode.
+	Plan bool `json:"plan,omitempty"`
+	// AllowedTools narrows the turn's tools to these tools.allow entries.
+	AllowedTools []string `json:"allowed_tools,omitempty"`
 }
 
 // Asset includes the full Markdown body returned when a user selects an item.
@@ -159,7 +176,7 @@ func (l *Library) Read(ctx context.Context, kind Kind, id string) (Asset, bool, 
 var (
 	assetIDPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	skillNamePattern  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	frontmatterField  = regexp.MustCompile(`^(name|title|description|argument-hint):\s*(.*)$`)
+	frontmatterField  = regexp.MustCompile(`^(name|title|description|argument-hint|model|profile|plan|allowed-tools):\s*(.*)$`)
 	inlineComment     = regexp.MustCompile(`\s+#.*$`)
 	firstHeading      = regexp.MustCompile(`^#\s+(.+)$`)
 	blankParagraph    = regexp.MustCompile(`\r?\n\s*\r?\n`)
@@ -178,9 +195,14 @@ type parsedMarkdown struct {
 	description  string
 	body         string
 	argumentHint string
-	hasName      bool
-	hasTitle     bool
-	hasDesc      bool
+	// The run options of a command (see commandOptions); read for every kind, used by
+	// commands only.
+	model, profile, plan string
+	allowedTools         []string
+	hasAllowedTools      bool
+	hasName              bool
+	hasTitle             bool
+	hasDesc              bool
 }
 
 func listKind(ctx context.Context, kind Kind, directories []string, maxBytes int64) ([]Summary, error) {
@@ -379,6 +401,7 @@ func readAsset(kind Kind, root, path string, maxBytes int64) (*Asset, error) {
 			return nil, nil
 		}
 		asset.Command, asset.ArgumentHint, asset.TakesArguments = word, parsed.argumentHint, takesArguments(parsed.body)
+		asset.CommandOptions, asset.Invalid = commandOptions(parsed)
 	}
 	return asset, nil
 }
@@ -435,6 +458,23 @@ func parseMarkdown(markdown string) parsedMarkdown {
 			continue
 		}
 		key, value := field[1], strings.TrimSpace(field[2])
+		if key == "allowed-tools" {
+			// A flow list ([read, grep]), a comma-separated line, or a block list of
+			// "- read" lines below the key.
+			parsed.hasAllowedTools = true
+			if value == "" {
+				for index+1 < len(metadataLines) && strings.HasPrefix(strings.TrimSpace(metadataLines[index+1]), "-") {
+					index++
+					parsed.allowedTools = append(parsed.allowedTools, unquoteScalar(strings.TrimPrefix(strings.TrimSpace(metadataLines[index]), "-")))
+				}
+				continue
+			}
+			value = strings.TrimSuffix(strings.TrimPrefix(value, "["), "]")
+			for _, item := range strings.Split(value, ",") {
+				parsed.allowedTools = append(parsed.allowedTools, unquoteScalar(item))
+			}
+			continue
+		}
 		if key == "description" && isBlockScalar(value) {
 			folded := strings.HasPrefix(value, ">")
 			block := make([]string, 0)
@@ -462,6 +502,12 @@ func parseMarkdown(markdown string) parsedMarkdown {
 			parsed.description, parsed.hasDesc = value, true
 		case "argument-hint":
 			parsed.argumentHint = value
+		case "model":
+			parsed.model = value
+		case "profile":
+			parsed.profile = value
+		case "plan":
+			parsed.plan = value
 		}
 	}
 	return parsed

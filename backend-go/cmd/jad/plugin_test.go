@@ -18,6 +18,7 @@ func TestPluginCommandInstallsListsAndRemoves(t *testing.T) {
 		"plugin.json":                `{"schema_version":1,"name":"acme","version":"1.0.0"}`,
 		"tools/review.json":          `{"schema_version":1,"native":{"glob":{}}}`,
 		"skills/acme-notes/SKILL.md": "---\nname: acme-notes\ndescription: Notes.\n---\nBody.\n",
+		"commands/review.md":         "Review $ARGUMENTS.\n",
 	} {
 		full := filepath.Join(source, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -36,20 +37,24 @@ func TestPluginCommandInstallsListsAndRemoves(t *testing.T) {
 		t.Fatalf("list before install = %q, %v", out, err)
 	}
 	out, err := run("plugin", "install", source)
-	if err != nil || !strings.HasPrefix(out, "Installed acme 1.0.0: 2 parts\n") || !strings.Contains(out, "toolset  acme/review") || !strings.Contains(out, "skill    acme-notes") {
+	if err != nil || !strings.HasPrefix(out, "Installed acme 1.0.0: 3 parts\n") || !strings.Contains(out, "toolset  acme/review") || !strings.Contains(out, "skill    acme-notes") || !strings.Contains(out, "commands acme") {
 		t.Fatalf("install = %q, %v", out, err)
 	}
 	// With no libraries.skill_dirs, the first skill folder is the default <root>/.agent/skills.
 	if _, err := os.Stat(filepath.Join(filepath.Dir(fixture.RootSetting), ".agent", "skills", "acme-notes", "SKILL.md")); err != nil {
 		t.Fatalf("skill not in the first skill folder: %v", err)
 	}
-	if out, err := run("plugin", "list"); err != nil || !strings.HasPrefix(out, "acme 1.0.0: 2 parts (from ") {
+	// And the first command folder is the default <root>/.agent/commands.
+	if _, err := os.Stat(filepath.Join(filepath.Dir(fixture.RootSetting), ".agent", "commands", "acme", "review.md")); err != nil {
+		t.Fatalf("commands not in the first command folder: %v", err)
+	}
+	if out, err := run("plugin", "list"); err != nil || !strings.HasPrefix(out, "acme 1.0.0: 3 parts (from ") {
 		t.Fatalf("list = %q, %v", out, err)
 	}
 	if out, err := run("plugin", "install", source); err != nil || !strings.HasPrefix(out, "Upgraded acme 1.0.0") {
 		t.Fatalf("reinstall = %q, %v", out, err)
 	}
-	if out, err := run("plugin", "remove", "acme"); err != nil || out != "Removed acme 1.0.0: 2 parts\n" {
+	if out, err := run("plugin", "remove", "acme"); err != nil || out != "Removed acme 1.0.0: 3 parts\n" {
 		t.Fatalf("remove = %q, %v", out, err)
 	}
 	for _, test := range []struct {

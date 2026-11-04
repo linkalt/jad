@@ -221,8 +221,9 @@ func (r *Runner) runAction(ctx context.Context, request Request, command Command
 
 // expand returns the text a library or MCP command stands for, followed by the command's
 // text on a new paragraph.
-func (r *Runner) expand(ctx context.Context, request Request, command Command) (string, error) {
+func (r *Runner) expand(ctx context.Context, request Request, command Command) (string, commandOptions, error) {
 	var text, rest string
+	var options commandOptions
 	var err error
 	switch command.Kind {
 	case CommandMCP:
@@ -231,27 +232,53 @@ func (r *Runner) expand(ctx context.Context, request Request, command Command) (
 		text, rest, err = r.mcpResource(ctx, request, command)
 	case CommandCustom:
 		// The arguments are part of the command's text, not a paragraph after it.
-		text, err = r.customCommandText(ctx, command)
+		text, options, err = r.customCommandText(ctx, command)
 	default:
 		text, err = r.libraryItem(ctx, command)
 		rest = command.Text
 	}
 	if err != nil {
-		return "", err
+		return "", commandOptions{}, err
 	}
 	if rest == "" {
-		return text, nil
+		return text, options, nil
 	}
-	return strings.TrimRight(text, "\n") + "\n\n" + rest, nil
+	return strings.TrimRight(text, "\n") + "\n\n" + rest, options, nil
+}
+
+// commandOptions are the run options of a custom command's front matter, as the expand
+// route gives them.
+type commandOptions struct {
+	Model        string   `json:"model"`
+	Profile      string   `json:"profile"`
+	Plan         bool     `json:"plan"`
+	AllowedTools []string `json:"allowed_tools"`
+}
+
+// apply sets what the request does not set itself: a --model, --profile or tool list the
+// caller gave wins over the command's. plan: true turns plan mode on.
+func (o commandOptions) apply(request *Request) {
+	if request.Model == "" {
+		request.Model = o.Model
+	}
+	if request.Profile == "" {
+		request.Profile = o.Profile
+	}
+	if o.Plan {
+		request.Plan = true
+	}
+	if request.Tools == nil && o.AllowedTools != nil {
+		request.Tools = o.AllowedTools
+	}
 }
 
 // customCommandText finds the custom command named by the word and returns its text
 // filled with the command's text as arguments, as the expand route gives it. A word the
 // library has no command for is errNotACommand.
-func (r *Runner) customCommandText(ctx context.Context, command Command) (string, error) {
+func (r *Runner) customCommandText(ctx context.Context, command Command) (string, commandOptions, error) {
 	raw, err := r.call(ctx, http.MethodGet, "/api/library", nil)
 	if err != nil {
-		return "", err
+		return "", commandOptions{}, err
 	}
 	var catalog struct {
 		Commands []struct {
@@ -260,7 +287,7 @@ func (r *Runner) customCommandText(ctx context.Context, command Command) (string
 		} `json:"commands"`
 	}
 	if err := json.Unmarshal(raw, &catalog); err != nil {
-		return "", fmt.Errorf("read the library: %w", err)
+		return "", commandOptions{}, fmt.Errorf("read the library: %w", err)
 	}
 	for _, entry := range catalog.Commands {
 		if entry.Command != command.Item {
@@ -268,17 +295,18 @@ func (r *Runner) customCommandText(ctx context.Context, command Command) (string
 		}
 		raw, err := r.call(ctx, http.MethodPost, "/api/library/command/"+url.PathEscape(entry.ID)+"/expand", map[string]string{"arguments": command.Text})
 		if err != nil {
-			return "", err
+			return "", commandOptions{}, err
 		}
 		var expanded struct {
 			Text string `json:"text"`
+			commandOptions
 		}
 		if err := json.Unmarshal(raw, &expanded); err != nil {
-			return "", fmt.Errorf("read the command's text: %w", err)
+			return "", commandOptions{}, fmt.Errorf("read the command's text: %w", err)
 		}
-		return expanded.Text, nil
+		return expanded.Text, expanded.commandOptions, nil
 	}
-	return "", errNotACommand
+	return "", commandOptions{}, errNotACommand
 }
 
 // libraryItem reads the library item a /prompt:, /template: or /skill: command names. The
@@ -716,7 +744,7 @@ func (r *Runner) runCommand(ctx context.Context, request *Request, command Comma
 		result.DurationMS = time.Since(started).Milliseconds()
 		return result, true, nil
 	}
-	input, err := r.expand(commandCtx, *request, command)
+	input, options, err := r.expand(commandCtx, *request, command)
 	if err != nil {
 		return stopped(err)
 	}
@@ -724,6 +752,7 @@ func (r *Runner) runCommand(ctx context.Context, request *Request, command Comma
 		return Result{}, false, fmt.Errorf("/%s stands for an empty text", command.Word)
 	}
 	request.Input = input
+	options.apply(request)
 	if request.Timeout > 0 {
 		// The run has what the command left of the timeout.
 		request.Timeout -= time.Since(started)

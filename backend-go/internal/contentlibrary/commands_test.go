@@ -154,3 +154,78 @@ func TestDefaultDirectoriesIncludeCommands(t *testing.T) {
 		t.Errorf("schema default %v, loader default %v", got, defaults["command_dirs"])
 	}
 }
+
+// A command's front matter may ask for a model, a profile, plan mode and a narrower tool
+// list; a bad value is reported on the command, which is still listed.
+func TestCommandRunOptions(t *testing.T) {
+	root := t.TempDir()
+	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["commands"]}}`)
+	for name, text := range map[string]string{
+		"flow.md":     "---\nmodel: openai/fast@high\nprofile: dev/coder\nplan: true\nallowed-tools: [read, \"grep\", read]\n---\nPlan it.\n",
+		"comma.md":    "---\nallowed-tools: read, mcp:docs:*\n---\nRead it.\n",
+		"block.md":    "---\nallowed-tools:\n  - glob\n- 'mcp:docs:search'\nplan: false\n---\nFind it.\n",
+		"plain.md":    "Just text.\n",
+		"badplan.md":  "---\nplan: yes\n---\nx\n",
+		"badtool.md":  "---\nallowed-tools: Bash\n---\nx\n",
+		"notools.md":  "---\nallowed-tools: []\n---\nx\n",
+		"badprof.md":  "---\nprofile: a/b/c\n---\nx\n",
+		"badmodel.md": "---\nmodel: \"a b\"\n---\nx\n",
+	} {
+		writeLibraryTestFile(t, filepath.Join(root, "commands", name), text)
+	}
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byWord := map[string]Summary{}
+	for _, command := range catalog.Commands {
+		byWord[command.Command] = command
+	}
+	want := map[string]CommandOptions{
+		"flow":  {Model: "openai/fast@high", Profile: "dev/coder", Plan: true, AllowedTools: []string{"read", "grep"}},
+		"comma": {AllowedTools: []string{"read", "mcp:docs:*"}},
+		"block": {AllowedTools: []string{"glob", "mcp:docs:search"}},
+		"plain": {},
+	}
+	for word, options := range want {
+		got := byWord[word]
+		if got.Invalid != "" || got.Model != options.Model || got.Profile != options.Profile || got.Plan != options.Plan || strings.Join(got.AllowedTools, ",") != strings.Join(options.AllowedTools, ",") {
+			t.Errorf("/%s options = %+v, %q; want %+v", word, got.CommandOptions, got.Invalid, options)
+		}
+	}
+	for word, problem := range map[string]string{
+		"badplan":  `plan must be true or false, not "yes"`,
+		"badtool":  `allowed-tools: "Bash" is not a native tool`,
+		"notools":  "allowed-tools lists no tool",
+		"badprof":  `profile "a/b/c" must be <category>/<name>`,
+		"badmodel": `model "a b" must not contain white space`,
+	} {
+		if got := byWord[word]; !strings.Contains(got.Invalid, problem) || got.Plan || got.AllowedTools != nil {
+			t.Errorf("/%s: invalid %q, options %+v; want %q", word, got.Invalid, got.CommandOptions, problem)
+		}
+	}
+	encoded, _ := json.Marshal(byWord["plain"])
+	if strings.Contains(string(encoded), "model") || strings.Contains(string(encoded), "allowed_tools") || strings.Contains(string(encoded), "invalid") || strings.Contains(string(encoded), "plan") {
+		t.Fatalf("empty run options were sent: %s", encoded)
+	}
+	encoded, _ = json.Marshal(byWord["flow"])
+	if !strings.Contains(string(encoded), `"model":"openai/fast@high","profile":"dev/coder","plan":true,"allowed_tools":["read","grep"]`) {
+		t.Fatalf("run options: %s", encoded)
+	}
+
+	// CheckCommands reports the first problem of a folder and counts the good ones.
+	if count, err := CheckCommands(context.Background(), root, "commands", 1<<20); err == nil || count != 0 {
+		t.Fatalf("CheckCommands over bad commands = %d, %v", count, err)
+	}
+	for _, name := range []string{"badplan.md", "badtool.md", "notools.md", "badprof.md", "badmodel.md"} {
+		if err := os.Remove(filepath.Join(root, "commands", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, err := CheckCommands(context.Background(), root, "commands", 1<<20); err != nil || count != 4 {
+		t.Fatalf("CheckCommands = %d, %v", count, err)
+	}
+	if _, err := CheckCommands(context.Background(), root, "commands", 10); err == nil || !strings.Contains(err.Error(), "more than libraries.max_asset_bytes") {
+		t.Fatalf("CheckCommands over the size limit = %v", err)
+	}
+}

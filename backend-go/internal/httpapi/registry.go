@@ -287,8 +287,11 @@ type activeRun struct {
 	// outputFormat is the text.format the run's requests send, nil for none. Set before
 	// the run starts and read on the run's goroutine.
 	outputFormat json.RawMessage
-	// plan starts the run in plan mode. Set before the run starts.
-	plan bool
+	// plan starts the run in plan mode, tools narrows its tools (nil: all of them) and
+	// executePlan puts plan_mode.execute_prompt before its input. Set before the run starts.
+	plan        bool
+	tools       []string
+	executePlan bool
 
 	mu                 sync.Mutex
 	status             string

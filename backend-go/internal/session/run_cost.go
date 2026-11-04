@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // CostMeter adds up what a run's model responses cost, in US dollars, from the pricing of
@@ -64,3 +65,16 @@ type RunCostLimitError struct {
 func (e *RunCostLimitError) Error() string {
 	return fmt.Sprintf("The run stopped before its next round: it cost $%.4f, which reached the max_run_cost_usd limit of $%.4f.", e.Used, e.Limit)
 }
+
+// RunDurationLimitError is returned when a run took max_run_duration_ms and was stopped.
+// Its text holds only the configured limit, so a client may read it.
+type RunDurationLimitError struct {
+	Limit time.Duration
+}
+
+func (e *RunDurationLimitError) Error() string {
+	return fmt.Sprintf("The run was stopped: it ran for the max_run_duration_ms limit of %s.", e.Limit)
+}
+
+// ClientMessage is the error's text, which names only the configured limit.
+func (e *RunDurationLimitError) ClientMessage() string { return e.Error() }

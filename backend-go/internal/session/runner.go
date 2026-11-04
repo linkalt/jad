@@ -159,6 +159,12 @@ type RunOptions struct {
 	// Plan marks a run started in plan mode. The caller that prepares the tools narrows
 	// ToolCatalog for it and sets PlanPrompt; Run itself only sends PlanPrompt.
 	Plan bool
+	// Tools, when not nil, narrows ToolCatalog to the tools these tools.allow entries
+	// cover; the caller that prepares the tools applies it.
+	Tools []string
+	// ExecutePlan puts plan_mode.execute_prompt before the input; the caller that stores
+	// the input applies it.
+	ExecutePlan bool
 	// PlanPrompt, when its Text is set, is sent after the history in every request of the
 	// run, with its Role; its After is ignored. It never reaches the transcript.
 	PlanPrompt StateContextPrompt

@@ -31,6 +31,23 @@ func (c *Catalog) PlanMode(allow []string) (*Catalog, error) {
 	return NewCatalog(kept)
 }
 
+// Only returns the catalog narrowed to the tools the entries cover (tools.allow entries:
+// a native tool name, mcp:<server>:<tool> or mcp:<server>:*). An entry that covers no tool
+// of the catalog narrows nothing more: the run asks for at most these tools. The receiver
+// is unchanged.
+func (c *Catalog) Only(entries []string) (*Catalog, error) {
+	if c == nil {
+		return nil, nil
+	}
+	kept := make([]Tool, 0, len(entries))
+	for _, tool := range c.tools {
+		if AnyEntryMatches(entries, tool.Definition) {
+			kept = append(kept, tool)
+		}
+	}
+	return NewCatalog(kept)
+}
+
 // planModeGuard wraps a tool whose calls may or may not change files, so the ones that
 // would are refused before the tool runs.
 func planModeGuard(tool Tool) Tool {

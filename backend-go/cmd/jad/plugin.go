@@ -19,9 +19,10 @@ const pluginUsage = `usage: jad plugin install [--force] <folder>
 
 A plugin is a folder with plugin.json ({"schema_version":1,"name":"<name>","version":"..."})
 and any of models/, mcp/, tools/ (toolsets, with their hooks), profiles/ (agents),
-skills/<skill>/SKILL.md and files/. install copies each catalog file to
-<catalog>/<name>/<file>.json, so the plugin's files name each other as <name>/<file>; each
-skill folder to the first of libraries.skill_dirs; and files/ to
+skills/<skill>/SKILL.md, commands/ (custom slash commands, .md files) and files/. install
+copies each catalog file to <catalog>/<name>/<file>.json, so the plugin's files name each
+other as <name>/<file>; each skill folder to the first of libraries.skill_dirs; commands/ to
+<first of libraries.command_dirs>/<name>, so its commands are /<name>:<command>; and files/ to
 <state>/.plugins/<name>/files, whose path replaces ${JAD_PLUGIN_FILES} in the catalog files.
 Every catalog file is checked as the loader reads it, and a failed install is undone.
 Installing a plugin that is already installed upgrades it: files the new version drops are
@@ -121,8 +122,8 @@ func versionText(version string) string {
 	return version
 }
 
-// pluginTarget is the catalog layout of the roots and the first skill folder of its root
-// setting. The catalogs are global to the root setting, so every root shares them.
+// pluginTarget is the catalog layout of the roots and the first skill and command folders
+// of its root setting. The catalogs are global to the root setting, so every root shares them.
 func pluginTarget() (plugins.Target, error) {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
@@ -160,6 +161,14 @@ func pluginTarget() (plugins.Target, error) {
 	if len(directories) > 0 {
 		target.SkillDir = directories[0]
 	}
+	commandDirectories, err := contentlibrary.CommandDirectories(root.GlobalJadRoot)
+	if err != nil {
+		return plugins.Target{}, err
+	}
+	if len(commandDirectories) > 0 {
+		target.CommandDir = commandDirectories[0]
+	}
+	target.ReadCommands = contentlibrary.CheckCommands
 	if target.SkillMaxBytes, err = contentlibrary.AssetByteLimit(root.GlobalJadRoot); err != nil {
 		return plugins.Target{}, err
 	}

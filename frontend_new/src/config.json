@@ -51,6 +51,8 @@
   "slash_menu_mcp_resources_enabled": true,
   "plan_mode_enabled": true,
   "plan_mode_placeholder": "Plan mode: describe the task; the agent only reads and answers with a plan…",
+  "plan_mode_execute_label": "Execute plan",
+  "plan_mode_execute_message": "Carry out the plan.",
   "mention_source": "cwd",
   "defer_offscreen_transcript_rows": true,
   "transcript_row_estimate_px": 120,

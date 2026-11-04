@@ -2,12 +2,16 @@ package contentlibrary
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
+
+	"jad/backend-go/internal/sessionfs"
 )
 
 // Custom slash commands. A command is a Markdown file in one of libraries.command_dirs;
@@ -24,6 +28,94 @@ var reservedCommandWords = []string{"compact", "state", "reset", "plan"}
 var reservedCommandPrefixes = []string{"prompt", "template", "skill", "mcp", "resource"}
 
 var commandPlaceholder = regexp.MustCompile(`\$(ARGUMENTS|[1-9])`)
+
+// commandProfilePattern is a profile the run route takes: a path profile's name or
+// <category>/<name>.
+var commandProfilePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$|^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// commandOptions reads the run options of a command's front matter. The second result is
+// the first problem found, in words for the person who wrote the file; the options are
+// then empty. The model and profile are only checked for shape here: whether the session
+// has them is the run's to say.
+func commandOptions(parsed parsedMarkdown) (CommandOptions, string) {
+	var options CommandOptions
+	if parsed.model != "" {
+		if strings.IndexFunc(parsed.model, unicode.IsSpace) >= 0 {
+			return CommandOptions{}, fmt.Sprintf("model %q must not contain white space", parsed.model)
+		}
+		options.Model = parsed.model
+	}
+	if parsed.profile != "" {
+		if !commandProfilePattern.MatchString(parsed.profile) {
+			return CommandOptions{}, fmt.Sprintf("profile %q must be <category>/<name> or a profile name", parsed.profile)
+		}
+		options.Profile = parsed.profile
+	}
+	switch parsed.plan {
+	case "", "false":
+	case "true":
+		options.Plan = true
+	default:
+		return CommandOptions{}, fmt.Sprintf("plan must be true or false, not %q", parsed.plan)
+	}
+	if parsed.hasAllowedTools {
+		options.AllowedTools = []string{}
+		for _, entry := range parsed.allowedTools {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			if err := sessionfs.CheckToolEntry(entry); err != nil {
+				return CommandOptions{}, "allowed-tools: " + err.Error()
+			}
+			if !slices.Contains(options.AllowedTools, entry) {
+				options.AllowedTools = append(options.AllowedTools, entry)
+			}
+		}
+		if len(options.AllowedTools) == 0 {
+			return CommandOptions{}, "allowed-tools lists no tool"
+		}
+	}
+	return options, ""
+}
+
+// CheckCommands reads the command files in folder, a folder below the command folder root,
+// the way the "/" menu reads them, and returns how many there are or the first that the
+// menu would leave out or refuse to expand: a file over maxBytes, one with no text, one
+// whose word another kind of "/" word owns, or one with invalid run options.
+func CheckCommands(ctx context.Context, root, folder string, maxBytes int64) (int, error) {
+	paths, err := markdownFiles(ctx, filepath.Join(root, folder))
+	if err != nil {
+		return 0, err
+	}
+	for _, path := range paths {
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return 0, err
+		}
+		if _, ok := CommandWord(relative); !ok {
+			return 0, fmt.Errorf("command %s: its word belongs to a built-in command or another kind of / word", filepath.ToSlash(relative))
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0, err
+		}
+		if info.Size() > maxBytes {
+			return 0, fmt.Errorf("command %s is %d bytes, more than libraries.max_asset_bytes (%d)", filepath.ToSlash(relative), info.Size(), maxBytes)
+		}
+		asset, err := readAsset(Command, root, path, maxBytes)
+		if err != nil {
+			return 0, err
+		}
+		if asset == nil {
+			return 0, fmt.Errorf("command %s has no text", filepath.ToSlash(relative))
+		}
+		if asset.Invalid != "" {
+			return 0, fmt.Errorf("command %s: %s", filepath.ToSlash(relative), asset.Invalid)
+		}
+	}
+	return len(paths), nil
+}
 
 // Slug is the name a person types after the slash: the name in lower case, every run of
 // characters that are not letters or digits made one dash, the dashes at either end

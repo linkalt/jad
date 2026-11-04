@@ -538,6 +538,19 @@ export interface RootLibraryAsset extends RootLibraryAssetSummary {
  * A custom slash command: a Markdown file in libraries.command_dirs. `command` is the
  * word typed after the slash; the server fills `$ARGUMENTS` and `$1`–`$9`.
  */
+/**
+ * How a custom command's front matter asks its turn to run. The composer applies plan,
+ * model and tools to the message it sends; profile is for jad run and jad eval, since a
+ * tab runs in its own profile.
+ */
+export interface CommandRunOptions {
+  model?: string;
+  profile?: string;
+  plan?: boolean;
+  /** tools.allow entries the turn's tools are narrowed to. */
+  tools?: string[];
+}
+
 export interface RootLibraryCommand {
   id: string;
   kind: 'command';
@@ -547,6 +560,35 @@ export interface RootLibraryCommand {
   command: string;
   argumentHint?: string;
   takesArguments: boolean;
+  /** The front matter's run options; empty when it sets none. */
+  options: CommandRunOptions;
+  /** What is wrong with the front matter; such a command cannot be expanded. */
+  invalid?: string;
+}
+
+/** A custom command filled with its arguments, as the server expands it. */
+export interface ExpandedCommand {
+  text: string;
+  options: CommandRunOptions;
+}
+
+/** The run options of a command or an expansion answer, or null when one is malformed. */
+function parseCommandRunOptions(value: Record<string, unknown>): CommandRunOptions | null {
+  const {model, profile, plan, allowed_tools: tools} = value;
+  if (
+    (model !== undefined && (typeof model !== 'string' || model === '')) ||
+    (profile !== undefined && (typeof profile !== 'string' || profile === '')) ||
+    (plan !== undefined && typeof plan !== 'boolean') ||
+    (tools !== undefined && (!Array.isArray(tools) || tools.length === 0 || !tools.every(entry => typeof entry === 'string' && entry !== '')))
+  ) {
+    return null;
+  }
+  return {
+    ...(typeof model === 'string' ? {model} : {}),
+    ...(typeof profile === 'string' ? {profile} : {}),
+    ...(plan === true ? {plan: true} : {}),
+    ...(Array.isArray(tools) ? {tools: tools as string[]} : {}),
+  };
 }
 
 export interface RootLibraryCatalog {
@@ -567,10 +609,13 @@ function parseRootLibraryCommand(value: unknown): RootLibraryCommand | null {
     typeof value.source !== 'string' ||
     typeof value.command !== 'string' || value.command === '' ||
     (value.argument_hint !== undefined && typeof value.argument_hint !== 'string') ||
-    (value.takes_arguments !== undefined && typeof value.takes_arguments !== 'boolean')
+    (value.takes_arguments !== undefined && typeof value.takes_arguments !== 'boolean') ||
+    (value.invalid !== undefined && typeof value.invalid !== 'string')
   ) {
     return null;
   }
+  const options = parseCommandRunOptions(value);
+  if (options === null) return null;
   return {
     id: value.id,
     kind: 'command',
@@ -580,6 +625,8 @@ function parseRootLibraryCommand(value: unknown): RootLibraryCommand | null {
     command: value.command,
     ...(typeof value.argument_hint === 'string' && value.argument_hint !== '' ? {argumentHint: value.argument_hint} : {}),
     takesArguments: value.takes_arguments === true,
+    options,
+    ...(typeof value.invalid === 'string' && value.invalid !== '' ? {invalid: value.invalid} : {}),
   };
 }
 
@@ -623,7 +670,7 @@ export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibrar
 }
 
 /** A custom command's text, filled with the arguments typed for it. */
-export async function expandRootLibraryCommand(id: string, args: string): Promise<string> {
+export async function expandRootLibraryCommand(id: string, args: string): Promise<ExpandedCommand> {
   const response = await authenticatedFetch(
     apiUrl(`/library/command/${encodeURIComponent(id)}/expand`),
     {
@@ -634,10 +681,11 @@ export async function expandRootLibraryCommand(id: string, args: string): Promis
   );
   if (!response.ok) throw new Error(await readError(response));
   const value: unknown = await response.json();
-  if (!isRecord(value) || typeof value.text !== 'string') {
+  const options = isRecord(value) ? parseCommandRunOptions(value) : null;
+  if (!isRecord(value) || typeof value.text !== 'string' || options === null) {
     throw new Error('the server returned invalid command data');
   }
-  return value.text;
+  return {text: value.text, options};
 }
 
 export async function fetchRootLibraryAsset(
@@ -1489,6 +1537,13 @@ export interface StreamSessionRunOptions {
    * anything and the session's plan_mode instructions, and answers with a plan.
    */
   plan?: boolean;
+  /** Narrows the run's tools to these tools.allow entries (a custom command's allowed-tools). */
+  tools?: string[];
+  /**
+   * Carries out the plan the transcript ends with: the server sends plan_mode.execute_prompt,
+   * followed by the input when it has text. The input may then be empty.
+   */
+  executePlan?: boolean;
   /**
    * The path profile to run in. A tab pinned to one profile must run there, so
    * its transcript, model default and run slot are that profile's.
@@ -2060,6 +2115,8 @@ export async function streamSessionRun(
           supports_interaction: true,
           ...(options.model === undefined ? {} : {model: options.model}),
           ...(options.plan === true ? {plan: true} : {}),
+          ...(options.tools === undefined ? {} : {tools: options.tools}),
+          ...(options.executePlan === true ? {execute_plan: true} : {}),
         }),
       },
       runOptions,

@@ -241,6 +241,9 @@ type SessionConfig struct {
 	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
 	// before it starts another provider round; zero means no cap.
 	MaxRunCostUSD float64
+	// MaxRunDurationMS is the most milliseconds one run may take, counted from when it
+	// holds the session's run lock; zero means no limit (the key is absent).
+	MaxRunDurationMS int64
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
 	// PlanMode shapes a run started in plan mode.
@@ -388,6 +391,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	maxRunCost, err := normalizeMaxRunCost(setting["max_run_cost_usd"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	maxRunDuration, err := normalizeMaxRunDuration(setting["max_run_duration_ms"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -718,6 +725,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
 		MaxRunCostUSD:            maxRunCost,
+		MaxRunDurationMS:         maxRunDuration,
 		Checkpoint:               checkpoint,
 		PlanMode:                 planMode,
 		Hooks:                    hooks,

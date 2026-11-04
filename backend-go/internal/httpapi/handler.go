@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/memorytrace"
 	"jad/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessiongate"
 )
 
@@ -483,7 +485,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
 	run.outputFormat = body.OutputFormat
-	run.plan = body.Plan
+	run.plan, run.tools, run.executePlan = body.Plan, body.Tools, body.ExecutePlan
 	h.attachContentCache(run)
 	queue := run.subscribe()
 	launched = true
@@ -871,6 +873,12 @@ type runRequest struct {
 	OutputFormat json.RawMessage `json:"output_format,omitempty"`
 	// Plan starts the run in plan mode: read-only tools and the plan_mode instructions.
 	Plan bool `json:"plan,omitempty"`
+	// Tools, when set, narrows the run's tools to the ones these tools.allow entries
+	// cover. Nil leaves the profile's tools as they are.
+	Tools []string `json:"tools,omitempty"`
+	// ExecutePlan sends plan_mode.execute_prompt, followed by the input when there is one:
+	// the run carries out the plan the transcript ends with.
+	ExecutePlan bool `json:"execute_plan,omitempty"`
 }
 
 const (
@@ -933,12 +941,31 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 	// The members are located in raw itself; json.Valid has accepted it, so nothing is copied.
 	members := scanRunBodyObject(raw)
 	var body runRequest
+	if members.hasExecutePlan {
+		if json.Unmarshal(members.executePlan, &body.ExecutePlan) != nil || string(bytes.TrimSpace(members.executePlan)) == "null" {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "execute_plan must be a boolean"}
+		}
+	}
+	var input json.RawMessage
+	var imageChars int64
+	if body.ExecutePlan {
+		// The input is optional and is text only: it follows the configured prompt.
+		var text string
+		if members.hasInput && json.Unmarshal(members.input, &text) != nil {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "with execute_plan, input must be a string or left out"}
+		}
+		if strings.TrimSpace(text) == "" {
+			// No text of its own: the runner sends the configured prompt alone.
+			input, members.hasInput = json.RawMessage(`""`), true
+		}
+	}
 	if !members.hasInput {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
-	input, imageChars, err := parseValidRunInput(members.input, limits)
-	if err != nil {
-		return runRequest{}, err
+	if input == nil {
+		if input, imageChars, err = parseValidRunInput(members.input, limits); err != nil {
+			return runRequest{}, err
+		}
 	}
 	// The reader allowed the image data on top of max_body_bytes; everything else in the
 	// body still has to fit in max_body_bytes itself.
@@ -964,8 +991,35 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "plan must be a boolean"}
 		}
 	}
+	if body.Plan && body.ExecutePlan {
+		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "execute_plan carries out a plan, so it cannot run in plan mode"}
+	}
+	if members.hasTools {
+		if body.Tools, err = parseRunTools(members.tools); err != nil {
+			return runRequest{}, err
+		}
+	}
 	body.Model = strings.TrimSpace(body.Model)
 	return body, nil
+}
+
+// parseRunTools reads the run body's tools: an array of distinct tools.allow entries
+// (a native tool name, mcp:<server>:<tool> or mcp:<server>:*). An empty array runs with
+// no tools.
+func parseRunTools(raw []byte) ([]string, error) {
+	var entries []string
+	if json.Unmarshal(raw, &entries) != nil || entries == nil {
+		return nil, &StatusError{Code: http.StatusBadRequest, Message: "tools must be an array of tool names"}
+	}
+	for index, entry := range entries {
+		if err := sessionfs.CheckToolEntry(entry); err != nil {
+			return nil, &StatusError{Code: http.StatusBadRequest, Message: fmt.Sprintf("tools[%d] %v", index, err)}
+		}
+		if slices.Contains(entries[:index], entry) {
+			return nil, &StatusError{Code: http.StatusBadRequest, Message: fmt.Sprintf("tools[%d] repeats %q", index, entry)}
+		}
+	}
+	return entries, nil
 }
 
 func decodedPathSegments(u *url.URL) ([]string, error) {

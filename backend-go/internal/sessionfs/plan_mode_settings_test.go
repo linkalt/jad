@@ -23,12 +23,12 @@ func TestPlanModeDefaults(t *testing.T) {
 
 func TestPlanModeAcceptsEveryKey(t *testing.T) {
 	config, err := loadSetting(t, map[string]any{"plan_mode": map[string]any{
-		"instructions": "Plan only.", "role": "system", "allow_tools": []string{"task", "mcp:docs:*"},
+		"instructions": "Plan only.", "role": "system", "allow_tools": []string{"task", "mcp:docs:*"}, "execute_prompt": "Go.",
 	}})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
-	want := PlanModeSettings{Instructions: "Plan only.", Role: "system", AllowTools: []string{"task", "mcp:docs:*"}}
+	want := PlanModeSettings{Instructions: "Plan only.", Role: "system", AllowTools: []string{"task", "mcp:docs:*"}, ExecutePrompt: "Go."}
 	if !reflect.DeepEqual(config.PlanMode, want) {
 		t.Fatalf("plan_mode = %+v, want %+v", config.PlanMode, want)
 	}
@@ -45,6 +45,8 @@ func TestPlanModeRejectsBadValues(t *testing.T) {
 		{"empty instructions", map[string]any{"instructions": "  "}, "plan_mode.instructions must be a non-empty string"},
 		{"long instructions", map[string]any{"instructions": strings.Repeat("x", 64*1024+1)}, "plan_mode.instructions must be a non-empty string of at most 65536 bytes"},
 		{"null instructions", map[string]any{"instructions": nil}, "plan_mode.instructions must be a non-empty string"},
+		{"empty execute_prompt", map[string]any{"execute_prompt": ""}, "plan_mode.execute_prompt must be a non-empty string"},
+		{"long execute_prompt", map[string]any{"execute_prompt": strings.Repeat("x", 64*1024+1)}, "plan_mode.execute_prompt must be a non-empty string of at most 65536 bytes"},
 		{"user role", map[string]any{"role": "user"}, `plan_mode.role must be "developer" or "system"`},
 		{"allow string", map[string]any{"allow_tools": "read"}, "plan_mode.allow_tools must be an array of tool names"},
 		{"allow empty entry", map[string]any{"allow_tools": []any{""}}, "plan_mode.allow_tools[0] must be a non-empty string"},
@@ -80,7 +82,11 @@ func TestPlanModeSchemaMatchesTheLoader(t *testing.T) {
 						Default string   `json:"default"`
 						Enum    []string `json:"enum"`
 					} `json:"role"`
-					AllowTools json.RawMessage `json:"allow_tools"`
+					AllowTools    json.RawMessage `json:"allow_tools"`
+					ExecutePrompt struct {
+						Default   string `json:"default"`
+						MaxLength int    `json:"maxLength"`
+					} `json:"execute_prompt"`
 				} `json:"properties"`
 				AdditionalProperties bool `json:"additionalProperties"`
 			} `json:"plan_mode"`
@@ -95,6 +101,9 @@ func TestPlanModeSchemaMatchesTheLoader(t *testing.T) {
 	}
 	if properties.Role.Default != defaultPlanModeRole || strings.Join(properties.Role.Enum, ",") != "developer,system" {
 		t.Errorf("role schema = %+v", properties.Role)
+	}
+	if properties.ExecutePrompt.Default != DefaultPlanModeExecutePrompt || properties.ExecutePrompt.MaxLength != maxPlanModeInstructionBytes {
+		t.Errorf("execute_prompt schema = %+v", properties.ExecutePrompt)
 	}
 	if len(properties.AllowTools) == 0 || schema.Properties.PlanMode.AdditionalProperties {
 		t.Error("plan_mode schema has no allow_tools or allows other keys")

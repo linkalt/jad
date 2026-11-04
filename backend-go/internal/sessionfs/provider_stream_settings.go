@@ -8,13 +8,22 @@ const (
 	maxProviderStreamIdleTimeoutMS     = 3_600_000
 )
 
-var providerStreamKeys = []string{"idle_timeout_ms"}
+var providerStreamKeys = []string{"header_timeout_ms", "idle_timeout_ms"}
+
+const (
+	minProviderHeaderTimeoutMS = 1_000
+	maxProviderHeaderTimeoutMS = 3_600_000
+)
 
 // ProviderStreamSettings bounds a response stream that has stopped sending.
 type ProviderStreamSettings struct {
 	// IdleTimeoutMS is how long one provider call may go without a stream event before
 	// the run fails. 0 turns the guard off.
 	IdleTimeoutMS int64
+	// HeaderTimeoutMS is how long the provider may take to answer a request with its
+	// response headers. A request that hits it failed to open, so the provider_retry
+	// rules retry it. 0, the default, leaves it to the idle timeout.
+	HeaderTimeoutMS int64
 }
 
 // normalizeProviderStreamSettings reads the `provider_stream` node. Only an absent key
@@ -39,6 +48,13 @@ func normalizeProviderStreamSettings(raw json.RawMessage, settingPath string) (P
 			return ProviderStreamSettings{}, configError("%s: provider_stream.idle_timeout_ms must be 0 (off) or a safe integer between %d and %d", settingPath, minProviderStreamIdleTimeoutMS, maxProviderStreamIdleTimeoutMS)
 		}
 		settings.IdleTimeoutMS = configured
+	}
+	if value, exists := fields["header_timeout_ms"]; exists {
+		configured, ok := configSafeInteger(value)
+		if !ok || configured < 0 || configured > maxProviderHeaderTimeoutMS || (configured > 0 && configured < minProviderHeaderTimeoutMS) {
+			return ProviderStreamSettings{}, configError("%s: provider_stream.header_timeout_ms must be 0 (off) or a safe integer between %d and %d", settingPath, minProviderHeaderTimeoutMS, maxProviderHeaderTimeoutMS)
+		}
+		settings.HeaderTimeoutMS = configured
 	}
 	return settings, nil
 }

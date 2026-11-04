@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
@@ -57,6 +59,25 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	if err := ctx.Err(); err != nil {
 		return session.RunResult{}, err
 	}
+	if r.config.MaxRunDurationMS <= 0 {
+		return r.runLocked(ctx, input, options)
+	}
+	// The limit counts from here: a run waiting for the lock behind another has not
+	// started. When it ends the run, the run fails with a message naming the limit.
+	limit := time.Duration(r.config.MaxRunDurationMS) * time.Millisecond
+	limitErr := &session.RunDurationLimitError{Limit: limit}
+	runCtx, cancel := context.WithTimeoutCause(ctx, limit, limitErr)
+	defer cancel()
+	result, err := r.runLocked(runCtx, input, options)
+	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(runCtx), limitErr) {
+		return result, limitErr
+	}
+	return result, err
+}
+
+// runLocked is a run once the session's run lock is held.
+func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, options session.RunOptions) (session.RunResult, error) {
+	var err error
 	// Listing and reading a session never create its transcript directory; the first
 	// write of a run does, before the input is appended to the transcript.
 	if err := os.MkdirAll(filepath.Dir(r.config.MessagesPath), 0o755); err != nil {
@@ -77,6 +98,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	// credential): the message is not lost, and the next run repairs and continues
 	// from it. A run that gives up while waiting for the lock stores nothing.
 	// The prompt_submit commands run first: one that blocks leaves nothing stored.
+	if options.ExecutePlan {
+		if input, err = executePlanInput(input, r.config.PlanMode); err != nil {
+			return session.RunResult{}, err
+		}
+	}
 	if input, err = r.promptSubmitInput(ctx, input, options.TurnID, options.OnHookReport); err != nil {
 		return session.RunResult{}, err
 	}
@@ -101,6 +127,11 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 			return session.RunResult{}, fmt.Errorf("prepare the plan-mode tools: %w", err)
 		}
 		options.PlanPrompt = planModePrompt(r.config.PlanMode)
+	}
+	if options.Tools != nil {
+		if options.ToolCatalog, err = options.ToolCatalog.Only(options.Tools); err != nil {
+			return session.RunResult{}, fmt.Errorf("narrow the run's tools: %w", err)
+		}
 	}
 	options.ImageResizer = newImageResizer(r.config.ImageResize)
 	options.ImageStore = newImageStore(r.config.ImageStore)
@@ -305,6 +336,26 @@ func (r boundRunner) RecordRunError(entry transcript.RunErrorEntry) error {
 		return errors.New("bound session runner is not initialized")
 	}
 	return r.shared.store.RecordRunError(entry, r.config.Persistence.RunErrorCacheMaxEntries)
+}
+
+// executePlanInput is the input of a run that carries out a plan: plan_mode.execute_prompt,
+// then the person's own text, when there is any, on a new paragraph. The run route lets
+// only a text input (or none) through with execute_plan.
+func executePlanInput(input json.RawMessage, settings sessionfs.PlanModeSettings) (json.RawMessage, error) {
+	prompt := settings.ExecutePrompt
+	if prompt == "" {
+		prompt = sessionfs.DefaultPlanModeExecutePrompt
+	}
+	var text string
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &text); err != nil {
+			return nil, errors.New("execute_plan takes a text input")
+		}
+	}
+	if text = strings.TrimSpace(text); text != "" {
+		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + text
+	}
+	return json.Marshal(prompt)
 }
 
 // planModePrompt is the message a plan-mode run sends after the history. A configuration

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -479,5 +480,67 @@ func TestResourceCommandsReadTheResource(t *testing.T) {
 	stub.answers["POST /api/sessions/demo/mcp-resources/read"] = routeAnswer{502, `{"error":"MCP server docs: resource docs://readme has no text to insert"}`}
 	if _, _, err := read("/resource:docs:README"); err == nil || !strings.Contains(err.Error(), "has no text to insert") {
 		t.Fatalf("refused read: %v", err)
+	}
+}
+
+// A custom command's front matter fills the run's model, profile, plan mode and tools,
+// unless the request sets them itself.
+func TestCustomCommandRunOptions(t *testing.T) {
+	stub := newRouteStub(map[string]routeAnswer{
+		"GET /api/library":                    {200, `{"prompts":[],"templates":[],"skills":[],"commands":[{"id":"c1","kind":"command","command":"review","name":"review"}]}`},
+		"POST /api/library/command/c1/expand": {200, `{"command":"review","text":"Review main.go.","model":"openai/fast","profile":"dev/reviewer","plan":true,"allowed_tools":["read","grep"]}`},
+	})
+	runner := NewRunner(stub, "t")
+	sent := func(path string) map[string]any {
+		t.Helper()
+		var body map[string]any
+		if err := json.Unmarshal([]byte(stub.bodies["POST "+path]), &body); err != nil {
+			t.Fatalf("no run at %s: %v", path, stub.bodies)
+		}
+		return body
+	}
+	result, err := runner.Run(context.Background(), Request{Session: "demo", Input: "/review main.go", Commands: true})
+	if err != nil || !result.Plan || result.Profile != "dev/reviewer" || result.Model != "openai/fast" {
+		t.Fatalf("command with run options: %+v %v", result, err)
+	}
+	body := sent("/api/sessions/demo/run?profile=dev%2Freviewer")
+	if body["model"] != "openai/fast" || body["plan"] != true || fmt.Sprint(body["tools"]) != "[read grep]" {
+		t.Fatalf("run body = %v", body)
+	}
+
+	// What the request sets wins.
+	result, err = runner.Run(context.Background(), Request{Session: "demo", Profile: "dev/coder", Model: "openai/slow", Tools: []string{"glob"}, Input: "/review main.go", Commands: true})
+	if err != nil || result.Profile != "dev/coder" || result.Model != "openai/slow" {
+		t.Fatalf("request options: %+v %v", result, err)
+	}
+	body = sent("/api/sessions/demo/run?profile=dev%2Fcoder")
+	if body["model"] != "openai/slow" || body["plan"] != true || fmt.Sprint(body["tools"]) != "[glob]" {
+		t.Fatalf("run body with the request's options = %v", body)
+	}
+}
+
+// ExecutePlan sends execute_plan with the input as written, which may be empty, and does not
+// read it as a command; it cannot be combined with plan mode.
+func TestExecutePlan(t *testing.T) {
+	stub := newRouteStub(map[string]routeAnswer{})
+	runner := NewRunner(stub, "t")
+	result, err := runner.Run(context.Background(), Request{Session: "demo", ExecutePlan: true, Commands: true})
+	if err != nil || !result.ExecutePlan || result.Status != StatusCompleted {
+		t.Fatalf("execute plan: %+v %v", result, err)
+	}
+	if raw := stub.bodies["POST /api/sessions/demo/run"]; raw != `{"input":"","execute_plan":true}` {
+		t.Fatalf("run body = %s", raw)
+	}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo", ExecutePlan: true, Commands: true, Input: "/compact skip the tests"}); err != nil {
+		t.Fatal(err)
+	}
+	if input := stub.runInput(t, "/api/sessions/demo/run"); input != "/compact skip the tests" {
+		t.Fatalf("execute plan input = %q", input)
+	}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo", ExecutePlan: true, Plan: true}); err == nil {
+		t.Fatal("execute plan in plan mode was accepted")
+	}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo"}); err == nil {
+		t.Fatal("an empty prompt was accepted")
 	}
 }

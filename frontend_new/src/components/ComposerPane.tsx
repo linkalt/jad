@@ -2,12 +2,14 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {KeyboardEvent, ReactNode, SVGProps} from 'react';
 import {
   Badge,
+  Button,
   ChatComposer,
   ChatComposerInput,
   ChatSendButton,
   HStack,
   Icon,
   IconButton,
+  Token,
   useChatPasteAsToken,
 } from '@astryxdesign/core';
 import type {ChatComposerInputHandle} from '@astryxdesign/core/Chat';
@@ -35,6 +37,7 @@ import {
   fetchSessionMCPResources,
   type MCPPrompt,
   type MCPResource,
+  type CommandRunOptions,
   type RootLibraryCommand,
 } from '../api';
 import {
@@ -76,8 +79,29 @@ import {
   LINK_KEY,
 } from './composerMarkdown';
 
-/** How a message is sent: `plan` runs it in plan mode. */
-export type ComposerSubmitOptions = {plan: boolean};
+/**
+ * How a message is sent: `plan` runs it in plan mode; `model` and `tools` come from a
+ * custom command's front matter; `executePlan` carries out the plan the view ends with,
+ * and the text may then be empty.
+ */
+export type ComposerSubmitOptions = {
+  plan: boolean;
+  model?: string;
+  tools?: string[];
+  executePlan?: boolean;
+};
+
+/** The run options a picked custom command left for the view's next message. */
+type PendingCommandOptions = {command: string; model?: string; tools?: string[]};
+
+/** The token text of pending command options: the command, then what it sets. */
+export function commandOptionsLabel(pending: PendingCommandOptions): string {
+  const parts = [
+    ...(pending.model === undefined ? [] : [`model ${pending.model}`]),
+    ...(pending.tools === undefined ? [] : [`tools ${pending.tools.join(', ')}`]),
+  ];
+  return `/${pending.command}: ${parts.join(' · ')}`;
+}
 
 export type ComposerInsertActions = {
   text: (value: string) => void;
@@ -519,6 +543,35 @@ export function ComposerPane({
   const togglePlan = useCallback(() => {
     setPlanViews(current => ({...current, [draftKey]: current[draftKey] !== true}));
   }, [draftKey]);
+  // A custom command's model and tools ride on the view's next message, shown as a token
+  // the person can remove; its plan: true turns plan mode on.
+  const [commandOptionViews, setCommandOptionViews] = useState<Record<string, PendingCommandOptions>>({});
+  const pendingCommand = commandOptionViews[draftKey];
+  const clearPendingCommand = useCallback(() => {
+    setCommandOptionViews(current => {
+      if (current[draftKey] === undefined) return current;
+      const next = {...current};
+      delete next[draftKey];
+      return next;
+    });
+  }, [draftKey]);
+  const applyCommandOptions = useCallback(
+    (command: string, options: CommandRunOptions) => {
+      if (options.plan === true && isPlanModeEnabled) {
+        setPlanViews(current => ({...current, [draftKey]: true}));
+      }
+      if (options.model === undefined && options.tools === undefined) return;
+      setCommandOptionViews(current => ({
+        ...current,
+        [draftKey]: {
+          command,
+          ...(options.model === undefined ? {} : {model: options.model}),
+          ...(options.tools === undefined ? {} : {tools: options.tools}),
+        },
+      }));
+    },
+    [draftKey, isPlanModeEnabled],
+  );
 
   /**
    * The trigger menus. Rebuilt only when the session changes: the `@` menu now
@@ -659,15 +712,34 @@ export function ComposerPane({
       }
       const sentImages = attachments.images;
       const sentFiles = fileAttachments.images;
-      if (onSubmit(text, sentImages, sentFiles, {plan: isPlan})) {
+      const options: ComposerSubmitOptions = {
+        plan: isPlan,
+        ...(pendingCommand?.model === undefined ? {} : {model: pendingCommand.model}),
+        ...(pendingCommand?.tools === undefined ? {} : {tools: pendingCommand.tools}),
+      };
+      if (onSubmit(text, sentImages, sentFiles, options)) {
         historyCursorRef.current = IDLE_HISTORY;
         setDraft(draftKey, '');
         attachments.clear(sentImages);
         fileAttachments.clear(sentFiles);
+        clearPendingCommand();
       }
     },
-    [attachments, draftKey, fileAttachments, isDisabled, isPlan, onSubmit, setDraft],
+    [attachments, clearPendingCommand, draftKey, fileAttachments, isDisabled, isPlan, onSubmit, pendingCommand, setDraft],
   );
+
+  // Execute plan: the next message leaves plan mode and carries out the plan, with the
+  // draft's text, if any, after the server's execute prompt. Attachments stay in the draft.
+  const executePlan = useCallback(() => {
+    if (isDisabled) return;
+    const text = inputRef.current?.getValue() ?? value;
+    if (onSubmit(text, [], [], {plan: false, executePlan: true})) {
+      historyCursorRef.current = IDLE_HISTORY;
+      setDraft(draftKey, '');
+      setPlanViews(current => ({...current, [draftKey]: false}));
+      clearPendingCommand();
+    }
+  }, [clearPendingCommand, draftKey, isDisabled, onSubmit, setDraft, value]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (handleShiftEnter(event) || handleHistoryKey(event)) {
@@ -831,7 +903,10 @@ export function ComposerPane({
   // like a library prompt, as a badge named /<command> past the length rule.
   const insertCommand = (command: RootLibraryCommand, args: string) => {
     expandRootLibraryCommand(command.id, args).then(
-      text => insertPrompt(text, `/${command.command}`),
+      expanded => {
+        insertPrompt(expanded.text, `/${command.command}`);
+        applyCommandOptions(command.command, expanded.options);
+      },
       reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
     );
   };
@@ -1081,6 +1156,22 @@ export function ComposerPane({
                   onClick={togglePlan}
                 />
               ) : null}
+              {isPlan && !isRunning ? (
+                <Button
+                  label={appConfig.plan_mode_execute_label}
+                  isDisabled={isDisabled}
+                  variant="secondary"
+                  size="sm"
+                  onClick={executePlan}
+                />
+              ) : null}
+              {pendingCommand === undefined ? null : (
+                <Token
+                  size="sm"
+                  label={commandOptionsLabel(pendingCommand)}
+                  onRemove={clearPendingCommand}
+                />
+              )}
             </HStack>
           </HStack>
         }

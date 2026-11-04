@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -52,7 +53,8 @@ func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segm
 }
 
 // handleCommandExpand fills a custom command's text with {"arguments": "..."} and answers
-// {"command": ..., "text": ...}. It writes nothing.
+// {"command": ..., "text": ...} with the front matter's run options (model, profile, plan,
+// allowed_tools) when it sets them. It writes nothing.
 func (h *Handler) handleCommandExpand(w http.ResponseWriter, r *http.Request, id string) {
 	if h.library == nil {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "root library is unavailable"})
@@ -85,12 +87,21 @@ func (h *Handler) handleCommandExpand(w http.ResponseWriter, r *http.Request, id
 		writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "library item not found"})
 		return
 	}
+	if asset.Invalid != "" {
+		writeJSONError(w, &StatusError{Code: http.StatusUnprocessableEntity, Message: fmt.Sprintf("command /%s (%s): %s", asset.Command, asset.Source, asset.Invalid)})
+		return
+	}
 	text := contentlibrary.ExpandCommand(asset.Content, arguments)
 	if strings.TrimSpace(text) == "" {
 		writeJSONError(w, &StatusError{Code: http.StatusUnprocessableEntity, Message: "the command's text is empty"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"command": asset.Command, "text": text})
+	// The run options of the front matter come with the text, for the client to apply.
+	writeJSON(w, http.StatusOK, struct {
+		Command string `json:"command"`
+		Text    string `json:"text"`
+		contentlibrary.CommandOptions
+	}{Command: asset.Command, Text: text, CommandOptions: asset.CommandOptions})
 }
 
 func writeRootLibraryError(w http.ResponseWriter, err error) {

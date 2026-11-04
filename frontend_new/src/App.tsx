@@ -1669,11 +1669,13 @@ function App({
       value: string,
       images: readonly AttachedImage[],
       files: readonly AttachedFile[],
-      options: {plan?: boolean} = {},
+      options: {plan?: boolean; model?: string; tools?: string[]; executePlan?: boolean} = {},
     ) => {
       const trimmedValue = value.trim();
+      const executePlan = options.executePlan === true;
       if (
-        (!trimmedValue && images.length === 0 && files.length === 0) ||
+        // Carrying out a plan needs no text: the server sends its execute prompt.
+        (!trimmedValue && images.length === 0 && files.length === 0 && !executePlan) ||
         target.isRunning ||
         resettingViewKey === target.viewKey ||
         frontCompactingViewKey === target.viewKey ||
@@ -1691,7 +1693,10 @@ function App({
       const userMessage: MessageRecord = {
         id: `${sessionId}-user-${Date.now()}`,
         sender: 'user',
-        text: trimmedValue,
+        // The server stores the execute prompt itself; the echo names the action.
+        text: executePlan
+          ? [appConfig.plan_mode_execute_message, trimmedValue].filter(part => part !== '').join('\n\n')
+          : trimmedValue,
         timestamp: messageTime(),
         ...(images.length === 0 ? {} : {sentImages: images.map(image => image.dataUrl)}),
         ...(files.length === 0 ? {} : {sentFiles: files.map(file => file.name)}),
@@ -1714,9 +1719,12 @@ function App({
 
       const controller = new AbortController();
       runAbortRefs.current.set(sessionId, controller);
-      void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
+      void streamSessionRun(sessionRef, executePlan ? trimmedValue : buildRunInput(trimmedValue, images, files), {
         signal: controller.signal,
         ...(options.plan === true ? {plan: true} : {}),
+        ...(options.model === undefined ? {} : {model: options.model}),
+        ...(options.tools === undefined ? {} : {tools: options.tools}),
+        ...(executePlan ? {executePlan: true} : {}),
         ...(target.profile === undefined ? {} : {profile: target.profile}),
         onRun: run => recordRunStarted(sessionId, run.turn_id),
         onInteraction: (turnId, interaction) =>

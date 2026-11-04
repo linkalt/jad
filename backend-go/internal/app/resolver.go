@@ -553,13 +553,25 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 }
 
 // providerHTTPClient returns nil when nothing changes the default client: no OAuth, no
-// HTTP debug and the default network. The base transport is built once and shared by the
+// HTTP debug, no header timeout and the default network. The base transport is built once and shared by the
 // OAuth wrapper and the debug wrapper.
 func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *http.Client {
 	var httpClient *http.Client
 	var network http.RoundTripper = http.DefaultTransport
+	var base *http.Transport
 	if config.ProviderNetwork.Network != "" && config.ProviderNetwork.Network != "tcp" {
-		network = newNetworkTransport(config.ProviderNetwork.Network, providerDial)
+		base = newNetworkTransport(config.ProviderNetwork.Network, providerDial)
+	}
+	if config.ProviderStream.HeaderTimeoutMS > 0 {
+		// The wrappers below (OAuth, HTTP debug) and an in-process translator's own calls
+		// all go through this transport, so they all get the header timeout.
+		if base == nil {
+			base = http.DefaultTransport.(*http.Transport).Clone()
+		}
+		base.ResponseHeaderTimeout = time.Duration(config.ProviderStream.HeaderTimeoutMS) * time.Millisecond
+	}
+	if base != nil {
+		network = base
 		httpClient = &http.Client{Transport: network}
 	}
 	if config.Model.AuthMode == "openai_oauth" {

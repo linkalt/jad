@@ -134,6 +134,8 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 	writeAppLibraryFile(t, filepath.Join(workspace, "setting.json"), `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"command_dirs":["commands"]}}`)
 	writeAppLibraryFile(t, filepath.Join(workspace, "commands/git/commit.md"), "---\ndescription: Commit\nargument-hint: <message>\n---\nCommit with the message: $ARGUMENTS\n")
 	writeAppLibraryFile(t, filepath.Join(workspace, "commands/blank.md"), "$ARGUMENTS\n")
+	writeAppLibraryFile(t, filepath.Join(workspace, "commands/plan.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: read, grep\n---\nPlan $1.\n")
+	writeAppLibraryFile(t, filepath.Join(workspace, "commands/broken.md"), "---\nplan: maybe\n---\nBroken.\n")
 	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +154,8 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if len(catalog.Commands) != 2 || catalog.Commands[1].Command != "git:commit" || catalog.Commands[1].ArgumentHint != "<message>" || !catalog.Commands[1].TakesArguments {
+	// plan.md's word is a built-in's, so it is left out; broken.md is listed with its problem.
+	if len(catalog.Commands) != 3 || catalog.Commands[2].Command != "git:commit" || catalog.Commands[2].ArgumentHint != "<message>" || !catalog.Commands[2].TakesArguments || catalog.Commands[1].Invalid == "" {
 		t.Fatalf("commands = %+v", catalog.Commands)
 	}
 	post := func(id, body string, token string) (int, string) {
@@ -170,7 +173,7 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 		data, _ := io.ReadAll(response.Body)
 		return response.StatusCode, string(data)
 	}
-	commit, blank := catalog.Commands[1].ID, catalog.Commands[0].ID
+	commit, blank, broken := catalog.Commands[2].ID, catalog.Commands[0].ID, catalog.Commands[1].ID
 	if status, body := post(commit, `{"arguments":"fix the build"}`, integrationAPIToken); status != 200 || body != `{"command":"git:commit","text":"Commit with the message: fix the build"}`+"\n" {
 		t.Fatalf("expand = %d %s", status, body)
 	}
@@ -186,10 +189,31 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 		"not a string":  {commit, `{"arguments":1}`, integrationAPIToken, http.StatusBadRequest},
 		"unknown id":    {strings.Repeat("0", 64), `{}`, integrationAPIToken, http.StatusNotFound},
 		"empty text":    {blank, `{"arguments":"  "}`, integrationAPIToken, http.StatusUnprocessableEntity},
+		"bad options":   {broken, `{}`, integrationAPIToken, http.StatusUnprocessableEntity},
 	} {
 		if status, body := post(test.id, test.body, test.token); status != test.status {
 			t.Errorf("%s: %d %s, want %d", name, status, body, test.status)
 		}
+	}
+	if status, body := post(broken, `{}`, integrationAPIToken); !strings.Contains(body, `command /broken (broken.md): plan must be true or false, not \"maybe\"`) {
+		t.Fatalf("expand of a command with bad options = %d %s", status, body)
+	}
+	// The run options of the front matter come with the text.
+	writeAppLibraryFile(t, filepath.Join(workspace, "commands/review.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: read, grep\n---\nReview $1.\n")
+	response = getAppLibrary(t, server.URL+"/api/library", integrationAPIToken)
+	catalog = contentlibrary.Catalog{}
+	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	var review string
+	for _, command := range catalog.Commands {
+		if command.Command == "review" {
+			review = command.ID
+		}
+	}
+	if status, body := post(review, `{"arguments":"main.go"}`, integrationAPIToken); status != 200 || body != `{"command":"review","text":"Review main.go.","model":"openai/default","plan":true,"allowed_tools":["read","grep"]}`+"\n" {
+		t.Fatalf("expand with run options = %d %s", status, body)
 	}
 	// The asset route reads a command like any library item.
 	asset := getAppLibrary(t, server.URL+"/api/library/command/"+commit, integrationAPIToken)

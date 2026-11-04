@@ -72,3 +72,41 @@ func TestPlanModeKeepsReadOnlyToolsAndAllowEntries(t *testing.T) {
 		t.Fatalf("nil catalog: %v %v", planned, err)
 	}
 }
+
+// Only keeps the tools the entries cover, in catalog order; an entry that covers nothing
+// narrows nothing more, and an empty list keeps no tool.
+func TestOnlyNarrowsToTheEntries(t *testing.T) {
+	base := testTool(t)
+	reader := namedTool(t, base, "native.read", "read")
+	writer := namedTool(t, base, "native.write", "write")
+	search := namedTool(t, base, "mcp:docs:search", "mcp_docs_search")
+	search.Definition.Source = "mcp"
+	other := namedTool(t, base, "mcp:git:log", "mcp_git_log")
+	other.Definition.Source = "mcp"
+	catalog := newTestCatalog(t, reader, writer, search, other)
+	names := func(c *Catalog) string {
+		var names []string
+		for _, definition := range c.Definitions() {
+			names = append(names, definition.Name)
+		}
+		return strings.Join(names, ",")
+	}
+	for entries, want := range map[string]string{
+		"write,read":       "read,write",
+		"read,mcp:docs:*":  "read,mcp_docs_search",
+		"grep,mcp:git:log": "mcp_git_log",
+		"":                 "",
+	} {
+		list := []string{}
+		if entries != "" {
+			list = strings.Split(entries, ",")
+		}
+		narrowed, err := catalog.Only(list)
+		if err != nil || names(narrowed) != want {
+			t.Errorf("Only(%v) = %q, %v; want %q", list, names(narrowed), err, want)
+		}
+	}
+	if names(catalog) != "read,write,mcp_docs_search,mcp_git_log" {
+		t.Fatal("Only changed the receiver")
+	}
+}

@@ -30,9 +30,10 @@ test('the drawer pick is saved to the profile and the sessions are refreshed', (
   );
 });
 
-test('the run request passes no model', () => {
-  const run = app.match(/void streamSessionRun\(sessionRef, buildRunInput\([\s\S]*?onRun:/);
+test('the run request passes no model of the drawer: only a custom command\'s, for that message', () => {
+  const run = app.match(/void streamSessionRun\(sessionRef, [\s\S]*?onRun:/);
   assert.ok(run, 'streamSessionRun call found');
-  assert.ok(!/\bmodel\b/.test(run[0]), 'no model option in the run request');
+  const models = run[0].match(/\bmodel\b[^,\n]*/g) ?? [];
+  assert.deepEqual(models, ['model === undefined ? {} : {model: options.model})'], 'the only model is the submit option');
   assert.ok(!/\brunModel\b/.test(app), 'no runModel variable');
 });
