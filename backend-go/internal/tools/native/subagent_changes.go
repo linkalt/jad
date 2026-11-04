@@ -39,7 +39,7 @@ func (r *subagentRun) recordChange(path, action string, max int, maxBytes int64)
 // nothing for a run that is not allowed to change files, and for one that changed
 // none it says so, because "none" is also an answer.
 func changedInformation(run subagentRunView) []tools.Information {
-	information := changedFilesInformation(run)
+	information := append(changedFilesInformation(run), worktreeInformation(run)...)
 	if run.note != "" {
 		information = append(information, tools.Information{Key: "background_note", Value: run.note})
 	}
@@ -66,9 +66,14 @@ func changedFilesInformation(run subagentRunView) []tools.Information {
 	return information
 }
 
-// changedFilesText is the changed-file list of a run as one line, for the async handle's
-// summary and status. It is empty for a run that does not list files.
+// changedFilesText is the changed-file list of a run as one line, and the worktree branch
+// of an isolated run as a second, for the async handle's summary and status. It is empty
+// for a run that does neither.
 func changedFilesText(run subagentRunView) string {
+	return strings.TrimSpace(changedListText(run) + "\n" + worktreeText(run))
+}
+
+func changedListText(run subagentRunView) string {
 	if !run.tracked {
 		return ""
 	}

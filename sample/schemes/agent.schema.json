@@ -79,6 +79,12 @@
       "default": false,
       "description": "Send the newest state-context block stored for the session to this agent's child, in every request. A child collects none of its own. Nothing is sent when the session's statecontext is off or has no block yet."
     },
+    "isolation": {
+      "type": "string",
+      "enum": ["none", "worktree"],
+      "default": "none",
+      "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules and the agent's paths apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit."
+    },
     "timeout_ms": {
       "type": "integer",
       "minimum": 1000,

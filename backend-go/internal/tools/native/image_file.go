@@ -16,6 +16,7 @@ import (
 // the path is a stored-image reference. It returns a ready tool result on failure. A
 // non-empty label prefixes each message, so a call with several images names the part.
 func readImageFile(path string, policy sessionfs.NativePathPolicy, store *imagestore.Store, maxBytes int64, execution tools.ExecutionContext, label string) ([]byte, string) {
+	policy = workspacePolicy(policy, execution)
 	prefix := ""
 	if label != "" {
 		prefix = label + ": "

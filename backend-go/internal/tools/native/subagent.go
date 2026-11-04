@@ -99,9 +99,10 @@ type subagentAgent struct {
 
 // backgroundSafe reports whether a writer agent may run as a handle: the session turned
 // background_writers on, the async tool is there to collect the run, and the agent
-// has a tool that changes files.
+// has a tool that changes the session's files. An agent with isolation worktree is
+// handed off like a reader without it.
 func backgroundSafe(settings sessionfs.NativeSubagentSettings, agent subagentAgent, host *AsyncHost) bool {
-	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesFiles() {
+	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesWorkspace() {
 		return false
 	}
 	return true
@@ -472,8 +473,9 @@ func containsName(names []string, name string) bool {
 }
 
 // callMayChangeFiles is the tool's per-call answer to "can this call change files": it
-// can when the agent the call picks lists a tool that changes files. A call that picks
-// no agent, or only checks a run, cannot.
+// can when the agent the call picks lists a tool that changes files and works in the
+// session's own folder (an agent with isolation worktree changes only its worktree). A
+// call that picks no agent, or only checks a run, cannot.
 func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 	task, _ := arguments["task"].(string)
 	if strings.TrimSpace(task) == "" {
@@ -484,7 +486,7 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 		return false
 	}
 	agent, problem := s.selectAgent(arguments)
-	return problem == "" && agent.config.ChangesFiles()
+	return problem == "" && agent.config.ChangesWorkspace()
 }
 
 // subagentListText is the text appended to the manifest description: the agent list, or,
@@ -560,6 +562,8 @@ func changeMarker(agent sessionfs.NativeSubagentAgent, background bool) string {
 	switch {
 	case !agent.ChangesFiles():
 		return ""
+	case agent.Isolated():
+		return " [can change files in a git worktree of its own; its changes come back as a branch]"
 	case background:
 		return " [can change files; may run in the background]"
 	}

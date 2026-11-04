@@ -207,6 +207,7 @@ func executeNativeGlob(
 	settings sessionfs.NativeGlobSettings,
 	execution tools.ExecutionContext,
 ) string {
+	settings.Policy = workspacePolicy(settings.Policy, execution)
 	args := parseGlobArguments(arguments)
 	compiled, err := compileGlob(args.pattern)
 	if err != nil {

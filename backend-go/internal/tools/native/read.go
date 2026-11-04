@@ -261,6 +261,7 @@ func parseReadArgs(arguments map[string]any) (readArgs, error) {
 }
 
 func executeRead(arguments map[string]any, settings sessionfs.NativeReadSettings, execution tools.ExecutionContext) (string, error) {
+	settings.Policy = workspacePolicy(settings.Policy, execution)
 	args, err := parseReadArgs(arguments)
 	if err != nil {
 		return "", err

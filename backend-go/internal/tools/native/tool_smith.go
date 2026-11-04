@@ -120,6 +120,7 @@ func executeToolSmith(
 	execution tools.ExecutionContext,
 	host *AsyncHost,
 ) (string, error) {
+	settings.Child.Policy = workspacePolicy(settings.Child.Policy, execution)
 	callID := execution.CallID
 	if _, hasCode := arguments["code"]; !hasCode {
 		return executeToolSmithList(arguments, settings, execution), nil

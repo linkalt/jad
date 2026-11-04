@@ -190,6 +190,7 @@ func executeNativeExecAsync(
 	execution tools.ExecutionContext,
 	host *AsyncHost,
 ) (string, error) {
+	settings.Child.Policy = workspacePolicy(settings.Child.Policy, execution)
 	callID := execution.CallID
 	if !execGiven(arguments, "code") {
 		return executeExecList(arguments, settings, execution), nil

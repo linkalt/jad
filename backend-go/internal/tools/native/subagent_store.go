@@ -49,6 +49,9 @@ type subagentManifest struct {
 	Files        []subagentFileChange `json:"files,omitempty"`
 	FilesOmitted int                  `json:"files_omitted,omitempty"`
 	Tracked      bool                 `json:"tracked,omitempty"`
+	// Worktree is the git worktree of a run with isolation worktree: the branch that holds
+	// its changes. Absent for any other run.
+	Worktree *subagentWorktree `json:"worktree,omitempty"`
 	// Config is the fingerprint of the agent definition the run started with; see
 	// subagentFingerprint. Absent in a manifest written before it existed, and then no
 	// config note is made.

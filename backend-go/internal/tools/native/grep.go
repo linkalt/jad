@@ -106,6 +106,7 @@ func executeNativeGrep(
 	settings sessionfs.NativeGrepSettings,
 	execution tools.ExecutionContext,
 ) string {
+	settings.Policy = workspacePolicy(settings.Policy, execution)
 	args := parseGrepArguments(arguments)
 	root, pathError := resolveExistingTarget(args.path, execution.WorkspaceRoot, settings.Policy, execution.CallID)
 	if pathError != "" {

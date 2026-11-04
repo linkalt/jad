@@ -51,13 +51,13 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths", "auto_compaction", "compaction_trigger_tokens", "state_context"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -134,6 +134,8 @@ type NativeSubagentSettings struct {
 	ListMaxBytes int64
 	// StorageDir holds one transcript directory per child run.
 	StorageDir string
+	// Worktree configures the git worktrees of the agents with isolation worktree.
+	Worktree NativeSubagentWorktreeSettings
 	// StateContext bounds the run records copied into a compaction state-context
 	// snapshot when statecontext.tools lists subagent.
 	StateContext NativeSubagentStateContextSettings
@@ -212,6 +214,10 @@ type NativeSubagentAgent struct {
 	// Paths narrows where the agent's write and edit may change files; it never widens
 	// the session's own rules.
 	Paths NativeSubagentPaths
+	// Isolation is SubagentIsolationWorktree for an agent whose runs work in a git worktree
+	// of their own, and empty otherwise. It is left out of JSON when empty, so the
+	// fingerprint of an agent without it is what it was before the key existed.
+	Isolation string `json:",omitempty"`
 }
 
 // Agent returns the configured agent with the given name.
@@ -316,6 +322,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.StateContext, err = normalizeNativeSubagentStateContext(fields["statecontext"], settingPath); err != nil {
+		return nil, err
+	}
+	if settings.Worktree, err = normalizeNativeSubagentWorktree(fields["worktree"], cwd, settingPath); err != nil {
 		return nil, err
 	}
 	agentsRaw, hasAgents := fields["agents"]
@@ -532,6 +541,9 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 		return NativeSubagentAgent{}, configError("%s: %s.compaction_trigger_tokens has no effect when auto_compaction is false", settingPath, section)
 	}
 	if agent.StateContext, _, err = optionalSubagentBool(fields, "state_context", settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
+	if agent.Isolation, err = subagentIsolation(fields, agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	return agent, nil

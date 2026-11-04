@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jad/backend-go/internal/worktree"
 )
 
 // subagentTaskPreviewBytes bounds the task text kept per run for the run list.
@@ -364,6 +366,10 @@ type subagentRun struct {
 	// tracked is set when the run lists its changed files (changes and a non-zero
 	// changed_files_max); without it the result says nothing about files.
 	tracked bool
+	// isolated is set for a run of an agent with isolation worktree, and worktree is its
+	// worktree once it has one; see subagentWorktree.
+	isolated bool
+	worktree *subagentWorktree
 	// async reports the run to the async manager as a handle; nil for a run that is not one
 	// (a writer, or a session without the async tool).
 	async *subagentAsyncHandle
@@ -386,6 +392,8 @@ type subagentRunView struct {
 	files                          []subagentFileChange
 	filesOmitted                   int
 	tracked                        bool
+	isolated                       bool
+	worktree                       *subagentWorktree
 	note                           string
 	configNote                     string
 	resumedFrom                    string
@@ -403,7 +411,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, isolated: r.isolated, worktree: r.worktreeCopy(), note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -457,7 +465,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Session: r.session, Root: r.root, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig, Caller: r.caller,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Worktree: r.worktreeCopy(), Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig, Caller: r.caller,
 	}
 }
 
@@ -473,6 +481,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 		id: manifest.ID, owner: manifest.Owner, session: manifest.Session, root: manifest.Root, agent: manifest.Agent, task: manifest.Task,
 		timeoutMS: manifest.TimeoutMS, startedAt: manifest.StartedAt, endedAt: manifest.EndedAt,
 		cancel: cancel, ctx: ctx, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
+		isolated: manifest.Worktree != nil, worktree: manifest.Worktree,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
 		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, resumedConfig: manifest.ResumedConfig, caller: manifest.Caller,
 		configNote: configNoteFor(resumeStart{from: manifest.ResumedFrom, config: manifest.ResumedConfig}, manifest.Config),
@@ -532,6 +541,8 @@ type subagentStart struct {
 	maxPerSession int
 	// changes is set when the agent can change files; see subagentRun.changes.
 	changes bool
+	// worktree, when set, runs the child in a git worktree of its own.
+	worktree *subagentWorktreeStart
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
@@ -772,6 +783,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		task:          subagentTaskPreview(spec.request.Task),
 		timeoutMS:     spec.request.Agent.TimeoutMS,
 		changes:       spec.changes,
+		isolated:      spec.worktree != nil,
 		resultMax:     spec.resultMax,
 		note:          spec.note,
 		configNote:    spec.configNote,
@@ -828,6 +840,14 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 
 	childContext, cancel := context.WithTimeout(ctx, time.Duration(spec.request.Agent.TimeoutMS)*time.Millisecond)
 	defer cancel()
+	var tree *worktree.Tree
+	if spec.worktree != nil {
+		var err error
+		if tree, err = m.openWorktree(childContext, run, &spec); err != nil {
+			m.finish(run, subagentRunFailed, SubagentResult{}, boundedReason("the worktree could not be created: "+err.Error()), spec)
+			return
+		}
+	}
 	spec.request.OnTranscript = run.setDir
 	result, err := m.runLauncher(childContext, spec)
 	// The child is over, so nothing it started should go on: stop its processes before
@@ -839,17 +859,31 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 		stoppedHandles = spec.asyncHost.Manager().DeleteOwnersWithPrefix(run.id, "subagent_run_ended")
 	}
 	run.setProcessesStopped(max(stoppedHandles, stopRunProcesses(spec.processes, run.id)))
+	state, reason := subagentRunDone, ""
 	switch {
 	case err == nil:
-		m.finish(run, subagentRunDone, result, "", spec)
 	case ctx.Err() != nil:
 		// Stopped by the model or by shutdown, not by the child's own limit.
-		m.finish(run, subagentRunStopped, result, run.takeStopReason(), spec)
+		state, reason = subagentRunStopped, run.takeStopReason()
 	case childContext.Err() != nil:
-		m.finish(run, subagentRunTimedOut, result, "", spec)
+		state = subagentRunTimedOut
 	default:
-		m.finish(run, subagentRunFailed, result, boundedReason(err.Error()), spec)
+		state, reason = subagentRunFailed, boundedReason(err.Error())
 	}
+	// The worktree is committed once nothing of the child runs any more, whatever the
+	// end, so what it did is on its branch before the run is reported ended.
+	if tree != nil {
+		m.closeWorktree(run, tree)
+	}
+	m.finish(run, state, result, reason, spec)
+}
+
+func (r *subagentRun) worktreeCopy() *subagentWorktree {
+	if r.worktree == nil {
+		return nil
+	}
+	copied := *r.worktree
+	return &copied
 }
 
 // stopRunProcesses stops the processes a run's child started and returns how many it

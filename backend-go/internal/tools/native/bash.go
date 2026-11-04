@@ -122,6 +122,7 @@ func executeNativeBash(
 	apiKeyEnv string,
 	execution tools.ExecutionContext,
 ) string {
+	settings.Policy = workspacePolicy(settings.Policy, execution)
 	args := parseBashArguments(arguments)
 	commandText := strings.TrimSpace(args.command)
 	if commandText == "" {

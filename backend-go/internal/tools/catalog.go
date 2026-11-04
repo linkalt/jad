@@ -29,7 +29,11 @@ type ExecutionContext struct {
 	CallID        string
 	ToolName      string
 	WorkspaceRoot string
-	SessionDir    string
+	// WorkspaceOrigin, when set, is the session's own working directory and WorkspaceRoot
+	// is the same folder in a git worktree of it (a sub-agent with isolation worktree). Path
+	// rules written for the origin apply to the same paths in the worktree instead.
+	WorkspaceOrigin string
+	SessionDir      string
 	// SessionKey identifies the session and profile the call belongs to. A tool that
 	// keeps state beyond one call uses it to scope that state, so a user stop or a
 	// reset of this session reaches only its own state.

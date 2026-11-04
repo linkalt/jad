@@ -57,7 +57,9 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	result := subagentAsyncOutcome(run)
 	// The files a writer changed come first, so the summary's cut keeps them. The answer
 	// gives up what the files line takes, so the summary stays within the run's limit.
-	if files, _ := cutUTF8(changedFilesText(run), subagentAsyncFilesBytes); files != "" {
+	// The worktree line is not cut: it holds the branch name the parent needs whole.
+	files, _ := cutUTF8(changedListText(run), subagentAsyncFilesBytes)
+	if files = strings.TrimSpace(files + "\n" + worktreeText(run)); files != "" {
 		answer, _ := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
 		result.Summary = strings.TrimSpace(files + "\n" + answer)
 	}

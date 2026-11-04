@@ -86,6 +86,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
 	changes := agent.config.ChangesFiles()
+	// A run in a worktree of its own changes no file of the session, so it is scheduled
+	// like a read-only run: it may be a handle and needs no background writer place.
+	touches := agent.config.ChangesWorkspace()
 	depth := execution.AgentDepth
 	if s.depthExceeded(depth) {
 		return depthExceededError(callID), nil
@@ -95,7 +98,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	// session has a place left; otherwise it runs to its end inside this call, where the
 	// checkpoint belongs.
 	background, note := false, ""
-	if externalObserver(ctx) == nil && changes && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
+	if externalObserver(ctx) == nil && touches && agent.background && s.async != nil && execution.SessionKey != "" && depth == 0 {
 		if background = s.manager.reserveWriter(execution.SessionKey, int(s.settings.MaxBackgroundWriters)); !background {
 			note = fmt.Sprintf("Not handed off: the session already has %d background writer(s) going (tools.native.subagent.max_background_writers), so this call ran to its end", s.settings.MaxBackgroundWriters)
 		}
@@ -105,7 +108,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	asyncOwner, canHandle := handleOwner(execution)
 	var handle *subagentAsyncHandle
 	observe := externalObserver(ctx)
-	if observe == nil && s.async != nil && (!changes || background) && canHandle {
+	if observe == nil && s.async != nil && (!touches || background) && canHandle {
 		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task))
 	}
 	config, err := subagentFingerprint(agent.config, agent.catalog)
@@ -132,6 +135,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		maxPerRoot:     int(s.settings.MaxRunsPerRoot),
 		maxPerSession:  int(s.settings.MaxRunsPerSession),
 		changes:        changes,
+		worktree:       s.worktreeStart(agent.config, from),
 		note:           note,
 		configNote:     configNoteFor(from, config),
 		writerReserved: background,
@@ -181,6 +185,16 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		wait = s.blockFor(arguments, execution)
 	}
 	return s.await(ctx, callID, run, wait, handle == nil)
+}
+
+// worktreeStart is the worktree of a run of agent, or nil for an agent without isolation
+// worktree. A resume starts from the branch of the run it continues, when that run
+// changed something.
+func (s *subagentTool) worktreeStart(agent sessionfs.NativeSubagentAgent, from resumeStart) *subagentWorktreeStart {
+	if !agent.Isolated() {
+		return nil
+	}
+	return &subagentWorktreeStart{options: worktreeOptions(s.settings.Worktree), from: from.branch}
 }
 
 // depthExceeded reports whether a call at depth may not start a sub-agent, local or remote.
@@ -301,13 +315,16 @@ func changesNote(run subagentRunView) string {
 	if !run.changes {
 		return ""
 	}
+	if run.isolated {
+		return ". It worked in a git worktree of its own: what it changed is on the branch below, and the session's files are unchanged"
+	}
 	return ". It can change files, so some changes may already be made: check them before starting it again"
 }
 
 // backgroundWriterNote is added to the running result of a writer: it keeps changing files
 // after the turn ends, and the checkpoint of this turn does not cover that.
 func backgroundWriterNote(run subagentRunView) string {
-	if !run.changes {
+	if !run.changes || run.isolated {
 		return ""
 	}
 	return ". It can change files and goes on after this turn ends: do not edit the paths it works on until it ends, and what it changes after this turn is not in this turn's checkpoint"

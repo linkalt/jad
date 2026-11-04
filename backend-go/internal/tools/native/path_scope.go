@@ -12,6 +12,7 @@ import (
 // result allows a subset of what policy allowed. It is applied once, to a policy that
 // has no Within of its own: only this function sets it.
 func scopedPolicy(policy sessionfs.NativePathPolicy, execution tools.ExecutionContext) sessionfs.NativePathPolicy {
+	policy = workspacePolicy(policy, execution)
 	scope := execution.PathScope
 	if scope == nil {
 		return policy
@@ -54,6 +55,48 @@ func scopeRoot(workspaceRoot, entry string) string {
 		rest = filepath.Join(filepath.Base(existing), rest)
 		existing = parent
 	}
+}
+
+// workspacePolicy is the tool's policy for a call that runs in a git worktree of the
+// session's working directory (ExecutionContext.WorkspaceOrigin): a rule on a path inside
+// the origin applies to the same path inside the worktree instead. The rule no longer
+// reaches the origin, so an allow rule of the session does not let the worktree run change
+// the session's own checkout. Rules outside the origin are kept as they are. Without an
+// origin the policy is returned unchanged.
+func workspacePolicy(policy sessionfs.NativePathPolicy, execution tools.ExecutionContext) sessionfs.NativePathPolicy {
+	origin, root := execution.WorkspaceOrigin, execution.WorkspaceRoot
+	if origin == "" || root == "" || filepath.Clean(origin) == filepath.Clean(root) {
+		return policy
+	}
+	origins := []string{filepath.Clean(origin)}
+	if canonical := sessionfs.CanonicalRulePath(origin); canonical != origins[0] {
+		origins = append(origins, canonical)
+	}
+	moved := sessionfs.NativePathPolicy{
+		Paths:             make([]sessionfs.NativePathRule, 0, len(policy.Paths)),
+		UnrestrictedPaths: policy.UnrestrictedPaths,
+		Within:            make([]string, 0, len(policy.Within)),
+	}
+	for _, rule := range policy.Paths {
+		moved.Paths = append(moved.Paths, sessionfs.NativePathRule{Action: rule.Action, Path: movePath(origins, root, rule.Path)})
+	}
+	for _, entry := range policy.Within {
+		moved.Within = append(moved.Within, movePath(origins, root, entry))
+	}
+	return moved
+}
+
+// movePath puts path, when it lies inside one of origins, at the same place under root.
+func movePath(origins []string, root, path string) string {
+	for _, origin := range origins {
+		if !sessionfs.PathWithin(origin, path) {
+			continue
+		}
+		if relative, err := filepath.Rel(origin, filepath.Clean(path)); err == nil {
+			return filepath.Join(root, relative)
+		}
+	}
+	return path
 }
 
 func withinAny(roots []string, target string) bool {
