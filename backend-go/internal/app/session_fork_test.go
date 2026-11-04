@@ -199,3 +199,39 @@ func TestCopyStoredImagesCopiesOnlyNamedFilesOnce(t *testing.T) {
 		t.Fatalf("the same directory copied %d, %v", copied, err)
 	}
 }
+
+// A message id found in two turns, here the provider's repeated response id, names no
+// fork point: the fork is refused rather than cut at the first of them.
+func TestForkRefusesAMessageIDOfSeveralTurns(t *testing.T) {
+	f := newHeldResetFixture(t)
+	close(f.release)
+	for _, input := range []string{"first", "second"} {
+		f.runTurn("local:one", input)
+	}
+	status, body := f.call(http.MethodGet, "/api/sessions/local:one?profile=dev/coder", "")
+	var snapshot struct {
+		Messages []struct {
+			ID     string `json:"id"`
+			Sender string `json:"sender"`
+		} `json:"messages"`
+	}
+	if status != http.StatusOK || json.Unmarshal([]byte(body), &snapshot) != nil {
+		t.Fatalf("snapshot: %d %s", status, body)
+	}
+	var answers []string
+	for _, message := range snapshot.Messages {
+		if message.Sender == "assistant" {
+			answers = append(answers, message.ID)
+		}
+	}
+	if len(answers) != 2 || answers[0] != answers[1] {
+		t.Fatalf("the fixture's answers should share an id: %v", answers)
+	}
+	status, body = f.call(http.MethodPost, "/api/sessions/local:one/fork?profile=dev/coder", `{"session":"local:after","message_id":"`+answers[1]+`","keep_turn":true}`)
+	if status != http.StatusConflict || !strings.Contains(body, "several turns") {
+		t.Fatalf("fork at a repeated id: %d %s", status, body)
+	}
+	if _, err := os.Stat(filepath.Join(f.fixture.SessionsDir, "after.json")); !os.IsNotExist(err) {
+		t.Fatalf("a refused fork left a session file: %v", err)
+	}
+}

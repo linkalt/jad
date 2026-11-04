@@ -23,6 +23,7 @@ import {
   useAttachments,
   useImageAttachments,
 } from './ImageAttachments';
+import {WatchIcon} from './AppIcons';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
@@ -140,6 +141,9 @@ type ComposerPaneProps = {
   /** Whether the left data panel is open, and which dataset the toggle would open. */
   isPromptLibraryOpen: boolean;
   onTogglePromptLibrary: () => void;
+  /** The watched MCP resources panel; without the toggle the button is not shown. */
+  isResourcePanelOpen?: boolean;
+  onToggleResourcePanel?: () => void;
   /**
    * Hands the pane's insert function to the app, so a view outside the composer
    * (the prompt library) can load text into the active draft. Drafts have to
@@ -523,6 +527,8 @@ export function ComposerPane({
   onToggleInspector,
   isPromptLibraryOpen,
   onTogglePromptLibrary,
+  isResourcePanelOpen = false,
+  onToggleResourcePanel,
   onRegisterInsert,
   slashCommands,
   onSlashCommand,
@@ -1100,6 +1106,16 @@ export function ComposerPane({
                 size="sm"
                 onClick={onTogglePromptLibrary}
               />
+              {onToggleResourcePanel !== undefined ? (
+                <IconButton
+                  data-panel-toggle=""
+                  label={`${isResourcePanelOpen ? 'Hide' : 'Show'} watched resources`}
+                  icon={<Icon icon={WatchIcon} size="sm" />}
+                  variant={isResourcePanelOpen ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={onToggleResourcePanel}
+                />
+              ) : null}
               {toolbarActions}
             </HStack>
             <HStack align="center" gap={1}>

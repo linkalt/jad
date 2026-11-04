@@ -2034,15 +2034,17 @@ function App({
     activateView(pendingForkView);
   }, [activateView, listRows, pendingForkView]);
   const forkTargetsRef = useRef(new Map<string, {sessionRef: string; profile: string | undefined; title: string}>());
-  const forkHandlersRef = useRef(new Map<string, (message: MessageRecord) => void>());
-  const forkFromMessage = useCallback(async (paneKey: string, message: MessageRecord) => {
+  const forkHandlersRef = useRef(new Map<string, (message: MessageRecord, keepTurn: boolean) => void>());
+  // keepTurn false forks before a user message and puts its text in the new draft; true
+  // forks after the message's turn, with an empty draft.
+  const forkFromMessage = useCallback(async (paneKey: string, message: MessageRecord, keepTurn: boolean) => {
     const target = forkTargetsRef.current.get(paneKey);
     if (target === undefined) return;
     const newRef = forkSessionRef(target.sessionRef, appConfig.fork_session_suffix, Date.now());
     try {
-      const result = await forkSession(target.sessionRef, {session: newRef, messageId: message.id, keepTurn: false}, target.profile);
+      const result = await forkSession(target.sessionRef, {session: newRef, messageId: message.id, keepTurn}, target.profile);
       const nextKey = viewKey(result.session, target.profile === undefined ? undefined : result.profile);
-      const text = userMessageImages(message).text;
+      const text = keepTurn ? '' : userMessageImages(message).text;
       if (text !== '') pendingComposerTextRef.current.set(nextKey, text);
       setPendingForkView(nextKey);
       refreshSessionsRef.current?.();
@@ -2051,7 +2053,9 @@ function App({
         sessionTitle: result.session,
         kind: 'info',
         title: 'Conversation forked',
-        message: `${result.session} holds the ${result.turns} turn(s) before the message; its text is in the draft.`,
+        message: keepTurn
+          ? `${result.session} holds the ${result.turns} turn(s) through the end of that turn.`
+          : `${result.session} holds the ${result.turns} turn(s) before the message; its text is in the draft.`,
       });
     } catch (error) {
       recordNotification({
@@ -2066,8 +2070,8 @@ function App({
   const forkHandlerFor = useCallback((paneKey: string) => {
     let handler = forkHandlersRef.current.get(paneKey);
     if (handler === undefined) {
-      handler = (message: MessageRecord) => {
-        void forkFromMessage(paneKey, message);
+      handler = (message: MessageRecord, keepTurn: boolean) => {
+        void forkFromMessage(paneKey, message, keepTurn);
       };
       forkHandlersRef.current.set(paneKey, handler);
     }

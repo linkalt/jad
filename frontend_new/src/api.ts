@@ -14,6 +14,7 @@ import {parseHookReport, type HookReport} from './hook-report-view.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 import type {RunInputPart} from './image-attachments.ts';
 import {parseResourceAttachments, type MCPResourceAttachment} from './resource-attachments.ts';
+import {parseResourceEvents, type MCPResourceEvents} from './resource-watch.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -1204,6 +1205,45 @@ export async function fetchSessionMCPResource(
     throw new Error('the server returned invalid MCP resource data');
   }
   return {text: value.resource.text, attachments};
+}
+
+/**
+ * Subscribes to (on) or unsubscribes from one MCP resource of a session profile. A server
+ * that does not offer subscriptions, or that the profile reaches over HTTP, is refused
+ * with the server's reason.
+ */
+export async function setSessionMCPResourceWatch(
+  sessionId: string,
+  server: string,
+  uri: string,
+  on: boolean,
+  profile?: string,
+): Promise<void> {
+  const route = on ? 'subscribe' : 'unsubscribe';
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/${route}${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({server, uri})},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+/** The change notifications of a session profile's watched resources after `after`. */
+export async function fetchSessionMCPResourceEvents(
+  sessionId: string,
+  after: number,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<MCPResourceEvents> {
+  const query = new URLSearchParams({after: String(Math.max(0, Math.floor(after)))});
+  if (profile !== undefined && profile.length > 0) query.set('profile', profile);
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/events?${query.toString()}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const events = parseResourceEvents(await response.json());
+  if (events === null) throw new Error('the server returned invalid MCP resource event data');
+  return events;
 }
 
 /** The MCP prompts of a session profile, for the composer's `/` menu. */

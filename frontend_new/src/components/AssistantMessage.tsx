@@ -2,9 +2,11 @@ import {Avatar, ChatMessage, ChatMessageBubble, ChatMessageMetadata, ChatToolCal
 import {spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {type MessageRecord, type Session} from '../app-types';
+import appConfig from '../config.json';
 import {copyActionLabel, useCopyToClipboard} from '../copy-to-clipboard';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
 import {useRowWidth} from '../use-row-width';
+import {ForkIcon} from './AppIcons';
 import {MarkdownText} from './MarkdownText';
 import {ReasoningBlock, type WebUiContentPart, WebUiParts} from './TranscriptParts';
 
@@ -145,11 +147,14 @@ export function AssistantMessage({
   model,
   effort,
   onLoadFull,
+  onForkAfter,
 }: {
   message: MessageRecord;
   model?: Session['model'];
   effort?: string;
   onLoadFull?: (message: MessageRecord) => void | Promise<void>;
+  /** Forks the conversation through the end of this message's turn. */
+  onForkAfter?: () => void;
 }) {
   const [rowRef, rowWidthPx] = useRowWidth();
   const rowHeightRef = useRowHeightRef(message.id);
@@ -175,6 +180,16 @@ export function AssistantMessage({
                   <Text type="inherit" color="inherit">{message.timestamp}</Text>
                 ) : null}
                 <CopyMessageButton text={markdown} noun="as Markdown" />
+                {onForkAfter !== undefined ? (
+                  <IconButton
+                    label={appConfig.fork_after_message_label}
+                    tooltip={`${appConfig.fork_after_message_label}: a new session with the conversation through the end of this turn`}
+                    icon={<Icon icon={ForkIcon} size="xsm" color="secondary" />}
+                    variant="ghost"
+                    size="sm"
+                    onClick={onForkAfter}
+                  />
+                ) : null}
                 <DeliveryStatus status="delivered" />
               </HStack>
             }

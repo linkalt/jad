@@ -140,3 +140,24 @@ export function TrashIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+/** A broadcast mark: the MCP resources a conversation watches for changes. */
+export function WatchIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="1.75" />
+      <path d="M8.25 8.25a5.3 5.3 0 0 0 0 7.5" />
+      <path d="M15.75 8.25a5.3 5.3 0 0 1 0 7.5" />
+      <path d="M5.25 5.25a9.55 9.55 0 0 0 0 13.5" />
+      <path d="M18.75 5.25a9.55 9.55 0 0 1 0 13.5" />
+    </svg>
+  );
+}

@@ -29,3 +29,10 @@ test('forkSession reports the server error and a malformed answer', async () => 
   reply = () => new Response(JSON.stringify({session: 7}), {status: 201});
   await assert.rejects(forkSession('local:demo', {session: 'x'}), /invalid fork data/);
 });
+
+test('forkSession sends keep_turn true for a fork after an answer', async () => {
+  requests.length = 0;
+  reply = () => new Response(JSON.stringify({session: 'local:demo-fork-2', profile: 'dev/coder', turns: 3}), {status: 201});
+  await forkSession('local:demo', {session: 'local:demo-fork-2', messageId: 'resp_1', keepTurn: true});
+  assert.deepEqual(JSON.parse(requests[0].init.body), {session: 'local:demo-fork-2', message_id: 'resp_1', keep_turn: true});
+});

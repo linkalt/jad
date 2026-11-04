@@ -60,7 +60,8 @@ export const TranscriptRow = memo(
     isFrontCompactionSelected?: boolean;
     onSelectFrontCompaction?: (message: MessageRecord) => void;
     /** Forks the conversation before this message; only a message of the live transcript can be. */
-    onFork?: (message: MessageRecord) => void;
+    /** Forks the conversation at the message: before it (keepTurn false) or after its turn. */
+    onFork?: (message: MessageRecord, keepTurn: boolean) => void;
   }) {
     const rowHeightRef = useRowHeightRef(
       message.sender === 'assistant' ? null : message.id,
@@ -162,7 +163,7 @@ export const TranscriptRow = memo(
                         icon={<Icon icon={ForkIcon} size="xsm" color="secondary" />}
                         variant="ghost"
                         size="sm"
-                        onClick={() => onFork(message)}
+                        onClick={() => onFork(message, false)}
                       />
                     ) : null}
                     <DeliveryStatus status="read" />
@@ -176,7 +177,15 @@ export const TranscriptRow = memo(
       );
     }
 
-    return <AssistantMessage message={message} model={model} effort={effort} onLoadFull={onLoadFull} />;
+    return (
+      <AssistantMessage
+        message={message}
+        model={model}
+        effort={effort}
+        onLoadFull={onLoadFull}
+        onForkAfter={onFork === undefined || message.status === 'streaming' ? undefined : () => onFork(message, true)}
+      />
+    );
   },
   // The poll and the session list rebuild messages and models as fresh objects,
   // so fall back to a structural compare when identities differ.

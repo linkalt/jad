@@ -21,3 +21,22 @@ export function forkSessionRef(sourceRef: string, suffix: string, now: number): 
   const base = id.slice(0, Math.max(1, MAX_SESSION_ID - tail.length));
   return `${root}${base}${tail}`;
 }
+
+/** A transcript message id of the live history (not the compacted one) that starts a turn. */
+const LIVE_USER_MESSAGE_ID = /^session-user-o(0|[1-9][0-9]*)$/;
+
+/**
+ * The message a fork names. A fork after an answer's turn names the user message that started
+ * the turn: its id is the transcript offset, unique, where an answer's id is the provider's
+ * response id, which a provider may repeat. Without such a message before it, the answer
+ * itself.
+ */
+export function forkPointMessage<M extends {id: string; sender: string}>(messages: readonly M[], message: M, keepTurn: boolean): M {
+  if (!keepTurn || message.sender !== 'assistant') return message;
+  const index = messages.indexOf(message);
+  for (let at = index - 1; at >= 0; at--) {
+    const candidate = messages[at];
+    if (candidate.sender === 'user') return LIVE_USER_MESSAGE_ID.test(candidate.id) ? candidate : message;
+  }
+  return message;
+}
