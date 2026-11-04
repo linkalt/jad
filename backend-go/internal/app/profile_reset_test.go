@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // heldResetFixture is a session with a run whose provider answers only once release is
@@ -24,6 +25,8 @@ type heldResetFixture struct {
 	release chan struct{}
 	// reached is closed by the provider once the run has started its request.
 	reached chan struct{}
+	// fixture is the session layout the service was loaded from.
+	fixture layouttest.Fixture
 }
 
 func newHeldResetFixture(t *testing.T) *heldResetFixture {
@@ -59,7 +62,7 @@ func newHeldResetFixture(t *testing.T) *heldResetFixture {
 	})
 	spec := maintenanceSpec(map[string]any{}, "")
 	spec.Models = map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}}
-	config, _ := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
+	config, fixture := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -69,7 +72,7 @@ func newHeldResetFixture(t *testing.T) *heldResetFixture {
 		service.Close()
 		api.Close()
 	})
-	return &heldResetFixture{t: t, api: api, service: service, release: release, reached: reached}
+	return &heldResetFixture{t: t, api: api, service: service, release: release, reached: reached, fixture: fixture}
 }
 
 // startHeldRun starts a run and returns once the provider has been reached, so the run is

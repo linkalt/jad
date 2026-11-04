@@ -382,6 +382,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionCompact(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "reset":
 		h.handleSessionReset(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "fork":
+		h.handleSessionFork(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "front-compact":
 		h.handleSessionFrontCompact(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "statecontext":
