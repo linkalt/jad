@@ -23,6 +23,7 @@ var profileMessageInputSchema = json.RawMessage(`{
   "properties":{
     "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
     "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
+    "model":{"type":"string","description":"Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer before an id is returned; collect it with the async tool."}
   },
   "required":["profile","message"],
@@ -61,6 +62,12 @@ var ErrProfileStopped = errors.New("profile run was stopped")
 // ErrProfileUnknown is returned by a ProfileMessenger when the target session or profile
 // does not exist. The tool answers it exactly like a target its settings do not allow.
 var ErrProfileUnknown = errors.New("profile is unknown")
+
+// ProfileModelError is returned by a ProfileMessenger when the target profile cannot run the
+// model the call named: it does not list it, or the model does not offer the effort.
+type ProfileModelError struct{ Model, Message string }
+
+func (e *ProfileModelError) Error() string { return "model " + e.Model + ": " + e.Message }
 
 // ErrProfileSameTranscript is returned by a ProfileMessenger when the target profile
 // shares the calling profile's transcript, so the call can never succeed.
@@ -132,6 +139,9 @@ type ProfileMessageRequest struct {
 	Session string
 	Target  string
 	Message string
+	// Model is the model ID (optionally @<effort>) the target runs this message with; empty
+	// runs the target's model default.
+	Model string
 	// Compact asks for the target's transcript to be compacted before the run, once per
 	// caller run and target.
 	Compact bool
@@ -314,14 +324,14 @@ func normalizeProfileMessageArguments(arguments map[string]any) map[string]any {
 		copied["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 		arguments = copied
 	}
-	for _, key := range []string{"profile", "message"} {
+	for _, key := range []string{"profile", "message", "model"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue
 		}
 		if trimmed := strings.TrimSpace(value); trimmed == "" {
 			delete(arguments, key)
-		} else if key == "profile" {
+		} else if key != "message" {
 			arguments[key] = trimmed
 		}
 	}
@@ -332,7 +342,11 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	callID := execution.CallID
 	profile, _ := arguments["profile"].(string)
 	message, _ := arguments["message"].(string)
+	model, _ := arguments["model"].(string)
 	if _, _, isRemote := remote.Split(profile); isRemote {
+		if model != "" {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "model_unavailable", "A remote profile answers with its remote's own model; leave model out"), nil
+		}
 		return p.executeRemote(ctx, arguments, execution, profile, message)
 	}
 	session, target, allowed := p.localTarget(profile)
@@ -348,6 +362,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		Session:      session,
 		Target:       target,
 		Message:      message,
+		Model:        model,
 		Compact:      p.settings.Compact == sessionfs.ProfileMessageCompactOn,
 		CompactAfter: p.settings.CompactAfter,
 		QueueWait:    time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
@@ -366,6 +381,11 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	plan, err := p.messenger.Prepare(callCtx, request)
 	if errors.Is(err, ErrProfileUnknown) {
 		return p.unknownProfile(callID, profile), nil
+	}
+	var modelErr *ProfileModelError
+	if errors.As(err, &modelErr) {
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "model_unavailable",
+			fmt.Sprintf("Profile %s cannot answer with model %s: %s", profile, modelErr.Model, modelErr.Message)), nil
 	}
 	if err != nil {
 		return p.renderFailure(callID, profile, err, transcriptInformation(plan)...), nil

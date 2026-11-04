@@ -157,6 +157,9 @@ type SessionModelDefaultUpdate struct {
 	ModelOptions  []SessionModelOption `json:"model_options,omitempty"`
 	Model         SessionModelInfo     `json:"model"`
 	Changed       bool                 `json:"changed"`
+	// ProfileETag is the entity tag of the profile file after the update; a later update sends
+	// it back as If-Match, so a change made meanwhile (another tab, an editor) is refused.
+	ProfileETag string `json:"profile_etag,omitempty"`
 }
 
 type SessionFileListing struct {
@@ -167,7 +170,8 @@ type SessionFileListing struct {
 // SessionSettings is an optional filesystem-backed extension for session
 // profile/model changes and safe session-file suggestions.
 type SessionSettings interface {
-	UpdateModelDefault(context.Context, string, string, string) (SessionModelDefaultUpdate, error)
+	// UpdateModelDefault's last argument is the request's If-Match, empty when it sent none.
+	UpdateModelDefault(context.Context, string, string, string, string) (SessionModelDefaultUpdate, error)
 	ListSessionFiles(context.Context, string, string) (SessionFileListing, error)
 }
 

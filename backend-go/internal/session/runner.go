@@ -168,6 +168,10 @@ type RunOptions struct {
 	// PlanPrompt, when its Text is set, is sent after the history in every request of the
 	// run, with its Role; its After is ignored. It never reaches the transcript.
 	PlanPrompt StateContextPrompt
+	// Notes are sent after the history (and before PlanPrompt) in every request of the run,
+	// each with its Role; their After is ignored. They never reach the transcript. The
+	// MCP resource changes since the profile's last run are one.
+	Notes []StateContextPrompt
 }
 
 // PersistedInput records a user input that PersistInput already stored.
@@ -654,6 +658,14 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 		settings.TextFormat = options.OutputFormat
 	}
 	stateContext := options.StateContext
+	for _, note := range options.Notes {
+		if note.Text == "" {
+			continue
+		}
+		// The copy keeps the caller's slice as it is for the next round.
+		note.After = len(sentHistory)
+		stateContext = append(stateContext[:len(stateContext):len(stateContext)], note)
+	}
 	if options.PlanPrompt.Text != "" {
 		// Last, after the history and every state-context block: the copy keeps the
 		// caller's slice as it is for the next round.
@@ -669,6 +681,7 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 		"history_items":     len(history),
 		"has_state_context": len(options.StateContext) > 0,
 		"plan":              options.PlanPrompt.Text != "",
+		"notes":             len(options.Notes),
 		"tool_count":        len(responseTools),
 		"images_resized":    resizeStats.Resized,
 		"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,

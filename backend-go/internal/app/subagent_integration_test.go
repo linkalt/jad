@@ -450,6 +450,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 
 	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}}
+	// __profile_models replaces the models the profile lists, which a call's model may pick.
+	if models, ok := agentSetting["__profile_models"].([]string); ok {
+		spec.ProfileModels = models
+		delete(agentSetting, "__profile_models")
+	}
 	var mcpServerFile map[string]any
 	if mcp != nil {
 		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)

@@ -376,3 +376,21 @@ func TestProfileMessagePassesTheCompactSettingToTheMessenger(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileMessageModelReachesTheMessengerAndARefusalIsInvalidInput(t *testing.T) {
+	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
+	callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"reviewer","message":"check it","model":"  openai/large@high "}`)
+	if messenger.request.Model != "openai/large@high" {
+		t.Fatalf("model = %q", messenger.request.Model)
+	}
+	messenger = &fakeMessenger{prepareErr: &ProfileModelError{Model: "openai/huge", Message: "not listed"}}
+	output := callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"reviewer","message":"check it","model":"openai/huge"}`)
+	if !strings.Contains(output, "model_unavailable") || !strings.Contains(output, "Profile reviewer cannot answer with model openai/huge: not listed") {
+		t.Fatalf("output = %s", output)
+	}
+	messenger = &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
+	output = callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"remote:far/s/dev/coder","message":"x","model":"openai/large"}`)
+	if !strings.Contains(output, "model_unavailable") || messenger.request.Message != "" {
+		t.Fatalf("remote with a model: %s", output)
+	}
+}

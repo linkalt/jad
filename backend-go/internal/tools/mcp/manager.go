@@ -176,6 +176,8 @@ type Manager struct {
 	connectCtx     context.Context
 	cancelConnects context.CancelFunc
 	connects       sync.WaitGroup
+	// events keeps the servers' resource change notifications and subscriptions.
+	events resourceEvents
 }
 
 // NewManager creates a session-scoped MCP manager using the provided process
@@ -445,7 +447,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 
 	structuredCapture := newStructuredContentCapture()
 	transport = &structuredContentTransport{inner: transport, capture: structuredCapture}
-	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, nil)
+	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, m.clientOptions(server.ID, config.resourceEventsMax))
 	connectCtx, cancel := context.WithTimeout(ctx, config.timeout)
 	stopConnect := context.AfterFunc(m.connectCtx, cancel)
 	clientSession, err := client.Connect(connectCtx, transport, nil)
@@ -484,6 +486,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	}
 	m.connections[server.ID] = current
 	m.mu.Unlock()
+	m.resubscribe(ctx, current)
 	return current, nil
 }
 

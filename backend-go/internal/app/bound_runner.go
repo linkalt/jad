@@ -13,6 +13,7 @@ import (
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
+	mcpclient "jad/backend-go/internal/tools/mcp"
 	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
@@ -127,6 +128,9 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 			return session.RunResult{}, fmt.Errorf("prepare the plan-mode tools: %w", err)
 		}
 		options.PlanPrompt = planModePrompt(r.config.PlanMode)
+	}
+	if note := r.resourceChangesNote(); note.Text != "" {
+		options.Notes = append(options.Notes, note)
 	}
 	if options.Tools != nil {
 		if options.ToolCatalog, err = options.ToolCatalog.Only(options.Tools); err != nil {
@@ -370,4 +374,26 @@ func planModePrompt(settings sessionfs.PlanModeSettings) session.StateContextPro
 		prompt.Role = defaults.Role
 	}
 	return prompt
+}
+
+// resourceChangesNote tells the run what the profile's MCP servers reported changed since
+// its last run (resources it watches, resource lists); each change is told once. It is sent
+// in the model's prompt role and is not stored.
+func (r boundRunner) resourceChangesNote() session.StateContextPrompt {
+	if len(r.config.MCPServers) == 0 {
+		return session.StateContextPrompt{}
+	}
+	manager, err := r.resolver.sharedMCPManager(r.config)
+	if err != nil {
+		return session.StateContextPrompt{}
+	}
+	text := mcpclient.ResourceChangesNote(manager.TakeResourceChanges())
+	if text == "" {
+		return session.StateContextPrompt{}
+	}
+	role := r.config.Model.PromptRole
+	if role == "" {
+		role = "developer"
+	}
+	return session.StateContextPrompt{Role: role, Text: text}
 }

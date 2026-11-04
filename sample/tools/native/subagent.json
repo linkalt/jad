@@ -18,6 +18,10 @@
             "type": "string",
             "description": "Agent name. Optional when only one is configured."
           },
+          "model": {
+            "type": "string",
+            "description": "Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."
+          },
           "resume": {
             "type": "string",
             "description": "Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."

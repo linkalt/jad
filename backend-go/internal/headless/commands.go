@@ -229,7 +229,7 @@ func (r *Runner) expand(ctx context.Context, request Request, command Command) (
 	case CommandMCP:
 		text, rest, err = r.mcpPrompt(ctx, request, command)
 	case CommandResource:
-		text, rest, err = r.mcpResource(ctx, request, command)
+		text, rest, err = r.mcpResource(ctx, request, command, &options.attachments)
 	case CommandCustom:
 		// The arguments are part of the command's text, not a paragraph after it.
 		text, options, err = r.customCommandText(ctx, command)
@@ -243,6 +243,9 @@ func (r *Runner) expand(ctx context.Context, request Request, command Command) (
 	if rest == "" {
 		return text, options, nil
 	}
+	if strings.TrimSpace(text) == "" {
+		return rest, options, nil
+	}
 	return strings.TrimRight(text, "\n") + "\n\n" + rest, options, nil
 }
 
@@ -253,6 +256,8 @@ type commandOptions struct {
 	Profile      string   `json:"profile"`
 	Plan         bool     `json:"plan"`
 	AllowedTools []string `json:"allowed_tools"`
+	// attachments are the images and PDFs of a /resource command's resource.
+	attachments []Attachment
 }
 
 // apply sets what the request does not set itself: a --model, --profile or tool list the
@@ -491,7 +496,7 @@ type mcpResourceEntry struct {
 // A template's variables are name=value words at the start of the text, as a prompt's
 // arguments are; the rest of the text follows the resource. A URI the server does not
 // list (a resource it can read but does not list) is read as given.
-func (r *Runner) mcpResource(ctx context.Context, request Request, command Command) (string, string, error) {
+func (r *Runner) mcpResource(ctx context.Context, request Request, command Command, attachments *[]Attachment) (string, string, error) {
 	raw, err := r.call(ctx, http.MethodGet, r.sessionPath(request.Session, "mcp-resources", request.Profile), nil)
 	if err != nil {
 		return "", "", err
@@ -577,12 +582,14 @@ func (r *Runner) mcpResource(ctx context.Context, request Request, command Comma
 	}
 	var read struct {
 		Resource struct {
-			Text string `json:"text"`
+			Text        string       `json:"text"`
+			Attachments []Attachment `json:"attachments"`
 		} `json:"resource"`
 	}
 	if err := json.Unmarshal(raw, &read); err != nil {
 		return "", "", fmt.Errorf("read the MCP resource: %w", err)
 	}
+	*attachments = append(*attachments, read.Resource.Attachments...)
 	return read.Resource.Text, strings.TrimSpace(rest), nil
 }
 
@@ -748,10 +755,11 @@ func (r *Runner) runCommand(ctx context.Context, request *Request, command Comma
 	if err != nil {
 		return stopped(err)
 	}
-	if strings.TrimSpace(input) == "" {
+	if strings.TrimSpace(input) == "" && len(options.attachments) == 0 {
 		return Result{}, false, fmt.Errorf("/%s stands for an empty text", command.Word)
 	}
 	request.Input = input
+	request.Attachments = append(request.Attachments, options.attachments...)
 	options.apply(request)
 	if request.Timeout > 0 {
 		// The run has what the command left of the timeout.

@@ -63,8 +63,10 @@ func effortsField(fields map[string]json.RawMessage, path string) ([]string, err
 	return efforts, nil
 }
 
-// checkModelEffort reads the model file and refuses an effort it does not list in efforts.
+// CheckModelEffort reads the model file and refuses an effort it does not list in efforts.
 // An empty effort is not checked.
+func CheckModelEffort(modelPath, effort string) error { return checkModelEffort(modelPath, effort) }
+
 func checkModelEffort(modelPath, effort string) error {
 	if effort == "" {
 		return nil

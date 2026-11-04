@@ -94,3 +94,57 @@ func TestRunRouteHandsTheOutputFormatToTheRunner(t *testing.T) {
 	default:
 	}
 }
+
+// The server checks the final answer of a run sent with output_format: the completed event
+// carries the verdict, and a run without one carries none.
+func TestRunRouteChecksTheAnswerAgainstTheOutputFormat(t *testing.T) {
+	answers := make(chan string, 4)
+	runner := runnerFunc(func(_ context.Context, _ json.RawMessage, options session.RunOptions) (session.RunResult, error) {
+		text, _ := json.Marshal(<-answers)
+		event := json.RawMessage(`{"type":"response.completed","response":{"id":"resp_a","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + string(text) + `}]}]}}`)
+		return session.RunResult{TurnID: options.TurnID, Event: event}, nil
+	})
+	resolver := &fakeResolver{resolved: ResolvedSession{Reference: "canonical-check", Profile: "dev", Runner: runner}}
+	handler := testHandler(t, resolver, Config{APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 16 * 1024, RunStateRetention: time.Minute})
+	defer handler.Close()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	completedOutput := func(body, answer string) string {
+		t.Helper()
+		answers <- answer
+		request, _ := http.NewRequest(http.MethodPost, server.URL+"/api/sessions/session-check/run?profile=dev", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+testAPIToken)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		raw, _ := io.ReadAll(response.Body)
+		_, after, found := strings.Cut(string(raw), "event: completed\ndata: ")
+		if !found {
+			t.Fatalf("no completed event:\n%s", raw)
+		}
+		line, _, _ := strings.Cut(after, "\n")
+		var data struct {
+			Output json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(line), &data); err != nil {
+			t.Fatalf("%v: %s", err, line)
+		}
+		return string(data.Output)
+	}
+	const format = `{"input":"go","output_format":{"type":"json_schema","schema":{"type":"object","required":["a"],"properties":{"a":{"type":"integer"}}}}}`
+	if got := completedOutput(format, "```json\n{ \"a\": 1 }\n```"); got != `{"valid":true,"value":{"a":1}}` {
+		t.Fatalf("a matching answer: %s", got)
+	}
+	if got := completedOutput(format, `{"a":"x"}`); !strings.Contains(got, `"valid":false`) || !strings.Contains(got, "does not match the output schema") {
+		t.Fatalf("a mismatching answer: %s", got)
+	}
+	if got := completedOutput(format, "no json here"); got != `{"valid":false,"error":"the final answer is not JSON"}` {
+		t.Fatalf("an answer that is not JSON: %s", got)
+	}
+	if got := completedOutput(`{"input":"go"}`, "anything"); got != "" {
+		t.Fatalf("a run without output_format got a verdict: %s", got)
+	}
+}

@@ -52,5 +52,51 @@ func (r *Resolver) ReadMCPResource(ctx context.Context, reference, profile strin
 		}
 		return httpapi.MCPResourceText{}, err
 	}
-	return httpapi.MCPResourceText(read), nil
+	text := httpapi.MCPResourceText{Server: read.Server, URI: read.URI, MIMEType: read.MIMEType, Text: read.Text}
+	for _, attachment := range read.Attachments {
+		text.Attachments = append(text.Attachments, httpapi.MCPResourceAttachment(attachment))
+	}
+	return text, nil
+}
+
+// SubscribeMCPResource implements httpapi.SessionMCPResourceWatch: a server outside the
+// profile's toolsets is 404, a server that does not offer subscriptions or refuses is 502.
+func (r *Resolver) SubscribeMCPResource(ctx context.Context, reference, profile, server, uri string, on bool) error {
+	config, manager, err := r.promptSessionConfig(ctx, reference, profile)
+	if err != nil {
+		return err
+	}
+	if err := manager.SubscribeUserResource(ctx, config.MCPServers, config.WorkingDir, server, uri, on); err != nil {
+		var userErr *mcpclient.UserPromptError
+		if errors.As(err, &userErr) {
+			status := http.StatusBadGateway
+			switch {
+			case userErr.NotFound:
+				status = http.StatusNotFound
+			case userErr.Invalid:
+				status = http.StatusBadRequest
+			}
+			return &httpapi.StatusError{Code: status, Message: userErr.Message}
+		}
+		return err
+	}
+	return nil
+}
+
+// MCPResourceEvents implements httpapi.SessionMCPResourceWatch. Reading them does not mark
+// them told: the profile's next run still hears of them.
+func (r *Resolver) MCPResourceEvents(ctx context.Context, reference, profile string, after int64) (httpapi.MCPResourceEvents, error) {
+	_, manager, err := r.promptSessionConfig(ctx, reference, profile)
+	if err != nil {
+		return httpapi.MCPResourceEvents{}, err
+	}
+	events, latest, subscriptions := manager.ResourceEvents(after)
+	result := httpapi.MCPResourceEvents{Latest: latest}
+	for _, event := range events {
+		result.Events = append(result.Events, httpapi.MCPResourceEvent(event))
+	}
+	for _, subscription := range subscriptions {
+		result.Subscriptions = append(result.Subscriptions, httpapi.MCPResourceSubscription(subscription))
+	}
+	return result, nil
 }

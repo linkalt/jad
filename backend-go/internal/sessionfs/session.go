@@ -155,6 +155,8 @@ type SessionConfig struct {
 	ModelPath    string
 	// ModelPaths maps each model ID the profile may use to its file.
 	ModelPaths map[string]string
+	// ProfilePath is the selected profile's own file in a catalog-layout session; empty otherwise.
+	ProfilePath string
 	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
 	// applies it to the model's request.
 	ReasoningEffort string

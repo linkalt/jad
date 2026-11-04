@@ -171,6 +171,8 @@ func (s *profileQueueSet) pump(key string, q *targetQueue) {
 
 // profileMessagePlan is a message that passed every check and has not started.
 type profileMessagePlan struct {
+	// model is the model ID the target runs the message with; empty is its default.
+	model     string
 	resolver  *Resolver
 	starter   httpapi.ProfileRunStarter
 	key       string
@@ -202,6 +204,7 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 		Caller:    p.caller,
 		Chain:     p.chain,
 		Message:   p.message,
+		Model:     p.model,
 		Hops:      p.hops,
 		Wait:      wait,
 		BeforeRun: p.beforeRun,

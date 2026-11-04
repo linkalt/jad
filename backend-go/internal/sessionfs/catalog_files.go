@@ -57,6 +57,8 @@ type CatalogFileInfo struct {
 	// Category is the folder a session file sets to group its listing; empty for every other
 	// kind, whose category is the first part of the ID, and when unset.
 	Category string
+	// Efforts are the reasoning efforts a model file lists; nil for other kinds and when none.
+	Efforts []string
 	// scope is the profile selection of a session file, read for ProfileSessions; zero for other kinds.
 	scope catalog.Selection
 }
@@ -141,7 +143,11 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 		if err != nil {
 			return nil, configError("%s: could not be read: %v", entry.Path, err)
 		}
-		infos = append(infos, CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data), Name: fileDisplayName(data)})
+		info := CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data), Name: fileDisplayName(data)}
+		if kind == CatalogModels {
+			info.Efforts = fileEfforts(data)
+		}
+		infos = append(infos, info)
 	}
 	return infos, nil
 }
@@ -154,6 +160,18 @@ func fileDisplayName(data []byte) string {
 	}
 	_ = json.Unmarshal(data, &named)
 	return strings.TrimSpace(named.Name)
+}
+
+// fileEfforts is the efforts a model file lists, with the leniency of fileDisplayName: a list
+// that is not all strings counts as none, so the file is still listed.
+func fileEfforts(data []byte) []string {
+	var model struct {
+		Efforts []string `json:"efforts"`
+	}
+	if json.Unmarshal(data, &model) != nil || len(model.Efforts) == 0 {
+		return nil
+	}
+	return model.Efforts
 }
 
 // fileCategory is the trimmed "category" a session file sets, with the same leniency as fileDisplayName.

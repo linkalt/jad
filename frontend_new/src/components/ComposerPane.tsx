@@ -47,6 +47,7 @@ import {
   type SlashCommand,
   type SlashSelection,
 } from '../slash-commands';
+import {resourceAttachmentFiles} from '../resource-attachments';
 import {MCPPromptDialog} from './MCPPromptDialog';
 import {CommandArgumentsDialog} from './CommandArgumentsDialog';
 import {ResourceVariablesDialog} from './ResourceVariablesDialog';
@@ -889,10 +890,16 @@ export function ComposerPane({
   /** The MCP resource template whose variables the dialog is asking for. */
   const [variableResource, setVariableResource] = useState<MCPResource | null>(null);
   // An MCP resource is read by its server and inserted like a library prompt, as a badge
-  // named <server>:<resource> past the length rule.
+  // named <server>:<resource> past the length rule; its images and PDFs join the draft's
+  // attachments as a dropped file would, under the same limits.
   const insertResource = (resource: MCPResource, values: Record<string, string>) => {
     fetchSessionMCPResource(activeSessionId, resource, mcpResourceVariableValues(resource, values), activeProfile).then(
-      text => insertPrompt(text, `${resource.server}:${resource.name}`),
+      read => {
+        if (read.text.trim() !== '') insertPrompt(read.text, `${resource.server}:${resource.name}`);
+        const {images, files} = resourceAttachmentFiles(read.attachments, resource.name);
+        if (images.length > 0) void attachments.add(images);
+        if (files.length > 0) void fileAttachments.add(files);
+      },
       reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
     );
   };

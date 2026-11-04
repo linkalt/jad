@@ -18,6 +18,8 @@ type ModelDefaultUpdate struct {
 	Profiles      []string
 	ModelDefault  string
 	Changed       bool
+	// ETag is the strong entity tag of the profile file after the update (CatalogETag).
+	ETag string
 }
 
 func rawObject(raw json.RawMessage, path string) (map[string]json.RawMessage, error) {

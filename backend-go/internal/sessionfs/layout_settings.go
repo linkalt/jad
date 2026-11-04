@@ -61,6 +61,13 @@ func (e *ConflictError) Error() string { return e.Message }
 // order and indentation kept. When the file changes between the read and the write, nothing
 // is written and a ConflictError is returned.
 func SetLayoutModelDefault(location Location, profile, model string, durability string) (ModelDefaultUpdate, error) {
+	return SetLayoutModelDefaultIfMatch(location, profile, model, durability, "")
+}
+
+// SetLayoutModelDefaultIfMatch is SetLayoutModelDefault that first checks ifMatch, when set,
+// against the profile file's entity tag (CatalogETag): a file that changed since the client
+// read it is a CatalogPreconditionFailed error and is not written.
+func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability, ifMatch string) (ModelDefaultUpdate, error) {
 	layout := *location.Root.Layout
 	sessionPath := location.SettingFile()
 	model = strings.TrimSpace(model)
@@ -91,6 +98,9 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)
 	}
+	if ifMatch != "" && !IfMatchSatisfied(ifMatch, CatalogETag(contents)) {
+		return ModelDefaultUpdate{}, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("profile %q changed since it was read; read it again", profile)}
+	}
 	var file layoutProfileFile
 	if err := readLayoutFile(entry.Path, &file); err != nil {
 		return ModelDefaultUpdate{}, err
@@ -109,7 +119,7 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if err := checkModelEffort(modelEntry.Path, effort); err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	update := ModelDefaultUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model}
+	update := ModelDefaultUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model, ETag: CatalogETag(contents)}
 	if !update.Changed {
 		return update, nil
 	}
@@ -120,6 +130,7 @@ func SetLayoutModelDefault(location Location, profile, model string, durability 
 	if err := writeFileIfUnchanged(entry.Path, rewritten, before, durability == "strict"); err != nil {
 		return ModelDefaultUpdate{}, err
 	}
+	update.ETag = CatalogETag(rewritten)
 	return update, nil
 }
 

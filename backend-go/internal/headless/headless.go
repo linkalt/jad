@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jad/backend-go/internal/outputcheck"
 )
 
 // Run outcomes. They are the "status" of a Result and decide the exit code of "jad run".
@@ -63,6 +65,17 @@ type Request struct {
 	// the session's plan_mode.execute_prompt, followed by Input when it has text. Input may
 	// be empty, and is not read for commands.
 	ExecutePlan bool
+	// Attachments are images and PDFs sent with Input as parts of one message. A
+	// /resource command adds those of the resource it reads.
+	Attachments []Attachment
+}
+
+// Attachment is an image or a PDF sent with the input: Type "image", or "file" with a Name;
+// Data is base64 (or a data URL). It is a run input part as the run route reads it.
+type Attachment struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+	Data string `json:"data"`
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -185,14 +198,25 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		}
 		outputFormat = format
 	}
+	var input any = request.Input
+	if len(request.Attachments) > 0 {
+		parts := make([]any, 0, len(request.Attachments)+1)
+		if strings.TrimSpace(request.Input) != "" {
+			parts = append(parts, map[string]string{"type": "text", "text": request.Input})
+		}
+		for _, attachment := range request.Attachments {
+			parts = append(parts, attachment)
+		}
+		input = parts
+	}
 	body, err := json.Marshal(struct {
-		Input        string          `json:"input"`
+		Input        any             `json:"input"`
 		Model        string          `json:"model,omitempty"`
 		OutputFormat json.RawMessage `json:"output_format,omitempty"`
 		Plan         bool            `json:"plan,omitempty"`
 		Tools        []string        `json:"tools,omitempty"`
 		ExecutePlan  bool            `json:"execute_plan,omitempty"`
-	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan, Tools: request.Tools, ExecutePlan: request.ExecutePlan})
+	}{Input: input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan, Tools: request.Tools, ExecutePlan: request.ExecutePlan})
 	if err != nil {
 		return Result{}, err
 	}
@@ -246,6 +270,8 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 
 	var stopReason string
 	var streamed string
+	// serverVerdict is the server's check of the answer against the output schema.
+	var serverVerdict *outputcheck.Verdict
 	stop := func(reason string) {
 		if stopReason != "" {
 			return
@@ -303,6 +329,12 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 				}
 			case "completed":
 				result.Status = StatusCompleted
+				var checked struct {
+					Output *outputcheck.Verdict `json:"output"`
+				}
+				if json.Unmarshal(event.Data, &checked) == nil {
+					serverVerdict = checked.Output
+				}
 				if text, ok := messageText(event.Data); ok {
 					result.Text = text
 				} else {
@@ -326,7 +358,13 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 					result.Status = StatusFailed
 				}
 				if result.Status == StatusCompleted && request.Output != nil {
-					request.Output.check(&result)
+					// The server checks the answer against the schema it was sent; a server
+					// that gave no verdict is checked here the same way.
+					if serverVerdict != nil {
+						request.Output.apply(&result, *serverVerdict)
+					} else {
+						request.Output.check(&result)
+					}
 				}
 				result.DurationMS = time.Since(started).Milliseconds()
 				return result, nil

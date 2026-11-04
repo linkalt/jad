@@ -79,7 +79,7 @@ func TestAppLockHelperProcess(t *testing.T) {
 				fmt.Println("error:", err)
 				os.Exit(2)
 			}
-			_, err = resolver.UpdateModelDefault(ctx, "session-1", "dev/green", model)
+			_, err = resolver.UpdateModelDefault(ctx, "session-1", "dev/green", model, "")
 			release()
 			if err != nil {
 				fmt.Println("error:", err)

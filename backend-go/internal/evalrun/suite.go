@@ -98,14 +98,20 @@ type Case struct {
 	Checks []string `json:"checks,omitempty"`
 	// ExpectText are regular expressions the final answer must each match.
 	ExpectText []string `json:"expect_text,omitempty"`
-	Profile    string   `json:"profile,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	TimeoutMS  int64    `json:"timeout_ms,omitempty"`
+	// OutputSchema is a JSON Schema the final answer must match as JSON: the run sends it as
+	// output_format and the server checks the answer. OutputStrict sends it in strict mode;
+	// nil is true, as for jad run --output-schema.
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+	OutputStrict *bool           `json:"output_strict,omitempty"`
+	Profile      string          `json:"profile,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	TimeoutMS    int64           `json:"timeout_ms,omitempty"`
 	// Commands and Plan replace the suite's values for this case when set.
 	Commands *bool `json:"commands,omitempty"`
 	Plan     *bool `json:"plan,omitempty"`
 
 	expect []*regexp.Regexp
+	output *headless.OutputSchema
 }
 
 // defaultShell runs a command line with the POSIX shell.
@@ -252,8 +258,18 @@ func (s *Suite) normalize() error {
 			}
 			one.expect = append(one.expect, compiled)
 		}
-		if len(one.Checks) == 0 && len(one.ExpectText) == 0 {
-			return fmt.Errorf("case %q: give checks or expect_text, or the case cannot fail", one.Name)
+		if len(one.OutputSchema) > 0 {
+			strict := one.OutputStrict == nil || *one.OutputStrict
+			output, err := headless.NewOutputSchema(one.OutputSchema, "", strict)
+			if err != nil {
+				return fmt.Errorf("case %q: output_schema: %w", one.Name, err)
+			}
+			one.output = output
+		} else if one.OutputStrict != nil {
+			return fmt.Errorf("case %q: output_strict needs output_schema", one.Name)
+		}
+		if len(one.Checks) == 0 && len(one.ExpectText) == 0 && one.output == nil {
+			return fmt.Errorf("case %q: give checks, expect_text or output_schema, or the case cannot fail", one.Name)
 		}
 		if err := s.checkCommand(one); err != nil {
 			return fmt.Errorf("case %q: %w", one.Name, err)

@@ -13,6 +13,7 @@ import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
 import {parseHookReport, type HookReport} from './hook-report-view.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 import type {RunInputPart} from './image-attachments.ts';
+import {parseResourceAttachments, type MCPResourceAttachment} from './resource-attachments.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -228,6 +229,8 @@ export interface SessionSnapshot {
   /** Display name each profile file sets, by profile ID; a profile without one is absent. */
   profile_names?: Record<string, string>;
   model_default?: string;
+  /** The entity tag of the profile file the record was built for; the model-default route takes it as If-Match. */
+  profile_etag?: string;
   models?: string[];
   model_options?: unknown;
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
@@ -397,21 +400,43 @@ export async function fetchSession(
   );
 }
 
+/** A refused settings write. `status` 409 or 412 means the profile changed since it was read. */
+export class SettingsRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SettingsRequestError';
+    this.status = status;
+  }
+
+  get isConflict(): boolean {
+    return this.status === 409 || this.status === 412;
+  }
+}
+
+/**
+ * `ifMatch` is the profile's `profile_etag` as last read; the server then refuses the write
+ * (412) when the profile file changed since, instead of writing over that change.
+ */
 export async function updateSessionProfileModelDefault(
   sessionRef: string,
   modelDefault: string,
   profile?: string,
+  ifMatch?: string,
 ): Promise<SessionPathModelDefaultUpdate> {
+  const headers: Record<string, string> = {'content-type': 'application/json'};
+  if (ifMatch !== undefined && ifMatch !== '') headers['If-Match'] = ifMatch;
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default${profileQuery(profile)}`),
     {
       method: 'POST',
-      headers: {'content-type': 'application/json'},
+      headers,
       body: JSON.stringify({model_default: modelDefault}),
     },
   );
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new SettingsRequestError(response.status, await readError(response));
   }
   const value: unknown = await response.json();
   if (
@@ -979,6 +1004,41 @@ export async function frontCompactSessionFromMessage(
   };
 }
 
+export interface SessionForkResult {
+  session: string;
+  profile: string;
+  turns: number;
+}
+
+/**
+ * Copies the profile's conversation into a new session. With `messageId` the copy ends at the
+ * turn that holds that message: before it when `keepTurn` is false, so the new session can ask
+ * that turn's question again. The new session must not exist yet (412 otherwise).
+ */
+export async function forkSession(
+  sessionId: string,
+  options: {session: string; messageId?: string; keepTurn?: boolean},
+  profile?: string,
+): Promise<SessionForkResult> {
+  const body: Record<string, unknown> = {session: options.session};
+  if (options.messageId !== undefined) {
+    body.message_id = options.messageId;
+    if (options.keepTurn !== undefined) body.keep_turn = options.keepTurn;
+  }
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/fork${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.session !== 'string' || typeof value.profile !== 'string' || typeof value.turns !== 'number') {
+    throw new Error('the server returned invalid fork data');
+  }
+  return {session: value.session, profile: value.profile, turns: value.turns};
+}
+
 export async function resetSession(sessionId: string, profile?: string): Promise<void> {
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionId)}/reset${profileQuery(profile)}`),
@@ -1115,13 +1175,20 @@ export async function fetchSessionMCPResources(
   return {resources, failures: (value.failures ?? []) as MCPResourceList['failures']};
 }
 
-/** One MCP resource read as text: by its URI, or its template filled with the variables. */
+/** One MCP resource read: by its URI, or its template filled with the variables. */
+export interface MCPResourceRead {
+  /** The text contents; empty for a resource that only holds images or PDFs. */
+  text: string;
+  /** Its images and PDFs, base64, for the composer's attachments. */
+  attachments: MCPResourceAttachment[];
+}
+
 export async function fetchSessionMCPResource(
   sessionId: string,
   resource: MCPResource,
   variables: Readonly<Record<string, string>>,
   profile?: string,
-): Promise<string> {
+): Promise<MCPResourceRead> {
   const body =
     resource.uriTemplate !== undefined
       ? {server: resource.server, uri_template: resource.uriTemplate, variables}
@@ -1132,10 +1199,11 @@ export async function fetchSessionMCPResource(
   );
   if (!response.ok) throw new Error(await readError(response));
   const value: unknown = await response.json();
-  if (!isRecord(value) || !isRecord(value.resource) || typeof value.resource.text !== 'string') {
+  const attachments = isRecord(value) && isRecord(value.resource) ? parseResourceAttachments(value.resource.attachments) : null;
+  if (!isRecord(value) || !isRecord(value.resource) || typeof value.resource.text !== 'string' || attachments === null) {
     throw new Error('the server returned invalid MCP resource data');
   }
-  return value.resource.text;
+  return {text: value.resource.text, attachments};
 }
 
 /** The MCP prompts of a session profile, for the composer's `/` menu. */
@@ -2365,6 +2433,8 @@ export interface CatalogFileInfo {
   category?: string;
   /** The sessions whose scope selects this profile; set for profiles only. */
   sessions?: CatalogSessionRef[];
+  /** The reasoning efforts a model file lists; set for models only, absent when none. */
+  efforts?: string[];
 }
 
 export interface CatalogSessionRef {
@@ -2441,7 +2511,8 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
         (file.etag === undefined || typeof file.etag === 'string') &&
         (file.name === undefined || typeof file.name === 'string') &&
         (file.category === undefined || typeof file.category === 'string') &&
-        (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))),
+        (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))) &&
+        (file.efforts === undefined || (Array.isArray(file.efforts) && file.efforts.every(effort => typeof effort === 'string'))),
     )
   ) {
     throw new Error('the server returned an invalid catalog list');
@@ -2452,6 +2523,7 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
     ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
     ...(typeof file.category === 'string' && file.category.trim() !== '' ? {category: file.category.trim()} : {}),
     ...(Array.isArray(file.sessions) && file.sessions.length > 0 ? {sessions: (file.sessions as unknown[]).map(toSessionRef)} : {}),
+    ...(Array.isArray(file.efforts) && file.efforts.length > 0 ? {efforts: [...(file.efforts as string[])]} : {}),
   }));
 }
 

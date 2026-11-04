@@ -237,6 +237,8 @@ export type ViewPaneProps = {
   isFrontCompactionConfirmationOpen: boolean;
   frontCompactionTargetMessageId: string | undefined;
   onSelectFrontCompaction: ((message: MessageRecord) => void) | undefined;
+  /** Forks the conversation before a user message; absent while forking is not possible. */
+  onForkMessage?: ((message: MessageRecord) => void) | undefined;
   onLoadFull: (message: MessageRecord) => void;
   /** Fetches the turns before the oldest one this client holds, from the server. */
   onLoadOlderTurns: () => void;
@@ -300,6 +302,7 @@ export function ViewPane({
   isFrontCompactionConfirmationOpen,
   frontCompactionTargetMessageId,
   onSelectFrontCompaction,
+  onForkMessage,
   onLoadFull,
   onLoadOlderTurns,
   onFocus,
@@ -580,6 +583,7 @@ export function ViewPane({
                       onSelectFrontCompaction={isFrontCompactionSelectionMode
                         ? onSelectFrontCompaction
                         : undefined}
+                      onFork={isFrontCompactionSelectionMode ? undefined : onForkMessage}
                     />
                     {placedFailures.byMessageId.get(message.id)?.map(failure => (
                       <RunFailureRow key={failure.turn_id} failure={failure} />

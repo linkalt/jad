@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -85,8 +86,15 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	if starter == nil {
 		return nil, errors.New("profile messages are unavailable: the run registry is not set")
 	}
-	resolved, err := m.resolver.Resolve(ctx, targetReference, target, "")
+	resolved, err := m.resolver.Resolve(ctx, targetReference, target, request.Model)
 	if err != nil {
+		// Only a target that resolves without the model is refused for the model itself.
+		var status *httpapi.StatusError
+		if request.Model != "" && errors.As(err, &status) && (status.Code == http.StatusBadRequest || status.Code == http.StatusUnprocessableEntity) {
+			if _, plain := m.resolver.Resolve(ctx, targetReference, target, ""); plain == nil {
+				return nil, &native.ProfileModelError{Model: request.Model, Message: status.Message}
+			}
+		}
 		return nil, err
 	}
 	canonical := resolved.Profile
@@ -130,6 +138,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		callerRef: callerRef,
 		chain:     chain,
 		message:   request.Message,
+		model:     request.Model,
 		timeout:   request.Timeout,
 		queueWait: request.QueueWait,
 		maxQueued: request.MaxQueued,

@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -40,12 +42,62 @@ type UserResourceList struct {
 	Failures  []UserPromptFailure `json:"failures,omitempty"`
 }
 
-// UserResourceText is a resource read as text for the draft.
+// UserResourceText is a resource read for the draft: its text, and the binary contents a
+// message can carry (images, PDFs) as attachments.
 type UserResourceText struct {
-	Server   string `json:"server"`
+	Server      string                   `json:"server"`
+	URI         string                   `json:"uri"`
+	MIMEType    string                   `json:"mime_type,omitempty"`
+	Text        string                   `json:"text"`
+	Attachments []UserResourceAttachment `json:"attachments,omitempty"`
+}
+
+// UserResourceAttachment is one binary content of a resource, ready to send as a run input
+// part: Type "image" (PNG, JPEG, GIF, WebP) or "file" (PDF, with a file Name); Data is base64.
+type UserResourceAttachment struct {
+	Type     string `json:"type"`
 	URI      string `json:"uri"`
-	MIMEType string `json:"mime_type,omitempty"`
-	Text     string `json:"text"`
+	MIMEType string `json:"mime_type"`
+	Name     string `json:"name,omitempty"`
+	Data     string `json:"data"`
+}
+
+// attachableImageTypes are the image types a run input part accepts.
+var attachableImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+// attachmentFor is the attachment a binary content becomes, or false for a type a message
+// cannot carry, which stays a note in the text.
+func attachmentFor(content *mcpSDK.ResourceContents) (UserResourceAttachment, bool) {
+	mimeType := strings.ToLower(strings.TrimSpace(strings.Split(content.MIMEType, ";")[0]))
+	attachment := UserResourceAttachment{URI: content.URI, MIMEType: mimeType, Data: base64.StdEncoding.EncodeToString(content.Blob)}
+	switch {
+	case attachableImageTypes[mimeType]:
+		attachment.Type = "image"
+	case mimeType == "application/pdf":
+		attachment.Type, attachment.Name = "file", attachmentFileName(content.URI)
+	default:
+		return UserResourceAttachment{}, false
+	}
+	return attachment, true
+}
+
+var unsafeFileNameCharacters = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// attachmentFileName is the last part of a PDF resource's URI as a plain file name ending in .pdf.
+func attachmentFileName(uri string) string {
+	name := uri
+	if index := strings.LastIndexAny(name, "/:"); index >= 0 {
+		name = name[index+1:]
+	}
+	name, _, _ = strings.Cut(name, "?")
+	name = strings.Trim(unsafeFileNameCharacters.ReplaceAllString(name, "_"), "._")
+	if name == "" {
+		name = "resource"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".pdf") {
+		name += ".pdf"
+	}
+	return name
 }
 
 // UserResourceRead names the resource to read: URI, or URITemplate filled with Variables.
@@ -223,9 +275,10 @@ func uniqueNames(names []string) []string {
 	return unique
 }
 
-// ReadUserResource reads one resource of a server with resources: true as text: the text
-// contents joined by blank lines, and a note for each binary one. A resource with no text
-// at all, or with more text than the server's max_result_bytes, is refused.
+// ReadUserResource reads one resource of a server with resources: true: the text contents
+// joined by blank lines, each image or PDF content as an attachment, and a note for any other
+// binary one. A resource with neither text nor an attachment, or whose text and attachments
+// add up to more than the server's max_result_bytes, is refused.
 func (m *Manager) ReadUserResource(ctx context.Context, servers []sessionfs.MCPServerReference, cwd string, request UserResourceRead) (UserResourceText, error) {
 	if ctx == nil {
 		return UserResourceText{}, errors.New("MCP resource context is required")
@@ -260,7 +313,8 @@ func (m *Manager) ReadUserResource(ctx context.Context, servers []sessionfs.MCPS
 		return UserResourceText{}, &UserPromptError{Message: fmt.Sprintf("MCP server %s: resource %s: %s", server.ID, uri, userRequestError(err, current))}
 	}
 	parts := make([]string, 0, len(contents))
-	hasText, mimeType := false, ""
+	var attachments []UserResourceAttachment
+	hasText, mimeType, size := false, "", 0
 	for _, content := range contents {
 		if content == nil {
 			continue
@@ -273,16 +327,24 @@ func (m *Manager) ReadUserResource(ctx context.Context, servers []sessionfs.MCPS
 			parts = append(parts, content.Text)
 			continue
 		}
+		if attachment, ok := attachmentFor(content); ok {
+			attachments = append(attachments, attachment)
+			size += len(content.Blob)
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("[resource %s (%s) not inserted]", content.URI, content.MIMEType))
 	}
-	if !hasText {
-		return UserResourceText{}, &UserPromptError{Message: fmt.Sprintf("MCP server %s: resource %s has no text to insert", server.ID, uri)}
+	if !hasText && len(attachments) == 0 {
+		return UserResourceText{}, &UserPromptError{Message: fmt.Sprintf("MCP server %s: resource %s has no text, image or PDF to insert", server.ID, uri)}
 	}
-	text := strings.Join(parts, "\n\n")
-	if len(text) > current.maxResultBytes {
-		return UserResourceText{}, &UserPromptError{Message: fmt.Sprintf("MCP server %s: resource %s is %d bytes, more than the server's max_result_bytes (%d)", server.ID, uri, len(text), current.maxResultBytes)}
+	text := ""
+	if hasText {
+		text = strings.Join(parts, "\n\n")
 	}
-	return UserResourceText{Server: server.ID, URI: uri, MIMEType: mimeType, Text: text}, nil
+	if size += len(text); size > current.maxResultBytes {
+		return UserResourceText{}, &UserPromptError{Message: fmt.Sprintf("MCP server %s: resource %s is %d bytes, more than the server's max_result_bytes (%d)", server.ID, uri, size, current.maxResultBytes)}
+	}
+	return UserResourceText{Server: server.ID, URI: uri, MIMEType: mimeType, Text: text, Attachments: attachments}, nil
 }
 
 // resourceURI is the request's URI, or its template filled with the variables. Every

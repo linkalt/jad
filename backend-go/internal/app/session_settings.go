@@ -11,7 +11,7 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedProfile, modelDefault string) (httpapi.SessionModelDefaultUpdate, error) {
+func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedProfile, modelDefault, ifMatch string) (httpapi.SessionModelDefaultUpdate, error) {
 	if err := requireSettingsContext(ctx); err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, err
 	}
@@ -49,7 +49,7 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	update, err := sessionfs.SetLayoutModelDefault(location, profile, modelDefault, settings.Persistence.Durability)
+	update, err := sessionfs.SetLayoutModelDefaultIfMatch(location, profile, modelDefault, settings.Persistence.Durability, ifMatch)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
@@ -67,7 +67,8 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 			Provider: selected.Model.Provider,
 			Model:    selected.Model.Name,
 		},
-		Changed: update.Changed,
+		Changed:     update.Changed,
+		ProfileETag: update.ETag,
 	}, nil
 }
 
@@ -118,6 +119,10 @@ func mapProfileSettingsError(err error) error {
 	var conflictErr *sessionfs.ConflictError
 	if errors.As(err, &conflictErr) {
 		return &httpapi.StatusError{Code: http.StatusConflict, Message: conflictErr.Message}
+	}
+	var catalogErr *sessionfs.CatalogError
+	if errors.As(err, &catalogErr) && catalogErr.Kind == sessionfs.CatalogPreconditionFailed {
+		return &httpapi.StatusError{Code: http.StatusPreconditionFailed, Message: catalogErr.Message}
 	}
 	var clientErr *sessionfs.ClientError
 	if errors.As(err, &clientErr) {

@@ -1,4 +1,4 @@
-import {Avatar, ChatMessage, ChatMessageBubble, ChatMessageMetadata, ChatSystemMessage, HStack, Icon, Text, VStack} from '@astryxdesign/core';
+import {Avatar, ChatMessage, ChatMessageBubble, ChatMessageMetadata, ChatSystemMessage, HStack, Icon, IconButton, Text, VStack} from '@astryxdesign/core';
 import {type CSSProperties, memo} from 'react';
 import {type MessageRecord, type Session} from '../app-types';
 import appConfig from '../config.json';
@@ -6,6 +6,7 @@ import {deepEqual} from '../deepEqual';
 import {userMessageImages} from '../image-attachments';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
 import {AssistantMessage, CopyMessageButton, DeliveryStatus} from './AssistantMessage';
+import {ForkIcon} from './AppIcons';
 import {SentFiles} from './FileAttachments';
 import {SentImages} from './ImageAttachments';
 import {MarkdownText} from './MarkdownText';
@@ -49,6 +50,7 @@ export const TranscriptRow = memo(
     isFrontCompactionSelectable = false,
     isFrontCompactionSelected = false,
     onSelectFrontCompaction,
+    onFork,
   }: {
     message: MessageRecord;
     model: Session['model'] | undefined;
@@ -57,6 +59,8 @@ export const TranscriptRow = memo(
     isFrontCompactionSelectable?: boolean;
     isFrontCompactionSelected?: boolean;
     onSelectFrontCompaction?: (message: MessageRecord) => void;
+    /** Forks the conversation before this message; only a message of the live transcript can be. */
+    onFork?: (message: MessageRecord) => void;
   }) {
     const rowHeightRef = useRowHeightRef(
       message.sender === 'assistant' ? null : message.id,
@@ -151,6 +155,16 @@ export const TranscriptRow = memo(
                       <Text type="inherit" color="inherit">{message.timestamp}</Text>
                     ) : null}
                     <CopyMessageButton text={userImages.text} noun="message" />
+                    {onFork !== undefined && isActiveTranscriptUserMessage(message) ? (
+                      <IconButton
+                        label={appConfig.fork_message_label}
+                        tooltip={`${appConfig.fork_message_label}: a new session with the conversation before this message`}
+                        icon={<Icon icon={ForkIcon} size="xsm" color="secondary" />}
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onFork(message)}
+                      />
+                    ) : null}
                     <DeliveryStatus status="read" />
                   </HStack>
                 }
@@ -172,5 +186,6 @@ export const TranscriptRow = memo(
     previous.effort === next.effort &&
     previous.isFrontCompactionSelectable === next.isFrontCompactionSelectable &&
     previous.isFrontCompactionSelected === next.isFrontCompactionSelected &&
-    previous.onSelectFrontCompaction === next.onSelectFrontCompaction,
+    previous.onSelectFrontCompaction === next.onSelectFrontCompaction &&
+    previous.onFork === next.onFork,
 );

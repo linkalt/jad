@@ -390,6 +390,10 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleMCPResourceList(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-resources" && segments[4] == "read":
 		h.handleMCPResourceRead(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-resources" && (segments[4] == "subscribe" || segments[4] == "unsubscribe"):
+		h.handleMCPResourceSubscribe(w, r, reference, profile, segments[4] == "subscribe")
+	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "mcp-resources" && segments[4] == "events":
+		h.handleMCPResourceEvents(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "model-default":
@@ -485,6 +489,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
 	run.outputFormat = body.OutputFormat
+	run.outputValidator = outputFormatValidator(body.OutputFormat)
 	run.plan, run.tools, run.executePlan = body.Plan, body.Tools, body.ExecutePlan
 	h.attachContentCache(run)
 	queue := run.subscribe()

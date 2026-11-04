@@ -290,6 +290,7 @@ func runAttempt(ctx context.Context, suite *Suite, runner Runner, root Root, sta
 		Timeout:  time.Duration(suite.timeoutOf(c)) * time.Millisecond,
 		Commands: suite.commandsOf(c),
 		Plan:     suite.planOf(c),
+		Output:   c.output,
 	})
 	if err != nil {
 		result.Outcome, result.Reason = OutcomeError, err.Error()
@@ -299,7 +300,11 @@ func runAttempt(ctx context.Context, suite *Suite, runner Runner, root Root, sta
 	_ = os.WriteFile(answerFile, []byte(run.Text), 0o600)
 
 	reasons := []string{}
-	if run.Status != headless.StatusCompleted {
+	switch run.Status {
+	case headless.StatusCompleted:
+	case headless.StatusInvalidOutput:
+		reasons = append(reasons, run.Error)
+	default:
 		reasons = append(reasons, "run "+run.Status)
 	}
 	for _, line := range c.Checks {

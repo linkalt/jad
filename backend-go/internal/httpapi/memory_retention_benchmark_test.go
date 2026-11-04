@@ -55,7 +55,7 @@ func finishedRun(b *testing.B, registry *runRegistry, key string, parts, bytesPe
 	}
 	message.Status = "complete"
 	run.setCommittedMessage(message)
-	terminal, err := encodeTerminalEvents(message)
+	terminal, err := encodeTerminalEvents(message, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

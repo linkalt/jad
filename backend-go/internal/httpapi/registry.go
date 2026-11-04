@@ -287,6 +287,8 @@ type activeRun struct {
 	// outputFormat is the text.format the run's requests send, nil for none. Set before
 	// the run starts and read on the run's goroutine.
 	outputFormat json.RawMessage
+	// outputValidator checks the final answer against outputFormat's schema; nil for none.
+	outputValidator *tools.SchemaValidator
 	// plan starts the run in plan mode, tools narrows its tools (nil: all of them) and
 	// executePlan puts plan_mode.execute_prompt before its input. Set before the run starts.
 	plan        bool

@@ -129,6 +129,8 @@ export interface CatalogRow extends Record<string, unknown> {
   sessions: string;
   category: string;
   name: string;
+  /** The reasoning efforts a model file lists, comma separated; empty for other kinds. */
+  efforts: string;
   /**
    * The version the file had when it was listed. A row delete carries it, so the
    * server refuses the delete when the file changed after the list was read.
@@ -146,6 +148,7 @@ export function catalogRows(kind: CatalogKind, files: readonly CatalogFileInfo[]
     sessions: sessionsOf(file),
     category: categoryOf(kind, file),
     name: file.name ?? '',
+    efforts: (file.efforts ?? []).join(', '),
     etag: file.etag,
   }));
 }
@@ -155,6 +158,7 @@ const COLUMN_VALUE: Record<string, (row: CatalogRow) => string> = {
   category: row => row.category,
   id: row => row.id,
   name: row => row.name,
+  efforts: row => row.efforts,
 };
 
 /** Sorts a copy by each entry in turn, ignoring case and reading digits as numbers; the full ID breaks ties. */

@@ -23,6 +23,7 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Sess
     ...(snapshot.profiles === undefined ? {} : {profiles: snapshot.profiles}),
     ...(snapshot.profile_names === undefined ? {} : {profileNames: snapshot.profile_names}),
     ...(snapshot.model_default === undefined ? {} : {modelDefault: snapshot.model_default}),
+    ...(typeof snapshot.profile_etag === 'string' && snapshot.profile_etag !== '' ? {profileEtag: snapshot.profile_etag} : {}),
     ...(snapshot.models === undefined ? {} : {models: snapshot.models}),
     ...(modelOptions === undefined ? {} : {modelOptions}),
     ...(snapshot.front_compaction === undefined

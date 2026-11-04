@@ -81,8 +81,13 @@ func TestUserResourcesListAndReadOnlyServersWithResources(t *testing.T) {
 			t.Errorf("%+v: %+v, want invalid", request, err)
 		}
 	}
-	if err := refused(UserResourceRead{Server: "docs", URI: "docs://logo"}); err.NotFound || err.Invalid || !strings.Contains(err.Message, "has no text to insert") {
-		t.Errorf("binary resource: %+v", err)
+	// An image resource has no text but comes back as an attachment a run input part can carry.
+	logo, err := manager.ReadUserResource(context.Background(), servers, t.TempDir(), UserResourceRead{Server: "docs", URI: "docs://logo"})
+	if err != nil || logo.Text != "" || len(logo.Attachments) != 1 {
+		t.Fatalf("logo = %+v, %v", logo, err)
+	}
+	if attachment := logo.Attachments[0]; attachment.Type != "image" || attachment.MIMEType != "image/png" || attachment.URI != "docs://logo" || attachment.Data != "iVBORw==" || attachment.Name != "" {
+		t.Fatalf("logo attachment = %+v", attachment)
 	}
 	if err := refused(UserResourceRead{Server: "docs", URI: "docs://none"}); err.NotFound || !strings.Contains(err.Message, "the server refused:") {
 		t.Errorf("unknown resource: %+v", err)
@@ -131,5 +136,26 @@ func TestUserResourcesOfAServerWithoutResourcesFailAndLimitsApply(t *testing.T) 
 	listed, err = manager.ListUserResources(context.Background(), []sessionfs.MCPServerReference{few}, t.TempDir())
 	if err != nil || len(listed.Failures) != 1 || !strings.Contains(listed.Failures[0].Error, "more than max_tools (2) resources and templates") {
 		t.Fatalf("max_tools: %+v, %v", listed, err)
+	}
+}
+
+func TestAttachmentForTakesImagesAndPDFsOnly(t *testing.T) {
+	for _, tc := range []struct {
+		mime, uri, kind, name string
+		ok                    bool
+	}{
+		{"image/png", "docs://a.png", "image", "", true},
+		{"IMAGE/JPEG; charset=binary", "docs://a", "image", "", true},
+		{"image/webp", "x", "image", "", true},
+		{"application/pdf", "file:///reports/q3 final.pdf?v=2", "file", "q3_final.pdf", true},
+		{"application/pdf", "docs://report", "file", "report.pdf", true},
+		{"application/pdf", "docs://", "file", "resource.pdf", true},
+		{"image/svg+xml", "docs://a.svg", "", "", false},
+		{"application/zip", "docs://a.zip", "", "", false},
+	} {
+		got, ok := attachmentFor(&mcpSDK.ResourceContents{URI: tc.uri, MIMEType: tc.mime, Blob: []byte("x")})
+		if ok != tc.ok || got.Type != tc.kind || got.Name != tc.name || (ok && got.Data != "eA==") {
+			t.Errorf("%s %s: %+v %v", tc.mime, tc.uri, got, ok)
+		}
 	}
 }

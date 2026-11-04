@@ -21,6 +21,8 @@ type ProfileRunRequest struct {
 	// target last; the run keeps it so a message sent from inside it can be checked.
 	Chain   []string
 	Message string
+	// Model is the model ID (optionally @<effort>) the run uses; empty is the profile's default.
+	Model string
 	// Hops is the remote hop count of the request that caused this message (0 when none).
 	Hops int
 	// Wait queues behind the run that holds the transcript, in the order user messages
@@ -99,7 +101,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	if request.Wait {
 		started, err = h.acquireProfileRun(ctx, request)
 	} else {
-		started, busy, err = h.tryStartRun(ctx, request.Reference, request.Profile, "", profileMessageSource, request.Caller)
+		started, busy, err = h.tryStartRun(ctx, request.Reference, request.Profile, request.Model, profileMessageSource, request.Caller)
 	}
 	if busy {
 		return nil, ErrSessionBusy
@@ -185,7 +187,7 @@ func (h *Handler) acquireProfileRun(ctx context.Context, request ProfileRunReque
 		waitCtx, cancel = context.WithTimeout(ctx, request.WaitLimit)
 	}
 	defer cancel()
-	started, err := h.acquireRun(waitCtx, request.Reference, request.Profile, "", profileMessageSource, request.Caller)
+	started, err := h.acquireRun(waitCtx, request.Reference, request.Profile, request.Model, profileMessageSource, request.Caller)
 	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 		return startedRun{}, ErrSessionBusy
 	}

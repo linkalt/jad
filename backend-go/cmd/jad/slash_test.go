@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -140,6 +142,10 @@ func docsServer(t *testing.T) string {
 	server.AddResource(&mcpSDK.Resource{URI: "docs://guide", Name: "Style guide"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
 		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: request.Params.URI, Text: "Use tabs."}}}, nil
 	})
+	server.AddResource(&mcpSDK.Resource{URI: "docs://logo.png", Name: "logo", MIMEType: "image/png"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
+		png, _ := base64.StdEncoding.DecodeString(onePixelPNG)
+		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: request.Params.URI, MIMEType: "image/png", Blob: png}}}, nil
+	})
 	server.AddResourceTemplate(&mcpSDK.ResourceTemplate{URITemplate: "docs://pages/{name}", Name: "page"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
 		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: request.Params.URI, Text: "Page " + strings.TrimPrefix(request.Params.URI, "docs://pages/") + "."}}}, nil
 	})
@@ -192,5 +198,55 @@ func TestRunResourceCommands(t *testing.T) {
 		if _, _, err := runJad(t, "", args...); exitCode(err) != exitFailed {
 			t.Errorf("%s: err = %v, want exit %d", name, err, exitFailed)
 		}
+	}
+}
+
+// onePixelPNG is a valid 1x1 PNG, base64.
+const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+// An image resource is sent as an image part of the message, with the text after the command.
+func TestRunResourceCommandAttachesAnImage(t *testing.T) {
+	var mu sync.Mutex
+	var last []byte
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		last = body
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"a dot\"}]}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"model\":\"m\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7},\"output\":[]}}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(provider.Close)
+	fixture := useFixture(t, layouttest.Spec{
+		Models:    map[string]map[string]any{"openai/default": {"provider": "openai", "model": "m", "api_key_env": "FIXTURE_KEY", "base_url": provider.URL + "/v1"}},
+		Server:    map[string]any{"log_level": "off"},
+		MCP:       map[string]map[string]any{"chat/docs": {"resources": true}},
+		MCPConfig: map[string]map[string]any{"chat/docs": {"schema_version": 1, "transport": map[string]any{"type": "streamable_http", "url": docsServer(t)}}},
+	})
+	t.Setenv("FIXTURE_KEY", "k")
+	stdout, stderr, err := runJad(t, "", "run", "--session", "local:"+fixture.SessionID, "/resource:docs:logo", "describe", "it")
+	if err != nil || strings.TrimSpace(stdout) != "a dot" {
+		t.Fatalf("run: %q %q %v", stdout, stderr, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var request struct {
+		Input []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				ImageURL string `json:"image_url"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(last, &request); err != nil {
+		t.Fatalf("%v: %s", err, last)
+	}
+	user := request.Input[len(request.Input)-1]
+	if user.Role != "user" || len(user.Content) != 2 || user.Content[0].Text != "describe it" ||
+		user.Content[1].Type != "input_image" || !strings.HasPrefix(user.Content[1].ImageURL, "data:image/png;base64,") {
+		t.Fatalf("the message is not the text and the image: %+v", user)
 	}
 }

@@ -88,3 +88,17 @@ export function resolveRunModelChoice(record: ModelRecord): {option?: ModelOptio
       : undefined;
   return {option, effort};
 }
+
+/**
+ * The If-Match a model-default write sends: the profile tag of the record the pane shows, but
+ * only when that record was read for the profile being written. A pinned pane whose own record
+ * has not arrived shows the session's record, which is another profile's file.
+ */
+export function modelDefaultIfMatch(
+  record: Pick<Session, 'profileEtag' | 'activeProfile'> | undefined,
+  profile: string | undefined,
+): string | undefined {
+  if (record?.profileEtag === undefined) return undefined;
+  if (profile !== undefined && record.activeProfile !== profile) return undefined;
+  return record.profileEtag;
+}

@@ -205,3 +205,32 @@ func TestCatalogModelDeleteNeedsIfMatch(t *testing.T) {
 		t.Fatalf("delete with a stale tag = %d", reply.status)
 	}
 }
+
+// The models list names the efforts each model file offers, so an editor can offer id@effort.
+func TestCatalogModelsListNamesTheEfforts(t *testing.T) {
+	f := newLayoutFixture(t)
+	body := strings.TrimSuffix(f.modelBody("model-thinker"), "}") + `,"efforts":["low","high"],"request":{"reasoning":{"effort":"low"}}}`
+	if created := f.catalogCall(t, "PUT", "/api/catalog/models/openai/thinker", body, map[string]string{"If-None-Match": "*"}); created.status != http.StatusCreated {
+		t.Fatalf("create = %d %s", created.status, created.body)
+	}
+	list := f.catalogCall(t, "GET", "/api/catalog/models", "", nil)
+	var listing struct {
+		Files []struct {
+			ID      string   `json:"id"`
+			Efforts []string `json:"efforts"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
+		t.Fatal(err)
+	}
+	efforts := map[string]string{}
+	for _, file := range listing.Files {
+		efforts[file.ID] = strings.Join(file.Efforts, ",")
+	}
+	if efforts["openai/thinker"] != "low,high" || efforts["openai/small"] != "" {
+		t.Fatalf("efforts = %v", efforts)
+	}
+	if strings.Contains(list.body, `"efforts":null`) || strings.Contains(list.body, `"efforts":[]`) {
+		t.Fatalf("a model without efforts lists them: %s", list.body)
+	}
+}
