@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Deterministic Go navigation from go/ast: definitions, callers, callees, related types, tests and impact in ONE JSON answer whose ranges chain into `gonav source`.
+# input: {"cmd":"navigate","symbol":"wait","path":"backend-go"}  or  gonav navigate|symbol|impact SYMBOL [--path DIR] [--receiver R] [--max N] [--no-tests]  |  gonav source [FILE START END]
+set -uo pipefail
+runner=${JAD_RUNNER_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+lib=$runner/gonav.d
+if [ ! -d "$lib" ]; then printf 'gonav: missing %s\n' "$lib" >&2; exit 2; fi
+export GOTOOLCHAIN=local
+export GONAV_ROOT=${GONAV_ROOT:-$PWD}
+cd "$lib" || exit 2
+exec go run . "$@"
