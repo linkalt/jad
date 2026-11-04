@@ -22,6 +22,9 @@ const (
 	Prompt   Kind = "prompt"
 	Template Kind = "template"
 	Skill    Kind = "skill"
+	// Command is a custom slash command: a Markdown file whose text a person sends by
+	// typing /<command> (see commands.go).
+	Command Kind = "command"
 )
 
 // Summary is the metadata shown in the frontend's library catalog.
@@ -31,6 +34,18 @@ type Summary struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Source      string `json:"source"`
+	CommandFields
+}
+
+// CommandFields are set on a command only.
+type CommandFields struct {
+	// Command is the word typed after the slash: the file's path below its command
+	// folder without .md, each folder and the file name made a slug, joined by ":".
+	Command string `json:"command,omitempty"`
+	// ArgumentHint is the front matter's argument-hint, shown where the arguments go.
+	ArgumentHint string `json:"argument_hint,omitempty"`
+	// TakesArguments is true when the text has $ARGUMENTS or $1 to $9.
+	TakesArguments bool `json:"takes_arguments,omitempty"`
 }
 
 // Asset includes the full Markdown body returned when a user selects an item.
@@ -41,6 +56,7 @@ type Asset struct {
 	Description string `json:"description"`
 	Source      string `json:"source"`
 	Content     string `json:"content"`
+	CommandFields
 }
 
 // Catalog has one ordered list for each supported library kind.
@@ -48,6 +64,9 @@ type Catalog struct {
 	Prompts   []Summary `json:"prompts"`
 	Templates []Summary `json:"templates"`
 	Skills    []Summary `json:"skills"`
+	// Commands are the custom slash commands, which the "/" menu lists; the library panel
+	// does not.
+	Commands []Summary `json:"commands"`
 }
 
 // Library reads the configured root-library directories. Configuration and
@@ -79,6 +98,11 @@ func (l *Library) List(ctx context.Context) (Catalog, error) {
 		Templates: []Summary{},
 		Skills:    []Summary{},
 	}
+	commands, err := listCommands(ctx, directories.commands, directories.maxAssetBytes)
+	if err != nil {
+		return Catalog{}, err
+	}
+	catalog.Commands = commands
 	for _, entry := range []struct {
 		kind Kind
 		dirs []string
@@ -135,7 +159,7 @@ func (l *Library) Read(ctx context.Context, kind Kind, id string) (Asset, bool, 
 var (
 	assetIDPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	skillNamePattern  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	frontmatterField  = regexp.MustCompile(`^(name|title|description):\s*(.*)$`)
+	frontmatterField  = regexp.MustCompile(`^(name|title|description|argument-hint):\s*(.*)$`)
 	inlineComment     = regexp.MustCompile(`\s+#.*$`)
 	firstHeading      = regexp.MustCompile(`^#\s+(.+)$`)
 	blankParagraph    = regexp.MustCompile(`\r?\n\s*\r?\n`)
@@ -149,13 +173,14 @@ type libraryFile struct {
 }
 
 type parsedMarkdown struct {
-	name        string
-	title       string
-	description string
-	body        string
-	hasName     bool
-	hasTitle    bool
-	hasDesc     bool
+	name         string
+	title        string
+	description  string
+	body         string
+	argumentHint string
+	hasName      bool
+	hasTitle     bool
+	hasDesc      bool
 }
 
 func listKind(ctx context.Context, kind Kind, directories []string, maxBytes int64) ([]Summary, error) {
@@ -340,14 +365,22 @@ func readAsset(kind Kind, root, path string, maxBytes int64) (*Asset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Asset{
+	asset := &Asset{
 		ID:          assetID(kind, path),
 		Kind:        kind,
 		Name:        name,
 		Description: description,
 		Source:      filepath.ToSlash(relative),
 		Content:     parsed.body,
-	}, nil
+	}
+	if kind == Command {
+		word, ok := CommandWord(relative)
+		if !ok {
+			return nil, nil
+		}
+		asset.Command, asset.ArgumentHint, asset.TakesArguments = word, parsed.argumentHint, takesArguments(parsed.body)
+	}
+	return asset, nil
 }
 
 func assetID(kind Kind, path string) string {
@@ -427,6 +460,8 @@ func parseMarkdown(markdown string) parsedMarkdown {
 			parsed.title, parsed.hasTitle = value, true
 		case "description":
 			parsed.description, parsed.hasDesc = value, true
+		case "argument-hint":
+			parsed.argumentHint = value
 		}
 	}
 	return parsed
@@ -495,7 +530,7 @@ func firstParagraph(markdown string) string {
 }
 
 func validKind(kind Kind) bool {
-	return kind == Prompt || kind == Template || kind == Skill
+	return kind == Prompt || kind == Template || kind == Skill || kind == Command
 }
 
 func directoryList(directories libraryDirectories, kind Kind) []string {
@@ -506,6 +541,8 @@ func directoryList(directories libraryDirectories, kind Kind) []string {
 		return directories.templates
 	case Skill:
 		return directories.skills
+	case Command:
+		return directories.commands
 	default:
 		return nil
 	}

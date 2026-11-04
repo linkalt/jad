@@ -20,10 +20,11 @@ its workspace and a new session in the "eval" category, one headless turn, then 
 Progress goes to stderr; the JSON report goes to --out, or to stdout without it.
 
 A case prompt that starts with a slash command runs it as jad run does: /prompt:,
-/template:, /skill:, /mcp:<server>:<prompt> and a custom command send their text, and
-/plan runs the case in plan mode (so does "plan": true on the suite or the case). A case
-prompt may not be /compact, /reset or /state, which run no turn. "commands": false on the
-suite or a case, or --no-commands for the whole run, sends prompts as written.
+/template:, /skill:, /mcp:<server>:<prompt>, /resource:<server>:<resource> and a custom
+command send their text, and /plan runs the case in plan mode (so does "plan": true on
+the suite or the case). A case prompt may not be /compact, /reset or /state, which run
+no turn. "commands": false on the suite or a case, or --no-commands for the whole run,
+sends prompts as written.
 
 Exit status: 0 every attempt passed, 1 an attempt failed or errored, 2 usage error,
 130 interrupted.

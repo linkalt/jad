@@ -48,6 +48,7 @@
   "slash_menu_max_results": 50,
   "slash_menu_refresh_ms": 5000,
   "slash_menu_mcp_prompts_enabled": true,
+  "slash_menu_mcp_resources_enabled": true,
   "plan_mode_enabled": true,
   "plan_mode_placeholder": "Plan mode: describe the task; the agent only reads and answers with a plan…",
   "mention_source": "cwd",

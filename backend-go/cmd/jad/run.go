@@ -81,6 +81,15 @@ A prompt that starts with a slash command runs it, as the web client's "/" menu 
                            send the MCP prompt, filled with its arguments, followed by
                            text; a prompt with one argument takes all of text as it. The
                            server's toolset entry needs "prompts": true.
+  /resource:<server>:<resource> [variable=value ...] [text]
+                           send the MCP resource's text (by name, the name in lower
+                           case with dashes, or URI; a template takes its variables as
+                           name=value), followed by text; the server's toolset entry
+                           needs "resources": true.
+  /<command> [arguments]   send the custom command's text (a Markdown file in
+                           libraries.command_dirs; git/commit.md is /git:commit), with
+                           $ARGUMENTS and $1 to $9 filled from the arguments; a word
+                           the library has no command for is sent as written
 Any other prompt is sent as it is. --no-commands sends a prompt that starts with a
 command word as it is too.
 

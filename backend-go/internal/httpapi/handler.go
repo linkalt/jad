@@ -109,6 +109,7 @@ type Handler struct {
 	catalog                   SessionCatalog
 	toolLister                SessionToolLister
 	mcpPrompts                SessionMCPPrompts
+	mcpResources              SessionMCPResources
 	settings                  SessionSettings
 	catalogFiles              CatalogFiles
 	catalogSessions           CatalogSessions
@@ -234,6 +235,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalog, _ := resolver.(SessionCatalog)
 	toolLister, _ := resolver.(SessionToolLister)
 	mcpPrompts, _ := resolver.(SessionMCPPrompts)
+	mcpResources, _ := resolver.(SessionMCPResources)
 	settings, _ := resolver.(SessionSettings)
 	catalogFiles, _ := resolver.(CatalogFiles)
 	catalogSessions, _ := resolver.(CatalogSessions)
@@ -253,6 +255,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		mcpPrompts:                mcpPrompts,
+		mcpResources:              mcpResources,
 		settings:                  settings,
 		catalogFiles:              catalogFiles,
 		catalogSessions:           catalogSessions,
@@ -381,6 +384,10 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleMCPPromptList(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-prompts" && segments[4] == "get":
 		h.handleMCPPromptGet(w, r, reference, profile)
+	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "mcp-resources":
+		h.handleMCPResourceList(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-resources" && segments[4] == "read":
+		h.handleMCPResourceRead(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "model-default":

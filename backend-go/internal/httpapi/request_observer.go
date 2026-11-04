@@ -128,7 +128,7 @@ var knownSessionRoutes = map[string]bool{
 	"model-default": true, "compact": true, "reset": true, "front-compact": true, "statecontext": true,
 	"run": true, "run/interaction": true, "run/interaction/extend": true,
 	"run/stream": true, "run/stop": true, "checkpoints": true, "fork": true,
-	"mcp-prompts": true, "mcp-prompts/get": true,
+	"mcp-prompts": true, "mcp-prompts/get": true, "mcp-resources": true, "mcp-resources/read": true,
 }
 
 // routeTemplate maps a request path to a route with identifiers replaced by
@@ -146,6 +146,10 @@ func routeTemplate(escapedPath string) string {
 			return "/api/library/{kind}"
 		case 4:
 			return "/api/library/{kind}/{id}"
+		case 5:
+			if segments[4] == "expand" {
+				return "/api/library/{kind}/{id}/expand"
+			}
 		}
 	case len(segments) == 2 && segments[0] == "api" && segments[1] == "sessions":
 		return "/api/sessions"

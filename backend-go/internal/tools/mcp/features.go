@@ -54,6 +54,9 @@ func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *con
 				InputSchema: json.RawMessage(schema),
 			},
 			Validator: validator,
+			// Listing and reading resources and prompts change nothing, by the protocol: a
+			// plan-mode run keeps these tools, and their calls may run beside others.
+			ReadOnly: true,
 			ExecuteOutput: func(ctx context.Context, arguments map[string]any, _ tools.ExecutionContext) (json.RawMessage, error) {
 				return execute(ctx, current, arguments)
 			},

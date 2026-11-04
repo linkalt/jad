@@ -219,7 +219,7 @@ func TestLibraryEmptyCatalogUsesArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encoded) != `{"prompts":[],"templates":[],"skills":[]}` {
+	if string(encoded) != `{"prompts":[],"templates":[],"skills":[],"commands":[]}` {
 		t.Fatalf("empty catalog JSON = %s", encoded)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".agent/prompts")); !errors.Is(err, os.ErrNotExist) {

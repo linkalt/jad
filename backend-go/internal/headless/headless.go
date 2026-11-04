@@ -139,10 +139,15 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 			}
 			if ok {
 				result, done, err := r.runCommand(ctx, &request, command)
-				if err != nil || done {
+				switch {
+				case errors.Is(err, errNotACommand):
+					// A /word the library has no command for is a prompt, sent as written.
+					if word != CommandPlan {
+						word = ""
+					}
+				case err != nil || done:
 					return result, err
-				}
-				if word != CommandPlan {
+				case word != CommandPlan:
 					word = command.Word
 				}
 			}

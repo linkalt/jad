@@ -402,6 +402,14 @@
             "type": "string"
           }
         },
+        "command_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [".agent/commands"],
+          "description": "Custom slash commands: each Markdown file is a command whose word is its path below the folder without .md, each part made a slug and the parts joined by ':' (review.md is /review, git/commit.md is /git:commit). Front matter may give description and argument-hint; the text may use $ARGUMENTS (everything typed after the word) and $1 to $9 (its words; a double-quoted run is one word), and without either the arguments follow as a new paragraph. A word found in an earlier folder hides the same word in a later one. A file whose word is a built-in command (compact, state, reset, plan) or starts with prompt:, template:, skill:, mcp: or resource: is skipped. The web client's / menu and jad run read them."
+        },
         "tool_definition_paths": {
           "type": "array",
           "items": {
@@ -414,7 +422,7 @@
           "minimum": 1024,
           "maximum": 8388608,
           "default": 1048576,
-          "description": "Largest prompt, template or skill file the library reads. A larger file is skipped."
+          "description": "Largest prompt, template, skill or command file the library reads. A larger file is skipped."
         }
       },
       "additionalProperties": true

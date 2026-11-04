@@ -1,1 +1,1 @@
-{"prompt_dirs":[".agent/prompts"],"template_dirs":[".agent/templates"],"skill_dirs":[".agent/skills"]}
+{"prompt_dirs":[".agent/prompts"],"template_dirs":[".agent/templates"],"skill_dirs":[".agent/skills"],"command_dirs":[".agent/commands"]}

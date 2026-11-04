@@ -25,20 +25,28 @@ import {FileAttachmentPicker, FileIcon} from './FileAttachments';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
 import {
+  expandRootLibraryCommand,
   fetchRootLibrary,
   fetchRootLibraryAsset,
   fetchSessionFiles,
   fetchSessionMCPPrompt,
   fetchSessionMCPPrompts,
+  fetchSessionMCPResource,
+  fetchSessionMCPResources,
   type MCPPrompt,
+  type MCPResource,
+  type RootLibraryCommand,
 } from '../api';
 import {
   createSlashSource,
   mcpPromptArgumentValues,
+  mcpResourceVariableValues,
   type SlashCommand,
   type SlashSelection,
 } from '../slash-commands';
 import {MCPPromptDialog} from './MCPPromptDialog';
+import {CommandArgumentsDialog} from './CommandArgumentsDialog';
+import {ResourceVariablesDialog} from './ResourceVariablesDialog';
 import {useFileDrop} from './FileDrop';
 import {createComposerTriggers, resolveMentionFiles, slashTrigger} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
@@ -527,6 +535,9 @@ export function ComposerPane({
             loadMCPPrompts: appConfig.slash_menu_mcp_prompts_enabled
               ? () => fetchSessionMCPPrompts(activeSessionId, activeProfile).then(listed => listed.prompts)
               : undefined,
+            loadMCPResources: appConfig.slash_menu_mcp_resources_enabled
+              ? () => fetchSessionMCPResources(activeSessionId, activeProfile).then(listed => listed.resources)
+              : undefined,
             maxResults: appConfig.slash_menu_max_results,
             refreshMs: appConfig.slash_menu_refresh_ms,
           }),
@@ -803,9 +814,44 @@ export function ComposerPane({
     );
   };
 
+  /** The MCP resource template whose variables the dialog is asking for. */
+  const [variableResource, setVariableResource] = useState<MCPResource | null>(null);
+  // An MCP resource is read by its server and inserted like a library prompt, as a badge
+  // named <server>:<resource> past the length rule.
+  const insertResource = (resource: MCPResource, values: Record<string, string>) => {
+    fetchSessionMCPResource(activeSessionId, resource, mcpResourceVariableValues(resource, values), activeProfile).then(
+      text => insertPrompt(text, `${resource.server}:${resource.name}`),
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
+
+  /** The custom command whose arguments the dialog is asking for. */
+  const [argumentCommand, setArgumentCommand] = useState<RootLibraryCommand | null>(null);
+  // The server fills a custom command, as jad run has it filled; the text is inserted
+  // like a library prompt, as a badge named /<command> past the length rule.
+  const insertCommand = (command: RootLibraryCommand, args: string) => {
+    expandRootLibraryCommand(command.id, args).then(
+      text => insertPrompt(text, `/${command.command}`),
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
+
   // A library pick inserts the way the prompt library panel does: a prompt by its
   // length rule, a template as plain text, a skill as a badge.
   slashPickRef.current = selection => {
+    if (selection.type === 'resource') {
+      if (selection.resource.uriTemplate !== undefined && selection.resource.variables.length > 0) {
+        setVariableResource(selection.resource);
+      } else {
+        insertResource(selection.resource, {});
+      }
+      return;
+    }
+    if (selection.type === 'custom') {
+      if (selection.command.takesArguments) setArgumentCommand(selection.command);
+      else insertCommand(selection.command, '');
+      return;
+    }
     if (selection.type === 'command') {
       if (selection.name === 'plan') togglePlan();
       else onSlashCommand?.(selection.name);
@@ -881,6 +927,22 @@ export function ComposerPane({
 
   return (
     <>
+      <ResourceVariablesDialog
+        resource={variableResource}
+        onCancel={() => setVariableResource(null)}
+        onSubmit={(resource, values) => {
+          setVariableResource(null);
+          insertResource(resource, values);
+        }}
+      />
+      <CommandArgumentsDialog
+        command={argumentCommand}
+        onCancel={() => setArgumentCommand(null)}
+        onSubmit={(command, args) => {
+          setArgumentCommand(null);
+          insertCommand(command, args);
+        }}
+      />
       <MCPPromptDialog
         prompt={argumentPrompt}
         onCancel={() => setArgumentPrompt(null)}

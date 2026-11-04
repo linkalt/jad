@@ -56,10 +56,12 @@ type UserPromptText struct {
 	Text        string `json:"text"`
 }
 
-// UserPromptError is a prompt request that could not be answered. NotFound is a server
-// that is not in the toolset with prompts: true; any other failure is the server's.
+// UserPromptError is a prompt or resource request that could not be answered. NotFound is
+// a server that is not in the toolset with prompts (or resources): true; Invalid is a
+// request that cannot be sent as given; any other failure is the server's.
 type UserPromptError struct {
 	NotFound bool
+	Invalid  bool
 	Message  string
 }
 

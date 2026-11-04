@@ -534,10 +534,53 @@ export interface RootLibraryAsset extends RootLibraryAssetSummary {
   content: string;
 }
 
+/**
+ * A custom slash command: a Markdown file in libraries.command_dirs. `command` is the
+ * word typed after the slash; the server fills `$ARGUMENTS` and `$1`–`$9`.
+ */
+export interface RootLibraryCommand {
+  id: string;
+  kind: 'command';
+  name: string;
+  description: string;
+  source: string;
+  command: string;
+  argumentHint?: string;
+  takesArguments: boolean;
+}
+
 export interface RootLibraryCatalog {
   prompts: RootLibraryAssetSummary[];
   templates: RootLibraryAssetSummary[];
   skills: RootLibraryAssetSummary[];
+  /** Listed by the `/` menu only; an older server sends none. */
+  commands: RootLibraryCommand[];
+}
+
+function parseRootLibraryCommand(value: unknown): RootLibraryCommand | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    value.kind !== 'command' ||
+    typeof value.name !== 'string' ||
+    typeof value.description !== 'string' ||
+    typeof value.source !== 'string' ||
+    typeof value.command !== 'string' || value.command === '' ||
+    (value.argument_hint !== undefined && typeof value.argument_hint !== 'string') ||
+    (value.takes_arguments !== undefined && typeof value.takes_arguments !== 'boolean')
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    kind: 'command',
+    name: value.name,
+    description: value.description,
+    source: value.source,
+    command: value.command,
+    ...(typeof value.argument_hint === 'string' && value.argument_hint !== '' ? {argumentHint: value.argument_hint} : {}),
+    takesArguments: value.takes_arguments === true,
+  };
 }
 
 function isRootLibraryAssetSummary(
@@ -567,7 +610,34 @@ export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibrar
   ) {
     throw new Error('the server returned invalid library data');
   }
-  return {prompts, templates, skills};
+  const commands: RootLibraryCommand[] = [];
+  if (value.commands !== undefined) {
+    if (!Array.isArray(value.commands)) throw new Error('the server returned invalid library data');
+    for (const item of value.commands) {
+      const command = parseRootLibraryCommand(item);
+      if (command === null) throw new Error('the server returned invalid library data');
+      commands.push(command);
+    }
+  }
+  return {prompts, templates, skills, commands};
+}
+
+/** A custom command's text, filled with the arguments typed for it. */
+export async function expandRootLibraryCommand(id: string, args: string): Promise<string> {
+  const response = await authenticatedFetch(
+    apiUrl(`/library/command/${encodeURIComponent(id)}/expand`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({arguments: args}),
+    },
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.text !== 'string') {
+    throw new Error('the server returned invalid command data');
+  }
+  return value.text;
 }
 
 export async function fetchRootLibraryAsset(
@@ -912,6 +982,112 @@ function isMCPPrompt(value: unknown): value is MCPPrompt {
         (argument.required === undefined || typeof argument.required === 'boolean'),
     )
   );
+}
+
+/**
+ * A resource, or resource template, of an MCP server the profile's toolsets list with
+ * `resources: true`. A resource has `uri`; a template has `uriTemplate` and the
+ * `variables` a person fills.
+ */
+export interface MCPResource {
+  server: string;
+  uri?: string;
+  uriTemplate?: string;
+  variables: string[];
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface MCPResourceList {
+  resources: MCPResource[];
+  /** Servers whose resources could not be listed; the others are still in `resources`. */
+  failures: {server: string; error: string}[];
+}
+
+function parseMCPResource(value: unknown): MCPResource | null {
+  const optional = (field: unknown) => field === undefined || typeof field === 'string';
+  if (
+    !isRecord(value) ||
+    typeof value.server !== 'string' ||
+    typeof value.name !== 'string' ||
+    !optional(value.uri) ||
+    !optional(value.uri_template) ||
+    !optional(value.title) ||
+    !optional(value.description) ||
+    !optional(value.mime_type) ||
+    (typeof value.uri === 'string') === (typeof value.uri_template === 'string') ||
+    (value.variables !== undefined &&
+      (!Array.isArray(value.variables) || !value.variables.every(name => typeof name === 'string')))
+  ) {
+    return null;
+  }
+  return {
+    server: value.server,
+    name: value.name,
+    variables: (value.variables ?? []) as string[],
+    ...(typeof value.uri === 'string' ? {uri: value.uri} : {}),
+    ...(typeof value.uri_template === 'string' ? {uriTemplate: value.uri_template} : {}),
+    ...(typeof value.title === 'string' ? {title: value.title} : {}),
+    ...(typeof value.description === 'string' ? {description: value.description} : {}),
+    ...(typeof value.mime_type === 'string' ? {mimeType: value.mime_type} : {}),
+  };
+}
+
+/** The MCP resources of a session profile, for the composer's `/` menu. */
+export async function fetchSessionMCPResources(
+  sessionId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<MCPResourceList> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources${profileQuery(profile)}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  const invalid = () => new Error('the server returned invalid MCP resource data');
+  if (!isRecord(value) || !Array.isArray(value.resources)) throw invalid();
+  const resources: MCPResource[] = [];
+  for (const item of value.resources) {
+    const resource = parseMCPResource(item);
+    if (resource === null) throw invalid();
+    resources.push(resource);
+  }
+  if (
+    value.failures !== undefined &&
+    (!Array.isArray(value.failures) ||
+      !value.failures.every(
+        failure => isRecord(failure) && typeof failure.server === 'string' && typeof failure.error === 'string',
+      ))
+  ) {
+    throw invalid();
+  }
+  return {resources, failures: (value.failures ?? []) as MCPResourceList['failures']};
+}
+
+/** One MCP resource read as text: by its URI, or its template filled with the variables. */
+export async function fetchSessionMCPResource(
+  sessionId: string,
+  resource: MCPResource,
+  variables: Readonly<Record<string, string>>,
+  profile?: string,
+): Promise<string> {
+  const body =
+    resource.uriTemplate !== undefined
+      ? {server: resource.server, uri_template: resource.uriTemplate, variables}
+      : {server: resource.server, uri: resource.uri};
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/read${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.resource) || typeof value.resource.text !== 'string') {
+    throw new Error('the server returned invalid MCP resource data');
+  }
+  return value.resource.text;
 }
 
 /** The MCP prompts of a session profile, for the composer's `/` menu. */

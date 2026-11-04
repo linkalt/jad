@@ -8,6 +8,7 @@ import {
   librarySlug,
   mcpPromptArgumentValues,
   mcpPromptArgumentsReady,
+  mcpResourceVariableValues,
   rankSlashEntries,
   slashEntries,
 } from './slash-commands.ts';
@@ -215,4 +216,52 @@ test('/plan is listed only while the composer has plan mode', () => {
   // A library item named Plan does not take the command's word.
   const planned = slashEntries(SLASH_COMMANDS, {...CATALOG, prompts: [summary('prompt', 'p9', 'Plan')]});
   assert.ok(ids(planned.map(entry => entry.item)).includes('prompt:plan'));
+});
+
+test('custom commands follow the built-ins as /<command>, before the library', () => {
+  const command = (id, word, extra = {}) => ({id, kind: 'command', name: word, description: '', source: `${word}.md`, command: word, takesArguments: false, ...extra});
+  const catalog = {
+    ...CATALOG,
+    commands: [command('c1', 'git:commit', {description: 'Commit staged', argumentHint: '<message>', takesArguments: true}), command('c2', 'lint'), command('c3', 'lint')],
+  };
+  const entries = slashEntries(SLASH_COMMANDS, catalog);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(SLASH_COMMANDS.length, SLASH_COMMANDS.length + 3), ['git:commit', 'lint', 'prompt:software-engineering']);
+  const picked = entries[SLASH_COMMANDS.length].item;
+  assert.equal(picked.label, '/git:commit');
+  assert.deepEqual(picked.auxiliaryData, {type: 'custom', command: catalog.commands[0]});
+  assert.deepEqual(ids(rankSlashEntries(entries, 'git', 50)), ['git:commit']);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'staged', 50)), ['git:commit'], 'the description is a match term');
+  assert.deepEqual(ids(rankSlashEntries(entries, '<message>', 50)), ['git:commit'], 'the argument hint is a match term');
+});
+
+const RESOURCES = [
+  {server: 'docs', uri: 'docs://guide', name: 'Style guide', title: 'Guide', variables: []},
+  {server: 'docs', uriTemplate: 'docs://pages/{name}', name: 'page', variables: ['name']},
+];
+
+test('MCP resources follow the MCP prompts as /resource:<server>:<slug>', () => {
+  const entries = slashEntries(SLASH_COMMANDS, CATALOG, [], RESOURCES);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(-2), ['resource:docs:style-guide', 'resource:docs:page']);
+  assert.deepEqual(entries.at(-1).item.auxiliaryData, {type: 'resource', resource: RESOURCES[1]});
+  assert.deepEqual(ids(rankSlashEntries(entries, 'resource:', 50)), ['resource:docs:style-guide', 'resource:docs:page']);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'docs://pages', 50)), ['resource:docs:page'], 'the URI template is a match term');
+  assert.deepEqual(mcpResourceVariableValues(RESOURCES[1], {name: 'intro', other: 'x'}), {name: 'intro'});
+  assert.deepEqual(mcpResourceVariableValues(RESOURCES[1], {name: '  '}), {});
+});
+
+test('a failing resource load leaves the rest of the menu and is retried', async () => {
+  let offline = true;
+  let loads = 0;
+  const menu = source({
+    loadCatalog: async () => CATALOG,
+    loadMCPResources: async () => {
+      loads += 1;
+      if (offline) throw new Error('offline');
+      return RESOURCES;
+    },
+  });
+  assert.equal(ids(await menu.search('')).length, SLASH_COMMANDS.length + 4);
+  offline = false;
+  assert.equal(ids(await menu.search('')).length, SLASH_COMMANDS.length + 6);
+  assert.equal(loads, 2);
 });
