@@ -64,8 +64,11 @@ type Result struct {
 	// Error is the client-safe failure message of a failed, stopped or timed-out run.
 	Error string `json:"error,omitempty"`
 	// Usage is the last usage summary the run published (webui.UsageSummary), if any.
-	Usage      json.RawMessage `json:"usage,omitempty"`
-	DurationMS int64           `json:"duration_ms"`
+	Usage json.RawMessage `json:"usage,omitempty"`
+	// CostUSD is what the run's priced responses cost, from the pricing in the model
+	// files; absent when no response was priced.
+	CostUSD    *float64 `json:"cost_usd,omitempty"`
+	DurationMS int64    `json:"duration_ms"`
 }
 
 // Runner sends headless turns to an API handler.
@@ -204,10 +207,14 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 				}
 			case "usage":
 				var payload struct {
-					Usage json.RawMessage `json:"usage"`
+					Usage   json.RawMessage `json:"usage"`
+					CostUSD *float64        `json:"cost_usd"`
 				}
 				if json.Unmarshal(event.Data, &payload) == nil && len(payload.Usage) > 0 {
 					result.Usage = payload.Usage
+				}
+				if payload.CostUSD != nil {
+					result.CostUSD = payload.CostUSD
 				}
 			case "completed":
 				result.Status = StatusCompleted

@@ -109,7 +109,39 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
+	if err := resolveFallbackModels(config.ModelFallback, layout.Models, sessionPath, scans); err != nil {
+		return SessionConfig{}, err
+	}
 	return config, nil
+}
+
+// resolveFallbackModels turns each model_fallback model ID into its model file and
+// effort. Like an agent's model, a fallback may be any model of the catalog, not only one
+// the profile lists. An unknown ID or an effort the model does not offer is a config error.
+func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPath string, scans *CatalogScans) error {
+	if settings == nil {
+		return nil
+	}
+	models, err := scans.Scan("model", modelsDir)
+	if err != nil {
+		return configError("%s: %v", sessionPath, err)
+	}
+	for index := range settings.Models {
+		entry := &settings.Models[index]
+		id, effort, err := SplitModelEffort(entry.ID)
+		if err != nil {
+			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
+		}
+		found, err := models.Lookup(id)
+		if err != nil {
+			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
+		}
+		if err := checkModelEffort(found.Path, effort); err != nil {
+			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
+		}
+		entry.ModelPath, entry.ReasoningEffort = found.Path, effort
+	}
+	return nil
 }
 
 // loadAgentToolsets reads the toolset each agent names. The session is composed again

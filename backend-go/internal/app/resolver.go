@@ -484,10 +484,16 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if err != nil {
 		return preparedRun{}, err
 	}
-	runnerKey := fingerprintRunner(config, apiKey)
+	if config.MaxRunCostUSD > 0 && config.Model.Pricing == nil {
+		return preparedRun{}, &httpapi.StatusError{
+			Code:    http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("max_run_cost_usd is set, but the model file %s has no pricing, so the run's cost cannot be counted", config.ModelPath),
+		}
+	}
+	streamer, fallbackIdentity := r.runStreamer(config, apiKey)
+	runnerKey := fingerprintRunner(config, apiKey) + fallbackIdentity
 	runner := shared.runners[runnerKey]
 	if runner == nil {
-		streamer := r.newProviderStreamer(config, apiKey)
 		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
 			Model:       config.Model.Name,
 			Request:     config.Model.Request,
@@ -1238,6 +1244,8 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		API             string
 		Anthropic       json.RawMessage
 		ChatCompletions json.RawMessage
+		// The priced wrapper holds the pricing.
+		Pricing *sessionfs.ModelPricing
 	}{
 		ModelPath:       config.ModelPath,
 		Provider:        config.Model.Provider,
@@ -1259,6 +1267,7 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		API:             config.Model.API,
 		Anthropic:       config.Model.Anthropic,
 		ChatCompletions: config.Model.ChatCompletions,
+		Pricing:         config.Model.Pricing,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])

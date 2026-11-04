@@ -76,6 +76,10 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	emitter := newMessageStreamEmitter(h.toolStreamInterval, run.publishMessage)
 	emitter.logger = logger
 	defer emitter.discard()
+	// The run's cost, from the pricing of the models that answered; its own meter (made by
+	// Run) adds into this one, which the usage events report.
+	meter := session.NewCostMeter(nil)
+	ctx = session.WithCostMeter(ctx, meter)
 	result, err := runner.Run(ctx, input, session.RunOptions{
 		TurnID:          run.turnID,
 		MemoryTrace:     h.memoryTrace,
@@ -92,9 +96,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 				logger.Warn("failed to flush committed message", slog.Any("error", err))
 			}
 			run.setCommittedMessage(normalizedRun.Message("streaming"))
-			publishRunUsage(run, runner, ctx, logger)
+			publishRunUsage(run, runner, ctx, meter, logger)
 		},
-		OnUsageChanged: func() { publishRunUsage(run, runner, ctx, logger) },
+		OnUsageChanged: func() { publishRunUsage(run, runner, ctx, meter, logger) },
 		OnHookReport: func(report session.HookReport) {
 			if err := run.publish("hook_report", map[string]any{"turn_id": run.turnID, "event": report.Event, "trigger": report.Trigger, "report": report.Report}); err != nil {
 				logger.Warn("failed to publish hook report", slog.Any("error", err))
@@ -154,7 +158,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	run.finish("completed", terminal)
 }
 
-func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, logger *slog.Logger) {
+// publishRunUsage sends the session's usage summary, and cost_usd, what this run's priced
+// responses cost so far, once there is one.
+func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, meter *session.CostMeter, logger *slog.Logger) {
 	reader, ok := runner.(runUsageSummaryReader)
 	if !ok {
 		return
@@ -164,7 +170,11 @@ func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, log
 		logger.Warn("failed to read usage summary", slog.Any("error", err))
 		return
 	}
-	if err := run.publish("usage", map[string]any{"usage": usage}); err != nil {
+	payload := map[string]any{"usage": usage}
+	if cost, priced := meter.Total(); priced > 0 {
+		payload["cost_usd"] = cost
+	}
+	if err := run.publish("usage", payload); err != nil {
 		logger.Warn("failed to publish usage summary", slog.Any("error", err))
 	}
 }
@@ -213,6 +223,10 @@ func clientRunErrorMessage(err error) string {
 	var tokenLimit *session.RunTokenLimitError
 	if errors.As(err, &tokenLimit) {
 		return tokenLimit.Error()
+	}
+	var costLimit *session.RunCostLimitError
+	if errors.As(err, &costLimit) {
+		return costLimit.Error()
 	}
 	var idle streamIdleError
 	if errors.As(err, &idle) {

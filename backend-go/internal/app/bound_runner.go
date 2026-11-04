@@ -96,6 +96,7 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	options.ImageStore = newImageStore(r.config.ImageStore)
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
 	options.MaxRunTokens = r.config.MaxRunTokens
+	options.MaxRunCostUSD = r.config.MaxRunCostUSD
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
 	options.ToolCallScheduling = r.config.ToolCallScheduling
 	options.LeafBudget = r.resolver.leafBudget

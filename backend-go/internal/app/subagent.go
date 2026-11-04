@@ -60,7 +60,8 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	if request.OnTranscript != nil {
 		request.OnTranscript(dir)
 	}
-	runner, err := session.NewRunner(store, l.resolver.newProviderStreamer(config, apiKey), session.ModelSettings{
+	streamer, _ := l.resolver.runStreamer(config, apiKey)
+	runner, err := session.NewRunner(store, streamer, session.ModelSettings{
 		Model:       config.Model.Name,
 		Request:     config.Model.Request,
 		HostedTools: config.Model.HostedTools,

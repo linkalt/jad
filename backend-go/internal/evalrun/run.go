@@ -89,6 +89,9 @@ type Summary struct {
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
 	CachedTokens int64   `json:"cached_input_tokens"`
+	// CostUSD adds up the cost of the attempts whose runs were priced (model file pricing);
+	// absent when none was.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // Attempt is one run of one case.
@@ -484,6 +487,13 @@ func summarize(results []Attempt) Summary {
 			summary.Failed++
 		default:
 			summary.Errors++
+		}
+		if result.Run != nil && result.Run.CostUSD != nil {
+			total := *result.Run.CostUSD
+			if summary.CostUSD != nil {
+				total += *summary.CostUSD
+			}
+			summary.CostUSD = &total
 		}
 		if result.Run == nil || len(result.Run.Usage) == 0 {
 			continue

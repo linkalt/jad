@@ -126,6 +126,9 @@ type RunOptions struct {
 	// OnUsageChanged runs after an automatic compaction rewrote the transcript.
 	OnUsageChanged func()
 	MaxToolRounds  int
+	// MaxRunCostUSD is the most one run may cost, by the CostMeter of its context, before
+	// it starts another round; zero means no cap. Run gives every run a meter of its own.
+	MaxRunCostUSD float64
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap. Counted from the usage the provider reported.
 	MaxRunTokens int64
@@ -490,6 +493,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	// Tokens the provider reported for the rounds of this run so far. Every round
 	// re-sends the history, so this is what the run is billed, not the transcript size.
 	var usedTokens int64
+	// The run's own meter; it adds into the meter of the run that started this one.
+	meter := NewCostMeter(CostMeterFrom(ctx))
+	ctx = WithCostMeter(ctx, meter)
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -549,7 +555,7 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 			}
 			return result, nil
 		}
-		if err := r.enforceToolLimits(calls, round, usedTokens, options, refreshAfterCompaction); err != nil {
+		if err := r.enforceToolLimits(calls, round, usedTokens, meter, options, refreshAfterCompaction); err != nil {
 			return result, err
 		}
 		declined, err := r.executeToolCalls(ctx, trace, checkpointRun, calls, round, options, refreshAfterCompaction)
@@ -647,7 +653,7 @@ func (r *Runner) compactAfterResponse(event json.RawMessage, calls []json.RawMes
 
 // enforceToolLimits refuses to start the calls of a round when the tool-round limit or
 // the run token cap is reached. The calls get a result so the transcript stays valid.
-func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedTokens int64, options RunOptions, refreshAfterCompaction func() error) error {
+func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedTokens int64, meter *CostMeter, options RunOptions, refreshAfterCompaction func() error) error {
 	if round >= options.MaxToolRounds {
 		summary := fmt.Sprintf("Tool execution was not started because the %d-round limit was reached.", options.MaxToolRounds)
 		if _, err := appendToolOutputs(r.store, calls, nil, "tool_round_limit", summary); err != nil {
@@ -664,6 +670,16 @@ func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedToken
 	if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
 		limit := &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
 		if _, err := appendToolOutputs(r.store, calls, nil, "run_token_limit", "Tool execution was not started. "+limit.Error()); err != nil {
+			return err
+		}
+		if err := refreshAfterCompaction(); err != nil {
+			return err
+		}
+		return limit
+	}
+	if cost, _ := meter.Total(); options.MaxRunCostUSD > 0 && cost >= options.MaxRunCostUSD {
+		limit := &RunCostLimitError{Used: cost, Limit: options.MaxRunCostUSD}
+		if _, err := appendToolOutputs(r.store, calls, nil, "run_cost_limit", "Tool execution was not started. "+limit.Error()); err != nil {
 			return err
 		}
 		if err := refreshAfterCompaction(); err != nil {

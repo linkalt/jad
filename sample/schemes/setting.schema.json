@@ -377,6 +377,8 @@
           "provider_network",
           "openai_oauth",
           "max_run_tokens",
+          "max_run_cost_usd",
+          "model_fallback",
           "checkpoint",
           "hooks",
           "image_resize",
@@ -418,6 +420,12 @@
         },
         "max_run_tokens": {
           "$ref": "#/properties/max_run_tokens"
+        },
+        "max_run_cost_usd": {
+          "$ref": "#/properties/max_run_cost_usd"
+        },
+        "model_fallback": {
+          "$ref": "#/properties/model_fallback"
         },
         "checkpoint": {
           "$ref": "#/properties/checkpoint"
@@ -555,6 +563,60 @@
       "minimum": 1,
       "maximum": 1000000000000,
       "description": "Most tokens one run may use before it stops. Absent means no cap, which is the default. After each provider response the harness adds the tokens the provider reported (total_tokens, or input plus output) to the run's count; when the count has reached this value and the model asked for tool calls, those calls get a run_token_limit result, no further round starts, and the run fails with a message naming the count and the limit. A response in flight is never cut, so a run can end above the cap by up to one response. A response with no usage counts as 0. A final answer with no tool calls always completes."
+    },
+    "max_run_cost_usd": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000, "description": "Most US dollars one run may cost before it stops. Absent means no cap, which is the default. Each response is priced with the pricing of the model file that answered it (a fallback model at its own prices). Sub-agent runs have their own cost and are not counted in it. Checked between rounds like max_run_tokens: when the cost has reached this value and the model asked for tool calls, those calls get a run_cost_limit result and the run fails with a message naming the cost and the limit. A run whose model file has no pricing is refused, and an unpriced model_fallback model is left out. Usage events report cost_usd, the run's priced cost so far."},
+    "model_fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models"
+      ],
+      "description": "Models a request goes to when the session's model fails it. After the provider client's own provider_retry attempts, a failure with a status in on_status (or, with on_network_error, a request that got no HTTP answer) sends the same request to the first model in models, then the next. It applies only before the response sent any event: once part of an answer arrived, the run keeps the failure. The request keeps its input (history and prompt); the model name, the request defaults of the model file and its hosted tools are the fallback's. After the session's model failed a request, the next ones skip it for cooldown_ms and go to the fallbacks first (it is still tried when they all fail). Sub-agent runs of the session use the same list. A fallback whose model file or key cannot be used is left out with a warning at run start. Reasoning items of one provider may be refused by another: a fallback works best on the same provider and api.",
+      "properties": {
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[^/\\s]+/[^\\s]+$",
+            "not": {
+              "pattern": "\\.json$"
+            }
+          },
+          "description": "Model IDs (<category>/<name>, optionally @<effort>) in the order they are tried. Any model of the catalog, not only those the profile lists."
+        },
+        "on_status": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "default": [
+            429,
+            500,
+            502,
+            503,
+            504,
+            529
+          ],
+          "description": "HTTP statuses that try the next model."
+        },
+        "on_network_error": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also try the next model when the request got no HTTP answer (connection refused, reset, DNS failure, idle timeout before the first event)."
+        },
+        "cooldown_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
+          "default": 60000,
+          "description": "How long requests skip the session's model after it failed one; 0 always tries it first."
+        }
+      }
     },
     "checkpoint": {
       "type": "object",

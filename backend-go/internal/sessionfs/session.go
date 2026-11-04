@@ -106,6 +106,9 @@ type Model struct {
 	// chat_completions; both are validated at load time and nil when absent.
 	Anthropic       json.RawMessage
 	ChatCompletions json.RawMessage
+	// Pricing is what the model costs per million tokens; nil means unknown, and its runs
+	// report no cost.
+	Pricing *ModelPricing
 }
 
 // Provider protocols a model file can name in api.
@@ -218,6 +221,12 @@ type SessionConfig struct {
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap (the key is absent).
 	MaxRunTokens int64
+	// ModelFallback lists the models a request goes to when the session's model fails
+	// it; nil means none.
+	ModelFallback *ModelFallbackSettings
+	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
+	// before it starts another provider round; zero means no cap.
+	MaxRunCostUSD float64
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
 	// ProfileTools is the selected profile's optional tool allow-list; without it the
@@ -355,6 +364,14 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	maxRunTokens, err := normalizeMaxRunTokens(setting["max_run_tokens"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	modelFallback, err := normalizeModelFallback(setting["model_fallback"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	maxRunCost, err := normalizeMaxRunCost(setting["max_run_cost_usd"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -663,6 +680,8 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ProviderNetwork:          providerNetwork,
 		OpenAIOAuth:              openAIOAuth,
 		MaxRunTokens:             maxRunTokens,
+		ModelFallback:            modelFallback,
+		MaxRunCostUSD:            maxRunCost,
 		Checkpoint:               checkpoint,
 		Hooks:                    hooks,
 		ProfileTools:             profileTools,
@@ -1039,7 +1058,12 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if err != nil {
 		return Model{}, err
 	}
+	pricing, err := modelPricingField(fields, path)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
+		Pricing:         pricing,
 		Efforts:         efforts,
 		Provider:        provider,
 		Name:            modelName,
