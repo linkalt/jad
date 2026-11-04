@@ -43,6 +43,9 @@ type ModelSettings struct {
 	PromptText  string
 	// PromptCacheKey, when set, is sent as the request's prompt_cache_key.
 	PromptCacheKey string
+	// TextFormat, when set, is sent as the request's text.format, beside any other text
+	// fields of Request; it replaces a text.format Request holds.
+	TextFormat json.RawMessage
 }
 
 type inputTextContent struct {
@@ -149,6 +152,10 @@ type RunOptions struct {
 	// work that can fail (reading the model file, connecting tool servers,
 	// resolving credentials) has to happen after the input is durable.
 	PersistedInput *PersistedInput
+	// OutputFormat, when set, is the Responses text.format every request of the run sends,
+	// for example {"type":"json_schema","name":...,"schema":...}: the provider then
+	// constrains the final answer to it. It never reaches the transcript.
+	OutputFormat json.RawMessage
 }
 
 // PersistedInput records a user input that PersistInput already stored.
@@ -389,6 +396,11 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 			return nil, fmt.Errorf("serialize prompt cache key: %w", err)
 		}
 	}
+	if len(settings.TextFormat) > 0 {
+		if requestFields["text"], err = withTextFormat(requestFields["text"], settings.TextFormat); err != nil {
+			return nil, err
+		}
+	}
 	requestFields["stream"] = json.RawMessage("true")
 	if allTools := appendHostedTools(responseTools, settings.HostedTools); len(allTools) > 0 {
 		encodedTools, err := json.Marshal(allTools)
@@ -403,6 +415,23 @@ func BuildRequestWithStateContext(settings ModelSettings, history [][]byte, resp
 		return nil, fmt.Errorf("serialize Responses request: %w", err)
 	}
 	return request, nil
+}
+
+// withTextFormat returns the request's text object with format set to format; the other
+// fields of text (verbosity, for one) are kept.
+func withTextFormat(text, format json.RawMessage) (json.RawMessage, error) {
+	fields := make(map[string]json.RawMessage)
+	if len(text) > 0 && !bytes.Equal(bytes.TrimSpace(text), []byte("null")) {
+		if err := json.Unmarshal(text, &fields); err != nil || fields == nil {
+			return nil, errors.New("model request text must be a JSON object to take an output format")
+		}
+	}
+	fields["format"] = format
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("serialize text format: %w", err)
+	}
+	return encoded, nil
 }
 
 // encodeRequestFields writes fields as json.Marshal writes a map[string]json.RawMessage
@@ -608,7 +637,11 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 	// References come back as data URLs first, so the resize step sees real bytes.
 	sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
 	sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
-	request, err := BuildRequestWithStateContext(r.settings, sentHistory, responseTools, options.StateContext)
+	settings := r.settings
+	if len(options.OutputFormat) > 0 {
+		settings.TextFormat = options.OutputFormat
+	}
+	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, options.StateContext)
 	if err != nil {
 		return nil, fmt.Errorf("build Responses request: %w", err)
 	}

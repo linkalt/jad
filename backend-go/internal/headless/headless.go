@@ -26,6 +26,9 @@ const (
 	StatusFailed    = "failed"
 	StatusAborted   = "aborted"
 	StatusTimedOut  = "timed_out"
+	// StatusInvalidOutput is a run that completed with a final answer that is not JSON
+	// matching the request's output schema.
+	StatusInvalidOutput = "invalid_output"
 )
 
 // Request is one headless turn.
@@ -44,6 +47,9 @@ type Request struct {
 	// OnEvent, when set, receives every run-stream event in order, as the web client
 	// would see it. It must not block for long: the stream waits for it.
 	OnEvent func(Event)
+	// Output, when set, asks for a final answer that is JSON matching a schema: the run
+	// sends it as output_format, and Run checks the answer against it.
+	Output *OutputSchema
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -61,6 +67,9 @@ type Result struct {
 	// Text is the final assistant message text; on a stopped run it is the text
 	// streamed so far.
 	Text string `json:"text"`
+	// Output is the final answer as JSON, set when the request had an output schema
+	// and the answer matched it.
+	Output json.RawMessage `json:"output,omitempty"`
 	// Error is the client-safe failure message of a failed, stopped or timed-out run.
 	Error string `json:"error,omitempty"`
 	// Usage is the last usage summary the run published (webui.UsageSummary), if any.
@@ -104,10 +113,19 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if strings.TrimSpace(request.Session) == "" {
 		return Result{}, errors.New("a session is required")
 	}
+	var outputFormat json.RawMessage
+	if request.Output != nil {
+		format, err := request.Output.format()
+		if err != nil {
+			return Result{}, err
+		}
+		outputFormat = format
+	}
 	body, err := json.Marshal(struct {
-		Input string `json:"input"`
-		Model string `json:"model,omitempty"`
-	}{Input: request.Input, Model: request.Model})
+		Input        string          `json:"input"`
+		Model        string          `json:"model,omitempty"`
+		OutputFormat json.RawMessage `json:"output_format,omitempty"`
+	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat})
 	if err != nil {
 		return Result{}, err
 	}
@@ -239,6 +257,9 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 			case "done":
 				if result.Status == "" {
 					result.Status = StatusFailed
+				}
+				if result.Status == StatusCompleted && request.Output != nil {
+					request.Output.check(&result)
 				}
 				result.DurationMS = time.Since(started).Milliseconds()
 				return result, nil

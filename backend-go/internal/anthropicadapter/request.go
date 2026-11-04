@@ -37,10 +37,11 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 		return nil, badRequest("model", "model is required")
 	}
 	result := &translation{Stream: request.Stream}
-	if apiErr := checkFields(config, fields, &request, result); apiErr != nil {
+	profile := config.ProfileFor(request.Model)
+	outputFormat, apiErr := checkFields(config, profile, fields, result)
+	if apiErr != nil {
 		return nil, apiErr
 	}
-	profile := config.ProfileFor(request.Model)
 
 	out := &result.Request
 	out.Model = request.Model
@@ -84,6 +85,12 @@ func translateRequest(config *Config, body []byte) (*translation, *apiError) {
 	out.ToolChoice = choice
 	dropFixedSampling(out, profile, &result.Ignored)
 	applyThinking(out, profile, request.Reasoning, &result.Ignored)
+	if outputFormat != nil {
+		if out.OutputConfig == nil {
+			out.OutputConfig = &anthropicOutputConfig{}
+		}
+		out.OutputConfig.Format = outputFormat
+	}
 	applyCache(out, &config.Cache)
 	sort.Strings(result.Ignored)
 	return result, nil
@@ -111,8 +118,10 @@ type responsesRequest struct {
 type rawObject = map[string]json.RawMessage
 
 // checkFields rejects what cannot be honoured without losing meaning, and
-// applies the unsupported_fields policy to the rest.
-func checkFields(config *Config, fields map[string]json.RawMessage, request *responsesRequest, result *translation) *apiError {
+// applies the unsupported_fields policy to the rest. It returns the
+// output_config.format a json_schema text.format becomes, nil when there is none.
+func checkFields(config *Config, profile *ModelProfile, fields map[string]json.RawMessage, result *translation) (json.RawMessage, *apiError) {
+	var outputFormat json.RawMessage
 	handled := map[string]bool{
 		"model": true, "input": true, "instructions": true, "tools": true,
 		"tool_choice": true, "parallel_tool_calls": true, "max_output_tokens": true,
@@ -124,24 +133,62 @@ func checkFields(config *Config, fields map[string]json.RawMessage, request *res
 		}
 		switch name {
 		case "previous_response_id", "conversation":
-			return notImplemented("%s is not supported: the adapter keeps no conversation state, send the full input", name)
+			return nil, notImplemented("%s is not supported: the adapter keeps no conversation state, send the full input", name)
 		case "background":
 			if !isJSONFalse(raw) {
-				return notImplemented("background responses are not supported")
+				return nil, notImplemented("background responses are not supported")
 			}
 		case "text":
-			if !textFormatIsPlain(raw) {
-				if apiErr := applyPolicy(config, name, "text.format other than text", result); apiErr != nil {
-					return apiErr
+			if textFormatIsPlain(raw) {
+				continue
+			}
+			if profile.StructuredOutput == StructuredOutputNative {
+				format, apiErr := jsonSchemaOutputFormat(raw)
+				if apiErr != nil {
+					return nil, apiErr
 				}
+				if format != nil {
+					outputFormat = format
+					continue
+				}
+			}
+			if apiErr := applyPolicy(config, name, "text.format other than text or json_schema", result); apiErr != nil {
+				return nil, apiErr
 			}
 		default:
 			if apiErr := applyPolicy(config, name, "this field", result); apiErr != nil {
-				return apiErr
+				return nil, apiErr
 			}
 		}
 	}
-	return nil
+	return outputFormat, nil
+}
+
+// jsonSchemaOutputFormat returns the output_config.format of a Responses text option whose
+// format is json_schema: {"type":"json_schema","schema":...}. name, description and strict
+// have no Anthropic equivalent (the schema is always enforced) and are dropped. It returns
+// nil for any other format type.
+func jsonSchemaOutputFormat(raw json.RawMessage) (json.RawMessage, *apiError) {
+	var text struct {
+		Format struct {
+			Type   string          `json:"type"`
+			Schema json.RawMessage `json:"schema"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(raw, &text); err != nil || text.Format.Type != "json_schema" {
+		return nil, nil
+	}
+	if !bytes.HasPrefix(bytes.TrimSpace(text.Format.Schema), []byte("{")) {
+		return nil, badRequest("text.format.schema", "text.format.schema must be a JSON Schema object")
+	}
+	format, err := json.Marshal(struct {
+		Type   string          `json:"type"`
+		Schema json.RawMessage `json:"schema"`
+	}{"json_schema", compactJSON(text.Format.Schema)})
+	if err != nil {
+		return nil, badRequest("text.format.schema", "text.format.schema cannot be encoded: %v", err)
+	}
+	return format, nil
 }
 
 func applyPolicy(config *Config, name, what string, result *translation) *apiError {

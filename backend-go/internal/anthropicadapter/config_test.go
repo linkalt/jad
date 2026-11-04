@@ -265,3 +265,38 @@ func TestProfileSelectionAndPartialProfile(t *testing.T) {
 		t.Fatal("an unmatched model must use the default profile")
 	}
 }
+
+// The profile schema documents structured_output's default and values; this keeps them
+// equal to the Go constants.
+func TestSchemaStructuredOutputMatchesTheConstants(t *testing.T) {
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			Profile struct {
+				Properties struct {
+					StructuredOutput struct {
+						Default string   `json:"default"`
+						Enum    []string `json:"enum"`
+					} `json:"structured_output"`
+				} `json:"properties"`
+			} `json:"profile"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	property := schema.Defs.Profile.Properties.StructuredOutput
+	if property.Default != StructuredOutputNative || len(property.Enum) != 2 || property.Enum[0] != StructuredOutputNative || property.Enum[1] != StructuredOutputUnsupported {
+		t.Fatalf("schema structured_output = %+v", property)
+	}
+	if DefaultConfig().DefaultProfile.StructuredOutput != "" {
+		t.Fatal("the default profile must leave structured_output to finish")
+	}
+	config, err := LoadConfig("")
+	if err != nil || config.DefaultProfile.StructuredOutput != StructuredOutputNative {
+		t.Fatalf("loaded default = %v %v", config, err)
+	}
+}

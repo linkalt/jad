@@ -88,7 +88,8 @@ type anthropicThinking struct {
 }
 
 type anthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"`
+	Effort string          `json:"effort,omitempty"`
+	Format json.RawMessage `json:"format,omitempty"`
 }
 
 // anthropicResponse is a non-streaming POST /v1/messages result.

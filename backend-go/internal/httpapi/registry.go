@@ -284,6 +284,9 @@ type activeRun struct {
 	// response. They are set before the run starts and called on the run's goroutine.
 	onCommitted func(event json.RawMessage)
 	onResult    func(event json.RawMessage)
+	// outputFormat is the text.format the run's requests send, nil for none. Set before
+	// the run starts and read on the run's goroutine.
+	outputFormat json.RawMessage
 
 	mu                 sync.Mutex
 	status             string

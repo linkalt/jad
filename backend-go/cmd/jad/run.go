@@ -63,7 +63,8 @@ type commandStreams struct {
 }
 
 const runUsage = `usage: jad run --session <ref> [--profile <category/name>] [--model <category/name>]
-               [--format text|json|jsonl] [--timeout <duration>] [--log-level <level>] [prompt | -]
+               [--format text|json|jsonl] [--timeout <duration>] [--log-level <level>]
+               [--output-schema <file> [--output-strict=false]] [prompt | -]
 
 Runs one turn of a session without a server and exits. The prompt is the remaining
 arguments, or standard input when there are none or the only one is "-".
@@ -71,7 +72,15 @@ arguments, or standard input when there are none or the only one is "-".
 Formats: text prints the final answer; json prints one result object; jsonl prints every
 run-stream event as {"event","data"} and ends with {"event":"result","data":<result>}.
 
-Exit status: 0 completed, 1 failed, 2 usage error, 124 timed out, 130 interrupted.
+--output-schema asks for a final answer that is JSON matching the JSON Schema in the file:
+the provider is asked to constrain its answer to it (text.format json_schema), and the
+answer is checked when the run ends. A matching answer is printed as compact JSON in text
+format and set as "output" in the result; any other answer ends the run with status
+invalid_output and exit status 1. --output-strict=false turns off the provider's strict
+mode, which needs every property required and additionalProperties false on every object.
+
+Exit status: 0 completed, 1 failed or invalid_output, 2 usage error, 124 timed out,
+130 interrupted.
 `
 
 // runOptions are the parsed flags of "jad run".
@@ -79,6 +88,19 @@ type runOptions struct {
 	request  headless.Request
 	format   string
 	logLevel string
+}
+
+// readOutputSchema reads and compiles the --output-schema file.
+func readOutputSchema(path string, strict bool) (*headless.OutputSchema, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, usageError("--output-schema: %v", err)
+	}
+	schema, err := headless.NewOutputSchema(raw, "", strict)
+	if err != nil {
+		return nil, usageError("--output-schema %s: %v", path, err)
+	}
+	return schema, nil
 }
 
 func parseRunOptions(args []string, streams commandStreams) (runOptions, error) {
@@ -91,6 +113,8 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	flags.StringVar(&options.format, "format", formatText, "text, json or jsonl")
 	flags.DurationVar(&options.request.Timeout, "timeout", 0, "stop the run after this long; 0 means no limit")
 	flags.StringVar(&options.logLevel, "log-level", "", "override server.log_level")
+	outputSchema := flags.String("output-schema", "", "JSON Schema file the final answer must match")
+	outputStrict := flags.Bool("output-strict", true, "ask the provider to enforce the output schema strictly")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, _ = io.WriteString(streams.stdout, runUsage)
@@ -108,6 +132,18 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	}
 	if options.request.Timeout < 0 {
 		return runOptions{}, usageError("--timeout must not be negative")
+	}
+	strictSet := false
+	flags.Visit(func(set *flag.Flag) { strictSet = strictSet || set.Name == "output-strict" })
+	switch {
+	case *outputSchema != "":
+		schema, err := readOutputSchema(*outputSchema, *outputStrict)
+		if err != nil {
+			return runOptions{}, err
+		}
+		options.request.Output = schema
+	case strictSet:
+		return runOptions{}, usageError("--output-strict needs --output-schema")
 	}
 	prompt, err := readPrompt(flags.Args(), streams.stdin)
 	if err != nil {
@@ -216,7 +252,11 @@ func runOnce(ctx context.Context, runner *headless.Runner, options runOptions, s
 	}
 	switch options.format {
 	case formatText:
-		if result.Text != "" {
+		// With an output schema, stdout carries only JSON that matched it; an answer that did
+		// not is in the json formats' text field, and the reason goes to stderr.
+		if len(result.Output) > 0 {
+			_, writeErr = streams.stdout.Write(append(append([]byte(nil), result.Output...), '\n'))
+		} else if options.request.Output == nil && result.Text != "" {
 			_, writeErr = io.WriteString(streams.stdout, strings.TrimRight(result.Text, "\n")+"\n")
 		}
 	case formatJSON:

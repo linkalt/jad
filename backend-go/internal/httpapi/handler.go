@@ -466,6 +466,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.mu.Lock()
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
+	run.outputFormat = body.OutputFormat
 	h.attachContentCache(run)
 	queue := run.subscribe()
 	launched = true
@@ -848,6 +849,9 @@ type runRequest struct {
 	Input               json.RawMessage `json:"input"`
 	Model               string          `json:"model,omitempty"`
 	SupportsInteraction bool            `json:"supports_interaction,omitempty"`
+	// OutputFormat is the checked output_format member: the text.format every request of
+	// the run sends. Nil when the request sent none.
+	OutputFormat json.RawMessage `json:"output_format,omitempty"`
 }
 
 const (
@@ -908,12 +912,12 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
 	// The members are located in raw itself; json.Valid has accepted it, so nothing is copied.
-	inputRaw, modelRaw, supportsRaw, hasInput, hasModel, hasSupports := scanRunBodyObject(raw)
+	members := scanRunBodyObject(raw)
 	var body runRequest
-	if !hasInput {
+	if !members.hasInput {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
-	input, imageChars, err := parseValidRunInput(inputRaw, limits)
+	input, imageChars, err := parseValidRunInput(members.input, limits)
 	if err != nil {
 		return runRequest{}, err
 	}
@@ -923,13 +927,18 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 		return runRequest{}, &StatusError{Code: http.StatusRequestEntityTooLarge, Message: "request body is too large"}
 	}
 	body.Input = input
-	if hasModel {
-		if json.Unmarshal(modelRaw, &body.Model) != nil || strings.TrimSpace(body.Model) == "" {
+	if members.hasModel {
+		if json.Unmarshal(members.model, &body.Model) != nil || strings.TrimSpace(body.Model) == "" {
 			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "model must be a non-empty string"}
 		}
 	}
-	if hasSupports {
-		_ = json.Unmarshal(supportsRaw, &body.SupportsInteraction)
+	if members.hasSupports {
+		_ = json.Unmarshal(members.supports, &body.SupportsInteraction)
+	}
+	if members.hasOutputFormat {
+		if body.OutputFormat, err = parseRunOutputFormat(members.outputFormat); err != nil {
+			return runRequest{}, err
+		}
 	}
 	body.Model = strings.TrimSpace(body.Model)
 	return body, nil

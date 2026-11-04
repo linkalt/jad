@@ -224,6 +224,12 @@
           "default": false,
           "description": "The model rejects non-default temperature, top_p and top_k on every request (and temperature together with top_p). When true, temperature and top_p are omitted whatever the request says, and reported in X-Adapter-Ignored-Fields."
         },
+        "structured_output": {
+          "type": "string",
+          "enum": ["native", "unsupported"],
+          "default": "native",
+          "description": "How a Responses text.format of type json_schema is sent. native: as output_config.format {\"type\":\"json_schema\",\"schema\":...} (name, description and strict are dropped; the schema is always enforced). unsupported: for models without structured outputs, the text field goes through unsupported_fields like any other field the adapter cannot send. A json_object format always goes through unsupported_fields."
+        },
         "extra_body": {
           "type": "object",
           "propertyNames": { "not": { "enum": ["model", "max_tokens", "system", "messages", "tools", "tool_choice", "stream", "temperature", "top_p", "thinking", "output_config"] } },

@@ -50,6 +50,13 @@ const (
 	defaultEffortBudgetMaxTokens     = 32000
 )
 
+// Values of a profile's structured_output: native sends a json_schema text.format as
+// output_config.format; unsupported treats it as an unsupported field (unsupported_fields).
+const (
+	StructuredOutputNative      = "native"
+	StructuredOutputUnsupported = "unsupported"
+)
+
 // reservedUpstreamHeaders cannot be set in upstream.extra_headers: the adapter sets them from
 // other keys, and a second source would make the result depend on header order.
 var reservedUpstreamHeaders = []string{

@@ -138,6 +138,10 @@ type ModelProfile struct {
 	// FixedSampling marks models that reject non-default temperature and top_p
 	// (and any top_p together with temperature) on every request, thinking or not.
 	FixedSampling bool `json:"fixed_sampling"`
+	// StructuredOutput is native (a json_schema text.format becomes output_config.format)
+	// or unsupported (for models without structured outputs: the format is handled by
+	// unsupported_fields, like any other field the adapter cannot send). Empty means native.
+	StructuredOutput string `json:"structured_output,omitempty"`
 	// ExtraBody holds top-level fields merged last into the /v1/messages body of requests
 	// this profile serves, as raw JSON. It cannot set a field the adapter builds from the client.
 	ExtraBody map[string]json.RawMessage `json:"extra_body"`
@@ -363,6 +367,12 @@ func (p *ModelProfile) finish(path string, needsMatch, cacheAutomatic bool) erro
 	}
 	if !slices.Contains([]string{DisplayDefault, DisplaySummarized, DisplayOmitted}, p.Display) {
 		return fmt.Errorf("config: %s.display must be empty, summarized or omitted, got %q", path, p.Display)
+	}
+	if p.StructuredOutput == "" {
+		p.StructuredOutput = StructuredOutputNative
+	}
+	if p.StructuredOutput != StructuredOutputNative && p.StructuredOutput != StructuredOutputUnsupported {
+		return fmt.Errorf("config: %s.structured_output must be %q or %q, got %q", path, StructuredOutputNative, StructuredOutputUnsupported, p.StructuredOutput)
 	}
 	if p.DefaultEffort != "" && !slices.Contains(efforts, p.DefaultEffort) {
 		return fmt.Errorf("config: %s.default_effort must be one of %v, got %q", path, efforts, p.DefaultEffort)

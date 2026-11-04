@@ -273,9 +273,38 @@ func TestUnsupportedFieldPolicy(t *testing.T) {
 		}
 	}
 	translateOK(t, ignore, `{"model":"m","input":"x","background":false,"previous_response_id":null,"text":{"format":{"type":"text"}}}`)
-	result, apiErr = translateRequest(ignore, []byte(`{"model":"m","input":"x","text":{"format":{"type":"json_schema","name":"n","schema":{}}}}`))
+	result, apiErr = translateRequest(ignore, []byte(`{"model":"m","input":"x","text":{"format":{"type":"json_object"}}}`))
 	if apiErr != nil || len(result.Ignored) != 1 || result.Ignored[0] != "text" {
-		t.Fatalf("structured output must be reported as ignored: %v %v", result, apiErr)
+		t.Fatalf("a json_object format must be reported as ignored: %v %v", result, apiErr)
+	}
+}
+
+func TestJSONSchemaFormatBecomesOutputConfigFormat(t *testing.T) {
+	config := mustConfig(t, `{"models":[{"match":"^old","structured_output":"unsupported"},{"match":"^think","thinking":"adaptive"}]}`)
+	body := func(model string) string {
+		return `{"model":"` + model + `","input":"x","reasoning":{"effort":"high"},"text":{"verbosity":"low","format":{"type":"json_schema","name":"n","strict":true,"schema":{ "type": "object" }}}}`
+	}
+	result, apiErr := translateRequest(config, []byte(body("claude-x")))
+	if apiErr != nil || len(result.Ignored) != 0 || asJSON(t, result.Request.OutputConfig) != `{"format":{"type":"json_schema","schema":{"type":"object"}}}` {
+		t.Fatalf("native: %s ignored=%v err=%v", asJSON(t, result.Request.OutputConfig), result, apiErr)
+	}
+	// The format joins the effort adaptive thinking sets.
+	if request := translateOK(t, config, body("think-1")); asJSON(t, request.OutputConfig) != `{"effort":"high","format":{"type":"json_schema","schema":{"type":"object"}}}` {
+		t.Fatalf("with effort: %s", asJSON(t, request.OutputConfig))
+	}
+	result, apiErr = translateRequest(config, []byte(body("old-1")))
+	if apiErr != nil || result.Request.OutputConfig != nil || len(result.Ignored) != 1 || result.Ignored[0] != "text" {
+		t.Fatalf("unsupported profile: %s ignored=%v err=%v", asJSON(t, result.Request.OutputConfig), result.Ignored, apiErr)
+	}
+	reject := mustConfig(t, `{"unsupported_fields":"reject","default_profile":{"structured_output":"unsupported"}}`)
+	if apiErr := translateFail(t, reject, body("claude-x")); apiErr.Param != "text" {
+		t.Fatalf("unsupported profile with reject: %+v", apiErr)
+	}
+	if apiErr := translateFail(t, config, `{"model":"m","input":"x","text":{"format":{"type":"json_schema","schema":true}}}`); apiErr.Param != "text.format.schema" {
+		t.Fatalf("schema not an object: %+v", apiErr)
+	}
+	if _, err := LoadConfig(writeConfig(t, `{"default_profile":{"structured_output":"maybe"}}`)); err == nil || !strings.Contains(err.Error(), "structured_output") {
+		t.Fatalf("bad structured_output: %v", err)
 	}
 }
 

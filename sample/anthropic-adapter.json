@@ -22,6 +22,7 @@
   },
   "default_profile": {
     "thinking": "none",
+    "structured_output": "unsupported",
     "extra_body": {
       "cache_control": {
         "type": "ephemeral",
