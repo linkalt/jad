@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2897,7 +2898,90 @@ func (se *session) typedAnswer(spec string, callsOnly bool) *typeAnswer {
 	if len(ans.exact) == 0 && len(ans.tests) == 0 && len(ans.nameOnly) == 0 && !ck.partial {
 		ans.note = "no type-checked references in the defining package or its importers (scope: " + itoa(len(scope)) + " packages)"
 	}
+	if cfg.cmd == "refs" && ans.defs[0].Kind == "method" {
+		if names := ck.interfacesDispatching(ld, ix.packagesDeclaring(ld, interfaceDeclaring(want.name)), ck.methodObject(base, want)); len(names) > 0 {
+			ans.note = "calls through interface " + strings.Join(names, ", ") + " not attributed; see impl " + names[0]
+		}
+	}
 	return ans
+}
+
+// interfaceDeclaring selects an interface declaration that has a method of the given name.
+func interfaceDeclaring(name string) func(Decl) bool {
+	return func(d Decl) bool {
+		return d.Kind == "interface" && slices.Contains(d.Methods, name)
+	}
+}
+
+// methodObject returns the concrete method the target names, from the export data of its package.
+func (ck *checker) methodObject(base string, want targetSpec) *types.Func {
+	pkg, err := ck.gc.Import(base)
+	if err != nil || pkg == nil {
+		return nil
+	}
+	tn, ok := pkg.Scope().Lookup(want.recv).(*types.TypeName)
+	if !ok {
+		return nil
+	}
+	named, ok := tn.Type().(*types.Named)
+	if !ok {
+		return nil
+	}
+	for i := 0; i < named.NumMethods(); i++ {
+		if m := named.Method(i); m.Name() == want.name {
+			return m
+		}
+	}
+	return nil
+}
+
+// interfacesDispatching names up to three interfaces, in the given packages, whose single method has the
+// target's name and a signature the target's pointer type satisfies. Such an interface can reach the
+// method without naming it. The check is types.Implements on a one-method interface, so the signatures
+// compare by the same identities impl uses, aliases included.
+func (ck *checker) interfacesDispatching(ld *loader, bases []string, method *types.Func) []string {
+	if method == nil {
+		return nil
+	}
+	recv := method.Type().(*types.Signature).Recv().Type()
+	var names []string
+	for _, base := range bases {
+		lp := ld.variant(base, "prod")
+		if lp == nil {
+			continue
+		}
+		ch := ck.check(lp)
+		if ch == nil || ch.pkg == nil {
+			continue
+		}
+		for _, name := range ch.pkg.Scope().Names() {
+			tn, ok := ch.pkg.Scope().Lookup(name).(*types.TypeName)
+			if !ok || tn.IsAlias() || len(names) >= 3 {
+				continue
+			}
+			// The export-data twin, the identity the method was read with, as impl does.
+			twin := ck.exportedType(base, name)
+			if twin == nil {
+				continue
+			}
+			iface, ok := twin.Underlying().(*types.Interface)
+			if !ok || iface.NumMethods() == 0 || slices.Contains(names, name) {
+				continue
+			}
+			for i := 0; i < iface.NumMethods(); i++ {
+				if iface.Method(i).Name() != method.Name() {
+					continue
+				}
+				single := types.NewInterfaceType([]*types.Func{iface.Method(i)}, nil)
+				single.Complete()
+				if types.Implements(recv, single) {
+					names = append(names, name)
+					break
+				}
+			}
+		}
+	}
+	return names
 }
 
 // typedFallback answers with engine A when engine B cannot run, never silently: every hit is marked

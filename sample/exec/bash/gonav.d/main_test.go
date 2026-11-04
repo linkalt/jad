@@ -1104,6 +1104,7 @@ pkg/user/user.go:6:11	call	in=Close
 # tests: 2 (grouped; --no-tests skips them)
 pkg/pool/pool_test.go:7:14	call	in=TestPoolClose
 pkg/user/x_test.go:12:8	call	in=TestExternal
+# note: calls through interface Closer not attributed; see impl Closer
 `
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
@@ -1465,5 +1466,32 @@ func TestAmbiguousSymbolCommandsExitOneWithCandidates(t *testing.T) {
 		if err := json.Unmarshal(encoded, &candidates); err != nil || len(candidates) != 2 {
 			t.Fatalf("%s wait: candidates = %s, want 2", cmd, encoded)
 		}
+	}
+}
+
+// refs on a concrete method does not follow calls made through an interface. The header must say so
+// and name the interfaces that declare a method of that name and signature, so the gap is visible.
+func TestRefsOnConcreteMethodNotesInterfaceDispatch(t *testing.T) {
+	root := writeModule(t, `package a
+
+import "context"
+
+type Streamer interface {
+	Stream(ctx context.Context, body []byte) error
+}
+
+type Client struct{}
+
+func (c *Client) Stream(ctx context.Context, body []byte) error { return nil }
+
+func Use(s Streamer) error { return s.Stream(context.Background(), nil) }
+`)
+	text := refsText(t, root, "refs", "a.Client.Stream")
+	if !strings.Contains(text, "note: calls through interface Streamer not attributed; see impl Streamer") {
+		t.Fatalf("refs on a concrete method must note the interface dispatch gap:\n%s", text)
+	}
+	got := refsJSON(t, root, "refs", "a.Client.Stream")
+	if note, _ := got["note"].(string); !strings.Contains(note, "calls through interface Streamer not attributed") {
+		t.Fatalf("json note = %q", note)
 	}
 }
