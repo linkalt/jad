@@ -17,7 +17,7 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(h.config.Upstream.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
 	translated.Request.Stream = true
-	params, apiErr := sdkMessageParams(h.config, &translated.Request)
+	body, apiErr := messagesPayload(h.config, &translated.Request)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -25,36 +25,29 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 	retry := h.config.Upstream.StreamRetry
 	sink := newSink(w)
 	for attempt := 0; ; attempt++ {
-		var upstream *http.Response
-		stream := h.client.Messages.NewStreaming(ctx, params, h.sdkRequestOptions(apiKey, &upstream)...)
-		if status, header, payload, ok := sdkHTTPError(stream.Err(), upstream); ok {
-			_ = stream.Close()
-			h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: status, Model: translated.Request.Model, Stream: true,
-				Header: header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
-			writeError(w, upstreamError(status, payload, header))
+		upstream, err := h.sendMessages(ctx, apiKey, body, true)
+		if err != nil {
+			writeError(w, callError(err, nil))
 			return
 		}
-		if err := stream.Err(); err != nil {
-			_ = stream.Close()
-			writeError(w, sdkCallError(err, upstream))
-			return
-		}
-		if upstream == nil {
-			_ = stream.Close()
-			writeError(w, &apiError{Status: http.StatusBadGateway, Type: "api_error", Code: "upstream_unreachable",
-				Message: "calling the Anthropic API failed: the SDK returned no HTTP response"})
+		if upstreamFailed(upstream) {
+			payload := readErrorBody(upstream)
+			closeHTTPResponse(upstream)
+			h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
+				Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
+			writeError(w, upstreamError(upstream.StatusCode, payload, upstream.Header))
 			return
 		}
 		if !strings.HasPrefix(upstream.Header.Get("Content-Type"), "text/event-stream") {
-			payload, _ := io.ReadAll(io.LimitReader(upstream.Body, errorBodyLimit))
-			_ = stream.Close()
+			payload := readErrorBody(upstream)
+			closeHTTPResponse(upstream)
 			h.logUpstreamFailure(upstreamFailure{Kind: "not_event_stream", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
 				Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
 			writeError(w, upstreamError(http.StatusBadGateway, payload, upstream.Header))
 			return
 		}
-		// Keep the adapter's parser on the raw body: it preserves ping events,
-		// unknown future events, and the configured retry handling for error events.
+		// The adapter's own parser reads the raw body: it keeps ping events, unknown
+		// future events, and the configured retry handling for error events.
 		if id := upstream.Header.Get("request-id"); id != "" {
 			w.Header().Set("request-id", id)
 		}
@@ -64,7 +57,7 @@ func (h *Handler) respondStream(w http.ResponseWriter, r *http.Request, apiKey s
 		if translator.sink.err == nil {
 			drainUpstream(ctx, upstream.Body)
 		}
-		_ = stream.Close()
+		closeHTTPResponse(upstream)
 		if outcome.ErrorType != "" {
 			h.logUpstreamFailure(upstreamFailure{Kind: "stream_error_event", Status: upstream.StatusCode, Model: translated.Request.Model, Stream: true,
 				Header: upstream.Header, Body: outcome.ErrorMessage, ErrorType: outcome.ErrorType, Retried: outcome.Retry})

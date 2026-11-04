@@ -1,6 +1,7 @@
 package anthropicadapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,16 +11,16 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // Handler serves the Responses API routes.
 type Handler struct {
 	config *Config
-	client anthropic.Client
-	now    func() time.Time
-	logger *slog.Logger
+	client *http.Client
+	// messagesURL is upstream.base_url with /v1/messages resolved against it.
+	messagesURL string
+	now         func() time.Time
+	logger      *slog.Logger
 }
 
 // NewHandler builds the HTTP handler. A nil client uses a plain http.Client;
@@ -29,7 +30,9 @@ func NewHandler(config *Config, httpClient *http.Client) *Handler {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
-	handler := &Handler{config: config, client: newAnthropicClient(config, httpClient), now: time.Now}
+	// The config was validated, so the URL parses; an empty one fails each request instead.
+	endpoint, _ := messagesURL(config.Upstream.BaseURL)
+	handler := &Handler{config: config, client: httpClient, messagesURL: endpoint, now: time.Now}
 	handler.SetLogger(nil)
 	return handler
 }
@@ -93,37 +96,34 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string, translated *translation) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(h.config.Upstream.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
-	params, apiErr := sdkMessageParams(h.config, &translated.Request)
+	body, apiErr := messagesPayload(h.config, &translated.Request)
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
 	}
 
-	var upstream *http.Response
-	message, err := h.client.Messages.New(ctx, params, h.sdkRequestOptions(apiKey, &upstream)...)
-	defer closeHTTPResponse(upstream)
+	upstream, err := h.sendMessages(ctx, apiKey, body, false)
 	if err != nil {
-		if status, header, payload, ok := sdkHTTPError(err, upstream); ok {
-			h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: status, Model: translated.Request.Model,
-				Header: header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
-			writeError(w, upstreamError(status, payload, header))
-			return
-		}
-		writeError(w, sdkCallError(err, upstream))
+		writeError(w, callError(err, nil))
 		return
 	}
-	if message == nil {
+	defer closeHTTPResponse(upstream)
+	if upstreamFailed(upstream) {
+		payload := readErrorBody(upstream)
+		h.logUpstreamFailure(upstreamFailure{Kind: "http_status", Status: upstream.StatusCode, Model: translated.Request.Model,
+			Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
+		writeError(w, upstreamError(upstream.StatusCode, payload, upstream.Header))
+		return
+	}
+	payload, err := io.ReadAll(upstream.Body)
+	if err != nil {
+		writeError(w, callError(err, upstream))
+		return
+	}
+	if len(bytes.TrimSpace(payload)) == 0 {
 		writeError(w, &apiError{Status: http.StatusBadGateway, Type: "api_error", Code: "upstream_invalid_body",
 			Message: "the upstream response is empty"})
 		return
-	}
-	payload := []byte(message.RawJSON())
-	if len(payload) == 0 {
-		payload, err = json.Marshal(message)
-		if err != nil {
-			writeError(w, invalidUpstreamBody(err))
-			return
-		}
 	}
 	var response anthropicResponse
 	if err := json.Unmarshal(payload, &response); err != nil {
@@ -132,27 +132,21 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, apiKey string,
 	}
 	// A non-streaming error can still arrive as {"type":"error"} with status 200.
 	if response.Type == "error" {
-		var header http.Header
-		var status int
-		if upstream != nil {
-			header, status = upstream.Header, upstream.StatusCode
-		}
-		h.logUpstreamFailure(upstreamFailure{Kind: "error_body_with_200", Status: status, Model: translated.Request.Model,
-			Header: header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
-		writeError(w, upstreamError(http.StatusBadGateway, payload, header))
+		h.logUpstreamFailure(upstreamFailure{Kind: "error_body_with_200", Status: upstream.StatusCode, Model: translated.Request.Model,
+			Header: upstream.Header, Body: string(payload), SentHeaders: sentHeaderNames(h.upstreamHeaders(""))})
+		writeError(w, upstreamError(http.StatusBadGateway, payload, upstream.Header))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if upstream != nil {
-		if id := upstream.Header.Get("request-id"); id != "" {
-			w.Header().Set("request-id", id)
-		}
+	if id := upstream.Header.Get("request-id"); id != "" {
+		w.Header().Set("request-id", id)
 	}
 	_ = json.NewEncoder(w).Encode(translateResponse(&response, h.now()))
 }
 
-// upstreamHeaders returns the adapter-configured upstream headers. The SDK adds its own standard
-// headers; this set is also used to record request header names without recording credential values.
+// upstreamHeaders returns the headers of an upstream request, apart from Accept and the
+// default User-Agent; this set is also used to record request header names without
+// recording credential values.
 func (h *Handler) upstreamHeaders(apiKey string) http.Header {
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")

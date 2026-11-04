@@ -279,7 +279,7 @@ func TestUpstreamErrorsKeepStatusAndRetryAfter(t *testing.T) {
 	}
 }
 
-func TestSDKDoesNotRetryNonStreamingFailures(t *testing.T) {
+func TestNonStreamingFailuresAreNotRetried(t *testing.T) {
 	upstream, calls := fakeAnthropic(t, http.StatusInternalServerError,
 		`{"type":"error","error":{"type":"api_error","message":"temporary"}}`, nil)
 	adapter := adapterFor(t, upstream.URL, "")
@@ -288,7 +288,7 @@ func TestSDKDoesNotRetryNonStreamingFailures(t *testing.T) {
 		t.Fatalf("status %d", status)
 	}
 	if len(*calls) != 1 {
-		t.Fatalf("the SDK made %d upstream attempts; want 1", len(*calls))
+		t.Fatalf("the adapter made %d upstream attempts; want 1", len(*calls))
 	}
 }
 

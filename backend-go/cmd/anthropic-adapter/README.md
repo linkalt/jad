@@ -131,7 +131,7 @@ All off by default. A cache write costs 1.25x (5 minutes) or 2x (1 hour) the inp
 
 ## Upstream transport
 
-The official Anthropic Go SDK sends the request and reads the HTTP status. It does not build the request or parse the reply: the adapter writes the Messages JSON itself and parses the reply itself, including the raw stream, so ping and unknown events are kept. SDK retries are off; `upstream.stream_retry` is the only retry. Because of this, the adapter covers only what the Responses API can express. `top_k`, `stop_sequences`, server tools and reply blocks other than thinking, text and tool calls are not passed through. See `DECISIONS.md`.
+The adapter sends the request with Go's `net/http` client; no Anthropic SDK is linked. It writes the Messages JSON itself, posts it once to `upstream.base_url` + `/v1/messages` (a path in the base URL is kept), and parses the reply itself, including the raw stream, so ping and unknown events are kept. Nothing is retried except by `upstream.stream_retry`. Besides the headers of the other `upstream` keys, a request carries `Accept` (`application/json`, or `text/event-stream` for a stream) and `User-Agent: jad-anthropic-adapter`, which `upstream.extra_headers` can replace. The request timeout is `upstream.request_timeout_ms` for both modes. Because the adapter builds the request itself, the adapter covers only what the Responses API can express. `top_k`, `stop_sequences`, server tools and reply blocks other than thinking, text and tool calls are not passed through. See `DECISIONS.md`.
 
 ## Not verified
 
