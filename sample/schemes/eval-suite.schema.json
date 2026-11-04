@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "eval-suite.schema.json",
+  "title": "jad eval suite",
+  "description": "An eval suite for `jad eval <suite.json>` (Go backend only). Each case gets a fresh copy of its workspace, a new session file in a session root whose cwd is that workspace, one headless turn, then its checks. Relative paths resolve from the folder that holds this file. The case sessions (and their transcripts) are kept for inspection; workspaces follow keep_workspaces.",
+  "type": "object",
+  "required": ["schema_version", "name", "cases"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "description": "Suite name; part of every case session id (eval-<name>-<run id>-<case>-<attempt>)."
+    },
+    "description": {
+      "type": "string"
+    },
+    "session_root": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Id of the session root (session_roots of the root setting) the case sessions are written to. Absent uses the first root."
+    },
+    "session": {
+      "type": "object",
+      "description": "Keys merged into every case's session file (see session.schema.json), for example scope and settings. category defaults to \"eval\". schema_version, cwd and description are set by the runner and refused here.",
+      "not": {
+        "anyOf": [
+          {"required": ["schema_version"]},
+          {"required": ["cwd"]},
+          {"required": ["description"]}
+        ]
+      }
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Profile of every case, '<category>/<name>'. Absent uses the session's default profile. A case's profile replaces it."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Model of every case, '<category>/<name>', one the profile allows. Absent uses the profile's default. A case's model replaces it."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1800000,
+      "description": "Time limit of one agent run; the run is stopped when it is reached and the attempt fails with \"run timed_out\". The run's own limits (max_tool_rounds, max_run_tokens) still apply."
+    },
+    "check_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 600000,
+      "description": "Time limit of each setup and check command; its process group is killed when it is reached."
+    },
+    "check_output_max_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216,
+      "default": 16384,
+      "description": "The last this many bytes of a setup or check command's combined output are kept in the report."
+    },
+    "repeat": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 1,
+      "description": "Attempts per case. `jad eval --repeat` replaces it."
+    },
+    "parallel": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 1,
+      "description": "Attempts run at once. Keep it at or below server.max_concurrent_runs. `jad eval --parallel` replaces it."
+    },
+    "keep_workspaces": {
+      "type": "string",
+      "enum": ["always", "failed", "never"],
+      "default": "failed",
+      "description": "Which attempt workspaces are left on disk afterwards: always, only those that did not pass, or never."
+    },
+    "work_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Folder the attempt folders (workspace/ and answer.txt) are created in. Absent uses the system temporary folder."
+    },
+    "shell": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "default": ["sh", "-c"],
+      "description": "Program and arguments that run a setup or check command; the command line is appended as the last argument."
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "case": {
+      "type": "object",
+      "required": ["name", "prompt"],
+      "anyOf": [
+        {"required": ["checks"]},
+        {"required": ["expect_text"]}
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "description": "Unique within the suite."
+        },
+        "prompt": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "The user message of the run."
+        },
+        "workspace": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Folder copied into the attempt's fresh workspace (regular files with their mode, symbolic links as links). Absent starts from an empty folder."
+        },
+        "setup": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Commands run in the workspace before the agent, in order. A non-zero exit makes the attempt an error and the agent does not run."
+        },
+        "checks": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Commands run in the workspace after the agent, even when its run did not complete. Every one must exit 0 for the attempt to pass. Commands see JAD_EVAL_SUITE, JAD_EVAL_CASE, JAD_EVAL_ATTEMPT, JAD_EVAL_WORKSPACE and JAD_EVAL_ANSWER_FILE (the final answer text)."
+        },
+        "expect_text": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Regular expressions (Go RE2 syntax) the final answer must each match."
+        },
+        "profile": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "timeout_ms": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    }
+  }
+}

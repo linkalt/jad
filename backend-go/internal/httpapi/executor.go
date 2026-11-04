@@ -14,6 +14,7 @@ import (
 	"jad/backend-go/internal/responses"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tracing"
 	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
 )
@@ -33,6 +34,11 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	ctx := responses.WithRetryNotifier(run.context(), run.setProviderRetry)
 	logger := logging.Or(h.logger).With(runLogAttrs(run)...)
 	reference, profile, _ := strings.Cut(run.key, "\x00")
+	// The span ends after every other deferred step, the panic recovery included, so it
+	// carries the run's final status.
+	var runErr error
+	ctx, span := tracing.StartRun(ctx, reference, profile, run.turnID, run.source)
+	defer func() { tracing.EndRun(span, run.state(), runErr) }()
 	started := time.Now()
 	logger.Info("run started")
 	// The turn and message the run's user input was saved as, once it is saved.
@@ -113,6 +119,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			publishToolResult(run, normalizedRun, emitter, item, logger)
 		},
 	})
+	runErr = err
 	if err != nil {
 		// Like the TypeScript run, a failed or stopped run drops the snapshot still
 		// waiting in the coalescing window instead of publishing it: it describes

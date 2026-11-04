@@ -16,12 +16,20 @@ import (
 	"jad/backend-go/internal/app"
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tracing"
 )
 
 func main() {
 	if err := run(); err != nil {
 		if errors.Is(err, errCheckFailed) {
 			os.Exit(1)
+		}
+		var exit *exitError
+		if errors.As(err, &exit) {
+			if exit.err != nil {
+				fmt.Fprintf(os.Stderr, "jad: %v\n", exit.err)
+			}
+			os.Exit(exit.code)
 		}
 		// A startup or shutdown failure is always reported on stderr, whatever
 		// server.log_level says: it explains why the process exited.
@@ -34,12 +42,30 @@ func main() {
 // already printed, so main exits 1 without adding a message.
 var errCheckFailed = errors.New("check failed")
 
-// runCommand runs "jad check": it reads the root setting and every catalog and session file
-// as the server would, starts nothing, needs no API token, and fails when a file is invalid.
+// runCommand runs a subcommand with the process's standard streams and stdout.
 func runCommand(args []string, stdout io.Writer) error {
-	if args[0] != "check" || len(args) > 1 {
-		return fmt.Errorf("unknown arguments %q; the only command is \"check\"", args)
+	return dispatchCommand(args, commandStreams{stdin: os.Stdin, stdout: stdout, stderr: os.Stderr})
+}
+
+// dispatchCommand runs "jad check", "jad run" or "jad eval".
+func dispatchCommand(args []string, streams commandStreams) error {
+	switch args[0] {
+	case "run":
+		return runRunCommand(args[1:], streams)
+	case "eval":
+		return runEvalCommand(args[1:], streams)
+	case "check":
+		if len(args) == 1 {
+			return runCheckCommand(streams.stdout)
+		}
 	}
+	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\" and \"eval\"", args)
+}
+
+// runCheckCommand runs "jad check": it reads the root setting and every catalog and session
+// file as the server would, starts nothing, needs no API token, and fails when a file is
+// invalid.
+func runCheckCommand(stdout io.Writer) error {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
 		return fmt.Errorf("load server configuration: %w", err)
@@ -74,6 +100,17 @@ func run() error {
 	for _, warning := range config.RootSettingWarnings {
 		logger.Warn(warning)
 	}
+	shutdownTracing, err := tracing.Setup(config.Tracing, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred before the service, so it runs after the service has closed and every run
+	// span has ended: the last spans are exported before the process exits.
+	defer func() {
+		if err := tracing.Shutdown(shutdownTracing, config.Tracing); err != nil {
+			logger.Warn("tracing shutdown failed", slog.Any("error", err))
+		}
+	}()
 	service, err := app.NewService(config)
 	if err != nil {
 		return fmt.Errorf("initialize Go backend: %w", err)

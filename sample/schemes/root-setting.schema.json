@@ -237,6 +237,57 @@
           "default": [],
           "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires JAD_API_TOKEN in the environment."
         },
+        "tracing": {
+          "type": "object",
+          "description": "Go backend only. OpenTelemetry spans for every run (jad.run), model request (chat <model>) and tool call (execute_tool <name>), exported over OTLP/HTTP (protobuf) by the server, `jad run` and `jad eval`. Attributes follow the OpenTelemetry GenAI conventions (gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.tool.name, ...) plus jad.session, jad.profile, jad.turn_id and jad.round. Spans never carry prompts, answers, tool arguments, tool output or error text. Headers (for example an API key of a hosted collector) come from OTEL_EXPORTER_OTLP_HEADERS. Off by default; a change applies after a restart.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "endpoint": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https?://[^?#@]+$",
+              "description": "OTLP/HTTP base URL, for example http://127.0.0.1:4318; spans are sent to <endpoint>/v1/traces. Absent uses OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318."
+            },
+            "service_name": {
+              "type": "string",
+              "pattern": "\\S",
+              "default": "jad",
+              "description": "service.name of the exported spans."
+            },
+            "sample_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 1,
+              "description": "Share of runs whose spans are recorded; a run's model requests and tool calls follow its decision."
+            },
+            "export_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300000,
+              "default": 10000,
+              "description": "Time limit of one export request, and of the final flush when the process exits."
+            },
+            "batch_timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300000,
+              "default": 5000,
+              "description": "Longest time an ended span waits in the batch before it is exported."
+            },
+            "max_queue_size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "default": 2048,
+              "description": "Ended spans kept for export; when the queue is full, new spans are dropped."
+            }
+          },
+          "additionalProperties": false
+        },
         "remote_api": {
           "type": "object",
           "description": "Go backend only. Lets other JAD servers call profiles and sub-agents here (and read transcripts) under /api/remote/v1, with tokens from its own table, never the JAD_API_TOKEN. Off by default. Served on exactly one listener: listen_unix when it is set, which keeps the routes off the network, otherwise the main listener, which is plain http. The bearer token of a remote travels in clear text over TCP, so keep such a listener behind a VPN or on loopback, or set listen_unix. With it enabled and listen_unix empty, server.host (or HOST) must name one address, never a wildcard. A change applies after a restart; the token file is re-read on every change, so revoking a token is immediate.",

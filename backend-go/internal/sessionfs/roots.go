@@ -108,6 +108,8 @@ type ServerSettings struct {
 	AllowedOrigins             []string
 	// RemoteAPI is server.remote_api; see RemoteAPISettings.
 	RemoteAPI RemoteAPISettings
+	// Tracing is server.tracing; see TracingSettings.
+	Tracing TracingSettings
 }
 
 // Root identifies one independent session directory and the workspace used to
@@ -205,6 +207,7 @@ func Defaults() ServerSettings {
 		RunContentFlushInterval:    time.Duration(serverconfig.DefaultRunContentFlushIntervalMS) * time.Millisecond,
 		RunContentMaxIndexSegments: serverconfig.DefaultRunContentMaxIndexSegments,
 		AllowedOrigins:             []string{},
+		Tracing:                    defaultTracingSettings(),
 	}
 }
 
@@ -759,6 +762,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.RemoteAPI = remoteAPI
+	tracing, err := normalizeTracing(fields["tracing"], path)
+	if err != nil {
+		return ServerSettings{}, err
+	}
+	settings.Tracing = tracing
 	return settings, nil
 }
 

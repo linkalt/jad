@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "smoke",
+  "description": "Two small tasks that show the suite format: a bug fix judged by tests, and a question judged by the answer.",
+  "profile": "dev/coder",
+  "timeout_ms": 600000,
+  "check_timeout_ms": 120000,
+  "keep_workspaces": "failed",
+  "cases": [
+    {
+      "name": "fix-sum",
+      "workspace": "fixtures/sum-bug",
+      "prompt": "The tests in test_sum.py fail. Fix the bug in sum.py so that `python3 -m unittest` passes. Do not change the tests.",
+      "checks": [
+        "python3 -m unittest -q",
+        "test \"$(grep -c assertEqual test_sum.py)\" = 2"
+      ]
+    },
+    {
+      "name": "count-files",
+      "workspace": "fixtures/sum-bug",
+      "prompt": "How many .py files are in the working directory? Answer with the number only.",
+      "expect_text": ["^\\s*2\\s*$"]
+    }
+  ]
+}

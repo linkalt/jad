@@ -23,6 +23,7 @@ import (
 	"jad/backend-go/internal/memorytrace"
 	"jad/backend-go/internal/responses"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tracing"
 	"jad/backend-go/internal/transcript"
 )
 
@@ -510,7 +511,9 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		// TypeScript suffixes every round, including the first, so the staging
 		// directory of a response is always <turn>-<round>.
 		responseTurnID := turnID + "-" + strconv.Itoa(round)
-		responseResult, err := r.runResponse(ctx, request, sessionTurn, int64(round+1), responseTurnID, options)
+		roundCtx, roundSpan := tracing.StartModelRequest(ctx, r.settings.Model, round)
+		responseResult, err := r.runResponse(roundCtx, request, sessionTurn, int64(round+1), responseTurnID, options)
+		tracing.EndModelRequest(roundSpan, responseResult.Event, err)
 		if err != nil {
 			return result, err
 		}

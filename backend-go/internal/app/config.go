@@ -49,7 +49,9 @@ type Config struct {
 	// MaxLeafCalls is server.max_leaf_calls: the leaf tool calls that may run at once in the process.
 	MaxLeafCalls int
 	// RemoteAPI is server.remote_api.
-	RemoteAPI          sessionfs.RemoteAPISettings
+	RemoteAPI sessionfs.RemoteAPISettings
+	// Tracing is server.tracing.
+	Tracing            sessionfs.TracingSettings
 	HTTP               httpapi.Config
 	Environment        map[string]string
 	RootLibraryOptions contentlibrary.Options
@@ -104,6 +106,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
 		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
+		Tracing:                    loaded.Server.Tracing,
 		MaxLeafCalls:               loaded.Server.MaxLeafCalls,
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],

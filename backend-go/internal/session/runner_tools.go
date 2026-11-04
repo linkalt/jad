@@ -9,6 +9,7 @@ import (
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/tracing"
 	"jad/backend-go/internal/transcript"
 )
 
@@ -287,7 +288,10 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 			}
 			callExecution := execution
 			callExecution.BatchWaiting = held[functionCallID(call)]
-			return catalog.ExecuteFunctionCall(ctx, call, callExecution)
+			callCtx, span := tracing.StartToolCall(ctx, call)
+			output, err := catalog.ExecuteFunctionCall(callCtx, call, callExecution)
+			tracing.EndToolCall(span, output, err)
+			return output, err
 		},
 		func(_ json.RawMessage, output json.RawMessage) error {
 			outputID := functionCallID(output)
