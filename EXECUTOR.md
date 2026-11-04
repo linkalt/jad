@@ -6,15 +6,15 @@ Execute tasks from Agent 1, who represents the actual user's intent. Explore, pl
 
 ## Mandatory Code Navigation (NON-NEGOTIABLE)
 
-All code navigation and reading goes through the index tools, not `read.sh`, `grep`, `rg` or `cat`.
+Go symbol questions go through `gonav` (exec helper, already in PATH), not `read.sh`, `grep`, `rg` or `cat`.
 
-1. Start every phase with `codebase-memory` `get_architecture` (project `home-www-Downloads-tmp-myagent3`) and a `zvec-grep` search scoped to the phase's packages.
-2. Find symbols and usages with `zvec-grep` and `codebase-memory` `search_graph` / `search_code`. Trace callers, callees and data flow with `trace_path`. Read code with `get_code_snippet` for the symbol you need.
-2a. `get_code_snippet` needs the exact `qualified_name`, which is `home-www-Downloads-tmp-myagent3.backend-go.internal.<package>.<Symbol>` (methods: `<Type>.<Method>`; example: `...internal.openaiauth.wait`). Never guess it: get it from a `search_graph` result (filter by name and file path) or `search_code` first, then call `get_code_snippet`. If a name fails, run `search_graph` with the bare symbol name before falling back to `read.sh`.
-3. Use `exec` with `read.sh PATH START END`, grep, sed, etc - only for an exact line range, reading multiple code in 1 file, a non-Go file, or when both indexes returned nothing useful. Say which fallback you used in the report. Use no parameter to list available helper scripts or functions. The scripts path already in PATH env. You can modify/create new helper script/functions to adapt your workflow `.jad/exec`.
+1. Locate and read with `gonav`: `gonav navigate|symbol|impact SYM` to find a symbol or size its impact, `gonav show SYM...` to read one or more bodies in a single call, `gonav refs SYM... [--calls]` for exact type-checked references, `gonav callers` for callers, `gonav impl SYM` for interface implementers and satisfied interfaces.
+2. Pass several symbols per call (`a|b|c`). Disambiguate with `pkg.Name`, `Type.Method`, `Type.field`; narrow with `--path DIR`, skip tests with `--no-tests`, use `--json` for scripts. Output is capped near 4 KB with a truncation line naming the flag to narrow.
+3. Use `exec` with `read.sh PATH START END`, grep, sed, etc - for an exact line range, a non-Go file, strings, comments, or concept search (including `design_*.md`). Say which fallback you used in the report. Use no parameter to list available helper scripts or functions. The scripts path already in PATH env. You can modify/create new helper script/functions to adapt your workflow `.jad/exec`.
 4. Never read a whole Go file. Never dump large output into context; redirect to `/tmp/<your-id>/` and report counts.
 5. Do not skip this because a symbol looks familiar. A claim in a finding must trace to a snippet or trace you actually fetched.
-6. If a tool fails or returns nothing, try the other one, then fall back, and state the failure. Never claim indexed evidence you did not get.
+6. If `gonav` returns nothing or fails, try another subcommand (`symbol` or `navigate` for a name you only half know), then fall back, and state the failure. Never claim evidence you did not actually fetch.
+7. Known limits: interface-dispatched calls are not attributed to the concrete method, build-tagged files are `name_only`, `impl` is module-only, and `refs` may need up to ~30 s on a cold cache.
 
 ## Workflow
 
@@ -31,7 +31,7 @@ All code navigation and reading goes through the index tools, not `read.sh`, `gr
 - Follow existing project conventions and reuse existing functionality.
 - Trace affected callers and behavior before editing; check for regressions and edge cases.
 - Bug fixes require a regression test that fails without the fix. Verify it with `mutate-check.sh`.
-- Before adding a helper, test, or symbol, use `zvec-grep` to check whether it already exists.
+- Before adding a helper, test, or symbol, check that it does not already exist with `gonav symbol` (Go) or grep (non-Go).
 - After removing or renaming a concept, search once for its old terms across code, docs, samples, and schemas. Fix or report remaining references.
 - Do not introduce hardcoded limits, timeouts, or toggles. Use configuration with defaults; update `sample/schemes/` and configuration tests as appropriate.
 - Treat `messages.jsonl` output as a golden contract. Use `messages-golden-diff` when changes could affect it.
