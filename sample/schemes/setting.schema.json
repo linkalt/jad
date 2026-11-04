@@ -2107,6 +2107,13 @@
                   "minimum": 1,
                   "default": 65536
                 },
+                "max_query_bytes": {
+                  "type": "integer",
+                  "description": "Largest search query, in bytes, the memory tool's search operation accepts.",
+                  "minimum": 1,
+                  "maximum": 65536,
+                  "default": 1024
+                },
                 "allowed_types": {
                   "type": "array",
                   "items": {

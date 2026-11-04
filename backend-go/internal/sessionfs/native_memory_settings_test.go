@@ -16,17 +16,17 @@ func TestNormalizeNativeMemorySettingsDefaultsAndSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize default memory settings: %v", err)
 	}
-	if defaults.StorageDir != filepath.Join(cwd, ".memory") || defaults.MaxTypes != 64 || defaults.MaxRecordsPerType != 1_000 || defaults.MaxTotalRecords != 10_000 || defaults.ListLimit != 20 || defaults.MaxListLimit != 100 || defaults.MaxCursors != 1_000 || defaults.CursorTTLMS != 86_400_000 {
+	if defaults.StorageDir != filepath.Join(cwd, ".memory") || defaults.MaxTypes != 64 || defaults.MaxRecordsPerType != 1_000 || defaults.MaxTotalRecords != 10_000 || defaults.ListLimit != 20 || defaults.MaxListLimit != 100 || defaults.MaxCursors != 1_000 || defaults.CursorTTLMS != 86_400_000 || defaults.MaxQueryBytes != 1024 {
 		t.Fatalf("memory defaults = %+v", defaults)
 	}
 
 	settings, err := normalizeNativeMemorySettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"memory":{"storage_dir":"state/memory","allowed_types":["task","task","note"],"list_limit":2,"max_list_limit":3,"statecontext":[{"type":"task","filter":{"status":"open","project.name":"core"},"exclude_any":[{"archived":true}],"limit":2}]}}}`),
+		"tools": json.RawMessage(`{"native":{"memory":{"storage_dir":"state/memory","allowed_types":["task","task","note"],"list_limit":2,"max_list_limit":3,"max_query_bytes":65536,"statecontext":[{"type":"task","filter":{"status":"open","project.name":"core"},"exclude_any":[{"archived":true}],"limit":2}]}}}`),
 	}, "/session/setting.json", cwd, "")
 	if err != nil {
 		t.Fatalf("normalize configured memory settings: %v", err)
 	}
-	if settings.StorageDir != filepath.Join(cwd, "state", "memory") || settings.ListLimit != 2 || settings.MaxListLimit != 3 || !reflect.DeepEqual(settings.AllowedTypes, []string{"task", "note"}) {
+	if settings.StorageDir != filepath.Join(cwd, "state", "memory") || settings.ListLimit != 2 || settings.MaxListLimit != 3 || settings.MaxQueryBytes != 65536 || !reflect.DeepEqual(settings.AllowedTypes, []string{"task", "note"}) {
 		t.Fatalf("configured memory settings = %+v", settings)
 	}
 	if len(settings.StateContext) != 1 || settings.StateContext[0].Type != "task" || settings.StateContext[0].Limit != 2 || len(settings.StateContext[0].ExcludeAny) != 1 || settings.StateContext[0].Filter["status"] != "open" {
@@ -53,6 +53,8 @@ func TestNormalizeNativeMemorySettingsRejectsInvalidPolicies(t *testing.T) {
 		`{"storage_path":"memory"}`,
 		`{"list_limit":4,"max_list_limit":3}`,
 		`{"max_record_bytes":100,"max_total_bytes":10}`,
+		`{"max_query_bytes":0}`,
+		`{"max_query_bytes":65537}`,
 		`{"allowed_types":["../escape"]}`,
 		`{"allowed_types":null}`,
 		`{"statecontext":null}`,

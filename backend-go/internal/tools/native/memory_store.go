@@ -119,10 +119,15 @@ type memoryStoredCursor struct {
 	ExcludeAny        []map[string]any `json:"excludeAny,omitempty"`
 	FilterFingerprint string           `json:"filterFingerprint"`
 	Last              string           `json:"last"`
+	// Query is the normalized query of a search cursor; empty for a list cursor.
+	Query string `json:"query,omitempty"`
 }
 type memoryListOptions struct {
 	CreateCursor bool
 	ExcludeAny   []map[string]any
+	// Query, when set, keeps only records whose string and number values contain every
+	// term (see memorySearchTerms).
+	Query string
 }
 
 // MemoryStore stores one JSON file per record beneath a configured root.
@@ -327,6 +332,62 @@ func (s *MemoryStore) List(recordType string, requestedFilter map[string]any, li
 	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, memoryListOptions{CreateCursor: true})
 }
 
+// Search is List that keeps only the records whose string and number values contain
+// every whitespace-separated term of query, compared case-insensitively. Its cursor
+// carries the query, so it continues only the same search.
+func (s *MemoryStore) Search(recordType, query string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeMemorySettings) (MemoryListResult, error) {
+	if int64(len(query)) > policy.MaxQueryBytes {
+		return MemoryListResult{}, &MemoryStoreError{Message: fmt.Sprintf("memory search query exceeds the configured %d bytes", policy.MaxQueryBytes)}
+	}
+	terms := memorySearchTerms(query)
+	if len(terms) == 0 {
+		return MemoryListResult{}, &MemoryStoreError{Message: "memory search query has no words"}
+	}
+	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, memoryListOptions{CreateCursor: true, Query: strings.Join(terms, " ")})
+}
+
+// Delete removes one record. With ifMatch set, the record must still have that ETag.
+// It returns the ref and the ETag the record had. A malformed record can be deleted too.
+// The type's directory is removed with its last record, so it no longer counts toward
+// max_types.
+func (s *MemoryStore) Delete(recordType, ref, ifMatch string, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
+	var item MemoryItem
+	err := s.withLock(func() error {
+		if err := s.checkType(recordType, policy); err != nil {
+			return err
+		}
+		path, err := s.target(recordType, ref)
+		if err != nil {
+			return err
+		}
+		text, err := s.readRecordText(recordType, filepath.Base(path))
+		if errors.Is(err, os.ErrNotExist) {
+			return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+		}
+		if err != nil {
+			return &MemoryStoreError{Message: "memory record is not a safe file"}
+		}
+		etag := memoryETag(text)
+		// readRecordText also refuses a symlink or directory under a record name; those
+		// are left in place for a person to look at.
+		if ifMatch != "" && etag != ifMatch {
+			return &MemoryConflictError{CurrentETag: etag}
+		}
+		if err := os.Remove(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+			}
+			return err
+		}
+		delete(s.sizes[recordType], filepath.Base(path))
+		// Fails, harmlessly, while the directory still holds anything.
+		_ = os.Remove(filepath.Dir(path))
+		item = MemoryItem{Ref: ref, ETag: etag}
+		return nil
+	})
+	return item, err
+}
+
 func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeMemorySettings, options memoryListOptions) (MemoryListResult, error) {
 	var result MemoryListResult
 	err := s.withLock(func() error {
@@ -398,7 +459,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 		if err != nil {
 			return err
 		}
-		fp, err := memoryFilterFingerprint(filter, excludeAny)
+		fp, err := memoryCursorFingerprint(filter, excludeAny, options.Query)
 		if err != nil {
 			return err
 		}
@@ -430,22 +491,32 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 			}
 			return names[i] < names[j]
 		})
+		// The cursor position is the last record of the previous page. Record names sort in
+		// creation order, so a position that was deleted since still has its place: the page
+		// goes on after the last name that sorts before it.
 		positionIndex := -1
+		positionFound := false
 		if last != "" {
 			base := strings.TrimPrefix(last, recordType+"/")
 			for index, name := range names {
 				if name == base {
 					positionIndex = index
+					positionFound = true
 					break
 				}
-			}
-			if positionIndex < 0 {
-				return &MemoryStoreError{Message: "memory cursor position was not found"}
+				if (order == "newest" && name < base) || (order == "oldest" && name > base) {
+					break
+				}
+				positionIndex = index
 			}
 		}
 		start := positionIndex
-		if legacy != nil && legacy.V == 1 {
+		if legacy != nil && legacy.V == 1 && positionFound {
 			start--
+		}
+		var terms []string
+		if options.Query != "" {
+			terms = strings.Split(options.Query, " ")
 		}
 		items := make([]MemoryItem, 0)
 		itemsJSONBytes := int64(2)
@@ -482,7 +553,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				continue
 			}
 			data := memoryGoMap(value)
-			if !memoryMatches(data, filter, excludeAny) {
+			if !memoryMatches(data, filter, excludeAny) || !memoryContainsTerms(value, terms) {
 				position = ref
 				continue
 			}
@@ -510,7 +581,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 		}
 		nextCursor := ""
 		if stopped && position != "" && options.CreateCursor {
-			nextCursor, err = s.createCursor(recordType, order, filter, excludeAny, fp, position, policy)
+			nextCursor, err = s.createCursor(recordType, order, filter, excludeAny, options.Query, fp, position, policy)
 			if err != nil {
 				return err
 			}
@@ -919,15 +990,15 @@ func (s *MemoryStore) readStoredCursor(value any, policy sessionfs.NativeMemoryS
 	if err := json.Unmarshal(data, &cursor); err != nil || cursor.V != 1 || cursor.Type == "" || (cursor.Order != "newest" && cursor.Order != "oldest") || cursor.Filter == nil || cursor.Last == "" || cursor.FilterFingerprint == "" {
 		return nil, &MemoryStoreError{Message: "memory cursor is invalid"}
 	}
-	fingerprint, err := memoryFilterFingerprint(cursor.Filter, cursor.ExcludeAny)
+	fingerprint, err := memoryCursorFingerprint(cursor.Filter, cursor.ExcludeAny, cursor.Query)
 	if err != nil || fingerprint != cursor.FilterFingerprint {
 		return nil, &MemoryStoreError{Message: "memory cursor is invalid"}
 	}
 	return &cursor, nil
 }
 
-func (s *MemoryStore) createCursor(recordType, order string, filter map[string]any, excludeAny []map[string]any, filterFingerprint, last string, policy sessionfs.NativeMemorySettings) (string, error) {
-	cursor := memoryStoredCursor{V: 1, Type: recordType, Order: order, Filter: filter, FilterFingerprint: filterFingerprint, Last: last}
+func (s *MemoryStore) createCursor(recordType, order string, filter map[string]any, excludeAny []map[string]any, query, filterFingerprint, last string, policy sessionfs.NativeMemorySettings) (string, error) {
+	cursor := memoryStoredCursor{V: 1, Type: recordType, Order: order, Filter: filter, FilterFingerprint: filterFingerprint, Last: last, Query: query}
 	if len(excludeAny) > 0 {
 		cursor.ExcludeAny = excludeAny
 	}

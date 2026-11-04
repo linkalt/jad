@@ -20,22 +20,27 @@ var memoryInputSchema = json.RawMessage(`{
   "required":["operation","type"],
   "additionalProperties":false,
   "properties":{
-    "operation":{"type":"string","enum":["create","get","list","update"],"description":"Create assigns and returns a ref for a new record. Use that exact returned ref for get/update; never invent a ref or create a duplicate just to obtain one. List first if checking for an existing record."},
+    "operation":{"type":"string","enum":["create","get","list","search","update","delete"],"description":"Create assigns and returns a ref for a new record. Use that exact returned ref for get/update/delete; never invent a ref or create a duplicate just to obtain one. List or search first if checking for an existing record. Delete removes a record for good."},
     "type":{"type":"string","minLength":1},
-    "ref":{"type":"string","minLength":1,"description":"For get/update, use the exact ref returned by create or list; never invent one. Create assigns and returns its ref."},
+    "ref":{"type":"string","minLength":1,"description":"For get/update/delete, use the exact ref returned by create, list or search; never invent one. Create assigns and returns its ref."},
     "data":{"type":"object"},
-    "filter":{"type":"object","description":"Top-level or dotted-path exact-match filter; omitted values inherit from a persistent cursor."},
+    "query":{"type":"string","minLength":1,"description":"For search: words that must all appear, ignoring case, in the record's string or number values; keys are not searched."},
+    "filter":{"type":"object","description":"Top-level or dotted-path exact-match filter for list and search; omitted values inherit from a persistent cursor."},
     "limit":{"type":"integer","minimum":1},
-    "order":{"type":"string","enum":["newest","oldest"],"description":"List order; when omitted while continuing, the cursor order is used."},
-    "cursor":{"type":"string","minLength":1,"description":"Cursor returned by list; a cursor position must still exist."},
-    "if_match":{"type":"string","minLength":1,"description":"Optional current ETag for optimistic concurrency. On mismatch, the update is rejected and the current_etag is returned; omitted means an unconditional update."}
+    "order":{"type":"string","enum":["newest","oldest"],"description":"List and search order; when omitted while continuing, the cursor order is used."},
+    "cursor":{"type":"string","minLength":1,"description":"Cursor returned by list or search, given back to the same operation with the same type, query and filter; it continues even if the last record it returned was deleted since."},
+    "if_match":{"type":"string","minLength":1,"description":"Optional current ETag for update or delete. On mismatch, the call is rejected and the current_etag is returned; omitted means an unconditional call."}
   },
   "allOf":[
     {"if":{"properties":{"operation":{"const":"create"}}},"then":{"properties":{"data":{}},"required":["data"]}},
     {"if":{"properties":{"operation":{"const":"get"}}},"then":{"properties":{"ref":{}},"required":["ref"]}},
-    {"if":{"properties":{"operation":{"const":"update"}}},"then":{"properties":{"ref":{},"data":{}},"required":["ref","data"]}}
+    {"if":{"properties":{"operation":{"const":"search"}}},"then":{"properties":{"query":{}},"required":["query"]}},
+    {"if":{"properties":{"operation":{"const":"update"}}},"then":{"properties":{"ref":{},"data":{}},"required":["ref","data"]}},
+    {"if":{"properties":{"operation":{"const":"delete"}}},"then":{"properties":{"ref":{}},"required":["ref"]}}
   ]
 }`)
+
+const memoryToolDescription = "Store and retrieve bounded JSON-object records. `create` assigns and returns the record's ref; never invent one or create a duplicate just to obtain a ref. Reuse returned refs with `get`/`update`/`delete`, and list or search first when checking for an existing record. `search` finds records whose values contain all the words of `query`; `delete` removes a record that is no longer true or needed."
 
 type memoryOperation string
 
@@ -44,6 +49,8 @@ const (
 	memoryGet    memoryOperation = "get"
 	memoryList   memoryOperation = "list"
 	memoryUpdate memoryOperation = "update"
+	memorySearch memoryOperation = "search"
+	memoryDelete memoryOperation = "delete"
 )
 
 type memoryToolContext struct {
@@ -65,7 +72,7 @@ func NewMemoryTool(settings sessionfs.NativeMemorySettings, store *MemoryStore) 
 			ID:          memoryToolID,
 			Source:      "native",
 			Name:        "memory",
-			Description: "Store and retrieve bounded JSON-object records. `create` assigns and returns the record's ref; never invent one or create a duplicate just to obtain a ref. Reuse returned refs with `get`/`update`, and list first when checking for an existing record.",
+			Description: memoryToolDescription,
 			InputSchema: append(json.RawMessage(nil), memoryInputSchema...),
 		},
 		Validator:          validator,
@@ -119,7 +126,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 	callID := execution.CallID
 	operation, okOperation := args["operation"].(string)
 	recordType, okType := args["type"].(string)
-	if !okOperation || !okType || (memoryOperation(operation) != memoryCreate && memoryOperation(operation) != memoryGet && memoryOperation(operation) != memoryList && memoryOperation(operation) != memoryUpdate) {
+	if !okOperation || !okType || !validMemoryOperation(memoryOperation(operation)) {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_operation", "Memory requires a valid operation and type"), nil
 	}
 	settings := toolContext.settings
@@ -164,13 +171,30 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 			return memoryExecutionError(callID, memoryUpdate, recordType, ref, err, store, settings), nil
 		}
 		return renderMemoryItem(callID, memoryUpdate, item, "Memory record updated")
-	case memoryList:
+	case memoryDelete:
+		ref, okRef := args["ref"].(string)
+		ifMatchValue, ifMatchExists := args["if_match"]
+		ifMatch, okIfMatch := ifMatchValue.(string)
+		if !okRef || (ifMatchExists && !okIfMatch) || !memoryOnlyKeys(args, "operation", "type", "ref", "if_match") {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_delete", "Delete requires type and ref; if_match is optional"), nil
+		}
+		item, err := store.Delete(recordType, ref, ifMatch, settings)
+		if err != nil {
+			return memoryExecutionError(callID, memoryDelete, recordType, ref, err, store, settings), nil
+		}
+		return renderMemoryItem(callID, memoryDelete, item, "Memory record deleted")
+	case memoryList, memorySearch:
 		filter, okFilter := args["filter"].(map[string]any)
 		if filter == nil && args["filter"] == nil {
 			okFilter = true
 		}
-		if !okFilter || !memoryOnlyKeys(args, "operation", "type", "filter", "limit", "order", "cursor") {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_list", "List accepts type, filter, limit, order, and cursor"), nil
+		query, okQuery := args["query"].(string)
+		if memoryOperation(operation) == memoryList {
+			if !okFilter || !memoryOnlyKeys(args, "operation", "type", "filter", "limit", "order", "cursor") {
+				return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_list", "List accepts type, filter, limit, order, and cursor"), nil
+			}
+		} else if !okFilter || !okQuery || !memoryOnlyKeys(args, "operation", "type", "query", "filter", "limit", "order", "cursor") {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_search", "Search requires type and query; it accepts filter, limit, order, and cursor"), nil
 		}
 		var requestedLimit int64
 		if args["limit"] != nil {
@@ -191,16 +215,24 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		if _, exists := args["filter"]; exists {
 			requestedFilter = filter
 		}
-		result, err := store.List(recordType, requestedFilter, requestedLimit, args["order"], args["cursor"], settings)
+		var result MemoryListResult
+		var err error
+		summary := "listed"
+		if memoryOperation(operation) == memoryList {
+			result, err = store.List(recordType, requestedFilter, requestedLimit, args["order"], args["cursor"], settings)
+		} else {
+			summary = "found"
+			result, err = store.Search(recordType, query, requestedFilter, requestedLimit, args["order"], args["cursor"], settings)
+		}
 		if err != nil {
-			return memoryExecutionError(callID, memoryList, recordType, "", err, store, settings), nil
+			return memoryExecutionError(callID, memoryOperation(operation), recordType, "", err, store, settings), nil
 		}
 		text, err := memoryListContentText(result)
 		if err != nil {
 			return tools.ExecutionError(callID, tools.StatusError, "memory_operation_failed", err.Error()), nil
 		}
 		information := []tools.Information{
-			{Key: "operation", Value: "list"},
+			{Key: "operation", Value: operation},
 			{Key: "type", Value: recordType},
 			{Key: "count", Value: len(result.Items)},
 		}
@@ -209,7 +241,7 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 		}
 		output, err := tools.RenderToolResult(tools.ResultOptions{
 			ID: callID, Status: tools.StatusOK,
-			Summary:     fmt.Sprintf("%d memory record%s listed", len(result.Items), pluralMemorySuffix(len(result.Items))),
+			Summary:     fmt.Sprintf("%d memory record%s %s", len(result.Items), pluralMemorySuffix(len(result.Items)), summary),
 			Information: information,
 			Content:     &tools.Content{Encoding: "utf8", Text: text},
 		})
@@ -217,6 +249,14 @@ func executeNativeMemory(args map[string]any, execution tools.ExecutionContext, 
 	default:
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_operation", "Memory requires a valid operation and type"), nil
 	}
+}
+
+func validMemoryOperation(operation memoryOperation) bool {
+	switch operation {
+	case memoryCreate, memoryGet, memoryList, memorySearch, memoryUpdate, memoryDelete:
+		return true
+	}
+	return false
 }
 
 func memoryArgumentData(raw json.RawMessage, fallback map[string]any) *memoryJSONValue {
@@ -250,7 +290,7 @@ func memoryExecutionError(callID string, operation memoryOperation, recordType, 
 	var conflict *MemoryConflictError
 	if errors.As(err, &conflict) {
 		return tools.ExecutionError(callID, tools.StatusError, "memory_conflict", err.Error(),
-			tools.Information{Key: "operation", Value: string(memoryUpdate)},
+			tools.Information{Key: "operation", Value: string(operation)},
 			tools.Information{Key: "type", Value: recordType},
 			tools.Information{Key: "ref", Value: ref},
 			tools.Information{Key: "current_etag", Value: conflict.CurrentETag},

@@ -28,6 +28,8 @@ const (
 	defaultNativeMemoryCursorTTL    int64 = 24 * 60 * 60 * 1000
 	defaultNativeMemoryCursorBytes  int64 = 64 * 1024
 	defaultNativeMemoryStateLimit   int64 = 10
+	defaultNativeMemoryQueryBytes   int64 = 1024
+	maxNativeMemoryQueryBytes       int64 = 64 * 1024
 	maxNativeMemoryRecords          int64 = 100_000
 	maxNativeMemoryTotalRecords     int64 = 10_000_000
 	maxNativeMemoryBytes            int64 = 10 * 1024 * 1024
@@ -78,7 +80,9 @@ type NativeMemorySettings struct {
 	MaxCursors        int64
 	CursorTTLMS       int64
 	MaxCursorBytes    int64
-	AllowedTypes      []string
+	// MaxQueryBytes bounds the text of a search query.
+	MaxQueryBytes int64
+	AllowedTypes  []string
 }
 
 func normalizeNativeMemorySettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeMemorySettings, error) {
@@ -106,7 +110,7 @@ func normalizeNativeMemorySettings(setting map[string]json.RawMessage, settingPa
 			return nil, configError("%s: tools.native.memory.storage_path was removed; use storage_dir", settingPath)
 		}
 		switch key {
-		case "storage_dir", "statecontext", "max_types", "max_records_per_type", "max_total_records", "max_record_bytes", "max_total_bytes", "list_limit", "max_list_limit", "max_list_bytes", "max_scan_records", "max_scan_bytes", "max_filter_fields", "max_filter_depth", "max_json_depth", "max_cursors", "cursor_ttl_ms", "max_cursor_bytes", "allowed_types":
+		case "storage_dir", "statecontext", "max_types", "max_records_per_type", "max_total_records", "max_record_bytes", "max_total_bytes", "list_limit", "max_list_limit", "max_list_bytes", "max_scan_records", "max_scan_bytes", "max_filter_fields", "max_filter_depth", "max_json_depth", "max_cursors", "cursor_ttl_ms", "max_cursor_bytes", "max_query_bytes", "allowed_types":
 		default:
 			return nil, configError("%s: tools.native.memory.%s is not supported", settingPath, key)
 		}
@@ -159,6 +163,9 @@ func normalizeNativeMemorySettings(setting map[string]json.RawMessage, settingPa
 		return nil, err
 	}
 	if settings.MaxCursorBytes, err = configuredInteger(fields, "max_cursor_bytes", defaultNativeMemoryCursorBytes, 1, maxNativeMemoryBytes, settingPath, "tools.native.memory"); err != nil {
+		return nil, err
+	}
+	if settings.MaxQueryBytes, err = configuredInteger(fields, "max_query_bytes", defaultNativeMemoryQueryBytes, 1, maxNativeMemoryQueryBytes, settingPath, "tools.native.memory"); err != nil {
 		return nil, err
 	}
 	if settings.ListLimit > settings.MaxListLimit || settings.MaxRecordBytes > settings.MaxTotalBytes {

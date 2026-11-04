@@ -11,7 +11,7 @@
 
 Examples include `workspace`, `task`, and `contact`. A record's type and identity are external metadata: the JSON payload does not duplicate an `id`, `type`, or timestamps.
 
-The MVP provides `create`, `get`, `list`, and `update`. It intentionally does **not** provide deletion, partial JSON patching, arbitrary query operators, an index, automatic retention, or date partitioning.
+The tool provides `create`, `get`, `list`, `search`, `update`, and `delete` (`search` and `delete` were added on 2026-11-04). It intentionally does **not** provide partial JSON patching, arbitrary query operators, an index, automatic retention, or date partitioning.
 
 Stored data is untrusted data, never executable instructions. A memory record cannot change agent instructions, permissions, tool policy, or configuration.
 
@@ -80,10 +80,11 @@ Every request has a fixed, explicit operation. Dynamic fields are contained only
 
 ```json
 {
-  "operation": "create | get | list | update",
+  "operation": "create | get | list | search | update | delete",
   "type": "task",
   "ref": "task/task-…json",
   "data": {},
+  "query": "words to find",
   "filter": {},
   "limit": 20,
   "order": "newest | oldest",
@@ -165,7 +166,7 @@ The selected type must match the type component of the canonical ref. A successf
 }
 ```
 
-The MVP scans only the selected type directory. It sorts canonical filenames lexicographically, descending for `newest` and ascending for `oldest`; creation names are sortable by timestamp. A cursor encodes the version, type, order, filter fingerprint, and **last scanned** ref (not merely the last returned item), so filtered and corrupt-file scans can advance correctly. It is opaque to callers, bounded in length, and rejected if used with a different type, order, or filter. Pagination is not snapshot-isolated: records created before the cursor's position may appear on an earlier page, while records created after it appear on a later or fresh listing.
+The MVP scans only the selected type directory. It sorts canonical filenames lexicographically, descending for `newest` and ascending for `oldest`; creation names are sortable by timestamp. A cursor encodes the version, type, order, filter fingerprint, and **last scanned** ref (not merely the last returned item), so filtered and corrupt-file scans can advance correctly. It is opaque to callers, bounded in length, and rejected if used with a different type, order, or filter. A cursor whose last record was deleted since still continues: names sort in creation order, so the next page starts after the deleted name's place. Pagination is not snapshot-isolated: records created before the cursor's position may appear on an earlier page, while records created after it appear on a later or fresh listing.
 
 ### 4.4 Update
 
@@ -184,7 +185,34 @@ The MVP scans only the selected type directory. It sorts canonical filenames lex
 
 `update` atomically replaces the complete payload while preserving the filename and ref. It does not merge or patch dynamic objects. `if_match` is required and must equal the current response `etag`; a mismatch returns a conflict and leaves the file unchanged. This prevents silent lost updates between agents or turns. The replacement must meet per-record and aggregate quota policy. A successful update returns the operation, type, ref, and new ETag without echoing the payload; call `get` to retrieve the updated data.
 
-Deletion is deliberately unsupported in the MVP. Records can be updated but not removed by this tool.
+In the implementation `if_match` is optional: omitted, the update is unconditional.
+
+### 4.5 Search
+
+```json
+{
+  "operation": "search",
+  "type": "task",
+  "query": "release blocker",
+  "filter": {"status": "open"},
+  "limit": 20
+}
+```
+
+`search` is `list` with one more condition: every whitespace-separated word of `query` must appear, ignoring case, in at least one string or number value of the record, at any depth. Keys are not searched, and different words may match different values. `filter`, `limit`, `order`, and `cursor` work as for `list`; the result has the same shape. A search cursor carries the normalized query, so it continues only the same search, and a list cursor does not continue a search. There is no index: a search scans the type directory under the same `max_scan_records` and `max_scan_bytes` budget as `list`, and `tools.native.memory.max_query_bytes` (default 1024) bounds the query.
+
+### 4.6 Delete
+
+```json
+{
+  "operation": "delete",
+  "type": "task",
+  "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
+  "if_match": "sha256:…"
+}
+```
+
+`delete` removes the record file for good; there is no trash. With `if_match`, a record whose ETag differs is left in place and the conflict returns its `current_etag`. The result returns the operation, type, ref and the ETag the record had. A malformed record can be deleted. The type directory is removed with its last record, so the type no longer counts toward `max_types`. A ref that does not exist answers not-found with the newest refs of the type.
 
 ## 5. Types, definitions, and filters
 
@@ -233,7 +261,7 @@ interface NativeMemoryToolSettings {
 }
 ```
 
-Without an index, the store establishes quota totals with a bounded scan before a mutation. If that scan cannot establish totals within its configured scan budget, the mutation fails conservatively rather than guessing that capacity remains. A create that would exceed record or byte quotas fails rather than silently pruning memory. Updates account for the old and new file size. Since deletion and automatic retention are out of scope, capacity exhaustion is a visible result requiring explicit operator policy rather than data loss.
+Without an index, the store establishes quota totals with a bounded scan before a mutation. If that scan cannot establish totals within its configured scan budget, the mutation fails conservatively rather than guessing that capacity remains. A create that would exceed record or byte quotas fails rather than silently pruning memory. Updates account for the old and new file size. Automatic retention is out of scope, so capacity exhaustion is a visible result: the agent frees space only by an explicit `delete`, never by silent pruning.
 
 List responses obey item and byte budgets. The scan has independent record and byte budgets, so a sparse filter cannot force an unbounded directory walk. If a scan limit is reached, the result is partial with a cursor/hint rather than falsely complete. Corrupt or unreadable candidate files are skipped, reported as bounded warnings by canonical ref, and do not abort unrelated records.
 
@@ -297,7 +325,7 @@ The first version is complete when it can:
 - perform bounded exact-match filtering over safe dot paths;
 - return canonical refs and ETags outside the original payload;
 - update a full payload atomically only with a current `if_match` ETag;
-- reject deletion, unsafe types/refs, path traversal, malformed JSON, and quota violations;
+- reject unsafe types/refs, path traversal, malformed JSON, and quota violations;
 - keep list/scan/result output bounded and report partial/corrupt-file conditions honestly;
 - recover safely from interrupted writes; and
 - treat every stored value as untrusted data.
