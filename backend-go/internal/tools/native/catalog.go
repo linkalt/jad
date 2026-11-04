@@ -86,7 +86,7 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
 func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeNotebook == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -393,6 +393,20 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool = withConfiguredHooks(config, tool)
 		loaded = append(loaded, tool)
 	}
+	if config.NativeNotebook != nil {
+		definition, err := requireNativeDefinition(config, definitions, "notebook", notebookToolID, notebookInputSchema)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		tool, err := NewNotebookTool(*config.NativeNotebook, locks)
+		if err != nil {
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		// post_edit hooks run on a changed notebook as on an edited file.
+		tool = withConfiguredHooks(config, tool)
+		loaded = append(loaded, tool)
+	}
 	if config.NativeGrep != nil {
 		definition, err := requireNativeDefinition(config, definitions, "grep", grepToolID, grepInputSchema)
 		if err != nil {
@@ -586,6 +600,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeWrite != nil
 	case "edit":
 		return config.NativeEdit != nil
+	case "notebook":
+		return config.NativeNotebook != nil
 	case "grep":
 		return config.NativeGrep != nil
 	case "bash":

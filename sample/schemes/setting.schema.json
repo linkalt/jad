@@ -1478,6 +1478,14 @@
               },
               "unevaluatedProperties": false
             },
+            "notebook": {
+              "type": "object",
+              "description": "Reads and changes the cells of a Jupyter notebook (.ipynb, nbformat 4): read shows cells and their outputs as text, edit, insert and delete change cells and rewrite the file in Jupyter's layout (sorted keys, one-space indent), so a diff shows only the changed cell. Nothing is executed. Needs tools.native.edit: where it may write, max_bytes and backups are edit's settings, so a profile that may edit a file may edit the notebook. Not read-only: its calls run in order with other changes, read-only sub-agents do not get it, and writer sub-agents may list it. post_edit hooks run on a changed notebook. Needs notebook in tool_definition_paths.",
+              "properties": {
+                "max_output_chars": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 2000, "description": "Characters of each cell output a read shows; the rest is cut and counted. 0 shows no output text."}
+              },
+              "additionalProperties": false
+            },
             "read_image": {
               "type": "object",
               "description": "Shows an image file (png, jpeg, webp or gif) to the model as an image. Read-only. The path rules are its own (read_style): without paths it reaches the workspace only, not what read allows. Needs read_image in tool_definition_paths. Large images are kept in files when image_store is on, and image_resize applies to them.",

@@ -164,7 +164,7 @@ type NativeSubagentStateContextSettings struct {
 // An agent may list them when the session enables them, and a call to an agent that
 // lists one is a change the checkpoint and the scheduler must know of. tool_smith runs
 // code, and subagent and profile_message start runs that may change files.
-var SubagentChangeTools = []string{"write", "edit", "bash", "exec", "process", "tool_smith", "subagent", "profile_message"}
+var SubagentChangeTools = []string{"write", "edit", "notebook", "bash", "exec", "process", "tool_smith", "subagent", "profile_message"}
 
 // NativeSubagentAgent is one configured child agent.
 type NativeSubagentAgent struct {

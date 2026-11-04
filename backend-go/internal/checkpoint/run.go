@@ -24,6 +24,18 @@ func CallChangesWorkspace(call json.RawMessage, source string, includeMCPTools b
 	switch fields.Name {
 	case "write", "edit", "bash", "exec":
 		return true
+	case "notebook":
+		// Every action but read changes the notebook file.
+		var text string
+		if json.Unmarshal(fields.Arguments, &text) != nil {
+			return false
+		}
+		var args map[string]any
+		if json.Unmarshal([]byte(text), &args) != nil || args == nil {
+			return false
+		}
+		action, _ := args["action"].(string)
+		return action != "read"
 	case "process":
 		var text string
 		if json.Unmarshal(fields.Arguments, &text) != nil {

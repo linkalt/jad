@@ -171,6 +171,7 @@ type SessionConfig struct {
 	NativeExec               *NativeExecSettings
 	NativeGlob               *NativeGlobSettings
 	NativeReadImage          *NativeReadImageSettings
+	NativeNotebook           *NativeNotebookSettings
 	NativeProcess            *NativeProcessSettings
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
@@ -454,6 +455,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeNotebook, err := normalizeNativeNotebookSettings(setting, nativeEdit, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	grepPolicy := NativePathPolicy{Paths: []NativePathRule{}}
 	if nativeGrep != nil {
 		grepPolicy = nativeGrep.Policy
@@ -660,6 +665,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeExec:               nativeExec,
 		NativeGlob:               nativeGlob,
 		NativeReadImage:          nativeReadImage,
+		NativeNotebook:           nativeNotebook,
 		NativeProcess:            nativeProcess,
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
