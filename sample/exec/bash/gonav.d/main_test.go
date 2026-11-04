@@ -1443,3 +1443,27 @@ func (m *Manager) List(filter string) []Snapshot { return nil }
 		t.Fatalf("note %q claims no implementer while one exists", note)
 	}
 }
+
+// An ambiguous name is not an answer for any command that takes a symbol: the same rule as refs, exit 1
+// with the candidates listed, and --json reports ok:false. A unique name keeps its answer.
+func TestAmbiguousSymbolCommandsExitOneWithCandidates(t *testing.T) {
+	root := fixture2(t)
+	for _, cmd := range []string{"symbol", "navigate", "impact", "show"} {
+		value, err := execute(config{cmd: cmd, symbols: []string{"wait"}, root: root, path: "backend-go", max: defaultMax, maxLines: defaultMaxLine}, time.Now())
+		if err == nil {
+			t.Fatalf("%s wait: want exit 1 for an ambiguous name, got answer %v", cmd, value)
+		}
+		payload, ok := err.(*resultError)
+		if !ok {
+			t.Fatalf("%s wait: want a result error, got %v", cmd, err)
+		}
+		if payload.value["ok"] != false || payload.value["ambiguous"] != true {
+			t.Fatalf("%s wait: json = %v, want ok:false and ambiguous:true", cmd, payload.value)
+		}
+		encoded, _ := json.Marshal(payload.value["candidates"])
+		var candidates []any
+		if err := json.Unmarshal(encoded, &candidates); err != nil || len(candidates) != 2 {
+			t.Fatalf("%s wait: candidates = %s, want 2", cmd, encoded)
+		}
+	}
+}

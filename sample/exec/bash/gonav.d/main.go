@@ -1462,7 +1462,7 @@ func (se *session) toJSON(ans *symAnswer) map[string]any {
 	}
 	if len(ans.candidates) > 0 {
 		return map[string]any{
-			"ok":          true,
+			"ok":          false,
 			"cmd":         cmd,
 			"symbol":      ans.symbol,
 			"ambiguous":   true,
@@ -1523,7 +1523,7 @@ func (se *session) jsonResult() (any, error) {
 	if len(se.answers) == 1 {
 		ans := se.answers[0]
 		out := se.toJSON(ans)
-		if ans.failure != nil {
+		if ans.failure != nil || len(ans.candidates) > 0 {
 			return nil, &resultError{value: out}
 		}
 		return out, nil
@@ -1531,7 +1531,7 @@ func (se *session) jsonResult() (any, error) {
 	results := make([]map[string]any, 0, len(se.answers))
 	failed := 0
 	for _, ans := range se.answers {
-		if ans.failure != nil {
+		if ans.failure != nil || len(ans.candidates) > 0 {
 			failed++
 		}
 		results = append(results, se.toJSON(ans))
@@ -2035,7 +2035,43 @@ func showResult(cfg config, started time.Time) (map[string]any, error) {
 		out["notes"] = notes
 	}
 	out["cmd"] = "show"
+	if len(ranges) == 0 && se.unresolved() > 0 {
+		out["ok"] = false
+		out["ambiguous"] = se.ambiguous()
+		out["candidates"] = se.candidates()
+		return nil, &resultError{value: out}
+	}
 	return out, nil
+}
+
+// unresolved counts the symbols that named no single definition: missing, or ambiguous.
+func (se *session) unresolved() int {
+	n := 0
+	for _, ans := range se.answers {
+		if ans.failure != nil || len(ans.candidates) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// candidates lists the candidates of every ambiguous symbol, in symbol order.
+func (se *session) candidates() []candidate {
+	var out []candidate
+	for _, ans := range se.answers {
+		out = append(out, ans.candidates...)
+	}
+	return out
+}
+
+// ambiguous reports whether any symbol matched several definitions.
+func (se *session) ambiguous() bool {
+	for _, ans := range se.answers {
+		if len(ans.candidates) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- compact text output ----------
@@ -2059,12 +2095,16 @@ func executeText(cfg config, started time.Time) (string, error) {
 		if se.cfg.cmd == "show" {
 			ranges, notes := se.showRanges()
 			blocks, _, omitted := readBlocks(se.cfg, ranges)
-			return capText(strings.Join(notes, "")+renderBlocks(blocks, omitted), se.cfg, ""), nil
+			text := capText(strings.Join(notes, "")+renderBlocks(blocks, omitted), se.cfg, "")
+			if len(ranges) == 0 && se.unresolved() > 0 {
+				return "", &resultError{value: map[string]any{"text": text}}
+			}
+			return text, nil
 		}
 		var b strings.Builder
 		failed := 0
 		for _, ans := range se.answers {
-			if ans.failure != nil {
+			if ans.failure != nil || len(ans.candidates) > 0 {
 				failed++
 			}
 			b.WriteString(se.renderText(ans))
