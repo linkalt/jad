@@ -380,6 +380,7 @@
           "max_run_cost_usd",
           "model_fallback",
           "checkpoint",
+          "plan_mode",
           "hooks",
           "image_resize",
           "image_store",
@@ -430,6 +431,9 @@
         },
         "checkpoint": {
           "$ref": "#/properties/checkpoint"
+        },
+        "plan_mode": {
+          "$ref": "#/properties/plan_mode"
         },
         "hooks": {
           "$ref": "#/properties/hooks"
@@ -678,6 +682,23 @@
         "include_mcp_tools": {"type": "boolean", "default": true, "description": "Treat a call to any MCP tool as a change to the workspace, so it takes the checkpoint."},
         "snapshot_on": {"type": "string", "enum": ["first_mutation", "run_start"], "default": "first_mutation", "description": "first_mutation snapshots just before the first call to write, edit, bash, a process start or an MCP tool, so a read-only run costs nothing; run_start snapshots at the start of every run."},
         "safe_restore": {"type": "boolean", "default": true, "description": "Default restore mode. Safe restore reverts only the paths the run changed and leaves paths changed since the run ended alone, reporting them as conflicts; when false the default is a full restore. A request can still choose the mode."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "plan_mode": {
+      "type": "object",
+      "description": "How a run started in plan mode (a run request with plan: true, jad run --plan, /plan, an eval case with plan: true, the web client's Plan switch) differs from another run. It sees only the tools that never change anything (read, grep, glob, fetch, lsp, skill, read-only sub-agents and the like) plus allow_tools; a call that could change files, such as a sub-agent that may write, is refused. The instructions are sent after the history in every request of the run and are never stored in messages.jsonl. There is no approval step: the run ends with the plan, and the next run without plan mode does the work.",
+      "properties": {
+        "instructions": {"type": "string", "minLength": 1, "maxLength": 65536, "default": "Plan mode is on for this turn. Study the task with the tools you have, which only read, then answer with a plan: the goal, what you would change and where, the steps in order, the risks, and how you would check the result. Do not start the work: the tools that change files or run commands are not available in this turn. The person reads the plan and starts the work with their next message.", "description": "Text of the plan-mode message (at most 65536 bytes)."},
+        "role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the plan-mode message."},
+        "allow_tools": {
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^(read|write|edit|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+          "description": "Tools kept in plan mode although they can change something, as tools.allow entries: a native tool name, mcp:<server>:<tool> or mcp:<server>:*. tools.allow and tools.deny still apply to them."
+        }
       },
       "additionalProperties": false,
       "default": {}

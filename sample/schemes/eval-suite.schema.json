@@ -95,6 +95,16 @@
       "default": ["sh", "-c"],
       "description": "Program and arguments that run a setup or check command; the command line is appended as the last argument."
     },
+    "commands": {
+      "type": "boolean",
+      "default": true,
+      "description": "Read a case prompt that starts with a slash command as jad run does: /prompt:, /template:, /skill:, /mcp:<server>:<prompt> and a custom command send their text, and /plan runs the case in plan mode. A prompt may not be /compact, /reset or /state, which run no turn (the loader refuses the suite). false sends prompts as written; a case's own commands replaces this, and jad eval --no-commands turns it off for every case."
+    },
+    "plan": {
+      "type": "boolean",
+      "default": false,
+      "description": "Run every case in plan mode (read-only tools and the session's plan_mode instructions); a case's own plan replaces this."
+    },
     "cases": {
       "type": "array",
       "minItems": 1,
@@ -144,7 +154,9 @@
         },
         "profile": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1},
-        "timeout_ms": {"type": "integer", "minimum": 1}
+        "timeout_ms": {"type": "integer", "minimum": 1},
+        "commands": {"type": "boolean", "description": "Replaces the suite's commands for this case."},
+        "plan": {"type": "boolean", "description": "Replaces the suite's plan for this case."}
       },
       "additionalProperties": false
     }

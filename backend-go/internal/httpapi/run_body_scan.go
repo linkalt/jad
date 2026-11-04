@@ -140,12 +140,12 @@ func firstJSONByte(b []byte) byte {
 
 // runBodyMembers are the extents of the members of a run request body that the server reads.
 type runBodyMembers struct {
-	input, model, supports, outputFormat             []byte
-	hasInput, hasModel, hasSupports, hasOutputFormat bool
+	input, model, supports, outputFormat, plan                []byte
+	hasInput, hasModel, hasSupports, hasOutputFormat, hasPlan bool
 }
 
-// scanRunBodyObject returns the extents of "input", "model", "supports_interaction" and
-// "output_format" in the top-level object b; the last of a repeated key wins, as in a map.
+// scanRunBodyObject returns the extents of "input", "model", "supports_interaction",
+// "output_format" and "plan" in the top-level object b; the last of a repeated key wins, as in a map.
 func scanRunBodyObject(b []byte) (members runBodyMembers) {
 	eachJSONMember(b, func(key, value []byte) {
 		switch jsonStringValue(key) {
@@ -157,6 +157,8 @@ func scanRunBodyObject(b []byte) (members runBodyMembers) {
 			members.supports, members.hasSupports = value, true
 		case "output_format":
 			members.outputFormat, members.hasOutputFormat = value, true
+		case "plan":
+			members.plan, members.hasPlan = value, true
 		}
 	})
 	return

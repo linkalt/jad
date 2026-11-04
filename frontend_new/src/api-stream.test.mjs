@@ -982,3 +982,12 @@ test('a caller that does not listen is unaffected by async_state', async () => {
   const result = await streamSessionRun('session-1', 'hello', {});
   assert.equal(result.message?.text, 'fine');
 });
+
+test('a plan-mode run sends plan: true, and any other run sends no plan key', async () => {
+  requests.length = 0;
+  responses.push(completedStream(), completedStream());
+  await streamSessionRun('session-1', 'design a cache', {plan: true});
+  await streamSessionRun('session-1', 'build it');
+  assert.equal(JSON.parse(requests[0].body).plan, true);
+  assert.equal('plan' in JSON.parse(requests[1].body), false);
+});

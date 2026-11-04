@@ -96,6 +96,12 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 	r.processManager, r.taskStore, r.memoryStore = prepared.processManager, prepared.taskStore, prepared.memoryStore
 	options.PersistedInput = persisted
 	options.ToolCatalog = prepared.toolCatalog
+	if options.Plan {
+		if options.ToolCatalog, err = options.ToolCatalog.PlanMode(r.config.PlanMode.AllowTools); err != nil {
+			return session.RunResult{}, fmt.Errorf("prepare the plan-mode tools: %w", err)
+		}
+		options.PlanPrompt = planModePrompt(r.config.PlanMode)
+	}
 	options.ImageResizer = newImageResizer(r.config.ImageResize)
 	options.ImageStore = newImageStore(r.config.ImageStore)
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
@@ -299,4 +305,18 @@ func (r boundRunner) RecordRunError(entry transcript.RunErrorEntry) error {
 		return errors.New("bound session runner is not initialized")
 	}
 	return r.shared.store.RecordRunError(entry, r.config.Persistence.RunErrorCacheMaxEntries)
+}
+
+// planModePrompt is the message a plan-mode run sends after the history. A configuration
+// built without the loader (zero settings) gets the defaults.
+func planModePrompt(settings sessionfs.PlanModeSettings) session.StateContextPrompt {
+	defaults := sessionfs.DefaultPlanModeSettings()
+	prompt := session.StateContextPrompt{Role: settings.Role, Text: settings.Instructions}
+	if prompt.Text == "" {
+		prompt.Text = defaults.Instructions
+	}
+	if prompt.Role == "" {
+		prompt.Role = defaults.Role
+	}
+	return prompt
 }

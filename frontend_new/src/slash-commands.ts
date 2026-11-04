@@ -1,6 +1,7 @@
 /**
- * The composer's `/` menu: three built-in commands, then every library item, then
- * the session profile's MCP prompts.
+ * The composer's `/` menu: the built-in commands, then every library item, then
+ * the session profile's MCP prompts. `/plan` switches the composer's plan mode;
+ * the other built-ins run a session action.
  *
  * Astryx ends a trigger's query at the first space, so a library item cannot be
  * typed by its name ("Software engineering"). Each one gets a slug instead, and
@@ -17,7 +18,7 @@
 import type {SearchableItem, SearchSource} from '@astryxdesign/core';
 import type {MCPPrompt, RootLibraryAssetSummary, RootLibraryCatalog, RootLibraryKind} from './api';
 
-export type SlashCommandName = 'compact' | 'state' | 'reset';
+export type SlashCommandName = 'compact' | 'state' | 'reset' | 'plan';
 
 export type SlashCommand = {
   name: SlashCommandName;
@@ -48,7 +49,17 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     description: 'Reset this conversation',
     keywords: ['clear', 'new'],
   },
+  {
+    name: 'plan',
+    description: 'Switch plan mode: read-only tools, the answer is a plan',
+    keywords: ['read-only', 'design', 'think'],
+  },
 ];
+
+/** The built-in commands, without `/plan` when the composer has no plan mode. */
+export function builtInSlashCommands(planModeEnabled: boolean): readonly SlashCommand[] {
+  return planModeEnabled ? SLASH_COMMANDS : SLASH_COMMANDS.filter(command => command.name !== 'plan');
+}
 
 export type SlashEntry = {
   item: SearchableItem<SlashSelection>;

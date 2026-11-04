@@ -53,6 +53,9 @@ type Request struct {
 	// Commands makes an input that starts with a slash command run it (see ParseCommand):
 	// an action ends without a turn, and a library or MCP command is replaced by its text.
 	Commands bool
+	// Plan starts the turn in plan mode: the model sees only the tools that never change
+	// anything, and the session's plan_mode instructions. /plan sets it too.
+	Plan bool
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -85,6 +88,8 @@ type Result struct {
 	// Request.Commands was set; CommandResult is the answer of an action's route.
 	Command       string          `json:"command,omitempty"`
 	CommandResult json.RawMessage `json:"command_result,omitempty"`
+	// Plan is set when the turn ran in plan mode.
+	Plan bool `json:"plan,omitempty"`
 }
 
 // Runner sends headless turns to an API handler.
@@ -122,16 +127,28 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 	}
 	if request.Commands {
 		if command, ok := ParseCommand(request.Input); ok {
-			if err := command.Check(request.Model, request.Output != nil); err != nil {
+			if err := command.Check(request.Model, request.Output != nil, request.Plan); err != nil {
 				return Result{}, err
 			}
-			result, done, err := r.runCommand(ctx, &request, command)
-			if err != nil || done {
-				return result, err
+			word := command.Word
+			if command.Kind == CommandPlan {
+				// /plan [command] text: the rest is the prompt, and may start with a
+				// library, MCP or custom command of its own (Check refused an action).
+				request.Plan, request.Input = true, command.Text
+				command, ok = ParseCommand(request.Input)
 			}
-			result, err = r.run(ctx, request)
+			if ok {
+				result, done, err := r.runCommand(ctx, &request, command)
+				if err != nil || done {
+					return result, err
+				}
+				if word != CommandPlan {
+					word = command.Word
+				}
+			}
+			result, err := r.run(ctx, request)
 			if err == nil {
-				result.Command = command.Word
+				result.Command = word
 			}
 			return result, err
 		}
@@ -153,7 +170,8 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		Input        string          `json:"input"`
 		Model        string          `json:"model,omitempty"`
 		OutputFormat json.RawMessage `json:"output_format,omitempty"`
-	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat})
+		Plan         bool            `json:"plan,omitempty"`
+	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan})
 	if err != nil {
 		return Result{}, err
 	}
@@ -191,7 +209,7 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		return Result{}, &RequestError{Status: status, Message: errorMessage(raw)}
 	}
 
-	result := Result{Session: request.Session, Profile: request.Profile}
+	result := Result{Session: request.Session, Profile: request.Profile, Plan: request.Plan}
 	var timeout <-chan time.Time
 	if request.Timeout > 0 {
 		timer := time.NewTimer(request.Timeout)

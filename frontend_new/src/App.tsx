@@ -56,7 +56,7 @@ import {selectionQuoteTarget} from './selection-target';
 import {sessionFromSnapshot} from './session-mapping';
 import {isSessionRunning, sessionUiStateForRun, snapshotEndsLocalRun, withSnapshotRun} from './session-run-status';
 import {type PinnedView, type SessionListRow, activeKeyAfterPrune, isPinnedViewKey, nextRecentViewKeys, profileLabel, profileOfViewKey, prunePinnedViews, restoreViews, retainedPinnedViewKeys, rowProfileMessageCaller, rowRunStatus, sessionListGroups, sessionRefOfViewKey, setGroupCollapsed, viewKey, viewLabel, withPaneViewKeys} from './session-views';
-import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
+import {builtInSlashCommands, type SlashCommandName} from './slash-commands';
 import {forgetSnapshotEtags, rememberSnapshotEtag} from './snapshot-etags';
 import {stopRunAfterConfirmation} from './stop-run';
 import {readCollapsedGroups, readStoredPanes, readStoredViews, writeCollapsedGroups, writeStoredPanes, writeStoredViews} from './stored-views';
@@ -1669,6 +1669,7 @@ function App({
       value: string,
       images: readonly AttachedImage[],
       files: readonly AttachedFile[],
+      options: {plan?: boolean} = {},
     ) => {
       const trimmedValue = value.trim();
       if (
@@ -1715,6 +1716,7 @@ function App({
       runAbortRefs.current.set(sessionId, controller);
       void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
         signal: controller.signal,
+        ...(options.plan === true ? {plan: true} : {}),
         ...(target.profile === undefined ? {} : {profile: target.profile}),
         onRun: run => recordRunStarted(sessionId, run.turn_id),
         onInteraction: (turnId, interaction) =>
@@ -2673,6 +2675,10 @@ function App({
       });
       return;
     }
+    if (name === 'plan') {
+      // The composer switches plan mode itself; it never reaches the app.
+      return;
+    }
     if (name === 'compact') {
       if (pane.session !== undefined) {
         void compactSessionFor(actionTargetOf(pane, pane.session));
@@ -3539,7 +3545,7 @@ function App({
                         // run, whether one pane or four are on screen.
                         showHeader
                         composerSessionId={sessionRefOfViewKey(paneViewKey)}
-                        onSubmitComposer={(value, images, files) =>
+                        onSubmitComposer={(value, images, files, options) =>
                           submitMessage(
                             {
                               viewKey: paneViewKey,
@@ -3551,6 +3557,7 @@ function App({
                             value,
                             images,
                             files,
+                            options,
                           )}
                         onStopComposer={() =>
                           stopRun({
@@ -3575,7 +3582,7 @@ function App({
                         onUseSkill={asset => useSkill(paneViewKey, asset)}
                         onRegisterComposerInsert={registerComposerInsert}
                         slashCommands={pane.isLive && pane.session?.sessionRef !== undefined
-                          ? SLASH_COMMANDS
+                          ? builtInSlashCommands(appConfig.plan_mode_enabled)
                           : undefined}
                         onSlashCommand={name => runSlashCommand(paneViewKey, name)}
                         onSlashError={message => reportSlashError(paneViewKey, message)}

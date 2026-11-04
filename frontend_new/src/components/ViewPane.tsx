@@ -32,7 +32,7 @@ import {profileMessageBusyNote, profileMessageRunLabel} from '../session-views';
 import {useActiveTranscript} from '../use-active-transcript';
 import {useRowWidth} from '../use-row-width';
 import {AssistantIdentity} from './AssistantMessage';
-import {type ComposerInsertActions, ComposerPane} from './ComposerPane';
+import {type ComposerInsertActions, type ComposerSubmitOptions, ComposerPane} from './ComposerPane';
 import {ComposerErrorBoundary} from './ComposerErrorBoundary';
 import {JadReadme} from './JadReadme';
 import {MarkdownText} from './MarkdownText';
@@ -185,7 +185,12 @@ export type ViewPaneProps = {
   composer?: ReactNode;
   /** The session reference the composer's session-scoped features use. */
   composerSessionId: string;
-  onSubmitComposer: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
+  onSubmitComposer: (
+    value: string,
+    images: AttachedImage[],
+    files: AttachedFile[],
+    options: ComposerSubmitOptions,
+  ) => boolean;
   onStopComposer: () => void;
   isComposerDisabled: boolean;
   placeholder: string;

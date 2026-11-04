@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"jad/backend-go/internal/headless"
 )
 
 // Suite defaults. Each is a key of the suite file; these are the values a missing key
@@ -71,7 +73,13 @@ type Suite struct {
 	WorkDir string `json:"work_dir,omitempty"`
 	// Shell runs setup and check commands: the command line is appended as the last argument.
 	Shell []string `json:"shell,omitempty"`
-	Cases []Case   `json:"cases"`
+	// Commands reads a prompt that starts with a slash command as jad run does (a library,
+	// custom or MCP command is replaced by its text, /plan runs in plan mode); nil is true.
+	// An action (/compact, /reset, /state) runs no turn, so a case prompt may not be one.
+	Commands *bool `json:"commands,omitempty"`
+	// Plan runs every case in plan mode unless the case says otherwise.
+	Plan  bool   `json:"plan,omitempty"`
+	Cases []Case `json:"cases"`
 
 	// dir is the folder of the suite file; relative paths in the suite are resolved from it.
 	dir string
@@ -93,6 +101,9 @@ type Case struct {
 	Profile    string   `json:"profile,omitempty"`
 	Model      string   `json:"model,omitempty"`
 	TimeoutMS  int64    `json:"timeout_ms,omitempty"`
+	// Commands and Plan replace the suite's values for this case when set.
+	Commands *bool `json:"commands,omitempty"`
+	Plan     *bool `json:"plan,omitempty"`
 
 	expect []*regexp.Regexp
 }
@@ -100,8 +111,20 @@ type Case struct {
 // defaultShell runs a command line with the POSIX shell.
 var defaultShell = []string{"sh", "-c"}
 
+// LoadOptions change how a suite file is read.
+type LoadOptions struct {
+	// NoCommands sends every case prompt as written, whatever the suite and its cases say
+	// about commands (jad eval --no-commands).
+	NoCommands bool
+}
+
 // LoadSuite reads and validates a suite file and fills in its defaults.
 func LoadSuite(path string) (*Suite, error) {
+	return LoadSuiteWith(path, LoadOptions{})
+}
+
+// LoadSuiteWith is LoadSuite with options.
+func LoadSuiteWith(path string, options LoadOptions) (*Suite, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read the suite: %w", err)
@@ -110,7 +133,7 @@ func LoadSuite(path string) (*Suite, error) {
 	if err != nil {
 		return nil, err
 	}
-	suite, err := ParseSuite(raw, filepath.Dir(absolute))
+	suite, err := ParseSuiteWith(raw, filepath.Dir(absolute), options)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -119,6 +142,11 @@ func LoadSuite(path string) (*Suite, error) {
 
 // ParseSuite parses a suite whose relative paths are relative to dir.
 func ParseSuite(raw []byte, dir string) (*Suite, error) {
+	return ParseSuiteWith(raw, dir, LoadOptions{})
+}
+
+// ParseSuiteWith is ParseSuite with options.
+func ParseSuiteWith(raw []byte, dir string, options LoadOptions) (*Suite, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var suite Suite
@@ -129,6 +157,9 @@ func ParseSuite(raw []byte, dir string) (*Suite, error) {
 		return nil, errors.New("invalid suite: more than one JSON value")
 	}
 	suite.dir = dir
+	if options.NoCommands {
+		suite.disableCommands()
+	}
 	if err := suite.normalize(); err != nil {
 		return nil, err
 	}
@@ -224,8 +255,50 @@ func (s *Suite) normalize() error {
 		if len(one.Checks) == 0 && len(one.ExpectText) == 0 {
 			return fmt.Errorf("case %q: give checks or expect_text, or the case cannot fail", one.Name)
 		}
+		if err := s.checkCommand(one); err != nil {
+			return fmt.Errorf("case %q: %w", one.Name, err)
+		}
 	}
 	return nil
+}
+
+// checkCommand refuses a prompt whose slash command cannot run as a case: an action,
+// which runs no turn, and what jad run refuses as a usage error.
+func (s *Suite) checkCommand(c *Case) error {
+	if !s.commandsOf(c) {
+		return nil
+	}
+	command, ok := headless.ParseCommand(c.Prompt)
+	if !ok {
+		return nil
+	}
+	if command.IsAction() {
+		return fmt.Errorf("the prompt starts with /%s, which runs no turn; set \"commands\": false to send it as written", command.Word)
+	}
+	return command.Check(s.modelOf(c), false, s.planOf(c))
+}
+
+// disableCommands sends every case prompt as written, whatever the suite and its cases say.
+func (s *Suite) disableCommands() {
+	off := false
+	s.Commands = &off
+	for index := range s.Cases {
+		s.Cases[index].Commands = nil
+	}
+}
+
+func (s *Suite) commandsOf(c *Case) bool {
+	if c.Commands != nil {
+		return *c.Commands
+	}
+	return s.Commands == nil || *s.Commands
+}
+
+func (s *Suite) planOf(c *Case) bool {
+	if c.Plan != nil {
+		return *c.Plan
+	}
+	return s.Plan
 }
 
 func (s *Suite) resolve(path string) string {

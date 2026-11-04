@@ -156,6 +156,12 @@ type RunOptions struct {
 	// for example {"type":"json_schema","name":...,"schema":...}: the provider then
 	// constrains the final answer to it. It never reaches the transcript.
 	OutputFormat json.RawMessage
+	// Plan marks a run started in plan mode. The caller that prepares the tools narrows
+	// ToolCatalog for it and sets PlanPrompt; Run itself only sends PlanPrompt.
+	Plan bool
+	// PlanPrompt, when its Text is set, is sent after the history in every request of the
+	// run, with its Role; its After is ignored. It never reaches the transcript.
+	PlanPrompt StateContextPrompt
 }
 
 // PersistedInput records a user input that PersistInput already stored.
@@ -641,13 +647,22 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 	if len(options.OutputFormat) > 0 {
 		settings.TextFormat = options.OutputFormat
 	}
-	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, options.StateContext)
+	stateContext := options.StateContext
+	if options.PlanPrompt.Text != "" {
+		// Last, after the history and every state-context block: the copy keeps the
+		// caller's slice as it is for the next round.
+		plan := options.PlanPrompt
+		plan.After = len(sentHistory)
+		stateContext = append(stateContext[:len(stateContext):len(stateContext)], plan)
+	}
+	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, stateContext)
 	if err != nil {
 		return nil, fmt.Errorf("build Responses request: %w", err)
 	}
 	trace.Mark("request-built", map[string]any{
 		"history_items":     len(history),
 		"has_state_context": len(options.StateContext) > 0,
+		"plan":              options.PlanPrompt.Text != "",
 		"tool_count":        len(responseTools),
 		"images_resized":    resizeStats.Resized,
 		"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,

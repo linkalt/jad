@@ -243,6 +243,8 @@ type SessionConfig struct {
 	MaxRunCostUSD float64
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
+	// PlanMode shapes a run started in plan mode.
+	PlanMode PlanModeSettings
 	// ProfileTools is the selected profile's optional tool allow-list; without it the
 	// model sees every registered tool (Go only).
 	ProfileTools ProfileToolSettings
@@ -401,6 +403,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	hooks, err := normalizeHooksSettings(setting["hooks"], settingPath, envFileBase)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	planMode, err := normalizePlanModeSettings(setting["plan_mode"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -713,6 +719,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		Sandbox:                  sandbox,
 		MaxRunCostUSD:            maxRunCost,
 		Checkpoint:               checkpoint,
+		PlanMode:                 planMode,
 		Hooks:                    hooks,
 		ProfileTools:             profileTools,
 		ImageResize:              imageResize,

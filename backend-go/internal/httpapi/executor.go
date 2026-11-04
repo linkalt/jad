@@ -85,6 +85,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		MemoryTrace:     h.memoryTrace,
 		ToolExecution:   toolExecution,
 		OutputFormat:    run.outputFormat,
+		Plan:            run.plan,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)

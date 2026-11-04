@@ -68,6 +68,9 @@ import {
   LINK_KEY,
 } from './composerMarkdown';
 
+/** How a message is sent: `plan` runs it in plan mode. */
+export type ComposerSubmitOptions = {plan: boolean};
+
 export type ComposerInsertActions = {
   text: (value: string) => void;
   prompt: (value: string, name: string) => void;
@@ -87,7 +90,12 @@ type ComposerPaneProps = {
    * Returns true when the message was accepted, so the draft is only cleared on a real send.
    * `images` are the draft's attached images; the text may be empty when there are some.
    */
-  onSubmit: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
+  onSubmit: (
+    value: string,
+    images: AttachedImage[],
+    files: AttachedFile[],
+    options: ComposerSubmitOptions,
+  ) => boolean;
   onStop: () => void;
   isRunning: boolean;
   /** Turns off typing, sending, attaching, dropping and inserting. */
@@ -138,6 +146,19 @@ function PreviewIcon(props: SVGProps<SVGSVGElement>) {
         strokeLinejoin="round"
       />
       <circle cx="12" cy="12" r="2.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/**
+ * The plan-mode switch: a list with check marks, drawn here because the semantic
+ * set has no checklist glyph.
+ */
+function PlanIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
+      <path d="M10 6.5h10M10 12h10M10 17.5h10" strokeLinecap="round" />
+      <path d="M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5l1.5 1.5 2.5-3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -482,6 +503,14 @@ export function ComposerPane({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const value = drafts[draftKey] ?? '';
   const isPreviewEnabled = appConfig.composer_preview_enabled;
+  // Plan mode is per view and stays on until it is switched off, so a plan can be
+  // refined over several messages before the work is asked for.
+  const [planViews, setPlanViews] = useState<Record<string, boolean>>({});
+  const isPlanModeEnabled = appConfig.plan_mode_enabled;
+  const isPlan = isPlanModeEnabled && planViews[draftKey] === true;
+  const togglePlan = useCallback(() => {
+    setPlanViews(current => ({...current, [draftKey]: current[draftKey] !== true}));
+  }, [draftKey]);
 
   /**
    * The trigger menus. Rebuilt only when the session changes: the `@` menu now
@@ -619,14 +648,14 @@ export function ComposerPane({
       }
       const sentImages = attachments.images;
       const sentFiles = fileAttachments.images;
-      if (onSubmit(text, sentImages, sentFiles)) {
+      if (onSubmit(text, sentImages, sentFiles, {plan: isPlan})) {
         historyCursorRef.current = IDLE_HISTORY;
         setDraft(draftKey, '');
         attachments.clear(sentImages);
         fileAttachments.clear(sentFiles);
       }
     },
-    [attachments, draftKey, fileAttachments, isDisabled, onSubmit, setDraft],
+    [attachments, draftKey, fileAttachments, isDisabled, isPlan, onSubmit, setDraft],
   );
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
@@ -778,7 +807,8 @@ export function ComposerPane({
   // length rule, a template as plain text, a skill as a badge.
   slashPickRef.current = selection => {
     if (selection.type === 'command') {
-      onSlashCommand?.(selection.name);
+      if (selection.name === 'plan') togglePlan();
+      else onSlashCommand?.(selection.name);
       return;
     }
     if (selection.type === 'mcp') {
@@ -879,7 +909,10 @@ export function ComposerPane({
           <ChatComposerInput
             ref={inputRootRef}
             handleRef={inputRef}
-            placeholder={composerPlaceholderForDraft(value, placeholder)}
+            placeholder={composerPlaceholderForDraft(
+              value,
+              isPlan ? appConfig.plan_mode_placeholder : placeholder,
+            )}
             triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
             onKeyDown={handleKeyDown}
             hasHistory={false}
@@ -974,6 +1007,16 @@ export function ComposerPane({
                   variant={isPreviewOpen ? 'secondary' : 'ghost'}
                   size="sm"
                   onClick={() => setIsPreviewOpen(current => !current)}
+                />
+              ) : null}
+              {isPlanModeEnabled ? (
+                <IconButton
+                  label={isPlan ? 'Turn off plan mode' : 'Plan mode: read-only tools, the answer is a plan'}
+                  isDisabled={isDisabled}
+                  icon={<Icon icon={PlanIcon} size="sm" />}
+                  variant={isPlan ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={togglePlan}
                 />
               ) : null}
             </HStack>

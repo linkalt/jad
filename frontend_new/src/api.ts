@@ -1309,6 +1309,11 @@ export interface StreamSessionRunOptions {
   /** Model identifier selected for the new run. */
   model?: string;
   /**
+   * Runs the turn in plan mode: the model sees only the tools that never change
+   * anything and the session's plan_mode instructions, and answers with a plan.
+   */
+  plan?: boolean;
+  /**
    * The path profile to run in. A tab pinned to one profile must run there, so
    * its transcript, model default and run slot are that profile's.
    */
@@ -1878,6 +1883,7 @@ export async function streamSessionRun(
           input,
           supports_interaction: true,
           ...(options.model === undefined ? {} : {model: options.model}),
+          ...(options.plan === true ? {plan: true} : {}),
         }),
       },
       runOptions,

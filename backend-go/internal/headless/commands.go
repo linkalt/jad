@@ -20,6 +20,8 @@ import (
 // the same routes the web client calls:
 //
 //   - /compact, /reset and /state [text] run the session action and end without a turn.
+//   - /plan <prompt> runs the prompt in plan mode; the prompt may start with a command
+//     of the kinds below.
 //   - /prompt:<name>, /template:<name> and /skill:<name> put the library item's text in
 //     place of the command word; the text after it follows on a new paragraph.
 //   - /mcp:<server>:<prompt> [arg=value ...] [text] puts the MCP prompt's text there.
@@ -32,6 +34,7 @@ const (
 	CommandCompact  = "compact"
 	CommandReset    = "reset"
 	CommandState    = "state"
+	CommandPlan     = "plan"
 	CommandPrompt   = "prompt"
 	CommandTemplate = "template"
 	CommandSkill    = "skill"
@@ -67,7 +70,7 @@ func ParseCommand(input string) (Command, bool) {
 	}
 	command := Command{Word: word[1:], Text: strings.TrimSpace(rest)}
 	switch command.Word {
-	case CommandCompact, CommandReset, CommandState:
+	case CommandCompact, CommandReset, CommandState, CommandPlan:
 		command.Kind = command.Word
 		return command, true
 	}
@@ -95,9 +98,25 @@ func (c Command) IsAction() bool {
 	return c.Kind == CommandCompact || c.Kind == CommandReset || c.Kind == CommandState
 }
 
-// Check refuses what the command cannot take: text after /compact or /reset, and a model
-// or an output schema for an action, which starts no turn.
-func (c Command) Check(model string, output bool) error {
+// Check refuses what the command cannot take: text after /compact or /reset, a model, an
+// output schema or plan mode for an action, which starts no turn, and a /plan with no
+// prompt or followed by an action.
+func (c Command) Check(model string, output, plan bool) error {
+	if c.Kind == CommandPlan {
+		if c.Text == "" {
+			return errors.New("/plan needs a prompt after it")
+		}
+		if inner, ok := ParseCommand(c.Text); ok {
+			if inner.IsAction() || inner.Kind == CommandPlan {
+				return fmt.Errorf("/plan cannot be followed by /%s", inner.Word)
+			}
+			return inner.Check(model, output, true)
+		}
+		return nil
+	}
+	if c.IsAction() && plan {
+		return fmt.Errorf("/%s starts no turn, so it cannot run in plan mode", c.Kind)
+	}
 	if (c.Kind == CommandCompact || c.Kind == CommandReset) && c.Text != "" {
 		return fmt.Errorf("/%s takes no text", c.Kind)
 	}
@@ -250,7 +269,7 @@ type libraryKey struct {
 
 // libraryKeys gives each item its menu key, kind:slug, in the order the web client does.
 func libraryKeys(groups [][]librarySummary) []libraryKey {
-	taken := map[string]bool{CommandCompact: true, CommandState: true, CommandReset: true}
+	taken := map[string]bool{CommandCompact: true, CommandState: true, CommandReset: true, CommandPlan: true}
 	var keys []libraryKey
 	for _, group := range groups {
 		for _, summary := range group {

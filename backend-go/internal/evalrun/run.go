@@ -283,11 +283,13 @@ func runAttempt(ctx context.Context, suite *Suite, runner Runner, root Root, sta
 	}
 	result.Session = root.ID + ":" + sessionID
 	run, err := runner.Run(ctx, headless.Request{
-		Session: result.Session,
-		Profile: suite.profileOf(c),
-		Model:   suite.modelOf(c),
-		Input:   c.Prompt,
-		Timeout: time.Duration(suite.timeoutOf(c)) * time.Millisecond,
+		Session:  result.Session,
+		Profile:  suite.profileOf(c),
+		Model:    suite.modelOf(c),
+		Input:    c.Prompt,
+		Timeout:  time.Duration(suite.timeoutOf(c)) * time.Millisecond,
+		Commands: suite.commandsOf(c),
+		Plan:     suite.planOf(c),
 	})
 	if err != nil {
 		result.Outcome, result.Reason = OutcomeError, err.Error()

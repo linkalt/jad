@@ -37,6 +37,8 @@ func TestSuiteSchemaDefaultsMatchTheLoader(t *testing.T) {
 		"repeat":                 float64(DefaultRepeat),
 		"parallel":               float64(DefaultParallel),
 		"keep_workspaces":        DefaultKeepWorkspaces,
+		"commands":               true,
+		"plan":                   false,
 		"shell":                  []any{defaultShell[0], defaultShell[1]},
 	} {
 		if got := schema.Properties[key].Default; !reflect.DeepEqual(got, want) {
@@ -87,6 +89,9 @@ func TestSampleSuiteAndSchemaAgreeWithTheLoader(t *testing.T) {
 		"repeat over":    `{"schema_version":1,"name":"s","repeat":1001,"cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`,
 		"version":        `{"schema_version":2,"name":"s","cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`,
 		"category given": `{"schema_version":1,"name":"s","session":{"category":"bench"},"cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`,
+		"commands keys":  `{"schema_version":1,"name":"s","commands":false,"plan":true,"cases":[{"name":"a","prompt":"p","commands":true,"plan":false,"expect_text":["x"]}]}`,
+		"commands text":  `{"schema_version":1,"name":"s","commands":"no","cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`,
+		"case plan text": `{"schema_version":1,"name":"s","cases":[{"name":"a","prompt":"p","plan":1,"expect_text":["x"]}]}`,
 	} {
 		_, loadErr := ParseSuite([]byte(text), dir)
 		if schemaOK, loaderOK := accepts([]byte(text)), loadErr == nil; schemaOK != loaderOK {

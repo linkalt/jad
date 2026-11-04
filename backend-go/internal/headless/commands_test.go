@@ -22,6 +22,8 @@ func TestParseCommand(t *testing.T) {
 		"/skill:review":               {Kind: CommandSkill, Word: "skill:review", Item: "review"},
 		"/mcp:git_hub:review pr=4 go": {Kind: CommandMCP, Word: "mcp:git_hub:review", Server: "git_hub", Item: "review", Text: "pr=4 go"},
 		"/mcp:s:a:b":                  {Kind: CommandMCP, Word: "mcp:s:a:b", Server: "s", Item: "a:b"},
+		"/plan fix the bug":           {Kind: CommandPlan, Word: "plan", Text: "fix the bug"},
+		"/planning":                   nil,
 		"/etc/hosts is wrong":         nil,
 		"/compacted":                  nil,
 		"/prompt:":                    nil,
@@ -48,21 +50,21 @@ func TestParseCommand(t *testing.T) {
 
 func TestCommandCheck(t *testing.T) {
 	compact, _ := ParseCommand("/compact now")
-	if err := compact.Check("", false); err == nil {
+	if err := compact.Check("", false, false); err == nil {
 		t.Fatal("/compact with text was accepted")
 	}
 	state, _ := ParseCommand("/state text")
-	if err := state.Check("", false); err != nil {
+	if err := state.Check("", false, false); err != nil {
 		t.Fatalf("/state with text: %v", err)
 	}
-	if err := state.Check("openai/m", false); err == nil {
+	if err := state.Check("openai/m", false, false); err == nil {
 		t.Fatal("/state with a model was accepted")
 	}
-	if err := state.Check("", true); err == nil {
+	if err := state.Check("", true, false); err == nil {
 		t.Fatal("/state with an output schema was accepted")
 	}
 	prompt, _ := ParseCommand("/prompt:x text")
-	if err := prompt.Check("openai/m", true); err != nil {
+	if err := prompt.Check("openai/m", true, false); err != nil {
 		t.Fatalf("a library command with a model and schema: %v", err)
 	}
 }
@@ -309,5 +311,79 @@ func TestMCPCommandsFillThePrompt(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %q", input, err, want)
 		}
+	}
+}
+
+func TestPlanCommandCheck(t *testing.T) {
+	for input, want := range map[string]string{
+		"/plan":                         "/plan needs a prompt after it",
+		"/plan /compact":                "/plan cannot be followed by /compact",
+		"/plan /plan again":             "/plan cannot be followed by /plan",
+		"/plan fix it":                  "",
+		"/plan /prompt:review fix it":   "",
+		"/plan /etc/hosts is the issue": "",
+	} {
+		command, _ := ParseCommand(input)
+		err := command.Check("", false, false)
+		if (want == "") != (err == nil) || (err != nil && err.Error() != want) {
+			t.Errorf("%q: %v, want %q", input, err, want)
+		}
+	}
+	state, _ := ParseCommand("/state text")
+	if err := state.Check("", false, true); err == nil || !strings.Contains(err.Error(), "cannot run in plan mode") {
+		t.Fatalf("/state in plan mode: %v", err)
+	}
+	inner, _ := ParseCommand("/plan /mcp:s:p x")
+	if err := inner.Check("openai/m", true, false); err != nil {
+		t.Fatalf("/plan with an MCP command, a model and a schema: %v", err)
+	}
+}
+
+func TestPlanSendsTheRunInPlanMode(t *testing.T) {
+	stub := newRouteStub(map[string]routeAnswer{
+		"GET /api/library":           {200, libraryList},
+		"GET /api/library/prompt/a2": {200, `{"asset":{"id":"a2","kind":"prompt","content":"Find the bugs."}}`},
+	})
+	runner := NewRunner(stub, "t")
+	plan := func() (string, bool) {
+		t.Helper()
+		var body struct {
+			Input string `json:"input"`
+			Plan  *bool  `json:"plan"`
+		}
+		if err := json.Unmarshal([]byte(stub.bodies["POST /api/sessions/demo/run"]), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Input, body.Plan != nil && *body.Plan
+	}
+	result, err := runner.Run(context.Background(), Request{Session: "demo", Input: "/plan add a cache", Commands: true})
+	if err != nil || !result.Plan || result.Command != "plan" {
+		t.Fatalf("/plan: %+v %v", result, err)
+	}
+	if input, planned := plan(); input != "add a cache" || !planned {
+		t.Fatalf("/plan body: %q %v", input, planned)
+	}
+	result, err = runner.Run(context.Background(), Request{Session: "demo", Input: "/plan /prompt:bug-finding-2 in main.go", Commands: true})
+	if err != nil || !result.Plan || result.Command != "plan" {
+		t.Fatalf("/plan with a library item: %+v %v", result, err)
+	}
+	if input, planned := plan(); input != "Find the bugs.\n\nin main.go" || !planned {
+		t.Fatalf("/plan with a library item body: %q %v", input, planned)
+	}
+	result, err = runner.Run(context.Background(), Request{Session: "demo", Input: "add a cache", Plan: true})
+	if err != nil || !result.Plan || result.Command != "" {
+		t.Fatalf("Plan: %+v %v", result, err)
+	}
+	if _, planned := plan(); !planned {
+		t.Fatal("Plan was not sent")
+	}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo", Input: "add a cache"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw := stub.bodies["POST /api/sessions/demo/run"]; strings.Contains(raw, "plan") {
+		t.Fatalf("a run without plan mode sent %s", raw)
+	}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo", Input: "/reset", Commands: true, Plan: true}); err == nil {
+		t.Fatal("/reset in plan mode was accepted")
 	}
 }

@@ -166,3 +166,35 @@ func TestEvalCommandWritesTheReportAndFailsOnAFailedCase(t *testing.T) {
 		t.Fatalf("no suite: err = %v, want exit %d", err, exitUsage)
 	}
 }
+
+func TestEvalCommandReadsSlashCommands(t *testing.T) {
+	useProviderFixture(t)
+	dir := t.TempDir()
+	write := func(name string, cases ...map[string]any) string {
+		raw, _ := json.Marshal(map[string]any{"schema_version": 1, "name": "cmds", "profile": "dev/coder", "work_dir": dir, "cases": cases})
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	planned := write("plan.json", map[string]any{"name": "planned", "prompt": "/plan say ok", "expect_text": []string{"^ok$"}})
+	stdout, stderr, err := runJad(t, "", "eval", planned)
+	var report evalrun.Report
+	if exitCode(err) != 0 || json.Unmarshal([]byte(stdout), &report) != nil {
+		t.Fatalf("/plan case: %v\n%s", err, stderr)
+	}
+	if run := report.Results[0].Run; run == nil || !run.Plan || run.Command != "plan" {
+		t.Fatalf("the /plan case did not run in plan mode: %+v", report.Results[0].Run)
+	}
+
+	reset := write("reset.json", map[string]any{"name": "reset", "prompt": "/reset", "expect_text": []string{"^ok$"}})
+	if _, _, err := runJad(t, "", "eval", reset); exitCode(err) != exitFailed || !strings.Contains(err.Error(), "runs no turn") {
+		t.Fatalf("/reset case: err = %v, want exit 1 naming the action", err)
+	}
+	stdout, stderr, err = runJad(t, "", "eval", "--no-commands", reset)
+	report = evalrun.Report{}
+	if exitCode(err) != 0 || json.Unmarshal([]byte(stdout), &report) != nil || report.Results[0].Run.Command != "" {
+		t.Fatalf("--no-commands: %v\n%s", err, stderr)
+	}
+}

@@ -476,6 +476,7 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
 	run.outputFormat = body.OutputFormat
+	run.plan = body.Plan
 	h.attachContentCache(run)
 	queue := run.subscribe()
 	launched = true
@@ -861,6 +862,8 @@ type runRequest struct {
 	// OutputFormat is the checked output_format member: the text.format every request of
 	// the run sends. Nil when the request sent none.
 	OutputFormat json.RawMessage `json:"output_format,omitempty"`
+	// Plan starts the run in plan mode: read-only tools and the plan_mode instructions.
+	Plan bool `json:"plan,omitempty"`
 }
 
 const (
@@ -947,6 +950,11 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 	if members.hasOutputFormat {
 		if body.OutputFormat, err = parseRunOutputFormat(members.outputFormat); err != nil {
 			return runRequest{}, err
+		}
+	}
+	if members.hasPlan {
+		if json.Unmarshal(members.plan, &body.Plan) != nil || string(bytes.TrimSpace(members.plan)) == "null" {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "plan must be a boolean"}
 		}
 	}
 	body.Model = strings.TrimSpace(body.Model)
