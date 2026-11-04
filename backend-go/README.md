@@ -64,9 +64,20 @@ Set `server.tracing.enabled` in the root setting to export OpenTelemetry spans (
 
 `cmd/openai-auth` signs in to a ChatGPT account, refreshes its tokens and reports the credential file that a session with `auth_mode: "openai_oauth"` reads. The backend never writes that file. See `cmd/openai-auth/README.md`.
 
-## Claude models: `anthropic-adapter`
+## Other provider protocols: `api` in `model.json`
 
-`cmd/anthropic-adapter` serves the Responses API on top of the Anthropic Messages API, so a session can use a Claude model by changing `base_url` in `model.json`. See `cmd/anthropic-adapter/README.md`.
+jad speaks the Responses API. A model whose provider speaks another protocol names it in `api`, and jad translates in its own process: no adapter to start, no port, no second credential hop. The translation sits behind the ordinary Responses client (`internal/inprocess` answers its requests with the translator's handler), so `provider_retry`, the idle timeout, HTTP debug logging (of the real upstream call), tracing and `messages.jsonl` work as for any model. Neither protocol can run `hosted_tools`, and both need `auth_mode` `api_key`.
+
+**Claude: `"api": "anthropic_messages"`.** The `cmd/anthropic-adapter` translator, run in process. `base_url` is the Anthropic API root (default `https://api.anthropic.com`), `api_key_env` defaults to `ANTHROPIC_API_KEY`, and the optional `anthropic` object takes the adapter's own config keys (thinking and effort per model, prompt caching, `stream_retry`, `extra_body`, `log`, ...), except `listen`, `caller_token_env` and `upstream.base_url`. Example: `sample/jad/models/cheap/haiku.json`. The adapter's behaviour and limits are in `cmd/anthropic-adapter/README.md`; the standalone command still exists for other clients.
+
+```json
+{"schema_version": 1, "api": "anthropic_messages", "model": "claude-sonnet-5-5",
+ "request": {"max_output_tokens": 16384, "reasoning": {"effort": "high"}},
+ "anthropic": {"cache": {"system": true, "history": true},
+               "default_profile": {"thinking": "adaptive", "display": "summarized", "fixed_sampling": true}}}
+```
+
+**OpenAI-compatible servers: `"api": "chat_completions"`.** `internal/chatadapter` calls `{base_url}/chat/completions` (vLLM, Ollama, llama.cpp, LM Studio, DeepSeek, Groq, gateways) and streams the answer back as Responses events. Function tools, tool rounds, images and files in user messages, reasoning text (`reasoning_content` or `reasoning` deltas become a reasoning item), structured output (`text.format`) and usage are translated. The optional `chat_completions` object sets `max_tokens_field`, `include_usage`, `system_role`, `reasoning_fields`, `echo_reasoning_field`, `missing_tool_result_text`, `request_timeout_ms`, `max_event_bytes`, `max_request_bytes`, `extra_headers` and `extra_body`; the schema has their defaults. Example: `sample/model-chat-completions.json` (Ollama).
 
 ## Claude subscription sign-in: `claude-auth`
 

@@ -2,6 +2,8 @@
 
 Serves the OpenAI **Responses API** (`POST /v1/responses`, streaming and not) on top of the **Anthropic Messages API**. A session uses a Claude model by pointing its `model.json` `base_url` at the adapter. Neither backend (TypeScript or Go) changes.
 
+**jad runs this adapter in its own process** when a model file says `"api": "anthropic_messages"`: nothing to start, and the settings below go in the model file's `anthropic` object instead of a config file (without `listen`, `caller_token_env` and `upstream.base_url`, which is the model file's `base_url`). See "Other provider protocols" in `backend-go/README.md`. The standalone command is for other clients, or for one adapter shared by several machines.
+
 ```
 backend (TS or Go)  --Responses-->  anthropic-adapter  --Messages-->  api.anthropic.com
 ```

@@ -22,10 +22,16 @@
       "description": "Provider identifier, for example openai or openrouter.",
       "default": "openai"
     },
+    "api": {
+      "type": "string",
+      "enum": ["responses", "anthropic_messages", "chat_completions"],
+      "default": "responses",
+      "description": "Protocol of the provider. responses calls {base_url}/responses. anthropic_messages and chat_completions are translated in jad's own process, with no separate adapter to run: anthropic_messages calls the Anthropic Messages API ({base_url}/v1/messages, base_url defaults to https://api.anthropic.com, api_key_env to ANTHROPIC_API_KEY) with the settings in anthropic; chat_completions calls an OpenAI-compatible {base_url}/chat/completions (vLLM, Ollama, llama.cpp, LM Studio, DeepSeek, Groq, gateways; base_url defaults to https://api.openai.com/v1) with the settings in chat_completions. Both need auth_mode api_key and no hosted_tools."
+    },
     "base_url": {
       "type": "string",
       "pattern": "^https?://\\S+$",
-      "description": "OpenAI-compatible SDK base URL. Do not include the /responses path."
+      "description": "Provider base URL. For api responses the OpenAI-compatible SDK base URL, without the /responses path; for chat_completions the root /chat/completions is appended to (for example http://localhost:11434/v1); for anthropic_messages the Anthropic API root, without /v1 (for example https://api.anthropic.com)."
     },
     "api_key_env": {
       "type": "string",
@@ -76,7 +82,7 @@
     },
     "hosted_tools": {
       "type": "array",
-      "description": "Provider-side tool definitions sent after the function tools, for example [{\"type\": \"web_search\"}]. The provider runs them, so there is no tool code here; each object is passed on unchanged. The Go backend only; the TypeScript backend ignores it. Not supported by the Anthropic adapter, which refuses non-function tools.",
+      "description": "Provider-side tool definitions sent after the function tools, for example [{\"type\": \"web_search\"}]. The provider runs them, so there is no tool code here; each object is passed on unchanged. Needs api responses: the Anthropic and Chat Completions translations serve function tools only.",
       "default": [],
       "items": {
         "type": "object",
@@ -91,6 +97,89 @@
         },
         "additionalProperties": true
       }
+    },
+    "anthropic": {
+      "description": "Settings of the Anthropic translation, for api anthropic_messages only. The keys of the anthropic-adapter config file (anthropic-adapter.schema.json: thinking and effort per model, prompt caching, stream_retry, extra_body, log, credential_file, ...), except listen and caller_token_env, which are refused because nothing listens, and upstream.base_url, which is this file's base_url. Absent means the adapter's defaults. With upstream.credential_file set, api_key_env needs no value.",
+      "allOf": [
+        { "$ref": "anthropic-adapter.schema.json" },
+        {
+          "not": { "anyOf": [{ "required": ["listen"] }, { "required": ["caller_token_env"] }] },
+          "properties": { "upstream": { "not": { "required": ["base_url"] } } }
+        }
+      ]
+    },
+    "chat_completions": {
+      "type": "object",
+      "description": "Settings of the Chat Completions translation, for api chat_completions only. Absent means these defaults. The request carries model, messages, tools, tool_choice, parallel_tool_calls, temperature, top_p, the max tokens field, reasoning_effort (from request.reasoning.effort), response_format (from request.text.format), user and stream; other Responses fields (store, include, metadata, prompt_cache_key, ...) are dropped.",
+      "properties": {
+        "max_tokens_field": {
+          "type": "string",
+          "enum": ["max_completion_tokens", "max_tokens"],
+          "default": "max_completion_tokens",
+          "description": "Field that carries request.max_output_tokens: max_completion_tokens (OpenAI's current name) or max_tokens (older servers)."
+        },
+        "include_usage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send stream_options.include_usage so the stream ends with token counts. Set false for a server that refuses stream_options; usage is then reported as zero."
+        },
+        "system_role": {
+          "type": "string",
+          "enum": ["system", "developer"],
+          "default": "system",
+          "description": "Role of the instructions and of system or developer messages."
+        },
+        "reasoning_fields": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "\\S" },
+          "default": ["reasoning_content", "reasoning"],
+          "description": "Delta fields read as reasoning text, first match wins. reasoning_content: DeepSeek, vLLM, llama.cpp; reasoning: OpenRouter, Ollama. Empty reads none."
+        },
+        "echo_reasoning_field": {
+          "type": "string",
+          "default": "",
+          "description": "When set, the text of a reasoning item in the history is sent on the next assistant message under this field (reasoning_content for DeepSeek's thinking mode with tool calls). Empty drops reasoning from the history."
+        },
+        "missing_tool_result_text": {
+          "type": "string",
+          "pattern": "\\S",
+          "default": "No result was recorded for this tool call.",
+          "description": "Tool message sent for a call the history has no result for: Chat Completions refuses an unanswered tool call."
+        },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000,
+          "default": 600000,
+          "description": "Longest one upstream call may take, stream included."
+        },
+        "max_event_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824,
+          "default": 16777216,
+          "description": "Largest upstream SSE event (or non-streaming answer); a larger one fails the response."
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824,
+          "default": 67108864,
+          "description": "Largest Responses request the translation accepts."
+        },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {},
+          "description": "Headers added to every upstream request (for example HTTP-Referer for OpenRouter). Authorization, Content-Type, Content-Length, Host and Accept are refused."
+        },
+        "extra_body": {
+          "type": "object",
+          "default": {},
+          "description": "Top-level fields merged last into every request body, as written (for example {\"chat_template_kwargs\": {\"enable_thinking\": true}} for vLLM). model, messages, tools, tool_choice, stream and stream_options are refused."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "provider": "ollama",
+  "api": "chat_completions",
+  "base_url": "http://127.0.0.1:11434/v1",
+  "api_key_env": "OLLAMA_API_KEY",
+  "model": "qwen3:32b",
+  "request": {
+    "max_output_tokens": 8192
+  },
+  "chat_completions": {
+    "max_tokens_field": "max_tokens",
+    "reasoning_fields": ["reasoning"]
+  }
+}

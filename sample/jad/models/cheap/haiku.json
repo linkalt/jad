@@ -1,9 +1,21 @@
 {
   "schema_version": 1,
   "provider": "anthropic",
+  "api": "anthropic_messages",
   "api_key_env": "ANTHROPIC_API_KEY",
   "model": "claude-haiku-5",
   "request": {
-    "max_tokens": 8192
+    "max_output_tokens": 8192
+  },
+  "anthropic": {
+    "cache": {
+      "system": true,
+      "history": true
+    },
+    "default_profile": {
+      "thinking": "adaptive",
+      "display": "summarized",
+      "fixed_sampling": true
+    }
   }
 }

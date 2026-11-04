@@ -21,6 +21,7 @@ import (
 	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/httpdebug"
+	"jad/backend-go/internal/inprocess"
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/openaiapi"
 	"jad/backend-go/internal/remote"
@@ -513,6 +514,11 @@ func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error
 		}
 		return oauthPlaceholderKey, nil
 	}
+	if config.Model.API == sessionfs.APIAnthropicMessages && anthropicHoldsCredential(config) {
+		// The adapter reads its token from upstream.credential_file on every request and
+		// ignores the key it is handed, so api_key_env needs no value.
+		return credentialFilePlaceholderKey, nil
+	}
 	apiKey := strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
 	if apiKey == "" {
 		return "", &httpapi.StatusError{
@@ -525,10 +531,18 @@ func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error
 
 // newProviderStreamer builds the provider client of a loaded model: the OAuth
 // transport when the model uses it, wrapped by the HTTP debug logger when that is on.
+// A model in api anthropic_messages or chat_completions gets the same Responses client
+// with an in-process translator in place of the network; the translator's own calls
+// use the network, OAuth-free, and the HTTP debug logger records them.
 func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey string) *openaiapi.Client {
 	httpClient := providerHTTPClient(config, r.logger)
+	baseURL := config.Model.BaseURL
+	if translator := providerTranslator(config, httpClient, r.logger); translator != nil {
+		httpClient = &http.Client{Transport: &inprocess.Transport{Handler: translator}}
+		baseURL = inProcessBaseURL
+	}
 	retry := providerRetryConfig(config.ProviderRetry, r.logger)
-	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: config.Model.BaseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
+	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: baseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
 }
 
 // providerHTTPClient returns nil when nothing changes the default client: no OAuth, no
@@ -1220,6 +1234,10 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		// and margin it was built with identify the runner. The token is not included.
 		OAuthAuthFile string
 		OpenAIOAuth   sessionfs.OpenAIOAuthSettings
+		// The in-process translator is built from the protocol and its settings.
+		API             string
+		Anthropic       json.RawMessage
+		ChatCompletions json.RawMessage
 	}{
 		ModelPath:       config.ModelPath,
 		Provider:        config.Model.Provider,
@@ -1238,6 +1256,9 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		ProviderNetwork: config.ProviderNetwork,
 		OAuthAuthFile:   config.Model.OAuthAuthFile,
 		OpenAIOAuth:     config.OpenAIOAuth,
+		API:             config.Model.API,
+		Anthropic:       config.Model.Anthropic,
+		ChatCompletions: config.Model.ChatCompletions,
 	}
 	keyHash := sha256.Sum256([]byte(apiKey))
 	identity.APIKeyHash = hex.EncodeToString(keyHash[:])

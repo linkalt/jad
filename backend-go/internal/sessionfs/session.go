@@ -98,7 +98,22 @@ type Model struct {
 	HostedTools []json.RawMessage
 	PromptRole  string
 	PromptText  string
+	// API is the protocol of the provider: "responses" (the default), "anthropic_messages"
+	// or "chat_completions". The last two are translated in process.
+	API string
+	// Anthropic is the anthropic object of the file (adapter settings) for API
+	// anthropic_messages, and ChatCompletions the chat_completions object for API
+	// chat_completions; both are validated at load time and nil when absent.
+	Anthropic       json.RawMessage
+	ChatCompletions json.RawMessage
 }
+
+// Provider protocols a model file can name in api.
+const (
+	APIResponses         = "responses"
+	APIAnthropicMessages = "anthropic_messages"
+	APIChatCompletions   = "chat_completions"
+)
 
 // SessionConfig is the resolved filesystem-backed configuration for one
 // session/profile/model selection.
@@ -962,6 +977,10 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if authMode != "api_key" && authMode != "openai_oauth" {
 		return Model{}, configError("%s: auth_mode must be api_key or openai_oauth", path)
 	}
+	api, anthropicConfig, chatConfig, err := modelAPIFields(fields, path, baseURL, authMode)
+	if err != nil {
+		return Model{}, err
+	}
 	if authMode == "api_key" {
 		if _, exists := fields["oauth_auth_file"]; exists {
 			return Model{}, configError("%s: oauth_auth_file requires auth_mode openai_oauth", path)
@@ -982,6 +1001,9 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	apiKeyEnvDefault := "OPENAI_API_KEY"
 	if strings.EqualFold(provider, "openrouter") || strings.Contains(baseURL, "openrouter.ai") {
 		apiKeyEnvDefault = "OPENROUTER_API_KEY"
+	}
+	if api == APIAnthropicMessages {
+		apiKeyEnvDefault = "ANTHROPIC_API_KEY"
 	}
 	apiKeyEnv, err := stringField(fields, "api_key_env", apiKeyEnvDefault, path)
 	if err != nil {
@@ -1010,22 +1032,28 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	if err != nil {
 		return Model{}, err
 	}
+	if len(hostedTools) > 0 && api != APIResponses {
+		return Model{}, configError("%s: hosted_tools needs api responses: the %s translation serves function tools only", path, api)
+	}
 	efforts, err := effortsField(fields, path)
 	if err != nil {
 		return Model{}, err
 	}
 	return Model{
-		Efforts:       efforts,
-		Provider:      provider,
-		Name:          modelName,
-		APIKeyEnv:     apiKeyEnv,
-		BaseURL:       baseURL,
-		AuthMode:      authMode,
-		OAuthAuthFile: oauthAuthFile,
-		Request:       request,
-		HostedTools:   hostedTools,
-		PromptRole:    promptRole,
-		PromptText:    promptText,
+		Efforts:         efforts,
+		Provider:        provider,
+		Name:            modelName,
+		APIKeyEnv:       apiKeyEnv,
+		BaseURL:         baseURL,
+		AuthMode:        authMode,
+		OAuthAuthFile:   oauthAuthFile,
+		Request:         request,
+		HostedTools:     hostedTools,
+		PromptRole:      promptRole,
+		PromptText:      promptText,
+		API:             api,
+		Anthropic:       anthropicConfig,
+		ChatCompletions: chatConfig,
 	}, nil
 }
 
