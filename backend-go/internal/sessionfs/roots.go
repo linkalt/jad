@@ -110,6 +110,8 @@ type ServerSettings struct {
 	RemoteAPI RemoteAPISettings
 	// Tracing is server.tracing; see TracingSettings.
 	Tracing TracingSettings
+	// Triggers is server.triggers; see TriggerSettings.
+	Triggers TriggerSettings
 }
 
 // Root identifies one independent session directory and the workspace used to
@@ -208,6 +210,7 @@ func Defaults() ServerSettings {
 		RunContentMaxIndexSegments: serverconfig.DefaultRunContentMaxIndexSegments,
 		AllowedOrigins:             []string{},
 		Tracing:                    defaultTracingSettings(),
+		Triggers:                   defaultTriggerSettings(),
 	}
 }
 
@@ -767,6 +770,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.Tracing = tracing
+	triggers, err := normalizeTriggers(fields["triggers"], path)
+	if err != nil {
+		return ServerSettings{}, err
+	}
+	settings.Triggers = triggers
 	return settings, nil
 }
 

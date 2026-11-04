@@ -20,6 +20,7 @@ const headlessTokenBytes = 32
 //   - The remote API is off: nothing listens, and its token file is not read.
 //   - The start-time recovery scans are off: they inspect every session's processes and
 //     sub-agent runs, which is the long-running server's job, not a one-turn process's.
+//   - server.triggers are off: schedules and webhooks belong to the long-running server.
 //
 // Close the service when done; it stops the runs and child processes it started.
 func NewHeadless(config Config) (*Service, *headless.Runner, error) {
@@ -32,6 +33,7 @@ func NewHeadless(config Config) (*Service, *headless.Runner, error) {
 	config.RemoteAPI.Enabled = false
 	config.RecoverProcessesAtStart = false
 	config.RecoverSubagentRunsAtStart = false
+	config.Triggers.Enabled = false
 	service, err := NewService(config)
 	if err != nil {
 		return nil, nil, err

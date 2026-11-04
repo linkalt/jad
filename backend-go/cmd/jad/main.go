@@ -151,6 +151,13 @@ func run() error {
 		slog.String("remote_api_socket", remoteSocket),
 		slog.String("log_level", config.Log.Level),
 		slog.String("log_file", config.Log.File))
+	if config.Triggers.Enabled {
+		names := make([]string, 0, len(config.Triggers.Entries))
+		for _, entry := range config.Triggers.Entries {
+			names = append(names, entry.Name)
+		}
+		logger.Info("server.triggers enabled", slog.Any("triggers", names))
+	}
 
 	select {
 	case err := <-serveErrors:

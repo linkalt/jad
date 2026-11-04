@@ -51,7 +51,9 @@ type Config struct {
 	// RemoteAPI is server.remote_api.
 	RemoteAPI sessionfs.RemoteAPISettings
 	// Tracing is server.tracing.
-	Tracing            sessionfs.TracingSettings
+	Tracing sessionfs.TracingSettings
+	// Triggers is server.triggers; the server runs them, "jad run" and "jad eval" do not.
+	Triggers           sessionfs.TriggerSettings
 	HTTP               httpapi.Config
 	Environment        map[string]string
 	RootLibraryOptions contentlibrary.Options
@@ -107,6 +109,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
 		Tracing:                    loaded.Server.Tracing,
+		Triggers:                   loaded.Server.Triggers,
 		MaxLeafCalls:               loaded.Server.MaxLeafCalls,
 		HTTP: httpapi.Config{
 			APIToken:                   environment[apiTokenEnvironmentName],

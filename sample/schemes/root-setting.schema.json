@@ -288,6 +288,49 @@
           },
           "additionalProperties": false
         },
+        "triggers": {
+          "type": "object",
+          "description": "Go backend only. Runs the server starts by itself: on a cron schedule, or when a signed webhook arrives (a CI failure, a new issue). Each run goes through the same run route as the web client and `jad run`, so it takes the session's locks, is written to messages.jsonl and shows in the web client like any other turn; `jad run` and `jad eval` never run triggers. A trigger runs once at a time: while its previous run goes on, a new firing is recorded as skipped (a webhook gets 409). Webhooks: POST /api/triggers/<name> with the HMAC-SHA256 of the body (hex, with or without sha256=, the form GitHub sends) in signature_header; no API token, and nothing is accepted unsigned. GET /api/triggers (with the API token) lists the triggers, their next scheduled time, the run in progress and the last history_limit runs, newest first. The webhook body reaches the model as {payload}: it is text from outside, so treat a webhook trigger like a prompt anyone with the secret can write. Off by default; a change applies after a restart.",
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "max_payload_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576, "default": 65536, "description": "Largest webhook body accepted; a larger one is refused with 413."},
+            "history_limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100, "description": "Finished trigger runs kept in memory for GET /api/triggers; the oldest go first. The history is not kept across restarts."},
+            "signature_header": {"type": "string", "pattern": "^[^\\s:]+$", "default": "X-Hub-Signature-256", "description": "Header that carries the body's HMAC-SHA256."},
+            "entries": {
+              "type": "object",
+              "maxProperties": 64,
+              "default": {},
+              "propertyNames": {"pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+              "description": "Triggers by name; the name is the webhook path. Each needs a schedule, a webhook or both.",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["session", "prompt"],
+                "anyOf": [{"required": ["schedule"]}, {"required": ["webhook"]}],
+                "dependentRequired": {"timezone": ["schedule"]},
+                "properties": {
+                  "enabled": {"type": "boolean", "default": true, "description": "False keeps the entry in the file but leaves it out."},
+                  "session": {"type": "string", "pattern": "\\S", "description": "Session reference the run goes to (demo or root:demo)."},
+                  "profile": {"type": "string", "pattern": "\\S", "description": "<category>/<name>; absent uses the session's default profile."},
+                  "model": {"type": "string", "pattern": "\\S", "description": "Model reference the profile allows; absent uses the profile's default."},
+                  "prompt": {"type": "string", "pattern": "\\S", "maxLength": 65536, "description": "The user message. {trigger} is the trigger's name, {time} the firing time (RFC 3339, UTC) and {payload} the webhook body (empty for a scheduled firing). Each is filled in once, so a placeholder inside the payload stays as it is."},
+                  "schedule": {"type": "string", "pattern": "\\S", "description": "Five-field cron expression (minute hour day-of-month month day-of-week: *, numbers, a-b, */n, a-b/n, lists, 7 for Sunday) or @hourly, @daily, @midnight, @weekly, @monthly, @yearly, @annually. With both day fields restricted, either one matches, as in cron. Names (JAN, MON) are not accepted."},
+                  "timezone": {"type": "string", "pattern": "\\S", "default": "Local", "description": "IANA time zone of schedule (for example Europe/Berlin or UTC); Local is the server's zone. Only with schedule. Needs the system's time zone data."},
+                  "webhook": {
+                    "type": "object",
+                    "required": ["secret_env"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "secret_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable with the HMAC secret. The server does not start when it is unset or empty."}
+                    }
+                  },
+                  "timeout_ms": {"type": "integer", "minimum": 0, "maximum": 86400000, "default": 0, "description": "Stops a run that has not ended after this long, as the stop button does; 0 leaves only the run's own limits (max_tool_rounds, max_run_tokens)."}
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "remote_api": {
           "type": "object",
           "description": "Go backend only. Lets other JAD servers call profiles and sub-agents here (and read transcripts) under /api/remote/v1, with tokens from its own table, never the JAD_API_TOKEN. Off by default. Served on exactly one listener: listen_unix when it is set, which keeps the routes off the network, otherwise the main listener, which is plain http. The bearer token of a remote travels in clear text over TCP, so keep such a listener behind a VPN or on loopback, or set listen_unix. With it enabled and listen_unix empty, server.host (or HOST) must name one address, never a wildcard. A change applies after a restart; the token file is re-read on every change, so revoking a token is immediate.",

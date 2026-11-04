@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/headless"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/triggers"
 )
 
 // Service owns the HTTP adapter and filesystem resolver for one server
@@ -19,9 +21,11 @@ type Service struct {
 	Handler http.Handler
 	// Remote serves /api/remote/v1; nil unless server.remote_api is enabled. It answers on the
 	// unix socket when listen_unix is set, else on the main listener, which is plain http.
-	Remote   http.Handler
-	remote   *remoteapi.Server
-	api      *httpapi.Handler
+	Remote http.Handler
+	remote *remoteapi.Server
+	api    *httpapi.Handler
+	// triggers runs server.triggers; nil when they are off.
+	triggers *triggers.Manager
 	resolver *Resolver
 
 	// stopRecovery cancels the start-time storage recovery; recovering closes when
@@ -81,6 +85,21 @@ func newServiceWithBudget(config Config, budget *tools.LeafBudget) (*Service, er
 		}
 		service.remote, service.Remote = server, server
 	}
+	if config.Triggers.Enabled {
+		// The trigger runs go to the API handler itself with the server's token, as "jad run"
+		// does in its own process; the webhook route sits in front of it.
+		manager, err := triggers.New(triggers.Options{
+			Settings: config.Triggers, Environment: config.Environment, Runner: headless.NewRunner(api, config.HTTP.APIToken),
+			APIToken: config.HTTP.APIToken, Logger: config.HTTP.Logger,
+		})
+		if err != nil {
+			service.Close()
+			return nil, err
+		}
+		service.triggers = manager
+		service.Handler = manager.Wrap(api)
+		manager.Start()
+	}
 	options := StorageRecoveryOptions{Processes: config.RecoverProcessesAtStart, SubagentRuns: config.RecoverSubagentRunsAtStart}
 	if options.Processes || options.SubagentRuns {
 		service.startStorageRecovery(options)
@@ -125,6 +144,10 @@ func (s *Service) Close() {
 			<-s.recovering
 		}
 	})
+	// Trigger runs are stopped through the API, so they end before it closes.
+	if s.triggers != nil {
+		s.triggers.Close()
+	}
 	if s.remote != nil {
 		s.remote.Close()
 	}
