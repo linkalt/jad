@@ -1,0 +1,59 @@
+{
+ "schema_version": 1,
+ "tools": [
+  {
+   "description": "Code intelligence from the project's language servers (for example gopls, pyright, typescript-language-server, rust-analyzer): exact answers where grep guesses. diagnostics lists the compiler and linter errors and warnings of a file as the server sees it now (use it after an edit). definition, references, type_definition and implementation find where a symbol is declared, used, typed or implemented; hover shows its type and documentation; symbols outlines a file; workspace_symbols searches symbol names across the project (path picks the language). Point at a symbol with line (1-based) and either column (1-based) or symbol, its text on that line. Results are file:line:column with the line's text. The server sees the files as saved on disk.",
+   "id": "native.lsp",
+   "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+     "action": {
+      "description": "What to ask the language server.",
+      "enum": [
+       "diagnostics",
+       "definition",
+       "references",
+       "hover",
+       "type_definition",
+       "implementation",
+       "symbols",
+       "workspace_symbols"
+      ],
+      "type": "string"
+     },
+     "column": {
+      "description": "1-based column of the symbol on line.",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "line": {
+      "description": "1-based line of the symbol (definition, references, hover, type_definition, implementation).",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "path": {
+      "description": "File, relative to cwd or absolute. Its extension picks the language server.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "query": {
+      "description": "workspace_symbols: part of the symbol name to search for.",
+      "type": "string"
+     },
+     "symbol": {
+      "description": "The symbol's text on line, instead of column; its first occurrence on the line is used.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "action",
+     "path"
+    ],
+    "type": "object"
+   },
+   "name": "lsp",
+   "source": "native"
+  }
+ ]
+}

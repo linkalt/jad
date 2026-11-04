@@ -10,7 +10,7 @@ import (
 var (
 	toolNodeNames   = []string{"native", "extension", "mcp"}
 	nativeToolNames = []string{
-		"read", "write", "edit", "notebook", "grep", "glob", "read_image", "bash", "exec", "process", "async", "task", "memory", "fetch", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
+		"read", "write", "edit", "notebook", "grep", "glob", "read_image", "lsp", "bash", "exec", "process", "async", "task", "memory", "fetch", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
 	}
 	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
 	extensionToolNames = []string{"decide_systemone"}

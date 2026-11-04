@@ -16,6 +16,7 @@ import (
 	"jad/backend-go/internal/headless"
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/tracing"
 )
 
@@ -168,6 +169,8 @@ func headlessService(logLevel string, stderr io.Writer) (app.Config, *headless.R
 	// The service closes first, so every run span has ended before the spans are flushed.
 	return config, runner, func() {
 		service.Close()
+		// Language servers the lsp tool started outlive catalogs; they end with the command.
+		native.ShutdownLanguageServers()
 		if err := tracing.Shutdown(shutdownTracing, config.Tracing); err != nil {
 			logger.Warn("tracing shutdown failed", "error", err)
 		}

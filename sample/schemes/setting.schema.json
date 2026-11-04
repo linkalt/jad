@@ -1478,6 +1478,39 @@
               },
               "unevaluatedProperties": false
             },
+            "lsp": {
+              "type": "object",
+              "description": "Code intelligence from language servers: diagnostics, definition, references, hover, type_definition, implementation, symbols and workspace_symbols. jad starts a server the first time a file of its extensions is asked about, one per server and workspace root (a worktree sub-agent gets its own), keeps it across runs and stops it after idle_shutdown_ms, when jad exits, or when its stdin closes. The server reads files from disk; the tool sends it the file's current text before each call. Read-only: it changes no file, and read-only sub-agents get it. Its path rules are its own (read_style): without paths it reaches the workspace only; a result outside them shows path and position but not the line's text. Servers run with the bash environment allowlist (PATH, HOME, LANG, ...) plus env, outside the sandbox setting. Needs lsp in tool_definition_paths.",
+              "allOf": [{"$ref": "#/$defs/read_style"}],
+              "required": ["servers"],
+              "properties": {
+                "servers": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "maxProperties": 32,
+                  "propertyNames": {"pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+                  "description": "Language servers by name. Two servers cannot claim the same extension. Examples: {\"go\": {\"command\": [\"gopls\"], \"extensions\": [\".go\"], \"language_id\": \"go\"}, \"python\": {\"command\": [\"pyright-langserver\", \"--stdio\"], \"extensions\": [\".py\"], \"language_id\": \"python\"}, \"ts\": {\"command\": [\"typescript-language-server\", \"--stdio\"], \"extensions\": [\".ts\", \".tsx\"], \"language_id\": \"typescript\"}, \"rust\": {\"command\": [\"rust-analyzer\"], \"extensions\": [\".rs\"], \"language_id\": \"rust\"}}.",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": ["command", "extensions", "language_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "command": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "The server program (a PATH name or an absolute path) and its arguments; it must speak LSP on stdin and stdout."},
+                      "extensions": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^\\.[A-Za-z0-9_+-]{1,16}$"}, "description": "File extensions the server serves, with the dot; case is ignored."},
+                      "language_id": {"type": "string", "pattern": "\\S", "description": "LSP languageId of the files (go, python, typescript, typescriptreact, rust, c, cpp, ...)."},
+                      "initialization_options": {"type": "object", "description": "Sent as initializationOptions in initialize, unchanged."},
+                      "env": {"type": "object", "additionalProperties": {"type": "string"}, "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "description": "Variables added to the server's environment (for example GOFLAGS or VIRTUAL_ENV)."}
+                    }
+                  }
+                },
+                "request_timeout_ms": {"type": "integer", "minimum": 100, "maximum": 600000, "default": 30000, "description": "Longest one request may take, a server's start and initialize included; also the grace a stopping server gets before it is killed."},
+                "diagnostics_wait_ms": {"type": "integer", "minimum": 0, "maximum": 60000, "default": 3000, "description": "How long diagnostics waits for the server to publish after sending it new text. An unchanged file returns what was published before at once."},
+                "idle_shutdown_ms": {"type": "integer", "minimum": 1000, "maximum": 86400000, "default": 600000, "description": "A server with no call for this long is stopped; the next call starts it again."},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most locations, diagnostics or symbols one call shows; the count of all is reported."},
+                "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 2097152, "description": "Largest file the tool sends to a server or reads for a result's line text."}
+              },
+              "unevaluatedProperties": false
+            },
             "notebook": {
               "type": "object",
               "description": "Reads and changes the cells of a Jupyter notebook (.ipynb, nbformat 4): read shows cells and their outputs as text, edit, insert and delete change cells and rewrite the file in Jupyter's layout (sorted keys, one-space indent), so a diff shows only the changed cell. Nothing is executed. Needs tools.native.edit: where it may write, max_bytes and backups are edit's settings, so a profile that may edit a file may edit the notebook. Not read-only: its calls run in order with other changes, read-only sub-agents do not get it, and writer sub-agents may list it. post_edit hooks run on a changed notebook. Needs notebook in tool_definition_paths.",

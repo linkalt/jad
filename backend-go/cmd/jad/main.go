@@ -16,6 +16,7 @@ import (
 	"jad/backend-go/internal/app"
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/tracing"
 )
 
@@ -115,6 +116,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize Go backend: %w", err)
 	}
+	// Deferred before service.Close, so it runs after it (last in, first out): the language
+	// servers the lsp tool started stop once no run can still ask them.
+	defer native.ShutdownLanguageServers()
 	defer service.Close()
 
 	address := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
