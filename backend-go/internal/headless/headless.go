@@ -50,6 +50,9 @@ type Request struct {
 	// Output, when set, asks for a final answer that is JSON matching a schema: the run
 	// sends it as output_format, and Run checks the answer against it.
 	Output *OutputSchema
+	// Commands makes an input that starts with a slash command run it (see ParseCommand):
+	// an action ends without a turn, and a library or MCP command is replaced by its text.
+	Commands bool
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -78,6 +81,10 @@ type Result struct {
 	// files; absent when no response was priced.
 	CostUSD    *float64 `json:"cost_usd,omitempty"`
 	DurationMS int64    `json:"duration_ms"`
+	// Command is the slash command the input started with, without its slash, when
+	// Request.Commands was set; CommandResult is the answer of an action's route.
+	Command       string          `json:"command,omitempty"`
+	CommandResult json.RawMessage `json:"command_result,omitempty"`
 }
 
 // Runner sends headless turns to an API handler.
@@ -113,6 +120,27 @@ func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if strings.TrimSpace(request.Session) == "" {
 		return Result{}, errors.New("a session is required")
 	}
+	if request.Commands {
+		if command, ok := ParseCommand(request.Input); ok {
+			if err := command.Check(request.Model, request.Output != nil); err != nil {
+				return Result{}, err
+			}
+			result, done, err := r.runCommand(ctx, &request, command)
+			if err != nil || done {
+				return result, err
+			}
+			result, err = r.run(ctx, request)
+			if err == nil {
+				result.Command = command.Word
+			}
+			return result, err
+		}
+	}
+	return r.run(ctx, request)
+}
+
+// run sends the request's input as one turn.
+func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 	var outputFormat json.RawMessage
 	if request.Output != nil {
 		format, err := request.Output.format()

@@ -5,6 +5,8 @@ import {
   SLASH_COMMANDS,
   createSlashSource,
   librarySlug,
+  mcpPromptArgumentValues,
+  mcpPromptArgumentsReady,
   rankSlashEntries,
   slashEntries,
 } from './slash-commands.ts';
@@ -143,4 +145,62 @@ test('a failing library load leaves the three commands usable and is retried', a
 test('the source answers a promise, so Astryx takes its async path and waits for the load', () => {
   const menu = source({loadCatalog: async () => CATALOG});
   assert.ok(menu.search('') instanceof Promise);
+});
+
+const MCP_PROMPTS = [
+  {server: 'gh', name: 'review_pr', description: 'Review a pull request', arguments: [{name: 'pr', required: true}, {name: 'focus'}]},
+  {server: 'gh', name: 'Review PR', arguments: []},
+  {server: 'docs', name: 'standup', title: 'Daily stand-up', arguments: []},
+];
+
+test('MCP prompts follow the library as mcp:<server>:<slug>, a taken slug numbered', () => {
+  const entries = slashEntries(SLASH_COMMANDS, CATALOG, MCP_PROMPTS);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(7), ['mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
+  const picked = entries[7].item.auxiliaryData;
+  assert.equal(picked.type, 'mcp');
+  assert.equal(picked.prompt.name, 'review_pr');
+  assert.deepEqual(ids(rankSlashEntries(entries, 'mcp:', 50)), ['mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'stand-up', 50)), ['mcp:docs:standup'], 'the title is a match term');
+});
+
+test('the library and the MCP prompts load side by side, and either may fail alone', async () => {
+  let libraryOffline = false;
+  let mcpOffline = true;
+  let mcpLoads = 0;
+  const menu = source({
+    loadCatalog: async () => {
+      if (libraryOffline) throw new Error('offline');
+      return CATALOG;
+    },
+    loadMCPPrompts: async () => {
+      mcpLoads += 1;
+      if (mcpOffline) throw new Error('MCP prompts are unavailable');
+      return MCP_PROMPTS;
+    },
+  });
+  assert.equal(ids(await menu.search('')).length, 7, 'the library is listed while MCP fails');
+  mcpOffline = false;
+  assert.equal(ids(await menu.search('')).length, 10, 'a failed load is retried next search');
+  assert.equal(mcpLoads, 2);
+  assert.equal(ids(await menu.search('')).length, 10);
+  assert.equal(mcpLoads, 2, 'a full load answers until refreshMs');
+});
+
+test('a failing library still shows the MCP prompts', async () => {
+  const menu = source({
+    loadCatalog: async () => {
+      throw new Error('offline');
+    },
+    loadMCPPrompts: async () => MCP_PROMPTS,
+  });
+  assert.deepEqual(ids(await menu.search('')), ['compact', 'state', 'reset', 'mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
+});
+
+test('an MCP prompt is ready when its required arguments have text; empty optional ones are left out', () => {
+  const [review] = MCP_PROMPTS;
+  assert.equal(mcpPromptArgumentsReady(review, {}), false);
+  assert.equal(mcpPromptArgumentsReady(review, {pr: '   '}), false);
+  assert.equal(mcpPromptArgumentsReady(review, {pr: '42'}), true);
+  assert.deepEqual(mcpPromptArgumentValues(review, {pr: '42', focus: '', other: 'x'}), {pr: '42'});
+  assert.deepEqual(mcpPromptArgumentValues(review, {pr: '42', focus: 'tests'}), {pr: '42', focus: 'tests'});
 });

@@ -64,10 +64,23 @@ type commandStreams struct {
 
 const runUsage = `usage: jad run --session <ref> [--profile <category/name>] [--model <category/name>]
                [--format text|json|jsonl] [--timeout <duration>] [--log-level <level>]
-               [--output-schema <file> [--output-strict=false]] [prompt | -]
+               [--output-schema <file> [--output-strict=false]] [--no-commands] [prompt | -]
 
 Runs one turn of a session without a server and exits. The prompt is the remaining
 arguments, or standard input when there are none or the only one is "-".
+
+A prompt that starts with a slash command runs it, as the web client's "/" menu does:
+  /compact, /reset         compact or reset the session; no turn is run
+  /state [text]            write a state-context block, with text as its prompt; no turn
+  /prompt:<name> [text]    send the library prompt, template or skill named <name> (its
+  /template:<name> [text]  name in lower case with dashes, as the "/" menu lists it),
+  /skill:<name> [text]     followed by text on a new paragraph
+  /mcp:<server>:<prompt> [arg=value ...] [text]
+                           send the MCP prompt, filled with its arguments, followed by
+                           text; a prompt with one argument takes all of text as it. The
+                           server's toolset entry needs "prompts": true.
+Any other prompt is sent as it is. --no-commands sends a prompt that starts with a
+command word as it is too.
 
 Formats: text prints the final answer; json prints one result object; jsonl prints every
 run-stream event as {"event","data"} and ends with {"event":"result","data":<result>}.
@@ -115,6 +128,7 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	flags.StringVar(&options.logLevel, "log-level", "", "override server.log_level")
 	outputSchema := flags.String("output-schema", "", "JSON Schema file the final answer must match")
 	outputStrict := flags.Bool("output-strict", true, "ask the provider to enforce the output schema strictly")
+	noCommands := flags.Bool("no-commands", false, "send a prompt that starts with a slash command as it is")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, _ = io.WriteString(streams.stdout, runUsage)
@@ -150,6 +164,14 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 		return runOptions{}, err
 	}
 	options.request.Input = prompt
+	options.request.Commands = !*noCommands
+	if options.request.Commands {
+		if command, ok := headless.ParseCommand(prompt); ok {
+			if err := command.Check(options.request.Model, options.request.Output != nil); err != nil {
+				return runOptions{}, usageError("%v", err)
+			}
+		}
+	}
 	return options, nil
 }
 

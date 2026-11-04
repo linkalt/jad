@@ -345,6 +345,7 @@ export function ViewPane({
     <ComposerErrorBoundary onError={onComposerError}>
       <ComposerPane
         activeSessionId={composerSessionId}
+        activeProfile={profile}
         draftKey={viewKey}
         inputHistory={inputHistory}
         onSubmit={onSubmitComposer}

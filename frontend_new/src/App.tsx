@@ -2691,7 +2691,7 @@ function App({
       sessionId: sessionRefOfViewKey(viewKey),
       sessionTitle: pane.label,
       kind: 'error',
-      title: 'Library item not inserted',
+      title: 'Slash menu item not inserted',
       message,
     });
   };

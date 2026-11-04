@@ -127,7 +127,8 @@ var knownSessionRoutes = map[string]bool{
 	"tools": true, "history": true, "files": true,
 	"model-default": true, "compact": true, "reset": true, "front-compact": true, "statecontext": true,
 	"run": true, "run/interaction": true, "run/interaction/extend": true,
-	"run/stream": true, "run/stop": true, "checkpoints": true,
+	"run/stream": true, "run/stop": true, "checkpoints": true, "fork": true,
+	"mcp-prompts": true, "mcp-prompts/get": true,
 }
 
 // routeTemplate maps a request path to a route with identifiers replaced by

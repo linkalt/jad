@@ -24,8 +24,21 @@ import {
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
-import {fetchRootLibrary, fetchRootLibraryAsset, fetchSessionFiles} from '../api';
-import {createSlashSource, type SlashCommand, type SlashSelection} from '../slash-commands';
+import {
+  fetchRootLibrary,
+  fetchRootLibraryAsset,
+  fetchSessionFiles,
+  fetchSessionMCPPrompt,
+  fetchSessionMCPPrompts,
+  type MCPPrompt,
+} from '../api';
+import {
+  createSlashSource,
+  mcpPromptArgumentValues,
+  type SlashCommand,
+  type SlashSelection,
+} from '../slash-commands';
+import {MCPPromptDialog} from './MCPPromptDialog';
 import {useFileDrop} from './FileDrop';
 import {createComposerTriggers, resolveMentionFiles, slashTrigger} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
@@ -64,6 +77,8 @@ export type ComposerInsertActions = {
 type ComposerPaneProps = {
   /** The session reference used for session-scoped features such as @ file search. */
   activeSessionId: string;
+  /** The profile the view is pinned to, for its MCP prompts; undefined is the session's default. */
+  activeProfile?: string;
   /** The row identity used to keep each profile view's draft independent. */
   draftKey: string;
   /** Earlier user messages of this view, oldest first, for ArrowUp / ArrowDown recall. */
@@ -442,6 +457,7 @@ const DROP_HIGHLIGHT = {
  */
 export function ComposerPane({
   activeSessionId,
+  activeProfile,
   draftKey,
   inputHistory,
   onSubmit,
@@ -479,6 +495,9 @@ export function ComposerPane({
           source: createSlashSource({
             commands: slashCommands ?? [],
             loadCatalog: () => fetchRootLibrary(),
+            loadMCPPrompts: appConfig.slash_menu_mcp_prompts_enabled
+              ? () => fetchSessionMCPPrompts(activeSessionId, activeProfile).then(listed => listed.prompts)
+              : undefined,
             maxResults: appConfig.slash_menu_max_results,
             refreshMs: appConfig.slash_menu_refresh_ms,
           }),
@@ -497,7 +516,7 @@ export function ComposerPane({
           : undefined,
       slash,
     });
-  }, [activeSessionId, slashCommands]);
+  }, [activeSessionId, activeProfile, slashCommands]);
 
   const imageLimits = useMemo(
     () => ({
@@ -740,11 +759,31 @@ export function ComposerPane({
     [insertPrompt, insertSkill, insertText],
   );
 
+  /** The MCP prompt whose arguments the dialog is asking for. */
+  const [argumentPrompt, setArgumentPrompt] = useState<MCPPrompt | null>(null);
+  // An MCP prompt is filled by its server and inserted like a library prompt, by the
+  // same length rule; its badge is named <server>:<prompt>.
+  const insertMCPPrompt = (prompt: MCPPrompt, values: Record<string, string>) => {
+    fetchSessionMCPPrompt(
+      activeSessionId,
+      {server: prompt.server, name: prompt.name, arguments: mcpPromptArgumentValues(prompt, values)},
+      activeProfile,
+    ).then(
+      text => insertPrompt(text, `${prompt.server}:${prompt.name}`),
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
+
   // A library pick inserts the way the prompt library panel does: a prompt by its
   // length rule, a template as plain text, a skill as a badge.
   slashPickRef.current = selection => {
     if (selection.type === 'command') {
       onSlashCommand?.(selection.name);
+      return;
+    }
+    if (selection.type === 'mcp') {
+      if (selection.prompt.arguments.length === 0) insertMCPPrompt(selection.prompt, {});
+      else setArgumentPrompt(selection.prompt);
       return;
     }
     fetchRootLibraryAsset(selection.kind, selection.id).then(
@@ -811,141 +850,151 @@ export function ComposerPane({
   });
 
   return (
-    <ChatComposer
-      {...(isDropEnabled ? fileDrop.targetProps : {})}
-      style={isDropEnabled && fileDrop.isDragging ? DROP_HIGHLIGHT : undefined}
-      isDisabled={isDisabled}
-      value={value}
-      onChange={handleChange}
-      onSubmit={handleSubmit}
-      sendButton={
-        <ChatSendButton
-          isDisabled={isDisabled || (value.trim() === '' && !hasAttachments)}
-          onSend={() => handleSubmit(value)}
-        />
-      }
-      onStop={onStop}
-      isStopShown={isRunning && !isDisabled}
-      placeholder={placeholder}
-      input={
-        <ChatComposerInput
-          ref={inputRootRef}
-          handleRef={inputRef}
-          placeholder={composerPlaceholderForDraft(value, placeholder)}
-          triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
-          onKeyDown={handleKeyDown}
-          hasHistory={false}
-          onFiles={
-            isImageAttachEnabled || isFileAttachEnabled ? fileDrop.handleFiles : undefined
-          }
-          pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}
-        />
-      }
-      drawer={
-        <>
-          {isDisabled ? null : drawer}
-          {isImageAttachEnabled || isFileAttachEnabled || isDropEnabled ? (
-            <ImageAttachmentsDrawer
-              images={attachments.images}
-              notice={attachments.notice}
-              onRemove={attachments.remove}
-              files={fileAttachments.images}
-              fileNotice={fileAttachments.notice}
-              onRemoveFile={fileAttachments.remove}
-            />
-          ) : null}
-          {isPreviewEnabled && isPreviewOpen ? <ComposerPreview value={value} /> : null}
-        </>
-      }
-      headerActions={
-        /*
-          One row, one gap: the icons from the prompt-library toggle to the
-          preview toggle are one run, so no cluster boundary is left showing as
-          a wider space.
-        */
-        <HStack align="center" gap={1}>
-          <HStack align="center" gap={1}>
-            <IconButton
-              data-panel-toggle=""
-              label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
-              icon={
-                <Icon icon={isPromptLibraryOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
-              }
-              variant={isPromptLibraryOpen ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={onTogglePromptLibrary}
-            />
-            {toolbarActions}
-          </HStack>
-          <HStack align="center" gap={1}>
-            {/*
-              The attachment buttons are plain toolbar icons like their
-              neighbours: no surface sets them apart as a group. Each keeps its
-              own picker and its own direct action, and each appears only while
-              its own attach flag is on.
-            */}
-            {isImageAttachEnabled ? (
-              <>
-                <IconButton
-                  label="Attach image"
-                  isDisabled={isDisabled}
-                  icon={<Icon icon={ImageIcon} size="sm" />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openImagePickerRef.current?.()}
-                />
-                <ImageAttachmentPicker
-                  accept={appConfig.attach_image_accept}
-                  onFiles={files => void attachments.add(files)}
-                  openRef={openImagePickerRef}
-                />
-              </>
-            ) : null}
-            {isFileAttachEnabled ? (
-              <>
-                <IconButton
-                  label="Attach file"
-                  isDisabled={isDisabled}
-                  icon={<Icon icon={FileIcon} size="sm" />}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openFilePickerRef.current?.()}
-                />
-                <FileAttachmentPicker
-                  accept={appConfig.attach_file_accept}
-                  onFiles={files => void fileAttachments.add(files)}
-                  openRef={openFilePickerRef}
-                />
-              </>
-            ) : null}
-            {isPreviewEnabled ? (
-              <IconButton
-                label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}
-                isDisabled={isDisabled}
-                icon={<Icon icon={PreviewIcon} size="sm" />}
-                variant={isPreviewOpen ? 'secondary' : 'ghost'}
-                size="sm"
-                onClick={() => setIsPreviewOpen(current => !current)}
+    <>
+      <MCPPromptDialog
+        prompt={argumentPrompt}
+        onCancel={() => setArgumentPrompt(null)}
+        onSubmit={(prompt, values) => {
+          setArgumentPrompt(null);
+          insertMCPPrompt(prompt, values);
+        }}
+      />
+      <ChatComposer
+        {...(isDropEnabled ? fileDrop.targetProps : {})}
+        style={isDropEnabled && fileDrop.isDragging ? DROP_HIGHLIGHT : undefined}
+        isDisabled={isDisabled}
+        value={value}
+        onChange={handleChange}
+        onSubmit={handleSubmit}
+        sendButton={
+          <ChatSendButton
+            isDisabled={isDisabled || (value.trim() === '' && !hasAttachments)}
+            onSend={() => handleSubmit(value)}
+          />
+        }
+        onStop={onStop}
+        isStopShown={isRunning && !isDisabled}
+        placeholder={placeholder}
+        input={
+          <ChatComposerInput
+            ref={inputRootRef}
+            handleRef={inputRef}
+            placeholder={composerPlaceholderForDraft(value, placeholder)}
+            triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
+            onKeyDown={handleKeyDown}
+            hasHistory={false}
+            onFiles={
+              isImageAttachEnabled || isFileAttachEnabled ? fileDrop.handleFiles : undefined
+            }
+            pasteAsToken={appConfig.paste_as_token_enabled ? pasteAsToken : false}
+          />
+        }
+        drawer={
+          <>
+            {isDisabled ? null : drawer}
+            {isImageAttachEnabled || isFileAttachEnabled || isDropEnabled ? (
+              <ImageAttachmentsDrawer
+                images={attachments.images}
+                notice={attachments.notice}
+                onRemove={attachments.remove}
+                files={fileAttachments.images}
+                fileNotice={fileAttachments.notice}
+                onRemoveFile={fileAttachments.remove}
               />
             ) : null}
+            {isPreviewEnabled && isPreviewOpen ? <ComposerPreview value={value} /> : null}
+          </>
+        }
+        headerActions={
+          /*
+            One row, one gap: the icons from the prompt-library toggle to the
+            preview toggle are one run, so no cluster boundary is left showing as
+            a wider space.
+          */
+          <HStack align="center" gap={1}>
+            <HStack align="center" gap={1}>
+              <IconButton
+                data-panel-toggle=""
+                label={`${isPromptLibraryOpen ? 'Hide' : 'Show'} prompt library`}
+                icon={
+                  <Icon icon={isPromptLibraryOpen ? 'chevronLeft' : 'chevronRight'} size="sm" />
+                }
+                variant={isPromptLibraryOpen ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={onTogglePromptLibrary}
+              />
+              {toolbarActions}
+            </HStack>
+            <HStack align="center" gap={1}>
+              {/*
+                The attachment buttons are plain toolbar icons like their
+                neighbours: no surface sets them apart as a group. Each keeps its
+                own picker and its own direct action, and each appears only while
+                its own attach flag is on.
+              */}
+              {isImageAttachEnabled ? (
+                <>
+                  <IconButton
+                    label="Attach image"
+                    isDisabled={isDisabled}
+                    icon={<Icon icon={ImageIcon} size="sm" />}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openImagePickerRef.current?.()}
+                  />
+                  <ImageAttachmentPicker
+                    accept={appConfig.attach_image_accept}
+                    onFiles={files => void attachments.add(files)}
+                    openRef={openImagePickerRef}
+                  />
+                </>
+              ) : null}
+              {isFileAttachEnabled ? (
+                <>
+                  <IconButton
+                    label="Attach file"
+                    isDisabled={isDisabled}
+                    icon={<Icon icon={FileIcon} size="sm" />}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openFilePickerRef.current?.()}
+                  />
+                  <FileAttachmentPicker
+                    accept={appConfig.attach_file_accept}
+                    onFiles={files => void fileAttachments.add(files)}
+                    openRef={openFilePickerRef}
+                  />
+                </>
+              ) : null}
+              {isPreviewEnabled ? (
+                <IconButton
+                  label={isPreviewOpen ? 'Hide markdown preview' : 'Preview markdown'}
+                  isDisabled={isDisabled}
+                  icon={<Icon icon={PreviewIcon} size="sm" />}
+                  variant={isPreviewOpen ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => setIsPreviewOpen(current => !current)}
+                />
+              ) : null}
+            </HStack>
           </HStack>
-        </HStack>
-      }
-      headerContext={
-        <HStack align="center" gap={1}>
-          {headerContextActions}
-          <IconButton
-            data-panel-toggle=""
-            label={showInspector ? 'Hide run inspector' : 'Show run inspector'}
-            icon={<Icon icon="viewColumns" size="sm" />}
-            variant={showInspector ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={onToggleInspector}
-          />
-        </HStack>
-      }
-      footerActions={footerNote}
-      elevation="low"
-    />
+        }
+        headerContext={
+          <HStack align="center" gap={1}>
+            {headerContextActions}
+            <IconButton
+              data-panel-toggle=""
+              label={showInspector ? 'Hide run inspector' : 'Show run inspector'}
+              icon={<Icon icon="viewColumns" size="sm" />}
+              variant={showInspector ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={onToggleInspector}
+            />
+          </HStack>
+        }
+        footerActions={footerNote}
+        elevation="low"
+      />
+    </>
   );
 }

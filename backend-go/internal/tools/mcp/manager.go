@@ -675,9 +675,16 @@ func (b *limitedResponseBody) Read(buffer []byte) (int, error) {
 	count, err := b.inner.Read(buffer)
 	b.read += int64(count)
 	if b.read > b.limit {
-		return 0, fmt.Errorf("MCP HTTP response body exceeds the max_result_bytes limit of %d bytes", b.limit)
+		return 0, &responseTooLargeError{limit: b.limit}
 	}
 	return count, err
+}
+
+// responseTooLargeError is an HTTP answer larger than max_result_bytes.
+type responseTooLargeError struct{ limit int64 }
+
+func (e *responseTooLargeError) Error() string {
+	return fmt.Sprintf("MCP HTTP response body exceeds the max_result_bytes limit of %d bytes", e.limit)
 }
 
 func (b *limitedResponseBody) Close() error {

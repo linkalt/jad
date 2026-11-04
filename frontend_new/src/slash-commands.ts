@@ -1,18 +1,21 @@
 /**
- * The composer's `/` menu: three built-in commands, then every library item.
+ * The composer's `/` menu: three built-in commands, then every library item, then
+ * the session profile's MCP prompts.
  *
  * Astryx ends a trigger's query at the first space, so a library item cannot be
  * typed by its name ("Software engineering"). Each one gets a slug instead, and
  * the library kind is the prefix: `/prompt:software-engineering`,
  * `/template:chatgpt-template`, `/skill:review`. Typing `/prompt:` lists one
- * kind; a new kind needs no change here beyond the catalog it arrives in.
+ * kind; a new kind needs no change here beyond the catalog it arrives in. An MCP
+ * prompt is `/mcp:<server>:<slug>`, from the servers whose toolset entry has
+ * `prompts: true`; `jad run` accepts the same words.
  *
  * The module is pure: it builds and ranks the entries. What a selection does is
  * decided by the app, which owns the drawers and the composer inserts.
  */
 
 import type {SearchableItem, SearchSource} from '@astryxdesign/core';
-import type {RootLibraryAssetSummary, RootLibraryCatalog, RootLibraryKind} from './api';
+import type {MCPPrompt, RootLibraryAssetSummary, RootLibraryCatalog, RootLibraryKind} from './api';
 
 export type SlashCommandName = 'compact' | 'state' | 'reset';
 
@@ -26,7 +29,8 @@ export type SlashCommand = {
 /** What the user picked: a built-in action, or a library item to insert. */
 export type SlashSelection =
   | {type: 'command'; name: SlashCommandName}
-  | {type: 'library'; kind: RootLibraryKind; id: string; name: string};
+  | {type: 'library'; kind: RootLibraryKind; id: string; name: string}
+  | {type: 'mcp'; prompt: MCPPrompt};
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
@@ -81,10 +85,26 @@ function libraryEntries(items: readonly RootLibraryAssetSummary[], taken: Set<st
   });
 }
 
-/** Commands first, then the library in the order the server lists it. */
+function mcpEntries(prompts: readonly MCPPrompt[], taken: Set<string>): SlashEntry[] {
+  return prompts.map(prompt => {
+    const base = `mcp:${prompt.server}:${librarySlug(prompt.name)}`;
+    let key = base;
+    for (let suffix = 2; taken.has(key); suffix += 1) {
+      key = `${base}-${suffix}`;
+    }
+    taken.add(key);
+    return {
+      item: {id: key, label: `/${key}`, auxiliaryData: {type: 'mcp', prompt}},
+      terms: [prompt.name, prompt.title ?? '', prompt.description ?? ''].map(term => term.toLowerCase()),
+    };
+  });
+}
+
+/** Commands first, then the library in the order the server lists it, then the MCP prompts. */
 export function slashEntries(
   commands: readonly SlashCommand[],
   catalog: RootLibraryCatalog | null,
+  mcpPrompts: readonly MCPPrompt[] = [],
 ): SlashEntry[] {
   const taken = new Set<string>(commands.map(command => command.name));
   const entries: SlashEntry[] = commands.map(command => ({
@@ -100,6 +120,7 @@ export function slashEntries(
       entries.push(...libraryEntries(items, taken));
     }
   }
+  entries.push(...mcpEntries(mcpPrompts, taken));
   return entries;
 }
 
@@ -138,6 +159,8 @@ export type SlashSourceOptions = {
   commands: readonly SlashCommand[];
   /** Loads the library catalog; a failure leaves the built-in commands on their own. */
   loadCatalog: () => Promise<RootLibraryCatalog>;
+  /** Loads the session profile's MCP prompts; left out, the menu has none. */
+  loadMCPPrompts?: () => Promise<readonly MCPPrompt[]>;
   maxResults: number;
   /** How long a loaded catalog answers before the next search asks the server again. */
   refreshMs: number;
@@ -155,23 +178,32 @@ export type SlashSourceOptions = {
 export function createSlashSource({
   commands,
   loadCatalog,
+  loadMCPPrompts,
   maxResults,
   refreshMs,
   now = Date.now,
 }: SlashSourceOptions): SearchSource {
+  let catalog: RootLibraryCatalog | null = null;
+  let mcpPrompts: readonly MCPPrompt[] = [];
   let entries: SlashEntry[] = slashEntries(commands, null);
   let loadedAt: number | null = null;
   let inFlight: Promise<void> | null = null;
 
+  // The library and the MCP prompts load side by side. Either failing keeps what the
+  // menu had of it, shows the other, and leaves the whole load to be retried next search.
   const ensureFresh = (): Promise<void> => {
     if (loadedAt !== null && now() - loadedAt < refreshMs) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = (async () => {
       try {
-        entries = slashEntries(commands, await loadCatalog());
-        loadedAt = now();
-      } catch {
-        // A failed load keeps the entries the menu already has, and is retried next search.
+        const [library, mcp] = await Promise.allSettled([
+          loadCatalog(),
+          loadMCPPrompts === undefined ? Promise.resolve(mcpPrompts) : loadMCPPrompts(),
+        ]);
+        if (library.status === 'fulfilled') catalog = library.value;
+        if (mcp.status === 'fulfilled') mcpPrompts = mcp.value;
+        entries = slashEntries(commands, catalog, mcpPrompts);
+        if (library.status === 'fulfilled' && mcp.status === 'fulfilled') loadedAt = now();
       } finally {
         inFlight = null;
       }
@@ -184,4 +216,22 @@ export function createSlashSource({
     return rankSlashEntries(entries, query, maxResults);
   };
   return {search, bootstrap: () => search('')};
+}
+
+/** Whether every required argument of an MCP prompt has a value. */
+export function mcpPromptArgumentsReady(prompt: MCPPrompt, values: Readonly<Record<string, string>>): boolean {
+  return prompt.arguments.every(argument => argument.required !== true || (values[argument.name] ?? '').trim() !== '');
+}
+
+/** The arguments to send: the prompt's own, without the optional ones left empty. */
+export function mcpPromptArgumentValues(
+  prompt: MCPPrompt,
+  values: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const chosen: Record<string, string> = {};
+  for (const argument of prompt.arguments) {
+    const value = values[argument.name] ?? '';
+    if (value.trim() !== '') chosen[argument.name] = value;
+  }
+  return chosen;
 }

@@ -875,6 +875,97 @@ export async function resetSession(sessionId: string, profile?: string): Promise
   }
 }
 
+export interface MCPPromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+/** A prompt template of an MCP server the profile's toolsets list with `prompts: true`. */
+export interface MCPPrompt {
+  server: string;
+  name: string;
+  title?: string;
+  description?: string;
+  arguments: MCPPromptArgument[];
+}
+
+export interface MCPPromptList {
+  prompts: MCPPrompt[];
+  /** Servers whose prompts could not be listed; the others are still in `prompts`. */
+  failures: {server: string; error: string}[];
+}
+
+function isMCPPrompt(value: unknown): value is MCPPrompt {
+  return (
+    isRecord(value) &&
+    typeof value.server === 'string' &&
+    typeof value.name === 'string' &&
+    (value.title === undefined || typeof value.title === 'string') &&
+    (value.description === undefined || typeof value.description === 'string') &&
+    Array.isArray(value.arguments) &&
+    value.arguments.every(
+      argument =>
+        isRecord(argument) &&
+        typeof argument.name === 'string' &&
+        (argument.description === undefined || typeof argument.description === 'string') &&
+        (argument.required === undefined || typeof argument.required === 'boolean'),
+    )
+  );
+}
+
+/** The MCP prompts of a session profile, for the composer's `/` menu. */
+export async function fetchSessionMCPPrompts(
+  sessionId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<MCPPromptList> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-prompts${profileQuery(profile)}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.prompts) ||
+    !value.prompts.every(isMCPPrompt) ||
+    (value.failures !== undefined &&
+      (!Array.isArray(value.failures) ||
+        !value.failures.every(
+          failure => isRecord(failure) && typeof failure.server === 'string' && typeof failure.error === 'string',
+        )))
+  ) {
+    throw new Error('the server returned invalid MCP prompt data');
+  }
+  return {
+    prompts: value.prompts,
+    failures: (value.failures ?? []) as MCPPromptList['failures'],
+  };
+}
+
+/** One MCP prompt filled with its arguments, as text for the draft. Nothing is sent to the model. */
+export async function fetchSessionMCPPrompt(
+  sessionId: string,
+  request: {server: string; name: string; arguments: Record<string, string>},
+  profile?: string,
+): Promise<string> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-prompts/get${profileQuery(profile)}`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isRecord(value.prompt) || typeof value.prompt.text !== 'string') {
+    throw new Error('the server returned invalid MCP prompt data');
+  }
+  return value.prompt.text;
+}
+
 /** The session's checkpoints, newest first, and whether the session keeps any. */
 export async function fetchSessionCheckpoints(
   sessionId: string,
