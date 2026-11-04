@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plugin.schema.json",
+  "title": "Jad plugin manifest (plugin.json)",
+  "description": "The manifest at the top of a plugin folder, which `jad plugin install <folder>` installs. Beside it the folder holds any of models/, mcp/, tools/ (toolsets, with their hooks) and profiles/ (agents), each with <file>.json catalog files; skills/<skill>/SKILL.md skill folders; and files/, copied to <state>/.plugins/<name>/files, whose path replaces ${JAD_PLUGIN_FILES} in the catalog files. README, LICENSE and CHANGELOG files and hidden entries are ignored; anything else is refused.",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "The plugin's name and the category its catalog files are installed under: mcp/<name>/<file>.json and so on. The plugin's files name each other as <name>/<file>."
+    },
+    "version": {"type": "string", "description": "Shown by jad plugin list; no rule applies to it."},
+    "description": {"type": "string"}
+  },
+  "required": ["schema_version", "name"],
+  "additionalProperties": false
+}
