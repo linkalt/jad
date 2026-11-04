@@ -2551,8 +2551,9 @@ func (t targetSpec) match(ck *checker, obj types.Object) bool {
 		if !ok || !v.IsField() {
 			return false
 		}
-		if owner := fieldOwner(obj); owner != "" && t.recv != "" {
-			return owner == t.recv
+		// A qualified Type.field never matches a field whose struct is not a package-level type (owner "").
+		if t.recv != "" {
+			return fieldOwner(obj) == t.recv
 		}
 		return true
 	case "func":
@@ -2562,12 +2563,13 @@ func (t targetSpec) match(ck *checker, obj types.Object) bool {
 		}
 		sig, ok := fn.Type().(*types.Signature)
 		return ok && sig.Recv() == nil
+	// A var or const target is a package-level declaration; a function-local object with the same name is not it.
 	case "const":
-		_, ok := obj.(*types.Const)
-		return ok
+		c, ok := obj.(*types.Const)
+		return ok && c.Parent() == c.Pkg().Scope()
 	case "var":
 		v, ok := obj.(*types.Var)
-		return ok && !v.IsField()
+		return ok && !v.IsField() && v.Parent() == v.Pkg().Scope()
 	}
 	return true
 }

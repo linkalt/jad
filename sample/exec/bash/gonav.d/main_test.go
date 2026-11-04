@@ -1296,3 +1296,82 @@ func TestImplCrossesPackagesWithForeignTypes(t *testing.T) {
 		t.Fatalf("both directions must be exact, got %v / %v", forward["types"], reverse["types"])
 	}
 }
+
+// writeModule writes a one-package module, for shapes the shared fixtures do not cover.
+func writeModule(t *testing.T, pkgSource string) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{"go.mod": "module fixture\n\ngo 1.21\n", "a/a.go": pkgSource}
+	for rel, body := range files {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	return root
+}
+
+// A package-level var or const must not match a same-named local: refs lists only the package-level uses.
+func TestRefsVarIgnoresShadowingLocal(t *testing.T) {
+	root := writeModule(t, `package a
+
+var Count = 1
+
+func F() int {
+	Count := 2
+	return Count
+}
+
+func G() int {
+	return Count
+}
+
+const Limit = 1
+
+func H() int {
+	const Limit = 2
+	return Limit
+}
+
+func K() int {
+	return Limit
+}
+`)
+	got := refsJSON(t, root, "refs", "a.Count")
+	refs := rows(got["refs"])
+	if len(refs) != 1 || refs[0]["in"] != "G" {
+		t.Fatalf("refs = %v, want only the package-level use in G (not the local in F)", refs)
+	}
+	konst := refsJSON(t, root, "refs", "a.Limit")
+	if refs := rows(konst["refs"]); len(refs) != 1 || refs[0]["in"] != "K" {
+		t.Fatalf("refs = %v, want only the package-level const use in K (not the local in H)", refs)
+	}
+}
+
+// A qualified Type.field must not match a field of a function-local struct that happens to share the name.
+func TestRefsFieldIgnoresLocalStructWithSameField(t *testing.T) {
+	root := writeModule(t, `package a
+
+type T struct{ Name string }
+
+func Use(t T) string { return t.Name }
+
+func G() string {
+	type local struct{ Name string }
+	var l local
+	return l.Name
+}
+`)
+	got := refsJSON(t, root, "refs", "a.T.Name")
+	for _, ref := range rows(got["refs"]) {
+		if ref["in"] == "G" {
+			t.Fatalf("refs lists G's local.Name for a.T.Name: %v", ref)
+		}
+	}
+	if refs := rows(got["refs"]); len(refs) != 1 || refs[0]["in"] != "Use" {
+		t.Fatalf("refs = %v, want only the T.Name use in Use", refs)
+	}
+}
