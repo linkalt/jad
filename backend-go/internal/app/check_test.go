@@ -2,9 +2,11 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -205,6 +207,29 @@ func TestCheckFilesChecksTheOtherSessionsWhenOneCannotBeRead(t *testing.T) {
 	for _, want := range []string{"session demo:", "permission denied", "session second:", "bogus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A sandbox that loads can still fail to start on this machine; jad check starts it once and
+// reports the session, and a sandbox that starts adds no problem.
+func TestCheckFilesStartsTheEnabledSandbox(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell")
+	}
+	for _, test := range []struct {
+		script string
+		valid  bool
+	}{{`exec "$@"`, true}, {`echo "bwrap: No permissions to create new namespace" >&2; exit 1`, false}} {
+		f := newLayoutFixture(t)
+		sandbox, _ := json.Marshal(map[string]any{"enabled": true, "backend": "command", "command": []string{"sh", "-c", test.script, "sandbox"}})
+		f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev"]},"settings":{"sandbox":`+string(sandbox)+`}}`)
+		valid, out := f.checkFiles(t)
+		if valid != test.valid {
+			t.Fatalf("%s: valid = %v, output %q", test.script, valid, out)
+		}
+		if !test.valid && !strings.Contains(out, "session demo: sandbox: a trial start in the sandbox failed, so every sandboxed call would fail: bwrap: No permissions to create new namespace") {
+			t.Fatalf("output %q", out)
 		}
 	}
 }

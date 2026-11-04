@@ -543,7 +543,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	applySandbox(sandbox, nativeBash, nativeExec, nativeToolSmith, nativeProcess)
+	applySandbox(sandbox, nativeBash, nativeExec, nativeToolSmith, nativeProcess, &hooks)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err

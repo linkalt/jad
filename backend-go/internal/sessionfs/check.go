@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -18,7 +19,34 @@ type CheckProblem struct {
 type CheckReport struct {
 	Checked  int
 	Problems []CheckProblem
-	seen     map[string]bool
+	// Sandboxes are the distinct enabled sandboxes of the sessions, each with the first session
+	// that uses it. Reading files cannot show that a sandbox starts on this machine, so the
+	// caller tries each one.
+	Sandboxes   []CheckedSandbox
+	seen        map[string]bool
+	seenSandbox map[string]bool
+}
+
+// CheckedSandbox is an enabled sandbox setting and a session that uses it.
+type CheckedSandbox struct {
+	SessionID  string
+	WorkingDir string
+	Settings   *SandboxSettings
+}
+
+func (r *CheckReport) addSandbox(id string, config SessionConfig) {
+	if config.Sandbox == nil {
+		return
+	}
+	key, _ := json.Marshal(config.Sandbox)
+	if r.seenSandbox[string(key)] {
+		return
+	}
+	if r.seenSandbox == nil {
+		r.seenSandbox = map[string]bool{}
+	}
+	r.seenSandbox[string(key)] = true
+	r.Sandboxes = append(r.Sandboxes, CheckedSandbox{SessionID: id, WorkingDir: config.WorkingDir, Settings: config.Sandbox})
 }
 
 // CheckLayout reads every file of the catalog layout without changing anything and reports
@@ -118,6 +146,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			continue
 		}
 		r.checkProfileMessage(file.ID, config)
+		r.addSandbox(file.ID, config)
 		for _, profile := range config.Profiles {
 			if profile == config.Profile {
 				continue
@@ -128,6 +157,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 				continue
 			}
 			r.checkProfileMessage(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
+			r.addSandbox(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 		}
 	}
 }

@@ -63,8 +63,8 @@ func dispatchCommand(args []string, streams commandStreams) error {
 }
 
 // runCheckCommand runs "jad check": it reads the root setting and every catalog and session
-// file as the server would, starts nothing, needs no API token, and fails when a file is
-// invalid.
+// file as the server would, starts nothing but one trial run of each enabled sandbox, needs
+// no API token, and fails when a file is invalid or a sandbox does not start.
 func runCheckCommand(stdout io.Writer) error {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {

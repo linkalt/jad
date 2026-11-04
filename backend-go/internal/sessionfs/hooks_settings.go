@@ -77,6 +77,8 @@ type HooksSettings struct {
 	EnvFile          string
 	Env              map[string]string
 	EnvDeny          []string
+	// Sandbox, when set, is the sandbox every hook command starts in (sandbox.tools lists hooks).
+	Sandbox *SandboxSettings
 }
 
 // PostEditHook is one check: an argv (no shell) run after a file with one of Ext changed.

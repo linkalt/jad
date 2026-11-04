@@ -415,6 +415,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Definition.Description += sandboxDescription(config.NativeBash.Sandbox)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeExec != nil {
@@ -427,6 +428,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Definition.Description += sandboxDescription(config.NativeExec.Child.Sandbox)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeGlob != nil {
@@ -463,6 +465,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Definition.Description += sandboxDescription(config.NativeProcess.Sandbox)
 		loaded = append(loaded, tool)
 	}
 	if config.NativeAsync != nil {
@@ -547,6 +550,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
+		tool.Definition.Description += sandboxDescription(config.NativeToolSmith.Child.Sandbox)
 		loaded = append(loaded, tool)
 	}
 	if config.ExtensionDecideSystemone != nil {

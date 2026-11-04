@@ -625,16 +625,16 @@
     "sandbox": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Sandbox for the child processes of bash, exec, process and tool_smith. Off by default; while disabled every child starts as before. With backend bwrap (Linux, bubblewrap installed) each child runs with the whole file system read-only except writable_paths, a fresh /dev and /proc, hide_paths covered, every namespace new (user, pid, ipc, uts, cgroup) and no network unless network is true. With backend command, command is put in front of the program and its arguments (for example a sandbox-exec or firejail call). An enabled sandbox whose program cannot be run is refused at load, so a session never runs without the sandbox it asked for. Paths and command parts may use {workspace} (the call's workspace root; a writer sub-agent's worktree), {cwd} (the call's working directory), {git_common_dir} (the git directory shared by the workspace's repository and its worktrees), {tmp} (the system temp folder) and {home}; a path whose placeholder names nothing, or that does not exist, is left out. Under bwrap, a command killed by a signal reports exit code 128+signal. Hooks, glob and MCP servers are not sandboxed. Tool descriptions are unchanged.",
+      "description": "Sandbox for the child processes of bash, exec, process and tool_smith, and of the hooks commands when tools lists hooks. Off by default; while disabled every child starts as before. With backend bwrap (Linux, bubblewrap installed) each child runs with the whole file system read-only except writable_paths, a fresh /dev and /proc, hide_paths covered, every namespace new (user, pid, ipc, uts, cgroup) and no network unless network is true. With backend command, command is put in front of the program and its arguments (for example a sandbox-exec or firejail call). An enabled sandbox whose program cannot be run is refused at load, so a session never runs without the sandbox it asked for. Paths and command parts may use {workspace} (the call's workspace root; a writer sub-agent's worktree), {cwd} (the call's working directory), {git_common_dir} (the git directory shared by the workspace's repository and its worktrees), {tmp} (the system temp folder) and {home}; a path whose placeholder names nothing, or that does not exist, is left out. Under bwrap, a command killed by a signal reports exit code 128+signal. glob and MCP servers are not sandboxed. The descriptions of the covered tools say that their calls run in the sandbox, what is writable, what is hidden and whether the network is on. jad check starts each distinct enabled sandbox once (the program true inside it) and reports one that does not start, for example bwrap on a host that forbids unprivileged user namespaces.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
         "tools": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["bash", "exec", "process", "tool_smith"]},
+          "items": {"enum": ["bash", "exec", "process", "tool_smith", "hooks"]},
           "default": ["bash", "exec", "process", "tool_smith"],
-          "description": "Tools whose child processes start in the sandbox."
+          "description": "Tools whose child processes start in the sandbox. hooks (every command of the hooks setting) is not in the default: hook commands come from this file, not from the model, and checks such as go test often write outside the workspace."
         },
         "backend": {"enum": ["bwrap", "command"], "default": "bwrap", "description": "bwrap builds a bubblewrap call from the settings below; command uses command as given."},
         "executable": {"type": "string", "pattern": "\\S", "default": "bwrap", "description": "bubblewrap program for backend bwrap: a PATH name or an absolute path."},
@@ -658,7 +658,8 @@
           "minItems": 1,
           "items": {"type": "string"},
           "description": "Backend command (required there, refused with bwrap): the program and arguments put in front of the child's resolved program and its arguments. Placeholders are filled in per call."
-        }
+        },
+        "check_timeout_ms": {"type": "integer", "minimum": 100, "maximum": 600000, "default": 10000, "description": "Longest the trial start of jad check may take before the sandbox is reported as not starting."}
       },
       "if": {"properties": {"backend": {"const": "command"}}, "required": ["backend"]},
       "then": {"required": ["command"], "not": {"required": ["executable"]}},
@@ -1381,7 +1382,7 @@
                   "type": "array",
                   "uniqueItems": true,
                   "default": ["read", "grep", "glob"],
-                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself is unsandboxed (exec/bash trust) and may use raw fs, network and process APIs.",
+                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself has exec/bash trust and may use raw fs, network and process APIs; only the sandbox setting (when its tools list tool_smith) limits it.",
                   "items": {
                     "type": "string",
                     "minLength": 1,

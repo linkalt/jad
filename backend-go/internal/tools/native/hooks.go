@@ -143,6 +143,8 @@ func runHookChildPassed(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		drainAfterExit:           time.Duration(hooks.DrainAfterExitMs) * time.Millisecond,
 		killProcessGroupWhenDone: hooks.KillProcessGroup == "always",
 		collector:                collector,
+		sandbox:                  hooks.Sandbox,
+		workspace:                workspaceRoot,
 	})
 	label := "[" + hook.name + "] "
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))

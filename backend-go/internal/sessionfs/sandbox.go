@@ -16,17 +16,24 @@ const (
 	defaultSandboxBackend    = SandboxBackendBwrap
 	defaultSandboxExecutable = "bwrap"
 	maxSandboxPaths          = 64
+
+	defaultSandboxCheckTimeoutMs int64 = 10000
+	minSandboxCheckTimeoutMs     int64 = 100
+	maxSandboxCheckTimeoutMs     int64 = 600000
 )
 
-// SandboxTools are the tools whose child processes a sandbox can wrap.
-var SandboxTools = []string{"bash", "exec", "process", "tool_smith"}
+// SandboxTools are the tools whose child processes a sandbox can wrap. hooks (the commands of
+// the hooks setting) is a choice: the default covers only the tools the model drives.
+var SandboxTools = []string{"bash", "exec", "process", "tool_smith", "hooks"}
+
+var defaultSandboxTools = []string{"bash", "exec", "process", "tool_smith"}
 
 // defaultSandboxWritablePaths keep the project, its git directory and the system temp folder
 // writable: git in a worktree writes to the repository's git directory, outside the worktree,
 // and exec and tool_smith keep their code, result and socket files under the temp folder.
 var defaultSandboxWritablePaths = []string{"{workspace}", "{git_common_dir}", "{tmp}"}
 
-var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "writable_paths", "hide_paths", "command"}
+var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "writable_paths", "hide_paths", "command", "check_timeout_ms"}
 
 var sandboxPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
@@ -50,6 +57,8 @@ type SandboxSettings struct {
 	WritablePaths []string
 	HidePaths     []string
 	Command       []string
+	// CheckTimeoutMs bounds the trial start "jad check" makes to see that the sandbox works.
+	CheckTimeoutMs int64
 }
 
 // Covers reports whether a tool's child processes start in the sandbox.
@@ -78,7 +87,7 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 	if err != nil {
 		return nil, err
 	}
-	settings := &SandboxSettings{Tools: append([]string(nil), SandboxTools...), Backend: defaultSandboxBackend, Executable: defaultSandboxExecutable}
+	settings := &SandboxSettings{Tools: append([]string(nil), defaultSandboxTools...), Backend: defaultSandboxBackend, Executable: defaultSandboxExecutable}
 	if raw, exists := fields["tools"]; exists && strings.TrimSpace(string(raw)) != "null" {
 		var names []string
 		if err := json.Unmarshal(raw, &names); err != nil || len(names) == 0 {
@@ -124,6 +133,9 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 				return nil, configError("%s: %s.command[%d]: %v", path, section, index, err)
 			}
 		}
+	}
+	if settings.CheckTimeoutMs, err = configuredInteger(fields, "check_timeout_ms", defaultSandboxCheckTimeoutMs, minSandboxCheckTimeoutMs, maxSandboxCheckTimeoutMs, path, section); err != nil {
+		return nil, err
 	}
 	switch settings.Backend {
 	case SandboxBackendCommand:
@@ -185,10 +197,14 @@ func checkSandboxPlaceholders(value string) error {
 	return nil
 }
 
-// applySandbox hands an enabled sandbox to each enabled tool it covers.
-func applySandbox(sandbox *SandboxSettings, bash *NativeBashSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, process *NativeProcessSettings) {
+// applySandbox hands an enabled sandbox to each enabled tool it covers, and to the hooks
+// when it covers them.
+func applySandbox(sandbox *SandboxSettings, bash *NativeBashSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, process *NativeProcessSettings, hooks *HooksSettings) {
 	if sandbox == nil {
 		return
+	}
+	if hooks != nil && sandbox.Covers("hooks") {
+		hooks.Sandbox = sandbox
 	}
 	if bash != nil && sandbox.Covers("bash") {
 		bash.Sandbox = sandbox

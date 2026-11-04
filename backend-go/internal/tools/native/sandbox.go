@@ -164,3 +164,39 @@ func sandboxKey(sandbox *sessionfs.SandboxSettings, place sandboxPlace) string {
 	settings, _ := json.Marshal(sandbox)
 	return string(settings) + "\x00" + place.workspace
 }
+
+// sandboxDescription is the sentence added to a tool's description when its calls run in a
+// sandbox, so the model knows what will fail and why instead of guessing. Empty without one.
+func sandboxDescription(sandbox *sessionfs.SandboxSettings) string {
+	if sandbox == nil {
+		return ""
+	}
+	if sandbox.Backend == sessionfs.SandboxBackendCommand {
+		return " Sandbox: every call runs under " + sandbox.Command[0] + ", which limits what it may read, write and reach; a refused file or network access is the sandbox, not a bug to work around."
+	}
+	text := " Sandbox: every call runs in a bubblewrap sandbox. Writable: " + sandboxPathList(sandbox.WritablePaths) +
+		"; everything else is read-only, so a write elsewhere fails with \"Read-only file system\"."
+	if len(sandbox.HidePaths) > 0 {
+		text += " Hidden (empty): " + sandboxPathList(sandbox.HidePaths) + "."
+	}
+	if sandbox.Network {
+		text += " Network: on."
+	} else {
+		text += " Network: off, so downloads, package installs and git fetch or push fail."
+	}
+	return text + " Do not try to get around the sandbox; say what access a task needs instead."
+}
+
+// sandboxPathList names configured paths for the model: placeholders that differ per call by
+// what they stand for, the temp and home folders by their place on this machine.
+func sandboxPathList(paths []string) string {
+	if len(paths) == 0 {
+		return "nothing"
+	}
+	names := strings.NewReplacer("{workspace}", "<workspace>", "{cwd}", "<working directory>", "{git_common_dir}", "<repository git directory>", "{tmp}", os.TempDir(), "{home}", "~")
+	named := make([]string, len(paths))
+	for index, path := range paths {
+		named[index] = names.Replace(path)
+	}
+	return strings.Join(named, ", ")
+}
