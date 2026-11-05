@@ -3,7 +3,6 @@ package sessionfs
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,13 +17,6 @@ async native=null err: setting.json: tools.native must be a JSON object
 async native=missing nil
 async native=tools-null err: setting.json: tools must be a JSON object
 async native=valid-empty-object nil
-bash native=string err: setting.json: tools.native must be a JSON object
-bash native=number err: setting.json: tools.native must be a JSON object
-bash native=array err: setting.json: tools.native must be a JSON object
-bash native=null err: setting.json: tools.native must be a JSON object
-bash native=missing nil
-bash native=tools-null err: setting.json: tools must be a JSON object
-bash native=valid-empty-object nil
 exec native=string err: setting.json: tools.native must be a JSON object
 exec native=number err: setting.json: tools.native must be a JSON object
 exec native=array err: setting.json: tools.native must be a JSON object
@@ -32,27 +24,6 @@ exec native=null err: setting.json: tools.native must be a JSON object
 exec native=missing nil
 exec native=tools-null err: setting.json: tools must be a JSON object
 exec native=valid-empty-object nil
-fetch native=string err: setting.json: tools.native must be a JSON object
-fetch native=number err: setting.json: tools.native must be a JSON object
-fetch native=array err: setting.json: tools.native must be a JSON object
-fetch native=null err: setting.json: tools.native must be a JSON object
-fetch native=missing nil
-fetch native=tools-null err: setting.json: tools must be a JSON object
-fetch native=valid-empty-object nil
-glob native=string err: setting.json: tools.native must be a JSON object
-glob native=number err: setting.json: tools.native must be a JSON object
-glob native=array err: setting.json: tools.native must be a JSON object
-glob native=null err: setting.json: tools.native must be a JSON object
-glob native=missing nil
-glob native=tools-null err: setting.json: tools must be a JSON object
-glob native=valid-empty-object nil
-grep native=string err: setting.json: tools.native must be a JSON object
-grep native=number err: setting.json: tools.native must be a JSON object
-grep native=array err: setting.json: tools.native must be a JSON object
-grep native=null err: setting.json: tools.native must be a JSON object
-grep native=missing nil
-grep native=tools-null err: setting.json: tools must be a JSON object
-grep native=valid-empty-object nil
 memory native=string err: setting.json: tools.native must be a JSON object
 memory native=number err: setting.json: tools.native must be a JSON object
 memory native=array err: setting.json: tools.native must be a JSON object
@@ -60,20 +31,6 @@ memory native=null err: setting.json: tools.native must be a JSON object
 memory native=missing nil
 memory native=tools-null err: setting.json: tools must be a JSON object
 memory native=valid-empty-object nil
-mutation native=string err: setting.json: tools.native must be a JSON object
-mutation native=number err: setting.json: tools.native must be a JSON object
-mutation native=array err: setting.json: tools.native must be a JSON object
-mutation native=null err: setting.json: tools.native must be a JSON object
-mutation native=missing nil
-mutation native=tools-null err: setting.json: tools must be a JSON object
-mutation native=valid-empty-object nil
-process native=string err: setting.json: tools.native must be a JSON object
-process native=number err: setting.json: tools.native must be a JSON object
-process native=array err: setting.json: tools.native must be a JSON object
-process native=null err: setting.json: tools.native must be a JSON object
-process native=missing nil
-process native=tools-null err: setting.json: tools must be a JSON object
-process native=valid-empty-object nil
 profile_message native=string err: setting.json: tools.native must be a JSON object
 profile_message native=number err: setting.json: tools.native must be a JSON object
 profile_message native=array err: setting.json: tools.native must be a JSON object
@@ -136,21 +93,7 @@ transcripts native=array err: setting.json: tools.native must be a JSON object
 transcripts native=null err: setting.json: tools.native must be a JSON object
 transcripts native=missing nil
 transcripts native=tools-null err: setting.json: tools must be a JSON object
-transcripts native=valid-empty-object nil
-read_settings native=string err: setting.json: tools.native must be a JSON object
-read_settings native=number err: setting.json: tools.native must be a JSON object
-read_settings native=array err: setting.json: tools.native must be a JSON object
-read_settings native=null err: setting.json: tools.native must be a JSON object
-read_settings native=missing nil
-read_settings native=tools-null err: setting.json: tools must be a JSON object
-read_settings native=valid-empty-object nil
-read_policy native=string err: setting.json: tools.native must be a JSON object
-read_policy native=number err: setting.json: tools.native must be a JSON object
-read_policy native=array err: setting.json: tools.native must be a JSON object
-read_policy native=null err: setting.json: tools.native must be a JSON object
-read_policy native=missing non-nil
-read_policy native=tools-null err: setting.json: tools must be a JSON object
-read_policy native=valid-empty-object non-nil`
+transcripts native=valid-empty-object nil`
 
 func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 	const settingPath = "setting.json"
@@ -174,36 +117,12 @@ func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 			v, err := normalizeNativeAsyncSettings(s, settingPath)
 			return v != nil, err
 		}},
-		{"bash", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeBashSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "", NativePathPolicy{}, NativePathPolicy{})
-			return v != nil, err
-		}},
 		{"exec", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeExecSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "", NativePathPolicy{}, NativePathPolicy{})
-			return v != nil, err
-		}},
-		{"fetch", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeFetchSettings(s, settingPath, "/tmp/cwd", "/tmp/tools")
-			return v != nil, err
-		}},
-		{"glob", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeGlobSettings(s, "/tmp/jad", settingPath)
-			return v != nil, err
-		}},
-		{"grep", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeGrepSettings(s, "/tmp/jad", settingPath)
+			v, err := normalizeNativeExecSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "")
 			return v != nil, err
 		}},
 		{"memory", func(s map[string]json.RawMessage) (bool, error) {
 			v, err := normalizeNativeMemorySettings(s, settingPath, "/tmp/cwd", "/tmp/tools")
-			return v != nil, err
-		}},
-		{"mutation", func(s map[string]json.RawMessage) (bool, error) {
-			w, e, err := normalizeNativeWriteEditSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools")
-			return w != nil && e != nil, err
-		}},
-		{"process", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeProcessSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "")
 			return v != nil, err
 		}},
 		{"profile_message", func(s map[string]json.RawMessage) (bool, error) {
@@ -231,7 +150,7 @@ func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 			return v != nil, err
 		}},
 		{"tool_smith", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeToolSmithSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "", NativePathPolicy{}, NativePathPolicy{})
+			v, err := normalizeNativeToolSmithSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "")
 			return v != nil, err
 		}},
 		{"transcript", func(s map[string]json.RawMessage) (bool, error) {
@@ -241,14 +160,6 @@ func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 		{"transcripts", func(s map[string]json.RawMessage) (bool, error) {
 			v, err := normalizeNativeTranscriptsSettings(s, settingPath, NativePathPolicy{})
 			return v != nil, err
-		}},
-		{"read_settings", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeReadSettings(s, "/tmp/jad", settingPath)
-			return v != nil, err
-		}},
-		{"read_policy", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeReadPolicy(s, "/tmp/jad", settingPath)
-			return !reflect.ValueOf(v).IsZero(), err
 		}},
 	}
 

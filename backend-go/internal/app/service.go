@@ -100,8 +100,8 @@ func newServiceWithBudget(config Config, budget *tools.LeafBudget) (*Service, er
 		service.Handler = manager.Wrap(api)
 		manager.Start()
 	}
-	options := StorageRecoveryOptions{Processes: config.RecoverProcessesAtStart, SubagentRuns: config.RecoverSubagentRunsAtStart}
-	if options.Processes || options.SubagentRuns {
+	options := StorageRecoveryOptions{SubagentRuns: config.RecoverSubagentRunsAtStart}
+	if options.SubagentRuns {
 		service.startStorageRecovery(options)
 	}
 	return service, nil
@@ -125,9 +125,9 @@ func (s *Service) startStorageRecovery(options StorageRecoveryOptions) {
 			logger.Warn("storage recovery at start failed", "error", err)
 		default:
 			logger.Info("storage recovery at start finished",
-				"processes", options.Processes, "subagent_runs", options.SubagentRuns,
-				"sessions", report.Sessions, "process_storages", report.Storages, "run_storages", report.RunStorages,
-				"unreadable", report.Unreadable, "failed", report.Failed, "took", time.Since(began).String())
+				"subagent_runs", options.SubagentRuns,
+				"sessions", report.Sessions, "run_storages", report.RunStorages,
+				"unreadable", report.Unreadable, "took", time.Since(began).String())
 		}
 	}()
 }

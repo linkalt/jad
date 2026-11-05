@@ -355,7 +355,7 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	if err != nil {
 		return nil, mapSessionError(err)
 	}
-	catalog, _, _, _, err := b.resolver.buildRegisteredCatalog(ctx, config)
+	catalog, _, _, err := b.resolver.buildRegisteredCatalog(ctx, config)
 	if err != nil {
 		return nil, err
 	}

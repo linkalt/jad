@@ -45,7 +45,7 @@ func (m boundMutation) StateContext(ctx context.Context, prompt string, preview 
 		return result, err
 	}
 	snapshot, include, err := collectStateContextSnapshotWithPrompt(m.config, stateContextSources{
-		process: m.processManager, task: m.taskStore, memory: m.memoryStore,
+		task: m.taskStore, memory: m.memoryStore,
 		subagent: m.subagentManager, owner: m.owner, async: m.asyncManager,
 	}, sessionfs.StateContextTriggerUser, prompt)
 	if err != nil {

@@ -26,8 +26,6 @@ type sessionStartFixture struct {
 	t      *testing.T
 	api    *httptest.Server
 	config Config
-	// processStorage is the directory of the process manifests the provider lists.
-	processStorage string
 	taskStore      *native.TaskStore
 	taskSettings   sessionfs.NativeTaskSettings
 	mu             sync.Mutex
@@ -40,27 +38,25 @@ type sessionStartFixture struct {
 	sawStale bool
 }
 
-func newSessionStartFixture(t *testing.T, seedProcess bool) *sessionStartFixture {
+// savedStateMarker is the title of the task a seeded fixture holds, which its state
+// blocks list.
+const savedStateMarker = "saved-state-marker"
+
+func newSessionStartFixture(t *testing.T, seed bool) *sessionStartFixture {
 	t.Helper()
-	return newStateContextFixture(t, seedProcess, map[string]any{"session_start": map[string]any{"tools": []string{"process"}, "max_bytes": 4096}})
+	return newStateContextFixture(t, seed, map[string]any{"session_start": map[string]any{"tools": []string{"task"}, "max_bytes": 4096}})
 }
 
-func newStateContextFixture(t *testing.T, seedProcess bool, triggers map[string]any) *sessionStartFixture {
+func newStateContextFixture(t *testing.T, seed bool, triggers map[string]any) *sessionStartFixture {
 	t.Helper()
-	return newStateContextFixtureWith(t, seedProcess, triggers, nil, nil)
+	return newStateContextFixtureWith(t, seed, triggers, nil, nil)
 }
 
 // newStateContextFixtureWith adds session settings and a server logger to the fixture.
-func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraSettings map[string]any, logger *slog.Logger) *sessionStartFixture {
+func newStateContextFixtureWith(t *testing.T, seed bool, triggers, extraSettings map[string]any, logger *slog.Logger) *sessionStartFixture {
 	t.Helper()
 	fixture := &sessionStartFixture{t: t}
 	workspace := t.TempDir()
-	processStorage := filepath.Join(workspace, "processes")
-	fixture.processStorage = processStorage
-	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	taskStorage := filepath.Join(workspace, "tasks")
 	fixture.taskSettings = sessionfs.NativeTaskSettings{
 		MaxTasks: 10, MaxStorageBytes: 64 * 1024,
@@ -74,20 +70,19 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 	manifest, err := json.Marshal(struct {
 		SchemaVersion int   `json:"schema_version"`
 		Tools         []any `json:"tools"`
-	}{SchemaVersion: 1, Tools: []any{processTool.Definition, taskTool.Definition}})
+	}{SchemaVersion: 1, Tools: []any{taskTool.Definition}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "process.json"), manifest, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "task.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if seedProcess {
-		startedAt, endedAt := recentProcessTimes()
-		writeProcessManifest(t, processStorage, native.ProcessManifest{
-			SchemaVersion: 1, ID: "proc_saved", State: native.ProcessExited, CWD: "/workspace/project",
-			StartedAt: startedAt, EndedAt: endedAt,
-			ExitCode: json.RawMessage("0"), Signal: json.RawMessage("null"),
-		})
+	if seed {
+		if _, err := fixture.taskStore.Create(native.TaskInput{
+			Title: savedStateMarker, Status: native.TaskInProgress, Priority: native.TaskPriorityNormal, Tags: []string{}, Documents: []string{},
+		}, fixture.taskSettings); err != nil {
+			t.Fatal(err)
+		}
 	}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if fixture.onProviderRequest != nil {
@@ -117,7 +112,7 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 				continue
 			}
 			for _, content := range message.Content {
-				carried = carried || (strings.Contains(content.Text, "STATE CONTEXT SNAPSHOT") && strings.Contains(content.Text, "proc_saved"))
+				carried = carried || (strings.Contains(content.Text, "STATE CONTEXT SNAPSHOT") && strings.Contains(content.Text, savedStateMarker))
 				stale = stale || strings.Contains(content.Text, "no longer configured")
 			}
 		}
@@ -148,11 +143,10 @@ func newStateContextFixtureWith(t *testing.T, seedProcess bool, triggers, extraS
 	config, _ := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "task.json"), asyncSampleToolPath(t)},
 		Settings:            settings,
 		Native: map[string]any{
 			"async":   map[string]any{},
-			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
 			"task":    map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
@@ -238,8 +232,8 @@ func TestHTTPRunWritesSessionStartStateContextBeforeAnyCompaction(t *testing.T) 
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Trigger != "session_start" || !strings.Contains(snapshot.Text, "proc_saved") {
-		t.Fatalf("persisted snapshot = %#v; want the session_start trigger with the process", snapshot)
+	if snapshot.Trigger != "session_start" || !strings.Contains(snapshot.Text, savedStateMarker) {
+		t.Fatalf("persisted snapshot = %#v; want the session_start trigger with the seeded task", snapshot)
 	}
 }
 
@@ -292,7 +286,7 @@ func TestHTTPRunIgnoresStoredStateContextWhoseTriggerIsNotConfigured(t *testing.
 	if err := json.Unmarshal([]byte(lines[1]), &added); err != nil {
 		t.Fatal(err)
 	}
-	if added.Trigger != "session_start" || !strings.Contains(added.Text, "proc_saved") || added.After != 1 {
-		t.Fatalf("new entry = %#v; want session_start with the process, placed after the first input", added)
+	if added.Trigger != "session_start" || !strings.Contains(added.Text, savedStateMarker) || added.After != 1 {
+		t.Fatalf("new entry = %#v; want session_start with the seeded task, placed after the first input", added)
 	}
 }

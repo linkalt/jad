@@ -546,14 +546,8 @@ type subagentStart struct {
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
-	// processes, when set, is the manager whose processes the run started; the run's end
-	// stops them. See stopRunProcesses.
-	processes ProcessManager
 	// changedMax is how many changed files the run lists; see recordChange.
 	changedMax int
-	// processMax is how many processes one child may have running; see
-	// ExecutionContext.ProcessOwnerLimit.
-	processMax int
 	keep       int
 	resultMax  int64
 	// async, when set, makes the run a handle of the async manager owned by owner.
@@ -801,13 +795,12 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	if holdsSlot {
 		run.state = subagentRunRunning
 	}
-	// The run id is the owner of every process the child starts, so the child sees only
+	// The run id is the owner of every handle the child starts, so the child sees only
 	// its own and the run's end can stop them.
 	spec.request.Seed = spec.seed
 	spec.request.Execution.ProcessOwner = id
 	spec.request.Execution.AgentDepth = spec.depth + 1
 	spec.request.Execution.RootRun = root
-	spec.request.Execution.ProcessOwnerLimit = int64(spec.processMax)
 	spec.request.Execution.ProcessAsync = spec.asyncHost != nil && spec.childAsync
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
@@ -850,15 +843,13 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	}
 	spec.request.OnTranscript = run.setDir
 	result, err := m.runLauncher(childContext, spec)
-	// The child is over, so nothing it started should go on: stop its processes before
-	// the run is reported ended, and say how many there were.
-	// The child's own async handles go first, so their records are removed with them; the
-	// process stop below catches any process that had no handle.
+	// The child is over, so nothing it started should go on: stop its async handles (exec
+	// runs, nested children) before the run is reported ended, and say how many there were.
 	stoppedHandles := 0
 	if spec.asyncHost != nil {
 		stoppedHandles = spec.asyncHost.Manager().DeleteOwnersWithPrefix(run.id, "subagent_run_ended")
 	}
-	run.setProcessesStopped(max(stoppedHandles, stopRunProcesses(spec.processes, run.id)))
+	run.setProcessesStopped(stoppedHandles)
 	state, reason := subagentRunDone, ""
 	switch {
 	case err == nil:
@@ -884,17 +875,6 @@ func (r *subagentRun) worktreeCopy() *subagentWorktree {
 	}
 	copied := *r.worktree
 	return &copied
-}
-
-// stopRunProcesses stops the processes a run's child started and returns how many it
-// stopped. It does nothing without a process manager or for a manager that cannot tell
-// owners apart.
-func stopRunProcesses(processes ProcessManager, runID string) int {
-	owners, ok := processes.(processOwnership)
-	if !ok {
-		return 0
-	}
-	return owners.stopOwned(runID, "subagent_run_ended")
 }
 
 // runLauncher turns a panic in the launcher into a failed run, because the goroutine

@@ -38,7 +38,7 @@ func sharedManagerCatalogs(t *testing.T, launcher SubagentLauncher) (*tools.Cata
 	host := newTestAsyncHost(t)
 	build := func() *tools.Catalog {
 		parent := withExecutors(t, readOnlyTool("read"))
-		tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, nil, host)
+		tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, host)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestSubagentCancelOwnerReachesAQueuedRun(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
 	host := newTestAsyncHost(t)
-	tool, err := newSubagentToolAsync(settings, parent, nil, blockedLauncher(release, nil), nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, blockedLauncher(release, nil), nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

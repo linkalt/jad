@@ -24,7 +24,7 @@ func TestExecDefaultLangResolvesToTheTableNameAndDefaultsToBash(t *testing.T) {
 	}
 	for _, tc := range cases {
 		config, err := loadSetting(t, map[string]any{
-			"tools": map[string]any{"native": map[string]any{"bash": map[string]any{}, "exec": tc.exec}},
+			"tools": map[string]any{"native": map[string]any{"exec": tc.exec}},
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
@@ -38,7 +38,7 @@ func TestExecDefaultLangResolvesToTheTableNameAndDefaultsToBash(t *testing.T) {
 func TestExecDefaultLangRefusesWhatIsNotInTheTable(t *testing.T) {
 	for name, value := range map[string]any{"unknown": "cobol", "empty": "", "a number": float64(3)} {
 		_, err := loadSetting(t, map[string]any{
-			"tools": map[string]any{"native": map[string]any{"bash": map[string]any{}, "exec": map[string]any{"default_lang": value}}},
+			"tools": map[string]any{"native": map[string]any{"exec": map[string]any{"default_lang": value}}},
 		})
 		if err == nil {
 			t.Errorf("%s: default_lang %v was accepted", name, value)
@@ -55,22 +55,23 @@ func writeExecEnvFile(t *testing.T, content string) string {
 	return path
 }
 
-// exec reads its own env_file and env. Nothing of bash's file or inline values reaches it,
-// and exec's reach bash no more than the other way round.
-func TestExecEnvironmentIsItsOwnAndNeverBashs(t *testing.T) {
+// exec reads its own env_file and env. Nothing of tool_smith's file or inline values (the
+// other tool with the same child-process keys) reaches it, and exec's reach tool_smith no
+// more than the other way round.
+func TestExecEnvironmentIsItsOwnAndNeverToolSmiths(t *testing.T) {
 	bashFile := writeExecEnvFile(t, "BASH_ONLY=1\nSHARED=bash\nWIN=bash-file\n")
 	execFile := writeExecEnvFile(t, "EXEC_ONLY=1\nSHARED=exec\nWIN=exec-file\n")
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash": map[string]any{"env_file": bashFile, "env": map[string]any{"WIN": "bash-inline", "BASH_INLINE": "1"}},
+		"tool_smith": map[string]any{"env_file": bashFile, "env": map[string]any{"WIN": "bash-inline", "BASH_INLINE": "1"}},
 		"exec": map[string]any{"env_file": execFile, "env": map[string]any{"WIN": "exec-inline"}},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bash, exec := config.NativeBash.Env, config.NativeExec.Child.Env
+	smith, exec := config.NativeToolSmith.Child.Env, config.NativeExec.Child.Env
 	for name, want := range map[string]string{"BASH_ONLY": "1", "SHARED": "bash", "WIN": "bash-inline", "BASH_INLINE": "1", "NO_COLOR": "1"} {
-		if bash[name] != want {
-			t.Errorf("bash env %s = %q, want %q (all: %v)", name, bash[name], want, bash)
+		if smith[name] != want {
+			t.Errorf("tool_smith env %s = %q, want %q (all: %v)", name, smith[name], want, smith)
 		}
 	}
 	for name, want := range map[string]string{"EXEC_ONLY": "1", "SHARED": "exec", "WIN": "exec-inline", "NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"} {
@@ -80,23 +81,23 @@ func TestExecEnvironmentIsItsOwnAndNeverBashs(t *testing.T) {
 	}
 	for _, leaked := range []string{"BASH_ONLY", "BASH_INLINE"} {
 		if _, found := exec[leaked]; found {
-			t.Errorf("bash's %s leaked into exec: %v", leaked, exec)
+			t.Errorf("tool_smith's %s leaked into exec: %v", leaked, exec)
 		}
 	}
-	if _, found := bash["EXEC_ONLY"]; found {
-		t.Errorf("exec's file value leaked into bash: %v", bash)
+	if _, found := smith["EXEC_ONLY"]; found {
+		t.Errorf("exec's file value leaked into tool_smith: %v", smith)
 	}
 	if config.NativeExec.Child.EnvFile != execFile {
 		t.Errorf("exec env file = %q, want %q", config.NativeExec.Child.EnvFile, execFile)
 	}
 }
 
-// Without its own env_file, exec runs with the built-in environment, not bash's file.
-func TestExecWithoutEnvFileDoesNotTakeBashsEnvironment(t *testing.T) {
+// Without its own env_file, exec runs with the built-in environment, not tool_smith's file.
+func TestExecWithoutEnvFileDoesNotTakeToolSmithsEnvironment(t *testing.T) {
 	bashFile := writeExecEnvFile(t, "BASH_ONLY=1\n")
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash": map[string]any{"env_file": bashFile},
-		"exec": map[string]any{},
+		"tool_smith": map[string]any{"env_file": bashFile},
+		"exec":       map[string]any{},
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +111,6 @@ func TestExecWithoutEnvFileDoesNotTakeBashsEnvironment(t *testing.T) {
 func TestExecEnvFileErrorsNameTheExecKey(t *testing.T) {
 	for name, value := range map[string]any{"missing file": filepath.Join(t.TempDir(), "none.env"), "empty": " ", "null": nil, "number": 3} {
 		_, err := loadSetting(t, nativeTools(map[string]any{
-			"bash": map[string]any{},
 			"exec": map[string]any{"env_file": value},
 		}))
 		if err == nil || !strings.Contains(err.Error(), "tools.native.exec") || !strings.Contains(err.Error(), "env_file") {
@@ -119,30 +119,30 @@ func TestExecEnvFileErrorsNameTheExecKey(t *testing.T) {
 	}
 }
 
-func TestExecSpillDefaultsToItsOwnDirectoryNotBashs(t *testing.T) {
+func TestExecSpillDefaultsToItsOwnDirectory(t *testing.T) {
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash": map[string]any{},
-		"exec": map[string]any{},
+		"tool_smith": map[string]any{},
+		"exec":       map[string]any{},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bash, exec := config.NativeBash.Spill.StorageDir, config.NativeExec.Child.Spill.StorageDir
-	if filepath.Base(bash) != ".bash-output" || filepath.Base(exec) != ".exec-output" || filepath.Dir(bash) != filepath.Dir(exec) {
-		t.Fatalf("bash spill = %q, exec spill = %q; want sibling .bash-output and .exec-output", bash, exec)
+	smith, exec := config.NativeToolSmith.Child.Spill.StorageDir, config.NativeExec.Child.Spill.StorageDir
+	if filepath.Base(smith) != ".bash-output" || filepath.Base(exec) != ".exec-output" || filepath.Dir(smith) != filepath.Dir(exec) {
+		t.Fatalf("tool_smith spill = %q, exec spill = %q; want sibling .bash-output and .exec-output", smith, exec)
 	}
 }
 
 func TestExecSpillFilesAreNamedForTheTool(t *testing.T) {
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash": map[string]any{},
-		"exec": map[string]any{},
+		"tool_smith": map[string]any{},
+		"exec":       map[string]any{},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := config.NativeBash.Spill.FilePrefix; got != "bash" {
-		t.Fatalf("bash spill file prefix = %q, want bash", got)
+	if got := config.NativeToolSmith.Child.Spill.FilePrefix; got != "bash" {
+		t.Fatalf("tool_smith spill file prefix = %q, want bash", got)
 	}
 	if got := config.NativeExec.Child.Spill.FilePrefix; got != "exec" {
 		t.Fatalf("exec spill file prefix = %q, want exec", got)

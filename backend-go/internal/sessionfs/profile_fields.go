@@ -14,7 +14,7 @@ var sessionPathFields = map[string]struct{}{
 	"http_debug": {}, "tool_storage": {},
 }
 
-const removedProcessTaskPathsMessage = "%s: paths.processes and paths.tasks were removed; use tools.native.process.storage_dir and tools.native.task.storage_dir"
+const removedProcessTaskPathsMessage = "%s: paths.processes and paths.tasks were removed; use tools.native.task.storage_dir (managed processes were removed with tools.native.process)"
 
 // validateProfileFields applies the TypeScript per-profile shape checks to one
 // paths.profiles entry. Fields are visited in document order, as TypeScript does.

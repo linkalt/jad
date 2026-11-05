@@ -3,11 +3,9 @@ module jad/backend-go
 go 1.26.0
 
 require (
-	github.com/andybalholm/brotli v1.2.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.74.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/xberg-io/html-to-markdown/packages/go/v3 v3.17.2
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0

@@ -19,7 +19,7 @@ var nativeProfileKeys = []string{"max_entries", "scan_max_entries", "allow_other
 // their own keys: profile does not read the transcripts section. A nil pointer in
 // SessionConfig means the tool is not configured.
 type NativeProfileSettings struct {
-	// Policy is the read path rules (tools.native.read.paths): a listed transcript they deny is
+	// Policy is the read path rules (session_files.paths): a listed transcript they deny is
 	// left out, as transcripts does.
 	Policy             NativePathPolicy
 	MaxEntries         int64

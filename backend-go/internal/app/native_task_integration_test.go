@@ -156,3 +156,17 @@ func TestHTTPRunExecutesNativeTaskAndPersistsOutputAcrossProviderRounds(t *testi
 		t.Fatalf("messages.jsonl does not include task call and output: %q", lines)
 	}
 }
+
+func findFunctionOutput(input []json.RawMessage, callID string) (string, bool) {
+	for _, item := range input {
+		var output struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+			Output string `json:"output"`
+		}
+		if json.Unmarshal(item, &output) == nil && output.Type == "function_call_output" && output.CallID == callID {
+			return output.Output, true
+		}
+	}
+	return "", false
+}

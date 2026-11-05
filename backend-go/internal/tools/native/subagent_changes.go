@@ -7,13 +7,13 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// subagentFileChange is one file a child's write or edit changed.
+// subagentFileChange is one file a child changed, as its exec calls' change scan reported it.
 type subagentFileChange struct {
 	Path   string `json:"path"`
 	Action string `json:"action"`
 }
 
-// recordChange notes that the child's write or edit changed a file. A path is listed
+// recordChange notes that the child changed a file. A path is listed
 // once, with the action of its first change; at most max paths are kept, and the rest
 // are only counted. A path that would take the kept list past maxBytes, as the rendered
 // list reads, is counted too. It is called from the child's goroutines, so it takes the run lock.
@@ -35,7 +35,7 @@ func (r *subagentRun) recordChange(path, action string, max int, maxBytes int64)
 	r.store.save(r)
 }
 
-// changedInformation lists the files the child's write and edit changed. It says
+// changedInformation lists the files the child changed. It says
 // nothing for a run that is not allowed to change files, and for one that changed
 // none it says so, because "none" is also an answer.
 func changedInformation(run subagentRunView) []tools.Information {
@@ -57,7 +57,7 @@ func changedFilesInformation(run subagentRunView) []tools.Information {
 		return nil
 	}
 	if len(run.files) == 0 && run.filesOmitted == 0 {
-		return []tools.Information{{Key: "written_files", Value: "none (changes made by bash, exec or process are not listed)"}}
+		return []tools.Information{{Key: "written_files", Value: "none (exec's changes are listed only with hooks.shell_changes scan)"}}
 	}
 	information := []tools.Information{{Key: "written_files", Value: filesValue(run.files)}}
 	if run.filesOmitted > 0 {
@@ -78,7 +78,7 @@ func changedListText(run subagentRunView) string {
 		return ""
 	}
 	if len(run.files) == 0 && run.filesOmitted == 0 {
-		return "changed files: none (changes made by bash, exec or process are not listed)"
+		return "changed files: none (exec's changes are listed only with hooks.shell_changes scan)"
 	}
 	text := "changed files: " + filesValue(run.files)
 	if run.filesOmitted > 0 {

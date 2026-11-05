@@ -2,11 +2,9 @@ package native
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"sort"
@@ -20,135 +18,13 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-const bashToolID = "native.bash"
-
-var bashInputSchema = json.RawMessage(`{
-  "type":"object",
-  "properties":{
-    "command":{"type":"string","minLength":1,"description":"Shell command line, executed with the configured shell."},
-    "stdin":{"type":"string","description":"Text piped to the command's standard input, e.g. a script for ` + "`python3 -` or `node -`" + `, or data for ` + "`jq`" + `."},
-    "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
-    "timeout_ms":{"type":"integer","description":"Wall-clock budget for this call in milliseconds; clamped to the configured range."}
-  },
-  "required":["command"],
-  "additionalProperties":false
-}`)
-
 var bashEnvironmentAllowlist = []string{
 	"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP",
 	"SYSTEMROOT", "WINDIR", "ComSpec", "PATHEXT",
 }
 
 // NewBashTool constructs native.bash from normalized per-session settings.
-func NewBashTool(settings sessionfs.NativeBashSettings, apiKeyEnv string) (tools.Tool, error) {
-	validator, err := tools.CompileSchema(bashInputSchema)
-	if err != nil {
-		return tools.Tool{}, fmt.Errorf("compile native bash schema: %w", err)
-	}
-	return tools.Tool{
-		Definition: tools.Definition{
-			ID:          bashToolID,
-			Source:      "native",
-			Name:        "bash",
-			Description: "Run a bounded shell command. Use file tools for file operations.",
-			InputSchema: append(json.RawMessage(nil), bashInputSchema...),
-		},
-		Validator:          validator,
-		ExampleOperation:   json.RawMessage(`{"command":"npm test"}`),
-		NormalizeArguments: normalizeBashArguments,
-		LeafBudget:         true,
-		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			return executeNativeBash(ctx, arguments, settings, apiKeyEnv, execution), nil
-		},
-	}, nil
-}
-
-func normalizeBashArguments(arguments map[string]any) map[string]any {
-	normalized := make(map[string]any, len(arguments))
-	for key, value := range arguments {
-		normalized[key] = value
-	}
-	if command, ok := normalized["command"].(string); ok {
-		normalized["command"] = strings.TrimSpace(command)
-	} else if command, ok := arguments["cmd"].(string); ok {
-		normalized["command"] = strings.TrimSpace(command)
-	}
-	if _, hasCwd := normalized["cwd"]; !hasCwd {
-		alias, exists := arguments["workdir"]
-		if !exists || alias == nil {
-			alias = arguments["dir"]
-		}
-		if cwd, ok := alias.(string); ok {
-			normalized["cwd"] = cwd
-		}
-	}
-	// `input` is the other common name for text piped to a command.
-	if _, hasStdin := normalized["stdin"]; !hasStdin {
-		if input, ok := arguments["input"].(string); ok {
-			normalized["stdin"] = input
-		}
-	}
-	delete(normalized, "cmd")
-	delete(normalized, "workdir")
-	delete(normalized, "dir")
-	delete(normalized, "input")
-	return normalized
-}
-
-type bashArguments struct {
-	command   string
-	stdin     string
-	cwd       string
-	timeoutMs *int64
-}
-
-func parseBashArguments(arguments map[string]any) bashArguments {
-	parsed := bashArguments{cwd: "."}
-	parsed.command, _ = arguments["command"].(string)
-	parsed.stdin, _ = arguments["stdin"].(string)
-	if cwd, ok := arguments["cwd"].(string); ok {
-		parsed.cwd = cwd
-	}
-	if timeout, ok := bashArgumentInteger(arguments["timeout_ms"]); ok {
-		parsed.timeoutMs = &timeout
-	}
-	return parsed
-}
-
-func executeNativeBash(
-	ctx context.Context,
-	arguments map[string]any,
-	settings sessionfs.NativeBashSettings,
-	apiKeyEnv string,
-	execution tools.ExecutionContext,
-) string {
-	settings.Policy = workspacePolicy(settings.Policy, execution)
-	args := parseBashArguments(arguments)
-	commandText := strings.TrimSpace(args.command)
-	if commandText == "" {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "invalid_command", "The command is empty")
-	}
-	// An empty stdin is the same as none: a closed input reads as empty anyway.
-	if stdinBytes := int64(len(args.stdin)); stdinBytes > settings.StdinMaxBytes {
-		return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "stdin_too_large",
-			fmt.Sprintf("stdin is %d bytes, over the limit of %d", stdinBytes, settings.StdinMaxBytes),
-			tools.Information{Key: "suggestion", Value: "write the text to a file and run it from there"})
-	}
-	commandArgs := []string{"-c", commandText}
-	if settings.LoginShell {
-		commandArgs = []string{"-l", "-c", commandText}
-	}
-	return runShellChild(ctx, shellChildRun{
-		file:  settings.Shell,
-		argv:  commandArgs,
-		stdin: args.stdin,
-		cwd:   args.cwd,
-		// timeoutMs is applied by runShellChild from the same argument.
-		timeoutMs: args.timeoutMs,
-	}, settings, apiKeyEnv, execution)
-}
-
-// shellChildRun is what differs between the tools that run a child under bash's policy.
+// shellChildRun is what differs between the tools that run a child under the shell child policy (exec, tool_smith).
 type shellChildRun struct {
 	file      string
 	argv      []string
@@ -193,10 +69,10 @@ type shellProgram struct {
 	subject string
 }
 
-// settingsSection is the block advice points the user at; a run that names none is bash's.
+// settingsSection is the block advice points the user at; a run that names none is exec's.
 func (run shellChildRun) settingsSection() string {
 	if run.section == "" {
-		return "tools.native.bash"
+		return "tools.native.exec"
 	}
 	return run.section
 }
@@ -388,29 +264,6 @@ func effectiveBashTimeoutMs(requested *int64, settings sessionfs.NativeBashSetti
 	return *requested
 }
 
-func bashArgumentInteger(value any) (int64, bool) {
-	const maxSafeInteger = int64(9_007_199_254_740_991)
-	switch number := value.(type) {
-	case json.Number:
-		parsed, err := number.Int64()
-		return parsed, err == nil && parsed >= -maxSafeInteger && parsed <= maxSafeInteger
-	case int:
-		return int64(number), true
-	case int64:
-		return number, number >= -maxSafeInteger && number <= maxSafeInteger
-	case float64:
-		if math.IsNaN(number) || math.IsInf(number, 0) || math.Trunc(number) != number || number < -float64(maxSafeInteger) || number > float64(maxSafeInteger) {
-			return 0, false
-		}
-		return int64(number), true
-	case string:
-		parsed, err := strconv.ParseInt(number, 10, 64)
-		return parsed, err == nil && parsed >= -maxSafeInteger && parsed <= maxSafeInteger
-	default:
-		return 0, false
-	}
-}
-
 func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSettings, apiKeyEnv string) []string {
 	denied := map[string]struct{}{"JAD_API_TOKEN": {}}
 	if apiKeyEnv != "" {
@@ -557,7 +410,7 @@ func renderBashExecutionResult(callID, cwd, shell string, timeoutMs int64, resul
 		}
 		if unavailable {
 			summary, code := "The shell is not available", "shell_unavailable"
-			suggestion := "install the shell or point tools.native.bash.shell at an executable"
+			suggestion := "install the shell or point tools.native.exec.shell at an executable"
 			if program != nil {
 				summary, code = program.name+" is not available", "interpreter_unavailable"
 				suggestion = "install " + program.name + " or point " + program.setting + " at it"

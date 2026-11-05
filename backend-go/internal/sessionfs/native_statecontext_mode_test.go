@@ -21,12 +21,6 @@ func nativeStateContextSection(t *testing.T, tool, raw string) (any, error) {
 			return nil, err
 		}
 		return settings.StateContext, nil
-	case "process":
-		settings, err := normalizeNativeProcessSettings(setting, t.TempDir(), "/s/setting.json", t.TempDir(), t.TempDir(), "", t.TempDir())
-		if err != nil {
-			return nil, err
-		}
-		return settings.StateContext, nil
 	default:
 		settings, err := normalizeNativeSubagentSettings(setting, "/s/setting.json", t.TempDir(), "")
 		if err != nil {
@@ -36,7 +30,7 @@ func nativeStateContextSection(t *testing.T, tool, raw string) (any, error) {
 	}
 }
 
-func TestNativeStateContextSummaryModeAcceptedForTaskProcessAndSubagent(t *testing.T) {
+func TestNativeStateContextSummaryModeAcceptedForTaskAndSubagent(t *testing.T) {
 	cases := []struct {
 		tool, raw string
 		want      any
@@ -45,8 +39,6 @@ func TestNativeStateContextSummaryModeAcceptedForTaskProcessAndSubagent(t *testi
 			NativeTaskStateContextSettings{Statuses: []string{"todo", "in-progress", "done"}, Limit: 25, Mode: "summary", DetailStatuses: []string{"in-progress"}}},
 		{"task", `{"mode":"summary","statuses":["todo","done"],"detail_statuses":["todo","done"],"limit":3}`,
 			NativeTaskStateContextSettings{Statuses: []string{"todo", "done"}, Limit: 3, Mode: "summary", DetailStatuses: []string{"todo", "done"}}},
-		{"process", `{"mode":"summary","states":["running","exited"]}`,
-			NativeProcessStateContextSettings{States: []string{"running", "exited"}, Limit: 20, Mode: "summary", DetailStates: []string{"running"}}},
 		{"subagent", `{"mode":"summary","states":["queued","running","done"],"detail_states":["running","queued","running"]}`,
 			NativeSubagentStateContextSettings{States: []string{"queued", "running", "done"}, Limit: 20, Mode: "summary", DetailStates: []string{"running", "queued"}}},
 		{"subagent", `{"mode":"items"}`,
@@ -68,13 +60,11 @@ func TestNativeStateContextSummaryModeRejectsInvalidValues(t *testing.T) {
 	cases := []struct{ tool, raw, want string }{
 		{"task", `{"mode":"counts"}`, "statecontext.mode"},
 		{"task", `{"mode":7}`, "statecontext.mode"},
-		{"process", `{"mode":""}`, "statecontext.mode"},
 		{"subagent", `{"mode":"Summary"}`, "statecontext.mode"},
+		{"subagent", `{"mode":""}`, "statecontext.mode"},
 		{"task", `{"detail_statuses":["done"]}`, "only valid with mode"},
-		{"process", `{"detail_states":["running"]}`, "only valid with mode"},
 		{"subagent", `{"mode":"items","detail_states":["running"]}`, "only valid with mode"},
 		{"task", `{"mode":"summary","statuses":["done"],"detail_statuses":["todo"]}`, "not one of the states"},
-		{"process", `{"mode":"summary","states":["exited"],"detail_states":["running"]}`, "not one of the states"},
 		{"subagent", `{"mode":"summary","detail_states":["done"]}`, "not one of the states"},
 		{"task", `{"mode":"summary","detail_statuses":"done"}`, "array of states"},
 	}

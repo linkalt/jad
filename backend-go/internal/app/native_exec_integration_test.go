@@ -14,34 +14,32 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
 	"jad/backend-go/internal/tools/native"
 )
 
-func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing.T) {
-	shell, err := exec.LookPath("bash")
-	if err != nil {
+func TestHTTPRunExecutesConfiguredNativeExecAndContinuesProviderRound(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
 	workspace := t.TempDir()
-	bashTool, err := native.NewBashTool(sessionfs.NativeBashSettings{Shell: shell}, "FIXTURE_OPENAI_KEY")
+	execTool, err := native.NewExecTool(execHandleSettings(t, workspace), "FIXTURE_OPENAI_KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := json.Marshal(struct {
 		SchemaVersion int   `json:"schema_version"`
 		Tools         []any `json:"tools"`
-	}{SchemaVersion: 1, Tools: []any{bashTool.Definition}})
+	}{SchemaVersion: 1, Tools: []any{execTool.Definition}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "bash.json"), manifest, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "exec.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	var providerCalls atomic.Int32
-	var secondRequestHadBashResult atomic.Bool
+	var secondRequestHadExecResult atomic.Bool
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
 			http.Error(w, "unexpected provider request", http.StatusNotFound)
@@ -62,11 +60,11 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 		call := providerCalls.Add(1)
 		var events []string
 		if call == 1 {
-			if len(request.Tools) != 1 || !strings.Contains(string(request.Tools[0]), `"name":"bash"`) {
-				http.Error(w, "native bash definition missing", http.StatusBadRequest)
+			if len(request.Tools) != 1 || !strings.Contains(string(request.Tools[0]), `"name":"exec"`) {
+				http.Error(w, "native exec definition missing", http.StatusBadRequest)
 				return
 			}
-			item := `{"type":"function_call","call_id":"call-bash","name":"bash","arguments":"{\"command\":\"printf 'bash fixture output\\\\n'\"}"}`
+			item := `{"type":"function_call","call_id":"call-exec","name":"exec","arguments":"{\"code\":\"printf 'exec fixture output\\\\n'\"}"}`
 			events = []string{
 				`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 				`{"type":"response.completed","response":{"id":"resp-tool","status":"completed","model":"gpt-test","output":[]}}`,
@@ -78,8 +76,8 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 					CallID string `json:"call_id"`
 					Output string `json:"output"`
 				}
-				if json.Unmarshal(item, &result) == nil && result.Type == "function_call_output" && result.CallID == "call-bash" && strings.Contains(result.Output, "bash fixture output") {
-					secondRequestHadBashResult.Store(true)
+				if json.Unmarshal(item, &result) == nil && result.Type == "function_call_output" && result.CallID == "call-exec" && strings.Contains(result.Output, "exec fixture output") {
+					secondRequestHadExecResult.Store(true)
 				}
 			}
 			events = []string{
@@ -101,9 +99,9 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "bash.json")},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "exec.json")},
 		Settings:            map[string]any{"max_tool_rounds": 2},
-		Native:              map[string]any{"bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}}},
+		Native:              map[string]any{"exec": map[string]any{"spill": map[string]any{"enabled": false}}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	service, err := NewService(config)
@@ -140,8 +138,8 @@ func TestHTTPRunExecutesConfiguredNativeBashAndContinuesProviderRound(t *testing
 	if calls := providerCalls.Load(); calls != 2 {
 		t.Fatalf("provider requests = %d, want 2", calls)
 	}
-	if !secondRequestHadBashResult.Load() {
-		t.Fatal("second provider request did not include the native bash result")
+	if !secondRequestHadExecResult.Load() {
+		t.Fatal("second provider request did not include the native exec result")
 	}
 
 	transcript, err := os.Open(filepath.Join(profileState(fixture), "messages.jsonl"))

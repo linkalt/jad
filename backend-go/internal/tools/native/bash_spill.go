@@ -223,7 +223,7 @@ func applyBashSpillPolicy(
 		files = append(files, decision.stderr.display)
 	}
 	if len(files) > 0 {
-		decision.hint = "the complete output is in " + strings.Join(files, " and ") + "; read or grep it instead of re-running the command"
+		decision.hint = "the complete output is in " + strings.Join(files, " and ") + "; read it with exec (sed -n, tail, rg) instead of re-running the command"
 	}
 	return decision
 }

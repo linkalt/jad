@@ -113,8 +113,8 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	if config.StoragePaths.ToolStorage != filepath.Join(config.WorkingDir, ".jad", "state", "default", "dev", "coder", "tools") {
 		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
 	}
-	if config.NativeRead == nil || config.NativeBash == nil || config.NativeSubagent == nil || config.NativeGrep == nil {
-		t.Fatalf("native tools missing: read=%v bash=%v subagent=%v", config.NativeRead, config.NativeBash, config.NativeSubagent)
+	if config.NativeExec == nil || config.NativeAsync == nil || config.NativeSubagent == nil {
+		t.Fatalf("native tools missing: exec=%v async=%v subagent=%v", config.NativeExec, config.NativeAsync, config.NativeSubagent)
 	}
 	if config.MaxToolRounds != 500 {
 		t.Fatalf("max tool rounds = %d", config.MaxToolRounds)
@@ -859,19 +859,19 @@ func TestLayoutEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 	}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
 		native := m["native"].(map[string]any)
-		native["bash"] = map[string]any{"env_file": "env"}
-		native["process"] = map[string]any{"env_file": "env"}
+		native["exec"] = map[string]any{"env_file": "env"}
+		native["tool_smith"] = map[string]any{"env_file": "env"}
 	})
 	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(root, "env")
-	if config.NativeBash == nil || config.NativeBash.EnvFile != want || config.NativeBash.Env["FROM_ROOT"] != "1" {
-		t.Fatalf("bash env file = %+v, want %s with FROM_ROOT", config.NativeBash, want)
+	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != want || config.NativeExec.Child.Env["FROM_ROOT"] != "1" {
+		t.Fatalf("exec env file = %+v, want %s with FROM_ROOT", config.NativeExec, want)
 	}
-	if config.NativeProcess == nil || config.NativeProcess.EnvFile != want {
-		t.Fatalf("process env file = %+v, want %s", config.NativeProcess, want)
+	if config.NativeToolSmith == nil || config.NativeToolSmith.Child.EnvFile != want {
+		t.Fatalf("tool_smith env file = %+v, want %s", config.NativeToolSmith, want)
 	}
 	// an absolute path is left alone
 	other := filepath.Join(t.TempDir(), "other.env")
@@ -879,10 +879,10 @@ func TestLayoutEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-		m["native"].(map[string]any)["bash"] = map[string]any{"env_file": other}
+		m["native"].(map[string]any)["exec"] = map[string]any{"env_file": other}
 	})
-	if config, err = LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err != nil || config.NativeBash.EnvFile != other {
-		t.Fatalf("absolute env file: %v, %+v", err, config.NativeBash)
+	if config, err = LoadLayoutSessionSettings(location, layout, "dev/coder", ""); err != nil || config.NativeExec.Child.EnvFile != other {
+		t.Fatalf("absolute env file: %v, %+v", err, config.NativeExec)
 	}
 }
 
@@ -890,7 +890,7 @@ func TestLayoutEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 func TestLayoutEnvFileErrorNamesTheRootFolderPath(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-		m["native"].(map[string]any)["bash"] = map[string]any{"env_file": "missing.env"}
+		m["native"].(map[string]any)["exec"] = map[string]any{"env_file": "missing.env"}
 	})
 	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
 	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "missing.env")) {
@@ -902,14 +902,14 @@ func TestLayoutEnvFileErrorNamesTheRootFolderPath(t *testing.T) {
 // the layout loader hands exec the environment built from it.
 func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 	layout, location, root := sampleLayout(t)
-	for name, content := range map[string]string{"bash.env": "WHO=bash\n", "exec.env": "WHO=exec\n"} {
+	for name, content := range map[string]string{"smith.env": "WHO=tool_smith\n", "exec.env": "WHO=exec\n"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
 		native := m["native"].(map[string]any)
-		native["bash"] = map[string]any{"env_file": "bash.env"}
+		native["tool_smith"] = map[string]any{"env_file": "smith.env"}
 		native["exec"] = map[string]any{"env_file": "exec.env"}
 	})
 	config, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
@@ -919,14 +919,14 @@ func TestLayoutExecEnvFileIsRelativeToTheRootFolder(t *testing.T) {
 	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != filepath.Join(root, "exec.env") || config.NativeExec.Child.Env["WHO"] != "exec" {
 		t.Fatalf("exec = %+v", config.NativeExec)
 	}
-	if config.NativeBash.Env["WHO"] != "bash" {
-		t.Fatalf("bash env = %v", config.NativeBash.Env)
+	if config.NativeToolSmith.Child.Env["WHO"] != "tool_smith" {
+		t.Fatalf("tool_smith env = %v", config.NativeToolSmith.Child.Env)
 	}
 }
 
-// defaults.env_file is the env_file of bash, process, exec and tool_smith when the toolset names none; a
+// defaults.env_file is the env_file of exec and tool_smith when the toolset names none; a
 // tool's own env_file wins, and a tool the toolset lacks is not added.
-func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
+func TestLayoutDefaultEnvFileFeedsExecAndToolSmith(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	if err := os.WriteFile(filepath.Join(root, "env"), []byte("FROM_DEFAULT=1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -937,9 +937,7 @@ func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 	}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
 		native := m["native"].(map[string]any)
-		native["bash"] = map[string]any{}
-		native["process"] = map[string]any{"env_file": own}
-		native["exec"] = map[string]any{}
+		native["exec"] = map[string]any{"env_file": own}
 		native["tool_smith"] = map[string]any{}
 	})
 	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
@@ -948,21 +946,15 @@ func TestLayoutDefaultEnvFileFeedsBashProcessAndExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := filepath.Join(root, "env")
-	if config.NativeBash == nil || config.NativeBash.EnvFile != want || config.NativeBash.Env["FROM_DEFAULT"] != "1" {
-		t.Fatalf("bash = %+v, want env file %s", config.NativeBash, want)
-	}
-	if config.NativeProcess == nil || config.NativeProcess.EnvFile != own {
-		t.Fatalf("process = %+v, want its own %s", config.NativeProcess, own)
-	}
-	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != want {
-		t.Fatalf("exec = %+v, want env file %s", config.NativeExec, want)
+	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != own {
+		t.Fatalf("exec = %+v, want its own %s", config.NativeExec, own)
 	}
 	if config.NativeToolSmith == nil || config.NativeToolSmith.Child.EnvFile != want || config.NativeToolSmith.Child.Env["FROM_DEFAULT"] != "1" {
 		t.Fatalf("tool_smith = %+v, want env file %s", config.NativeToolSmith, want)
 	}
 }
 
-// A toolset without process gets no process from the default.
+// A toolset without tool_smith gets no tool_smith from the default.
 func TestLayoutDefaultEnvFileAddsNoTool(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	if err := os.WriteFile(filepath.Join(root, "env"), []byte("A=1\n"), 0o644); err != nil {
@@ -973,8 +965,8 @@ func TestLayoutDefaultEnvFileAddsNoTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeProcess != nil || config.NativeExec != nil {
-		t.Fatalf("process = %+v, exec = %+v, want neither", config.NativeProcess, config.NativeExec)
+	if config.NativeToolSmith != nil || config.NativeLSP != nil {
+		t.Fatalf("tool_smith = %+v, lsp = %+v, want neither", config.NativeToolSmith, config.NativeLSP)
 	}
 }
 
@@ -988,7 +980,7 @@ func TestLayoutEnvFileNearestLevelWins(t *testing.T) {
 	}
 	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"env"`)}
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-		m["native"].(map[string]any)["bash"] = map[string]any{}
+		m["native"].(map[string]any)["exec"] = map[string]any{}
 	})
 	check := func(label, want string) {
 		t.Helper()
@@ -996,8 +988,8 @@ func TestLayoutEnvFileNearestLevelWins(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
-		if config.NativeBash == nil || config.NativeBash.EnvFile != filepath.Join(root, want) {
-			t.Fatalf("%s: bash = %+v, want %s", label, config.NativeBash, want)
+		if config.NativeExec == nil || config.NativeExec.Child.EnvFile != filepath.Join(root, want) {
+			t.Fatalf("%s: exec = %+v, want %s", label, config.NativeExec, want)
 		}
 	}
 	check("defaults", "env")
@@ -1158,8 +1150,8 @@ func TestLayoutToolStorageIsUnderTheCWD(t *testing.T) {
 	if config.StoragePaths.ToolStorage != want {
 		t.Fatalf("tool storage = %s, want %s", config.StoragePaths.ToolStorage, want)
 	}
-	if !strings.HasPrefix(config.NativeBash.Spill.StorageDir, want+string(filepath.Separator)) {
-		t.Fatalf("bash spill = %s, want it under %s", config.NativeBash.Spill.StorageDir, want)
+	if !strings.HasPrefix(config.NativeExec.Child.Spill.StorageDir, want+string(filepath.Separator)) {
+		t.Fatalf("exec spill = %s, want it under %s", config.NativeExec.Child.Spill.StorageDir, want)
 	}
 	if !strings.HasPrefix(config.MessagesPath, layout.State+string(filepath.Separator)) {
 		t.Fatalf("messages = %s, want it under the root state %s", config.MessagesPath, layout.State)

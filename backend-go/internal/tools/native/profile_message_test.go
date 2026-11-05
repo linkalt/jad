@@ -272,7 +272,7 @@ func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testi
 	if len(catalog.Definitions()) != 0 {
 		t.Fatalf("offered without a messenger: %#v", catalog.Definitions())
 	}
-	catalog, err = BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, nil, nil, &fakeMessenger{})
+	catalog, err = BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, &fakeMessenger{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 		Profiles:             []string{"main", "reviewer", "team/coder"},
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, nil, nil, messenger)
+	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, messenger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 	}
 
 	config.Profiles = []string{"main", "team/coder"}
-	if _, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, nil, nil, messenger); err == nil || !strings.Contains(err.Error(), "no profile to message") {
+	if _, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, messenger); err == nil || !strings.Contains(err.Error(), "no profile to message") {
 		t.Fatalf("empty effective list error = %v", err)
 	}
 }

@@ -81,7 +81,7 @@ func buildSubagentCatalog(t *testing.T, settings sessionfs.NativeSubagentSetting
 	host := newTestAsyncHost(t)
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
-	tool, err := newSubagentToolAsync(settings, parentTools, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parentTools, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatalf("newSubagentToolAsync: %v", err)
 	}

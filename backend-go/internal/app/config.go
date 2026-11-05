@@ -36,10 +36,8 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	// Log configures the structured logger built by main; see internal/logging.
 	Log logging.Settings
-	// RecoverProcessesAtStart starts a background recovery of every session's managed
-	// processes when the service is created; see Resolver.RecoverStorages.
-	RecoverProcessesAtStart bool
-	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests.
+	// RecoverSubagentRunsAtStart starts a background recovery of every session's sub-agent
+	// run manifests when the service is created; see Resolver.RecoverStorages.
 	RecoverSubagentRunsAtStart bool
 	Roots                      []sessionfs.Root
 	// RootSettingWarnings are the notices of the root setting load: keys it does not read.
@@ -104,7 +102,6 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			Format: loaded.Server.LogFormat,
 			File:   loaded.Server.LogFile,
 		},
-		RecoverProcessesAtStart:    loaded.Server.RecoverProcessesAtStart,
 		SessionStoreIdle:           loaded.Server.SessionStoreIdle,
 		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),

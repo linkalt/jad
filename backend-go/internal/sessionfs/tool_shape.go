@@ -10,7 +10,21 @@ import (
 var (
 	toolNodeNames   = []string{"native", "extension", "mcp"}
 	nativeToolNames = []string{
-		"read", "write", "edit", "apply_patch", "notebook", "grep", "glob", "read_image", "lsp", "bash", "exec", "process", "async", "task", "memory", "fetch", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
+		"read_image", "lsp", "exec", "async", "task", "memory", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
+	}
+	// removedNativeTools are the tools exec replaced, each with what to do instead. Their
+	// keys are refused by name, never ignored, so a setting that still names one says why.
+	removedNativeTools = map[string]string{
+		"read":        "read files with exec (cat, sed -n, head) or a saved exec helper; delete the key",
+		"write":       "write files with exec (a heredoc, or a helper); delete the key",
+		"edit":        "edit files with exec (a helper or a short script); delete the key",
+		"apply_patch": "apply patches with exec (git apply, patch, or a helper); delete the key",
+		"notebook":    "edit notebooks with exec (a python helper using nbformat); delete the key",
+		"grep":        "search with exec (rg, grep); delete the key",
+		"glob":        "list files with exec (rg --files, find); delete the key",
+		"bash":        "exec runs shell commands (lang bash, its default); move the settings to tools.native.exec and delete the key",
+		"process":     "exec runs long commands: a call that outlasts block_ms becomes an async handle; delete the key",
+		"fetch":       "fetch pages with exec (curl, or a helper); delete the key",
 	}
 	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
 	extensionToolNames = []string{"decide_systemone", "web_search"}
@@ -65,6 +79,9 @@ func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath s
 			return configError("%s: tools.native must be an object", settingPath)
 		}
 		for _, key := range nativeKeys {
+			if hint, removed := removedNativeTools[key]; removed {
+				return configError("%s: tools.native.%s was removed; %s", settingPath, key, hint)
+			}
 			if !containsString(nativeToolNames, key) {
 				return unsupportedToolKey(settingPath+": tools.native", key, nativeToolNames, "MCP servers are configured under tools.mcp")
 			}

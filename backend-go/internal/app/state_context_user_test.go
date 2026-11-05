@@ -32,7 +32,7 @@ func (fixture *sessionStartFixture) statecontext(body string) (int, string) {
 }
 
 func userTrigger(extra map[string]any) map[string]any {
-	trigger := map[string]any{"tools": []string{"process"}, "max_bytes": 4096, "max_prompt_bytes": 256}
+	trigger := map[string]any{"tools": []string{"task"}, "max_bytes": 4096, "max_prompt_bytes": 256}
 	for key, value := range extra {
 		trigger[key] = value
 	}
@@ -43,7 +43,7 @@ func TestHTTPStateContextUserTriggerWritesABlockWithTheTypedPrompt(t *testing.T)
 	fixture := newStateContextFixture(t, true, userTrigger(map[string]any{"max_prompt_bytes": 64}))
 
 	status, body := fixture.statecontext(`{"prompt":"  focus on the build  ","preview":true}`)
-	if status != http.StatusOK || !strings.Contains(body, `"preview":true`) || !strings.Contains(body, "focus on the build") || !strings.Contains(body, "proc_saved") {
+	if status != http.StatusOK || !strings.Contains(body, `"preview":true`) || !strings.Contains(body, "focus on the build") || !strings.Contains(body, savedStateMarker) {
 		t.Fatalf("preview = %d %s", status, body)
 	}
 	if _, err := os.Stat(fixture.snapshotPath()); !os.IsNotExist(err) {
@@ -62,7 +62,7 @@ func TestHTTPStateContextUserTriggerWritesABlockWithTheTypedPrompt(t *testing.T)
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &entry); err != nil {
 		t.Fatal(err)
 	}
-	header, prompt, state := strings.Index(entry.Text, "STATE CONTEXT SNAPSHOT"), strings.Index(entry.Text, "focus on the build"), strings.Index(entry.Text, "proc_saved")
+	header, prompt, state := strings.Index(entry.Text, "STATE CONTEXT SNAPSHOT"), strings.Index(entry.Text, "focus on the build"), strings.Index(entry.Text, savedStateMarker)
 	if entry.Trigger != "user" || entry.Role != "developer" || header != 0 || prompt < header || state < prompt {
 		t.Fatalf("entry = %#v; want trigger user, the header, then the typed prompt, then the data", entry)
 	}

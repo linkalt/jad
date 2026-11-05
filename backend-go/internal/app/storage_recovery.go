@@ -12,9 +12,6 @@ import (
 
 // StorageRecoveryOptions chooses which storages RecoverStorages visits.
 type StorageRecoveryOptions struct {
-	// Processes recovers the managed-process storage: a process a crashed server left
-	// running is stopped and its manifest marked lost.
-	Processes bool
 	// SubagentRuns recovers the sub-agent run manifests: a run the last server left
 	// queued or running is marked lost, and the oldest ended runs beyond keep_finished
 	// are dropped.
@@ -25,30 +22,20 @@ type StorageRecoveryOptions struct {
 type StorageRecoveryReport struct {
 	// Sessions is the number of session directories with a setting.json.
 	Sessions int
-	// Storages is the number of distinct process storage directories recovered.
-	Storages int
 	// RunStorages is the number of distinct sub-agent storage directories recovered.
 	RunStorages int
 	// Unreadable counts sessions and profiles whose settings could not be loaded.
 	Unreadable int
-	// Failed counts process storages whose recovery returned an error.
-	Failed int
-}
-
-// RecoverProcesses is RecoverStorages for the managed-process storage alone.
-func (r *Resolver) RecoverProcesses(ctx context.Context) (StorageRecoveryReport, error) {
-	return r.RecoverStorages(ctx, StorageRecoveryOptions{Processes: true})
 }
 
 // RecoverStorages recovers, for every session and path profile, the storages the tools
 // of that session keep between server runs, so the recovery happens at start instead of
 // at the first use of the tool in its session. A restart otherwise leaves a stale
-// "running" manifest, and for a process a live orphan, until someone touches the session.
+// "running" manifest until someone touches the session.
 //
 // It only visits a storage directory that already exists: a session that never started a
-// process or a child gets no new directory. It builds the same shared manager a run uses,
-// so the recovery done here is the recovery that run would have done; the process manager
-// serializes its recovery, so a run that starts meanwhile waits for it. A session or
+// child gets no new directory. It builds the same shared manager a run uses, so the
+// recovery done here is the recovery that run would have done. A session or
 // profile that cannot be read is skipped and logged; it never stops the scan. The context
 // is checked before each session and before each storage; a recovery already going on is
 // not interrupted.
@@ -57,7 +44,6 @@ func (r *Resolver) RecoverStorages(ctx context.Context, options StorageRecoveryO
 	if ctx == nil {
 		return report, errors.New("storage recovery context is required")
 	}
-	seenProcess := make(map[string]struct{})
 	seenRuns := make(map[string]struct{})
 	for _, root := range r.roots {
 		entries, err := os.ReadDir(root.Directory)
@@ -76,7 +62,7 @@ func (r *Resolver) RecoverStorages(ctx context.Context, options StorageRecoveryO
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
-			if err := r.recoverSessionStorages(ctx, root, id, options, seenProcess, seenRuns, &report); err != nil {
+			if err := r.recoverSessionStorages(ctx, root, id, options, seenRuns, &report); err != nil {
 				return report, err
 			}
 		}
@@ -86,7 +72,7 @@ func (r *Resolver) RecoverStorages(ctx context.Context, options StorageRecoveryO
 
 func (r *Resolver) recoverSessionStorages(
 	ctx context.Context, root sessionfs.Root, name string, options StorageRecoveryOptions,
-	seenProcess, seenRuns map[string]struct{}, report *StorageRecoveryReport,
+	seenRuns map[string]struct{}, report *StorageRecoveryReport,
 ) error {
 	location, err := sessionfs.Resolve(r.roots, root.ID+":"+name)
 	if err != nil {
@@ -113,7 +99,7 @@ func (r *Resolver) recoverSessionStorages(
 		return nil
 	}
 	// The active profile is the base config; every other profile may keep its tool
-	// storage, and so its processes and child runs, in its own folder, so each is read.
+	// storage, and so its child runs, in its own folder, so each is read.
 	configs := []sessionfs.SessionConfig{base}
 	for _, profile := range base.Profiles {
 		if profile == base.Profile {
@@ -128,42 +114,11 @@ func (r *Resolver) recoverSessionStorages(
 		configs = append(configs, config)
 	}
 	for _, config := range configs {
-		if options.Processes {
-			if err := r.recoverProcessStorage(ctx, location.Reference, config, seenProcess, report); err != nil {
-				return err
-			}
-		}
 		if options.SubagentRuns {
 			if err := r.recoverSubagentStorage(ctx, config, seenRuns, report); err != nil {
 				return err
 			}
 		}
-	}
-	return nil
-}
-
-func (r *Resolver) recoverProcessStorage(
-	ctx context.Context, reference string, config sessionfs.SessionConfig, seen map[string]struct{}, report *StorageRecoveryReport,
-) error {
-	if config.NativeProcess == nil {
-		return nil
-	}
-	storage := filepath.Clean(config.NativeProcess.StorageDir)
-	if !firstVisit(seen, storage) || !directoryExists(storage) {
-		return nil
-	}
-	// A recovery can last the whole kill grace, so stop before starting the next.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	manager := r.sharedProcessManager(config)
-	if manager == nil {
-		return errors.New("resolver is closed")
-	}
-	report.Storages++
-	if err := manager.Recover(); err != nil {
-		r.logger.Warn("process recovery failed", "session", reference, "storage", storage, "error", err)
-		report.Failed++
 	}
 	return nil
 }

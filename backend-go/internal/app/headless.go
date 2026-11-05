@@ -31,7 +31,6 @@ func NewHeadless(config Config) (*Service, *headless.Runner, error) {
 	config.HTTP.APIToken = token
 	config.HTTP.AllowedOrigins = nil
 	config.RemoteAPI.Enabled = false
-	config.RecoverProcessesAtStart = false
 	config.RecoverSubagentRunsAtStart = false
 	config.Triggers.Enabled = false
 	service, err := NewService(config)

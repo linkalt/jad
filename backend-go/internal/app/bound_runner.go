@@ -22,13 +22,12 @@ import (
 // boundRunner is a session resolved from its settings. Its model, tools and
 // credential are prepared inside Run, once the user input is durable.
 type boundRunner struct {
-	resolver       *Resolver
-	shared         *sharedSession
-	config         sessionfs.SessionConfig
-	reference      string
-	processManager native.ProcessManager
-	taskStore      *native.TaskStore
-	memoryStore    *native.MemoryStore
+	resolver    *Resolver
+	shared      *sharedSession
+	config      sessionfs.SessionConfig
+	reference   string
+	taskStore   *native.TaskStore
+	memoryStore *native.MemoryStore
 }
 
 // hold leases the transcript store cached for the session now and points r at it for
@@ -129,7 +128,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	}
 	// From here on the configuration includes the model.
 	r.config = prepared.config
-	r.processManager, r.taskStore, r.memoryStore = prepared.processManager, prepared.taskStore, prepared.memoryStore
+	r.taskStore, r.memoryStore = prepared.taskStore, prepared.memoryStore
 	options.PersistedInput = persisted
 	options.ToolCatalog = prepared.toolCatalog
 	if options.Plan {
@@ -184,7 +183,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	}
 	options.RefreshStateContext = func(context.Context) ([]session.StateContextPrompt, error) {
 		snapshot, include, err := collectStateContextSnapshot(r.config, stateContextSources{
-			process: r.processManager, task: r.taskStore, memory: r.memoryStore,
+			task: r.taskStore, memory: r.memoryStore,
 			subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
 			async: r.resolver.sessionAsyncManager(r.config),
 		}, "compaction")
@@ -231,7 +230,7 @@ func (r boundRunner) currentStateContext() ([]session.StateContextPrompt, error)
 		return nil, err
 	}
 	sources := stateContextSources{
-		process: r.processManager, task: r.taskStore, memory: r.memoryStore,
+		task: r.taskStore, memory: r.memoryStore,
 		subagent: r.resolver.sharedSubagentManager(r.config), owner: sessionKey(r.reference, r.config.Profile),
 		async: r.resolver.sessionAsyncManager(r.config),
 	}

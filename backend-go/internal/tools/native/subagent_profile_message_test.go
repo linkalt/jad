@@ -44,7 +44,7 @@ func profileMessageChild(t *testing.T, settings sessionfs.NativeSubagentSettings
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
 	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) { return run(ctx, request) }}
-	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, nil, nil)
+	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestProfileMessageIsGovernedByTheToolsListAlone(t *testing.T) {
 
 func TestListingProfileMessageWithoutTheSessionToolIsALoadError(t *testing.T) {
 	parent := withExecutors(t, readOnlyTool("read"))
-	_, err := newSubagentToolAsync(subagentSettings(nestingAgent("asker", "read", "profile_message")), parent, nil, &fakeLauncher{}, nil, NewSubagentManager(), nil, nil)
+	_, err := newSubagentToolAsync(subagentSettings(nestingAgent("asker", "read", "profile_message")), parent, nil, &fakeLauncher{}, nil, NewSubagentManager(), nil)
 	if err == nil || !strings.Contains(err.Error(), "profile_message") || !strings.Contains(err.Error(), "does not enable tools.native.profile_message") {
 		t.Fatalf("error = %v, want one that names profile_message and says the session does not enable it", err)
 	}

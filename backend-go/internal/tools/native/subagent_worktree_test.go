@@ -53,17 +53,34 @@ func gitCommand(t *testing.T, dir string, arguments ...string) string {
 }
 
 func isolatedAgent(name string) sessionfs.NativeSubagentAgent {
-	agent := writerAgent(name, "read", "write")
+	agent := writerAgent(name, "read", "exec")
 	agent.Isolation = sessionfs.SubagentIsolationWorktree
 	return agent
 }
 
-// worktreeChild is a child that writes with the real write tool through the context the
-// manager gave it, and records that context.
+// worktreeChild is a child that writes files through the context the manager gave it,
+// under the session's path rules moved into its workspace (workspacePolicy, as exec's cwd
+// check uses them), and records that context.
 type worktreeChild struct {
 	executions chan tools.ExecutionContext
-	write      sessionfs.NativeWriteSettings
+	policy     sessionfs.NativePathPolicy
 	files      map[string]string
+}
+
+func (c *worktreeChild) write(path, text string, execution tools.ExecutionContext) string {
+	target := filepath.Join(execution.WorkspaceRoot, filepath.FromSlash(path))
+	for _, rule := range workspacePolicy(c.policy, execution).Paths {
+		if rule.Action == "deny" && sessionfs.PathWithin(rule.Path, target) {
+			return "path_denied " + path
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err.Error()
+	}
+	if err := os.WriteFile(target, []byte(text), 0o644); err != nil {
+		return err.Error()
+	}
+	return "wrote " + path
 }
 
 func (c *worktreeChild) run(_ context.Context, request SubagentRequest) (SubagentResult, error) {
@@ -72,11 +89,7 @@ func (c *worktreeChild) run(_ context.Context, request SubagentRequest) (Subagen
 	for path, text := range c.files {
 		execution := request.Execution
 		execution.CallID = "w"
-		out, err := executeWrite(map[string]any{"path": path, "content": text}, c.write, NewPathLocks(), execution)
-		if err != nil {
-			return SubagentResult{}, err
-		}
-		outputs = append(outputs, out)
+		outputs = append(outputs, c.write(path, text, execution))
 	}
 	return SubagentResult{Text: "wrote: " + strings.Join(outputs, " | ")}, nil
 }
@@ -100,12 +113,11 @@ func worktreeCall(t *testing.T, catalog *tools.Catalog, root, arguments string) 
 func TestIsolatedAgentWorksInAWorktreeAndReturnsABranch(t *testing.T) {
 	repo := gitRepository(t)
 	// The session denies keep/; the rule follows the child into its worktree.
-	write := testWriteSettings(t.TempDir(), 1<<20)
-	write.Policy.Paths = []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(repo, "keep")}}
-	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), write: write, files: map[string]string{"a.txt": "changed\n", "new.txt": "new\n", "keep/secret.txt": "stolen\n"}}
+	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{{Action: "deny", Path: filepath.Join(repo, "keep")}}}
+	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), policy: policy, files: map[string]string{"a.txt": "changed\n", "new.txt": "new\n", "keep/secret.txt": "stolen\n"}}
 	settings := writeSettings(isolatedAgent("fixer"))
 	settings.StorageDir = t.TempDir()
-	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{run: child.run}, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{run: child.run}, readOnlyTool("read"), writeTool("exec"))
 
 	out := worktreeCall(t, catalog, repo, `{"agent":"fixer","task":"fix it","block_ms":3000}`)
 	execution := <-child.executions
@@ -142,7 +154,7 @@ func TestIsolatedAgentWorksInAWorktreeAndReturnsABranch(t *testing.T) {
 // An isolated agent's call is not a change of the session's files: it takes no
 // checkpoint, needs no background writer place, and is handed off like a reader.
 func TestIsolatedAgentIsScheduledLikeAReader(t *testing.T) {
-	catalog, _ := buildSubagentCatalog(t, writeSettings(isolatedAgent("fixer"), writerAgent("plain", "read", "write")), &fakeLauncher{}, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(isolatedAgent("fixer"), writerAgent("plain", "read", "exec")), &fakeLauncher{}, readOnlyTool("read"), writeTool("exec"))
 	for agent, want := range map[string]bool{"fixer": false, "plain": true} {
 		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c", "name": "subagent", "arguments": `{"agent":"` + agent + `","task":"x"}`})
 		if got := catalog.CallMayChangeFiles(call); got != want {
@@ -157,10 +169,10 @@ func TestIsolatedAgentIsScheduledLikeAReader(t *testing.T) {
 
 func TestIsolatedRunThatChangesNothingLeavesNoBranch(t *testing.T) {
 	repo := gitRepository(t)
-	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), write: testWriteSettings(t.TempDir(), 1<<20)}
+	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), policy: sessionfs.NativePathPolicy{}}
 	settings := writeSettings(isolatedAgent("fixer"))
 	settings.StorageDir = t.TempDir()
-	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{run: child.run}, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, &fakeLauncher{run: child.run}, readOnlyTool("read"), writeTool("exec"))
 	out := worktreeCall(t, catalog, repo, `{"agent":"fixer","task":"look","block_ms":3000}`)
 	<-child.executions
 	if !strings.Contains(out, "worktree_changes: none (its worktree and branch were removed)") {
@@ -180,7 +192,7 @@ func TestIsolatedRunOutsideARepositoryFails(t *testing.T) {
 	launcher := &fakeLauncher{}
 	settings := writeSettings(isolatedAgent("fixer"))
 	settings.StorageDir = t.TempDir()
-	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
 	out := worktreeCall(t, catalog, t.TempDir(), `{"agent":"fixer","task":"x","block_ms":3000}`)
 	if !strings.Contains(out, "subagent_failed") || !strings.Contains(out, "not inside a git repository") || len(launcher.requests) != 0 {
 		t.Fatalf("result (launches %d):\n%s", len(launcher.requests), out)
@@ -190,7 +202,7 @@ func TestIsolatedRunOutsideARepositoryFails(t *testing.T) {
 // A resume of an isolated run starts its worktree at the branch the run left.
 func TestIsolatedResumeStartsFromTheRunsBranch(t *testing.T) {
 	repo := gitRepository(t)
-	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 2), write: testWriteSettings(t.TempDir(), 1<<20), files: map[string]string{"a.txt": "first\n"}}
+	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 2), policy: sessionfs.NativePathPolicy{}, files: map[string]string{"a.txt": "first\n"}}
 	var seen string
 	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 		if data, err := os.ReadFile(filepath.Join(request.Execution.WorkspaceRoot, "a.txt")); err == nil {
@@ -206,7 +218,7 @@ func TestIsolatedResumeStartsFromTheRunsBranch(t *testing.T) {
 	}}
 	settings := writeSettings(isolatedAgent("fixer"))
 	settings.StorageDir = t.TempDir()
-	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
 	first := worktreeCall(t, catalog, repo, `{"agent":"fixer","task":"one","block_ms":3000}`)
 	<-child.executions
 	run := runIDOf(t, first)
@@ -251,14 +263,14 @@ func TestWorkspacePolicyMovesTheOriginsRules(t *testing.T) {
 func TestIsolatedRunIsAHandleAndItsWaitNamesTheBranch(t *testing.T) {
 	repo := gitRepository(t)
 	release := make(chan struct{})
-	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), write: testWriteSettings(t.TempDir(), 1<<20), files: map[string]string{"c.txt": "c\n"}}
+	child := &worktreeChild{executions: make(chan tools.ExecutionContext, 1), policy: sessionfs.NativePathPolicy{}, files: map[string]string{"c.txt": "c\n"}}
 	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 		<-release
 		return child.run(ctx, request)
 	}}
 	settings := writeSettings(isolatedAgent("fixer"))
 	settings.StorageDir = t.TempDir()
-	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
 	started := worktreeCall(t, catalog, repo, `{"agent":"fixer","task":"later","block_ms":0}`)
 	if !strings.Contains(started, "is still running") || strings.Contains(started, "goes on after this turn ends") {
 		t.Fatalf("start:\n%s", started)

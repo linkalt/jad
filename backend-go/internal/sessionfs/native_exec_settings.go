@@ -184,7 +184,6 @@ func defaultNativeExecLangs() ([]string, map[string]NativeExecLang) {
 func normalizeNativeExecSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeExecSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
@@ -222,7 +221,7 @@ func normalizeNativeExecSettings(
 		}
 	}
 
-	child, err := normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase, readPolicy, grepPolicy)
+	child, err := normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase)
 	if err != nil {
 		return nil, err
 	}

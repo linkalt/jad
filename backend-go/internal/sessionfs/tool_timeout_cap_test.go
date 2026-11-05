@@ -19,15 +19,15 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 			var err error
 			switch section {
 			case "bash":
-				_, err = normalizeNativeBashSettings(setting, dir, settingPath, dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+				_, err = normalizeNativeBashSettings(setting, dir, settingPath, dir, dir, "", dir)
 			case "transcripts":
 				_, err = normalizeNativeTranscriptsSettings(setting, settingPath, NativePathPolicy{})
 			case "transcript":
 				_, err = normalizeNativeTranscriptSettings(setting, settingPath, NativePathPolicy{})
 			case "exec":
-				_, err = normalizeNativeExecSettings(setting, dir, settingPath, dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+				_, err = normalizeNativeExecSettings(setting, dir, settingPath, dir, dir, "", dir)
 			default:
-				_, err = normalizeNativeToolSmithSettings(setting, dir, settingPath, dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+				_, err = normalizeNativeToolSmithSettings(setting, dir, settingPath, dir, dir, "", dir)
 			}
 			return err
 		}

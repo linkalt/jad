@@ -4,12 +4,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
-	"time"
 
 	"jad/backend-go/internal/sessionfs"
-	"jad/backend-go/internal/tools/native"
 )
 
 func deleteDemoSession(t *testing.T, f *layoutFixture) {
@@ -28,21 +25,6 @@ func demoSettingPath(t *testing.T, f *layoutFixture) string {
 		t.Fatal(err)
 	}
 	return location.File
-}
-
-func startSleeper(t *testing.T, manager *native.ManagedProcessManager, workspace string) string {
-	t.Helper()
-	snapshot, err := manager.Start(native.ProcessStartRequest{
-		CWD: workspace, DisplayCWD: workspace, Command: "sleep 60", Environment: os.Environ(),
-		Policy: sessionfs.NativeProcessSettings{
-			Shell: "/bin/sh", KillGraceMs: 250, MaxRunning: 4, MaxCompleted: 10,
-			LogCapBytes: 1024, MaxLineChars: 100, StdinMaxBytes: 1024, Env: map[string]string{}, EnvDeny: []string{},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return snapshot.ID
 }
 
 func TestSessionDeleteClosesItsMCPManagersAndKeepsOthers(t *testing.T) {
@@ -78,44 +60,6 @@ func TestSessionDeleteClosesItsMCPManagersAndKeepsOthers(t *testing.T) {
 	}
 	if _, err := other.LoadTools(t.Context(), nil, f.cwd); err != nil {
 		t.Errorf("another session's MCP manager was closed: %v", err)
-	}
-}
-
-func TestSessionDeleteStopsItsManagedProcesses(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("managed process groups require a POSIX platform")
-	}
-	f := newLayoutFixture(t)
-	resolver := f.service.resolver
-	settingPath := demoSettingPath(t, f)
-	processes := sessionfs.NativeProcessSettings{StorageDir: filepath.Join(f.cwd, "demo-processes"), KillGraceMs: 250}
-	manager := resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: settingPath, NativeProcess: &processes}).(*native.ManagedProcessManager)
-	id := startSleeper(t, manager, f.cwd)
-
-	// A second session that points at the same storage directory keeps the manager alive.
-	resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: filepath.Join(f.root, "sessions", "twin.json"), NativeProcess: &processes})
-	deleteDemoSession(t, f)
-	if snapshot, found := manager.Snapshot(id); !found || snapshot.State != native.ProcessRunning {
-		t.Fatalf("a manager the twin session still uses was stopped: %+v", snapshot)
-	}
-
-	resolver.releaseSessionChildren(filepath.Join(f.root, "sessions", "twin.json"))
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		snapshot, found := manager.Snapshot(id)
-		if found && snapshot.State != native.ProcessRunning {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("process still running after its last session was released: %+v", snapshot)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	resolver.mu.Lock()
-	left := len(resolver.processManagers) + len(resolver.processSessions)
-	resolver.mu.Unlock()
-	if left != 0 {
-		t.Fatalf("%d process manager entries left cached", left)
 	}
 }
 

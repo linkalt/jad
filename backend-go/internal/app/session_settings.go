@@ -87,7 +87,7 @@ func (r *Resolver) ListSessionFiles(ctx context.Context, reference, profile stri
 	if !settings.SessionFiles.Enabled {
 		return httpapi.SessionFileListing{}, &httpapi.StatusError{Code: http.StatusForbidden, Message: "file listing is disabled"}
 	}
-	listing := sessionfs.CollectSessionFiles(settings.WorkingDir, settings.SessionFiles, settings.NativeReadPolicy)
+	listing := sessionfs.CollectSessionFiles(settings.WorkingDir, settings.SessionFiles, settings.FilePolicy)
 	return httpapi.SessionFileListing{Files: listing.Files, Truncated: listing.Truncated}, nil
 }
 

@@ -162,6 +162,9 @@ func checkProfileToolEntry(entry string) error {
 		return fmt.Errorf("%q must not contain whitespace", entry)
 	}
 	if !strings.HasPrefix(entry, ProfileToolMCPPrefix) {
+		if hint, removed := removedNativeTools[entry]; removed {
+			return fmt.Errorf("%q was removed; %s", entry, strings.TrimSuffix(strings.TrimSuffix(hint, "; delete the key"), "and delete the key")+"; remove it from the list")
+		}
 		if containsString(nativeToolNames, entry) || containsString(extensionToolNames, entry) {
 			return nil
 		}

@@ -381,7 +381,7 @@ func subagentOrphanCatalog(t *testing.T, workspace string, manager *native.Subag
 		launches.Add(1)
 		return native.SubagentResult{}, nil
 	})
-	catalog, err := native.BuildCatalogWithSubagents(config, nil, nil, nil, nil, nil, launcher, nil, manager, nil)
+	catalog, err := native.BuildCatalogWithSubagents(config, nil, nil, nil, launcher, nil, manager, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

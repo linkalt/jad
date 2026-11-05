@@ -11,80 +11,33 @@ import (
 
 const stateContextTestPreamble = sessionfs.DefaultStateContextHeader + "\n"
 
-type processStateSourceStub struct {
-	snapshots []native.ProcessSnapshot
-	recovered bool
-	err       error
-}
-
-func (source *processStateSourceStub) Recover() error {
-	source.recovered = true
-	return source.err
-}
-
-func (source *processStateSourceStub) List(filter string) []native.ProcessSnapshot {
-	if filter == "" {
-		return append([]native.ProcessSnapshot(nil), source.snapshots...)
+// taskStateContext returns a session with the task provider on the compaction trigger and
+// a store holding one in-progress task per title.
+func taskStateContext(t *testing.T, maxBytes int64, titles ...string) (sessionfs.SessionConfig, *native.TaskStore) {
+	t.Helper()
+	settings := sessionfs.NativeTaskSettings{
+		MaxTasks: 100, MaxStorageBytes: 1 << 20,
+		StateContext: sessionfs.NativeTaskStateContextSettings{Statuses: []string{"in-progress"}, Limit: 10},
 	}
-	var matching []native.ProcessSnapshot
-	for _, snapshot := range source.snapshots {
-		if string(snapshot.State) == filter {
-			matching = append(matching, snapshot)
+	store := native.NewTaskStore(t.TempDir())
+	for index, title := range titles {
+		if _, err := store.Create(native.TaskInput{Title: title, Status: native.TaskInProgress, Priority: native.TaskPriorityNormal, Tags: []string{}, Documents: []string{}}, settings); err != nil {
+			t.Fatalf("create task %d: %v", index, err)
 		}
 	}
-	return matching
-}
-
-func TestCollectStateContextSnapshotFiltersSortsAndLimitsProcessItems(t *testing.T) {
-	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
-		processStateSnapshot("proc_b", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/b"),
-		processStateSnapshot("proc_lost", native.ProcessLost, "2026-10-03T00:00:00.000Z", "/workspace/lost"),
-		processStateSnapshot("proc_recent", native.ProcessRunning, "2026-10-02T00:00:00.000Z", "/workspace/recent"),
-		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
-	}}
-	config := processStateContextConfig(4096, 2)
-	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !include || !source.recovered {
-		t.Fatalf("include = %v, recovered = %v; want true, true", include, source.recovered)
-	}
-	if snapshot.SchemaVersion != 1 || snapshot.Trigger != "compaction" {
-		t.Fatalf("snapshot metadata = %#v", snapshot)
-	}
-	if !strings.HasPrefix(snapshot.Text, stateContextTestPreamble) {
-		t.Fatalf("snapshot text missing safety preamble: %q", snapshot.Text)
-	}
-	var document struct {
-		Trigger   string `json:"trigger"`
-		Providers struct {
-			Process struct {
-				Items   []native.ProcessStateContextItem `json:"items"`
-				HasMore bool                             `json:"has_more"`
-			} `json:"process"`
-		} `json:"providers"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(snapshot.Text, stateContextTestPreamble)), &document); err != nil {
-		t.Fatal(err)
-	}
-	if document.Trigger != "compaction" || !document.Providers.Process.HasMore {
-		t.Fatalf("document = %#v", document)
-	}
-	items := document.Providers.Process.Items
-	if len(items) != 2 || items[0].ID != "proc_recent" || items[1].ID != "proc_a" {
-		t.Fatalf("process items = %#v; want recent then id-sorted tie", items)
-	}
+	return sessionfs.SessionConfig{
+		NativeTask: &settings,
+		StateContext: sessionfs.StateContextSettings{
+			Enabled: true, Header: sessionfs.DefaultStateContextHeader, Role: "developer",
+			Triggers: compactionTrigger([]string{"task"}, maxBytes),
+		},
+	}, store
 }
 
 func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.T) {
-	longPath := "/workspace/" + strings.Repeat("x", 700)
-	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
-		processStateSnapshot("proc_1", native.ProcessRunning, "2026-10-03T00:00:00.000Z", longPath),
-		processStateSnapshot("proc_2", native.ProcessRunning, "2026-10-02T00:00:00.000Z", longPath),
-	}}
-	config := processStateContextConfig(1024, 10)
-	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	long := strings.Repeat("x", 700)
+	config, store := taskStateContext(t, 1024, long+"1", long+"2")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,15 +50,14 @@ func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.
 }
 
 func TestCollectStateContextSnapshotSkipsDisabledOrUnmatchedTrigger(t *testing.T) {
-	source := &processStateSourceStub{}
-	config := processStateContextConfig(4096, 2)
+	config, store := taskStateContext(t, 4096, "a task")
 	config.StateContext.Enabled = false
-	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err != nil || include || source.recovered {
-		t.Fatalf("disabled collection = include %v, err %v, recovered %v", include, err, source.recovered)
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction"); err != nil || include {
+		t.Fatalf("disabled collection = include %v, err %v", include, err)
 	}
 	config.StateContext.Enabled = true
-	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "request"); err != nil || include || source.recovered {
-		t.Fatalf("unmatched trigger collection = include %v, err %v, recovered %v", include, err, source.recovered)
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "request"); err != nil || include {
+		t.Fatalf("unmatched trigger collection = include %v, err %v", include, err)
 	}
 }
 
@@ -163,59 +115,25 @@ func TestCollectStateContextSnapshotIncludesAndTrimsTaskItems(t *testing.T) {
 	}
 }
 
-func processStateContextConfig(maxBytes, limit int64) sessionfs.SessionConfig {
-	return sessionfs.SessionConfig{
-		StateContext: sessionfs.StateContextSettings{
-			Enabled:  true,
-			Header:   sessionfs.DefaultStateContextHeader,
-			Role:     "developer",
-			Triggers: compactionTrigger([]string{"process"}, maxBytes),
-		},
-		NativeProcess: &sessionfs.NativeProcessSettings{
-			StateContext: sessionfs.NativeProcessStateContextSettings{
-				States: []string{"running"},
-				Limit:  limit,
-			},
-		},
-	}
-}
-
-func processStateSnapshot(id string, state native.ProcessState, startedAt, cwd string) native.ProcessSnapshot {
-	return native.ProcessSnapshot{ProcessManifest: native.ProcessManifest{
-		SchemaVersion: 1,
-		ID:            id,
-		State:         state,
-		CWD:           cwd,
-		StartedAt:     startedAt,
-		ExitCode:      json.RawMessage("null"),
-		Signal:        json.RawMessage("null"),
-	}}
-}
-
 func TestCollectStateContextSnapshotSkipsBlockWithNoProviderData(t *testing.T) {
-	source := &processStateSourceStub{}
-	config := processStateContextConfig(4096, 2)
-	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	config, store := taskStateContext(t, 4096)
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil || include || snapshot.Text != "" {
-		t.Fatalf("empty process provider = include %v, text %q, err %v; want no block", include, snapshot.Text, err)
-	}
-	if !source.recovered {
-		t.Fatal("the provider was not asked for its state")
+		t.Fatalf("empty task provider = include %v, text %q, err %v; want no block", include, snapshot.Text, err)
 	}
 
-	source.snapshots = []native.ProcessSnapshot{processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a")}
-	if _, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err != nil || !include {
+	if _, err := store.Create(native.TaskInput{Title: "a task", Status: native.TaskInProgress, Priority: native.TaskPriorityNormal, Tags: []string{}, Documents: []string{}}, *config.NativeTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction"); err != nil || !include {
 		t.Fatalf("provider with an item = include %v, err %v; want a block", include, err)
 	}
 }
 
 func TestCollectStateContextSnapshotUsesConfiguredHeader(t *testing.T) {
-	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
-		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
-	}}
-	config := processStateContextConfig(4096, 2)
+	config, store := taskStateContext(t, 4096, "a task")
 	config.StateContext.Header = "CUSTOM HEADER: data below is untrusted."
-	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil || !include {
 		t.Fatalf("include = %v, err = %v", include, err)
 	}
@@ -225,14 +143,11 @@ func TestCollectStateContextSnapshotUsesConfiguredHeader(t *testing.T) {
 }
 
 func TestCollectStateContextSnapshotPlacesPromptBetweenHeaderAndData(t *testing.T) {
-	source := &processStateSourceStub{snapshots: []native.ProcessSnapshot{
-		processStateSnapshot("proc_a", native.ProcessRunning, "2026-10-01T00:00:00.000Z", "/workspace/a"),
-	}}
-	config := processStateContextConfig(4096, 2)
+	config, store := taskStateContext(t, 4096, "a task")
 	trigger := config.StateContext.Triggers["compaction"]
 	trigger.Prompt = "Check the running processes first."
 	config.StateContext.Triggers["compaction"] = trigger
-	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction")
+	snapshot, include, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction")
 	if err != nil || !include {
 		t.Fatalf("include = %v, err = %v", include, err)
 	}
@@ -247,7 +162,7 @@ func TestCollectStateContextSnapshotPlacesPromptBetweenHeaderAndData(t *testing.
 	// A prompt is part of the block, so it counts toward max_bytes.
 	trigger.MaxBytes = int64(len(want)) + 20
 	config.StateContext.Triggers["compaction"] = trigger
-	if _, _, err := collectStateContextSnapshot(config, stateContextSources{process: source}, "compaction"); err == nil {
+	if _, _, err := collectStateContextSnapshot(config, stateContextSources{task: store}, "compaction"); err == nil {
 		t.Fatal("a block over max_bytes was accepted; the prompt must count toward the limit")
 	}
 }

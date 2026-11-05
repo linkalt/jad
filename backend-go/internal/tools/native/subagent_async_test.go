@@ -34,7 +34,7 @@ func newSubagentAsyncFixture(t *testing.T, config asyncmgr.Config, settings sess
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: filepath.Join(dir, "sub"), Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestSubagentWriterIsNeverAHandle(t *testing.T) {
 	manager := NewSubagentManager()
 	defer manager.Close()
 	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

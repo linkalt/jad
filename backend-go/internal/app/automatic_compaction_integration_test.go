@@ -21,33 +21,32 @@ import (
 
 func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
 	workspace := t.TempDir()
-	processStorage := filepath.Join(workspace, "processes")
-	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{StorageDir: processStorage, Shell: "/bin/sh"}, nil, "UNSET_PROVIDER_KEY", nil)
+	taskStorage := filepath.Join(workspace, "tasks")
+	taskSettings := sessionfs.NativeTaskSettings{
+		MaxTasks: 10, MaxStorageBytes: 64 * 1024,
+		StateContext: sessionfs.NativeTaskStateContextSettings{Statuses: []string{"in-progress"}, Limit: 5},
+	}
+	taskStore := native.NewTaskStore(taskStorage)
+	taskTool, err := native.NewTaskTool(taskSettings, taskStore)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := json.Marshal(struct {
 		SchemaVersion int   `json:"schema_version"`
 		Tools         []any `json:"tools"`
-	}{SchemaVersion: 1, Tools: []any{processTool.Definition}})
+	}{SchemaVersion: 1, Tools: []any{taskTool.Definition}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "process.json"), manifest, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "task.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	startedAt, endedAt := recentProcessTimes()
-	writeProcessManifest(t, processStorage, native.ProcessManifest{
-		SchemaVersion: 1,
-		ID:            "proc_saved",
-		State:         native.ProcessExited,
-		CWD:           "/workspace/project",
-		StartedAt:     startedAt,
-		EndedAt:       endedAt,
-		ExitCode:      json.RawMessage("0"),
-		Signal:        json.RawMessage("null"),
-	})
+	if _, err := taskStore.Create(native.TaskInput{
+		Title: savedStateMarker, Status: native.TaskInProgress, Priority: native.TaskPriorityNormal, Tags: []string{}, Documents: []string{},
+	}, taskSettings); err != nil {
+		t.Fatal(err)
+	}
 
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,13 +76,13 @@ func TestHTTPRunAutomaticallyCompactsAndPersistsStateContext(t *testing.T) {
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "task.json"), asyncSampleToolPath(t)},
 		Settings: map[string]any{
 			"max_tool_rounds": 1,
 			"compaction":      map[string]any{"auto_enabled": true, "trigger_tokens": 1, "keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
-			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"process"}, "max_bytes": 4096}}},
+			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"task"}, "max_bytes": 4096}}},
 		},
-		Native: map[string]any{"async": map[string]any{}, "process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}}},
+		Native: map[string]any{"async": map[string]any{}, "task": map[string]any{"storage_dir": taskStorage, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}}},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	messages := strings.Join([]string{

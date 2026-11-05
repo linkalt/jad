@@ -81,12 +81,7 @@ type Resolver struct {
 	stores            map[string]*storeEntry
 	profileTurnsMu    sync.Mutex
 	profileTurnCounts map[string]profileTurnsEntry
-	processManagers   map[string]*native.ManagedProcessManager
-	// processSessions lists the session files that use each process manager, by the same
-	// storage key, so deleting the last of them can stop its processes. An explicit
-	// tools.native.process.storage_dir may be shared by several sessions.
-	processSessions  map[string]map[string]struct{}
-	subagentManagers map[string]*native.SubagentManager
+	subagentManagers  map[string]*native.SubagentManager
 	// budgetLedgers holds one session budget ledger per ledger path, so every profile of
 	// a session counts into one; guarded by mu.
 	budgetLedgers map[string]*session.BudgetLedger
@@ -100,8 +95,7 @@ type Resolver struct {
 	mcpManagers   map[string]*mcpclient.Manager
 	taskStores    map[string]*native.TaskStore
 	memoryStores  map[string]*native.MemoryStore
-	fetchStores   map[string]*native.FetchStore
-	// storeSessions lists the session files that use each task, memory and fetch store,
+	// storeSessions lists the session files that use each task and memory store,
 	// keyed by kind and storage key, so deleting the last of them can release the store.
 	storeSessions map[string]map[string]struct{}
 	mutationLock  *native.PathLocks
@@ -283,8 +277,6 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		catalog:           catalog,
 		stores:            make(map[string]*storeEntry),
 		profileTurnCounts: make(map[string]profileTurnsEntry),
-		processManagers:   make(map[string]*native.ManagedProcessManager),
-		processSessions:   make(map[string]map[string]struct{}),
 		remotes:           remote.NewHub(func(name string) string { return copyEnvironment[name] }),
 		subagentManagers:  make(map[string]*native.SubagentManager),
 		leafBudget:        resolverOptions.leafBudget,
@@ -294,7 +286,6 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		mcpManagers:       make(map[string]*mcpclient.Manager),
 		taskStores:        make(map[string]*native.TaskStore),
 		memoryStores:      make(map[string]*native.MemoryStore),
-		fetchStores:       make(map[string]*native.FetchStore),
 		storeSessions:     make(map[string]map[string]struct{}),
 		mutationLock:      native.NewPathLocks(),
 		gate:              &sessiongate.Gate{},
@@ -462,12 +453,11 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 
 // preparedRun is everything a run needs beyond the session settings.
 type preparedRun struct {
-	config         sessionfs.SessionConfig
-	runner         *session.Runner
-	toolCatalog    *tools.Catalog
-	processManager native.ProcessManager
-	taskStore      *native.TaskStore
-	memoryStore    *native.MemoryStore
+	config      sessionfs.SessionConfig
+	runner      *session.Runner
+	toolCatalog *tools.Catalog
+	taskStore   *native.TaskStore
+	memoryStore *native.MemoryStore
 }
 
 // prepareRun reads the model file, builds the tool catalog (connecting MCP
@@ -479,7 +469,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if err != nil {
 		return preparedRun{}, err
 	}
-	toolCatalog, processManager, taskStore, memoryStore, err := r.buildToolCatalog(ctx, config)
+	toolCatalog, taskStore, memoryStore, err := r.buildToolCatalog(ctx, config)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -510,7 +500,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 		}
 		shared.runners[runnerKey] = runner
 	}
-	return preparedRun{config: config, runner: runner, toolCatalog: toolCatalog, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore}, nil
+	return preparedRun{config: config, runner: runner, toolCatalog: toolCatalog, taskStore: taskStore, memoryStore: memoryStore}, nil
 }
 
 // providerAPIKey returns the key handed to the provider client for a loaded model, and
@@ -617,7 +607,7 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 	if err != nil {
 		return httpapi.SessionTools{}, mapSessionError(err)
 	}
-	registered, _, _, _, err := r.buildRegisteredCatalog(ctx, config)
+	registered, _, _, err := r.buildRegisteredCatalog(ctx, config)
 	if err != nil {
 		return httpapi.SessionTools{}, err
 	}
@@ -630,47 +620,45 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 
 // buildToolCatalog is the catalog the profile's model sees: every registered tool, narrowed
 // by the profile's tools.allow when it has one.
-func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, native.ProcessManager, *native.TaskStore, *native.MemoryStore, error) {
-	registered, processManager, taskStore, memoryStore, err := r.buildRegisteredCatalog(ctx, config)
+func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.MemoryStore, error) {
+	registered, taskStore, memoryStore, err := r.buildRegisteredCatalog(ctx, config)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	// The profile narrows what its own model sees, not what a child may use: the
 	// sub-agent tool built its agents' catalogs from the registered tools already.
 	toolCatalog, _, err := applyProfileTools(config, registered)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
-	return toolCatalog, processManager, taskStore, memoryStore, nil
+	return toolCatalog, taskStore, memoryStore, nil
 }
 
 // buildRegisteredCatalog builds every tool the session registers (native, then MCP).
-func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, native.ProcessManager, *native.TaskStore, *native.MemoryStore, error) {
-	processManager := r.sharedProcessManager(config)
+func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.MemoryStore, error) {
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
-	fetchStore := r.sharedFetchStore(config)
 	subagentMCP := native.NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
 	// One lazy set per prepare: read from the state folder once, and passed to both the native
 	// pass and the MCP pass below. Nil when the profile has no tools.lazy.
 	lazy, err := openLazySet(config, r.logger)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
-	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, processManager, taskStore, memoryStore, fetchStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
+	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, taskStore, memoryStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
 	mcpManager, err := r.sharedMCPManager(config)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	// A server whose file enables sampling is answered with this run's model.
 	mcpManager.SetSampler(r.mcpSampler(config))
 	mcpManager.SetCommandWrapper(mcpSandboxWrapper(config))
 	mcpTools, err := mcpManager.LoadTools(ctx, config.MCPServers, config.WorkingDir)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
 	// The parent's copy is gated (its lazy tools only) and hooked. The subagent's children get the
 	// raw list: each child's session copy is gated with the same set and hooked by the subagent tool
@@ -679,11 +667,11 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	parentMCPTools := native.WithToolEventHooksAll(native.GateLazyTools(mcpTools, lazy), config.Hooks, config.Model.APIKeyEnv)
 	mcpCatalog, err := tools.NewCatalog(parentMCPTools)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
 	toolsetMCP, err := r.loadAgentToolsetMCP(ctx, config)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	// A child gates its MCP tools with the owning profile's set and gets the owner's load_tool when
 	// the owner enables it. Both come from the owner's config, so a child reads the same state folder.
@@ -691,29 +679,29 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if lazy != nil && config.NativeLoadTool != nil {
 		tool, err := native.ChildLoadTool(config, lazy)
 		if err != nil {
-			return nil, nil, nil, nil, mapSessionError(err)
+			return nil, nil, nil, mapSessionError(err)
 		}
 		childLoadTool = &tool
 	}
 	if err := subagentMCP.SetLazy(lazy, childLoadTool); err != nil {
-		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
+		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
 	// The subagent tool was built with the native catalog, before the MCP tools existed.
 	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
-		return nil, nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
+		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
 	registered, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
 	if err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
 	if err := checkHookMatches(config, registered.Definitions(), func(message string) {
 		if r.logger != nil {
 			r.logger.Warn(message, "profile", config.Profile)
 		}
 	}); err != nil {
-		return nil, nil, nil, nil, mapSessionError(err)
+		return nil, nil, nil, mapSessionError(err)
 	}
-	return registered, processManager, taskStore, memoryStore, nil
+	return registered, taskStore, memoryStore, nil
 }
 
 // AsyncHost implements native.AsyncResources: one async manager per tool storage folder,
@@ -766,26 +754,6 @@ func (r *Resolver) finishAsyncHost(key string, done chan struct{}, config native
 	}()
 	host, err = r.openAsyncHost(key, config.Config, r.logger)
 	return nil, err
-}
-
-func (r *Resolver) sharedProcessManager(config sessionfs.SessionConfig) native.ProcessManager {
-	if config.NativeProcess == nil {
-		return nil
-	}
-	storageKey := filepath.Clean(config.NativeProcess.StorageDir)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if manager := r.processManagers[storageKey]; manager != nil {
-		r.processSessions[storageKey][filepath.Clean(config.SettingPath)] = struct{}{}
-		return manager
-	}
-	if r.closed {
-		return nil
-	}
-	manager := native.NewConfiguredProcessManager(*config.NativeProcess)
-	r.processManagers[storageKey] = manager
-	r.processSessions[storageKey] = map[string]struct{}{filepath.Clean(config.SettingPath): {}}
-	return manager
 }
 
 // sharedSubagentManager returns the manager that owns the child runs of one storage
@@ -907,27 +875,7 @@ func (r *Resolver) sharedMemoryStore(config sessionfs.SessionConfig) *native.Mem
 	return store
 }
 
-func (r *Resolver) sharedFetchStore(config sessionfs.SessionConfig) *native.FetchStore {
-	if config.NativeFetch == nil {
-		return nil
-	}
-	storageKey := filepath.Clean(config.NativeFetch.StorageDir)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if store := r.fetchStores[storageKey]; store != nil {
-		r.noteStoreSession("fetch", storageKey, config.SettingPath)
-		return store
-	}
-	if r.closed {
-		return nil
-	}
-	r.noteStoreSession("fetch", storageKey, config.SettingPath)
-	store := native.NewFetchStore(storageKey)
-	r.fetchStores[storageKey] = store
-	return store
-}
-
-// noteStoreSession records that a session file uses a task, memory or fetch store. The
+// noteStoreSession records that a session file uses a task or memory store. The
 // caller holds r.mu.
 func (r *Resolver) noteStoreSession(kind, storageKey, settingPath string) {
 	key := kind + "\x00" + storageKey
@@ -949,8 +897,8 @@ func (r *Resolver) sharedMCPManager(config sessionfs.SessionConfig) (*mcpclient.
 
 // Resources implements native.ToolsetResources: the shared stores of a toolset that a
 // sub-agent names, keyed by that toolset's own storage directories.
-func (r *Resolver) Resources(config sessionfs.SessionConfig) (native.ProcessManager, *native.TaskStore, *native.MemoryStore, *native.FetchStore) {
-	return r.sharedProcessManager(config), r.sharedTaskStore(config), r.sharedMemoryStore(config), r.sharedFetchStore(config)
+func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore, *native.MemoryStore) {
+	return r.sharedTaskStore(config), r.sharedMemoryStore(config)
 }
 
 // loadAgentToolsetMCP connects the MCP servers of every toolset a sub-agent names and
@@ -1139,7 +1087,7 @@ func openSharedSession(config sessionfs.SessionConfig, storeOptions transcript.T
 	}, nil
 }
 
-// Close prevents new resolutions and stops managed native processes.
+// Close prevents new resolutions and stops the runs, handles and servers it started.
 func (r *Resolver) Close() {
 	if r == nil {
 		return
@@ -1156,10 +1104,6 @@ func (r *Resolver) Close() {
 			entry.idleTimer = nil
 		}
 	}
-	managers := make([]*native.ManagedProcessManager, 0, len(r.processManagers))
-	for _, manager := range r.processManagers {
-		managers = append(managers, manager)
-	}
 	mcpManagers := make([]*mcpclient.Manager, 0, len(r.mcpManagers))
 	for _, manager := range r.mcpManagers {
 		mcpManagers = append(mcpManagers, manager)
@@ -1171,10 +1115,6 @@ func (r *Resolver) Close() {
 	asyncHosts := make([]*native.AsyncHost, 0, len(r.asyncHosts))
 	for _, host := range r.asyncHosts {
 		asyncHosts = append(asyncHosts, host)
-	}
-	fetchStores := make([]*native.FetchStore, 0, len(r.fetchStores))
-	for _, store := range r.fetchStores {
-		fetchStores = append(fetchStores, store)
 	}
 	// A manager being built is not in the map yet. Its builder closes it (the resolver
 	// is closed), but Close still waits for the build to end, as it did when the build
@@ -1197,18 +1137,12 @@ func (r *Resolver) Close() {
 	for _, manager := range subagentManagers {
 		_ = manager.Close()
 	}
-	for _, manager := range managers {
-		_ = manager.Close()
-	}
-	// Sub-agents and processes first: they report their end to the async manager.
+	// Sub-agents first: they report their end to the async manager.
 	for _, host := range asyncHosts {
 		host.Close()
 	}
 	for _, manager := range mcpManagers {
 		_ = manager.Close()
-	}
-	for _, store := range fetchStores {
-		store.Close()
 	}
 }
 

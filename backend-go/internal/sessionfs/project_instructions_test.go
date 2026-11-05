@@ -14,16 +14,16 @@ func TestProjectInstructionsSettingsDefaultIsOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ProjectInstructionsSettings{FileNames: []string{"AGENTS.md", "CLAUDE.md"}, StopAt: "git_root", MaxBytes: 65536, SubfolderMaxBytes: 16384}
-	if !reflect.DeepEqual(settings, want) || settings.SubfoldersActive() {
+	want := ProjectInstructionsSettings{FileNames: []string{"AGENTS.md", "CLAUDE.md"}, StopAt: "git_root", MaxBytes: 65536}
+	if !reflect.DeepEqual(settings, want) {
 		t.Fatalf("default = %+v", settings)
 	}
-	configured, err := normalizeProjectInstructions(json.RawMessage(`{"enabled":true,"file_names":["RULES.md","RULES.md","AGENTS.md"],"stop_at":"cwd","max_bytes":10,"subfolders":true,"subfolder_max_bytes":20}`), "setting.json")
+	configured, err := normalizeProjectInstructions(json.RawMessage(`{"enabled":true,"file_names":["RULES.md","RULES.md","AGENTS.md"],"stop_at":"cwd","max_bytes":10}`), "setting.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = ProjectInstructionsSettings{Enabled: true, FileNames: []string{"RULES.md", "AGENTS.md"}, StopAt: "cwd", MaxBytes: 10, Subfolders: true, SubfolderMaxBytes: 20}
-	if !reflect.DeepEqual(configured, want) || !configured.SubfoldersActive() {
+	want = ProjectInstructionsSettings{Enabled: true, FileNames: []string{"RULES.md", "AGENTS.md"}, StopAt: "cwd", MaxBytes: 10}
+	if !reflect.DeepEqual(configured, want) {
 		t.Fatalf("configured = %+v", configured)
 	}
 }
@@ -38,10 +38,20 @@ func TestProjectInstructionsSettingsRefuseBadValues(t *testing.T) {
 		`{"file_names":["a/AGENTS.md"]}`: "must be one file name",
 		`{"file_names":[".."]}`:          "must be one file name",
 		`{"max_bytes":0}`:                "max_bytes",
-		`{"subfolder_max_bytes":-1}`:     "subfolder_max_bytes",
 	} {
 		if _, err := normalizeProjectInstructions(json.RawMessage(raw), "setting.json"); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: error = %v, want %q", raw, err, want)
+		}
+	}
+}
+
+// subfolders added a subfolder's file to the results of the file tools exec replaced; both of
+// its keys are refused by name, whatever their value.
+func TestProjectInstructionsSubfolderKeysAreRefused(t *testing.T) {
+	for _, raw := range []string{`{"subfolders":true}`, `{"enabled":true,"subfolders":false}`, `{"subfolder_max_bytes":20}`, `{"subfolder_max_bytes":-1}`} {
+		_, err := normalizeProjectInstructions(json.RawMessage(raw), "setting.json")
+		if err == nil || !strings.Contains(err.Error(), "was removed") || !strings.Contains(err.Error(), "delete the key") {
+			t.Errorf("%s: error = %v, want a removal error", raw, err)
 		}
 	}
 }
@@ -64,7 +74,7 @@ func TestProjectInstructionsSchemaMatchesTheLoader(t *testing.T) {
 		t.Fatalf("schema keys = %d, loader keys = %v", len(properties), projectInstructionsKeys)
 	}
 	defaults := DefaultProjectInstructionsSettings()
-	want := map[string]any{"enabled": false, "subfolders": false, "stop_at": defaults.StopAt, "max_bytes": float64(defaults.MaxBytes), "subfolder_max_bytes": float64(defaults.SubfolderMaxBytes), "file_names": []any{"AGENTS.md", "CLAUDE.md"}}
+	want := map[string]any{"enabled": false, "stop_at": defaults.StopAt, "max_bytes": float64(defaults.MaxBytes), "file_names": []any{"AGENTS.md", "CLAUDE.md"}}
 	for _, key := range projectInstructionsKeys {
 		field, ok := properties[key]
 		if !ok {
@@ -75,7 +85,7 @@ func TestProjectInstructionsSchemaMatchesTheLoader(t *testing.T) {
 			t.Errorf("project_instructions.%s schema default = %v, loader = %v", key, field["default"], want[key])
 		}
 	}
-	for _, key := range []string{"max_bytes", "subfolder_max_bytes"} {
+	for _, key := range []string{"max_bytes"} {
 		if properties[key]["maximum"] != float64(maxPromptDocumentBytes) {
 			t.Errorf("project_instructions.%s maximum = %v", key, properties[key]["maximum"])
 		}

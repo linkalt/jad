@@ -33,8 +33,7 @@
       "prompts/skills"
     ],
     "tool_definition_paths": [
-      "../sample/tools/native/read.json",
-      "../sample/tools/native/bash.json"
+      "../sample/tools/native/exec.json"
     ]
   },
   "defaults": {

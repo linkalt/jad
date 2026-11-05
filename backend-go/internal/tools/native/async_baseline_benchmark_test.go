@@ -63,63 +63,6 @@ func BenchmarkSubagentListManyFinished(b *testing.B) {
 	}
 }
 
-func BenchmarkProcessRecoverManifests(b *testing.B) {
-	for _, count := range []int{1000, 5000} {
-		b.Run(fmt.Sprint(count), func(b *testing.B) {
-			directory := filepath.Join(b.TempDir(), "processes")
-			seedCompletedProcesses(b, directory, count)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				manager := NewProcessManager(directory)
-				if err := manager.Recover(); err != nil {
-					b.Fatal(err)
-				}
-				_ = manager.Close()
-			}
-		})
-	}
-}
-
-func BenchmarkProcessListManyFinished(b *testing.B) {
-	directory := filepath.Join(b.TempDir(), "processes")
-	seedCompletedProcesses(b, directory, 1000)
-	manager := NewProcessManager(directory)
-	if err := manager.Recover(); err != nil {
-		b.Fatal(err)
-	}
-	defer manager.Close()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if len(manager.List("")) != 1000 {
-			b.Fatal("unexpected list length")
-		}
-	}
-}
-
-func BenchmarkProcessStartToExit(b *testing.B) {
-	if runtime.GOOS == "windows" {
-		b.Skip("managed process groups require a POSIX platform")
-	}
-	directory := b.TempDir()
-	manager := NewProcessManager(filepath.Join(directory, "processes"))
-	defer manager.Close()
-	request := processTestRequest(directory, "true", 1024)
-	request.Policy.MaxCompleted = 1 << 20
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		started, err := manager.Start(request)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if !manager.Wait(started.ID, 5000).Waited {
-			b.Fatal("process did not finish")
-		}
-	}
-}
-
 func BenchmarkSubagentInlineRun(b *testing.B) {
 	manager := NewSubagentManager()
 	defer manager.Close()
@@ -149,7 +92,7 @@ func BenchmarkSubagentDetachedWake(b *testing.B) {
 		ReadOnly:   true, Validator: mustBenchSchema(b),
 		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "ok", nil },
 	}}
-	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		b.Fatal(err)
 	}

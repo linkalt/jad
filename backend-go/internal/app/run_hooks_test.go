@@ -32,7 +32,7 @@ func newRunHooksFixture(t *testing.T, hooks map[string]any) (*sessionStartFixtur
 	t.Helper()
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	triggers := map[string]any{"session_start": map[string]any{"tools": []string{"process"}, "max_bytes": 4096}}
+	triggers := map[string]any{"session_start": map[string]any{"tools": []string{"task"}, "max_bytes": 4096}}
 	return newStateContextFixtureWith(t, false, triggers, map[string]any{"hooks": hooks}, logger), logs
 }
 

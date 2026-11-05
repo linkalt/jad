@@ -26,10 +26,6 @@ const (
 	// result; a child that changes more says how many it left out.
 	defaultNativeSubagentChangedFilesMax int64 = 100
 	maxNativeSubagentChangedFilesMax     int64 = 10_000
-	// defaultNativeSubagentProcessMaxRunning is how many background processes one child
-	// may have running at once, so a child cannot fill the session's process capacity.
-	defaultNativeSubagentProcessMaxRunning int64 = 4
-	maxNativeSubagentProcessMaxRunning     int64 = 1024
 	maxNativeSubagentMaxQueued             int64 = 1024
 	// defaultNativeSubagentMaxBackgroundWriters is how many writer runs one session may
 	// have going as handles at once; a start beyond it waits for its end instead.
@@ -51,13 +47,13 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree", "model_choice"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree", "model_choice"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "paths", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -96,14 +92,9 @@ type NativeSubagentSettings struct {
 	// MaxQueued is how many runs may wait for a free slot while MaxConcurrent are
 	// going. A start beyond it is refused. Zero allows no waiting at all.
 	MaxQueued int64
-	// ChangedFilesMax is the most files a run lists as changed by its write and edit;
-	// zero turns the list off.
+	// ChangedFilesMax is the most files a run lists as changed (exec's changes are found by
+	// the hooks.shell_changes scan); zero turns the list off.
 	ChangedFilesMax int64
-	// ProcessMaxRunning is the most background processes one child run may have running
-	// at once (when its tools include process). The session's own max_running still
-	// applies to all processes together. Zero, only possible in a hand-built struct,
-	// means no per-child limit.
-	ProcessMaxRunning int64
 	// BackgroundWriters lets an agent that can change files run as an async handle (it
 	// honours block_ms). Off by default: a writer then runs to its end, as before.
 	BackgroundWriters bool
@@ -170,9 +161,9 @@ type NativeSubagentStateContextSettings struct {
 
 // SubagentChangeTools are the native tools that let a child change files or run code.
 // An agent may list them when the session enables them, and a call to an agent that
-// lists one is a change the checkpoint and the scheduler must know of. tool_smith runs
-// code, and subagent and profile_message start runs that may change files.
-var SubagentChangeTools = []string{"write", "edit", "apply_patch", "notebook", "bash", "exec", "process", "tool_smith", "subagent", "profile_message"}
+// lists one is a change the checkpoint and the scheduler must know of. exec and tool_smith
+// run code, and subagent and profile_message start runs that may change files.
+var SubagentChangeTools = []string{"exec", "tool_smith", "subagent", "profile_message"}
 
 // NativeSubagentAgent is one configured child agent.
 type NativeSubagentAgent struct {
@@ -219,9 +210,6 @@ type NativeSubagentAgent struct {
 	CompactionTriggerTokens int64
 	// StateContext sends the session's newest stored state-context block to the child.
 	StateContext bool
-	// Paths narrows where the agent's write and edit may change files; it never widens
-	// the session's own rules.
-	Paths NativeSubagentPaths
 	// Isolation is SubagentIsolationWorktree for an agent whose runs work in a git worktree
 	// of their own, and empty otherwise. It is left out of JSON when empty, so the
 	// fingerprint of an agent without it is what it was before the key existed.
@@ -267,6 +255,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		if key == "allow_write" {
 			return nil, configError("%s: %s.allow_write was removed; %s", settingPath, section, removedAllowWriteHint)
 		}
+		if key == "process_max_running" {
+			return nil, configError("%s: %s.process_max_running was removed; %s", settingPath, section, removedProcessMaxRunningHint)
+		}
 		if !containsString(nativeSubagentKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentKeys, "")
 		}
@@ -297,9 +288,6 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.ChangedFilesMax, err = configuredInteger(fields, "changed_files_max", defaultNativeSubagentChangedFilesMax, 0, maxNativeSubagentChangedFilesMax, settingPath, section); err != nil {
-		return nil, err
-	}
-	if settings.ProcessMaxRunning, err = configuredInteger(fields, "process_max_running", defaultNativeSubagentProcessMaxRunning, 1, maxNativeSubagentProcessMaxRunning, settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.BackgroundWriters, err = bashBool(fields, "background_writers", false, settingPath+": "+section); err != nil {
@@ -472,6 +460,9 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 		return NativeSubagentAgent{}, configError("%s: %s must be an object", settingPath, section)
 	}
 	for _, key := range keys {
+		if key == "paths" {
+			return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingPath, section, removedAgentPathsHint)
+		}
 		if !containsString(nativeSubagentAgentKeys, key) {
 			return NativeSubagentAgent{}, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentAgentKeys, "")
 		}
@@ -525,12 +516,6 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 		return NativeSubagentAgent{}, err
 	}
 	if agent.Toolset, err = optionalSubagentToolsets(fields, settingPath, section); err != nil {
-		return NativeSubagentAgent{}, err
-	}
-	if agent.Paths, err = optionalSubagentPaths(fields, settingPath, section); err != nil {
-		return NativeSubagentAgent{}, err
-	}
-	if err = checkSubagentPaths(agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	if agent.MaxToolRounds, err = configuredInteger(fields, "max_tool_rounds", defaultNativeSubagentMaxToolRounds, 1, maxConfiguredToolRounds, settingPath, section); err != nil {
@@ -658,7 +643,7 @@ func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, secti
 		if name == "" {
 			return nil, false, configError("%s: %s.tools[%d] must be a non-empty string", settingPath, section, index)
 		}
-		if strings.HasPrefix(name, ProfileToolMCPPrefix) {
+		if _, removed := removedNativeTools[name]; removed || strings.HasPrefix(name, ProfileToolMCPPrefix) {
 			if err := checkProfileToolEntry(name); err != nil {
 				return nil, false, configError("%s: %s.tools[%d] %v", settingPath, section, index, err)
 			}

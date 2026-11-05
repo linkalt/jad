@@ -15,35 +15,34 @@ func storeConfig(settingPath, dir string) sessionfs.SessionConfig {
 		SettingPath:  settingPath,
 		NativeTask:   &sessionfs.NativeTaskSettings{StorageDir: filepath.Join(dir, "tasks")},
 		NativeMemory: &sessionfs.NativeMemorySettings{StorageDir: filepath.Join(dir, "memory")},
-		NativeFetch:  &sessionfs.NativeFetchSettings{StorageDir: filepath.Join(dir, "fetch")},
 	}
 }
 
-func storeCounts(r *Resolver) (tasks, memory, fetch, sessions int) {
+func storeCounts(r *Resolver) (tasks, memory, sessions int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.taskStores), len(r.memoryStores), len(r.fetchStores), len(r.storeSessions)
+	return len(r.taskStores), len(r.memoryStores), len(r.storeSessions)
 }
 
-func TestReleasingSessionsDropsTheirTaskMemoryAndFetchStores(t *testing.T) {
+func TestReleasingSessionsDropsTheirTaskAndMemoryStores(t *testing.T) {
 	f := newLayoutFixture(t)
 	resolver := f.service.resolver
 	const sessions = 50
 	for index := 0; index < sessions; index++ {
 		path := filepath.Join(f.root, "sessions", fmt.Sprintf("s%03d.json", index))
 		config := storeConfig(path, filepath.Join(f.cwd, fmt.Sprintf("s%03d", index)))
-		if resolver.sharedTaskStore(config) == nil || resolver.sharedMemoryStore(config) == nil || resolver.sharedFetchStore(config) == nil {
+		if resolver.sharedTaskStore(config) == nil || resolver.sharedMemoryStore(config) == nil {
 			t.Fatal("store not created")
 		}
 	}
-	if tasks, memory, fetch, _ := storeCounts(resolver); tasks != sessions || memory != sessions || fetch != sessions {
-		t.Fatalf("stores = %d/%d/%d, want %d each", tasks, memory, fetch, sessions)
+	if tasks, memory, _ := storeCounts(resolver); tasks != sessions || memory != sessions {
+		t.Fatalf("stores = %d/%d, want %d each", tasks, memory, sessions)
 	}
 	for index := 0; index < sessions; index++ {
 		resolver.releaseSessionChildren(filepath.Join(f.root, "sessions", fmt.Sprintf("s%03d.json", index)))
 	}
-	if tasks, memory, fetch, tracked := storeCounts(resolver); tasks+memory+fetch+tracked != 0 {
-		t.Fatalf("after release: %d task, %d memory, %d fetch stores, %d tracked keys; want 0", tasks, memory, fetch, tracked)
+	if tasks, memory, tracked := storeCounts(resolver); tasks+memory+tracked != 0 {
+		t.Fatalf("after release: %d task, %d memory stores, %d tracked keys; want 0", tasks, memory, tracked)
 	}
 }
 
@@ -62,7 +61,7 @@ func TestSharedStoreSurvivesUntilItsLastSessionIsReleased(t *testing.T) {
 		t.Fatal("store released while another session still uses it")
 	}
 	resolver.releaseSessionChildren(second)
-	if tasks, _, _, _ := storeCounts(resolver); tasks != 0 {
+	if tasks, _, _ := storeCounts(resolver); tasks != 0 {
 		t.Fatalf("%d task stores left", tasks)
 	}
 	if again := resolver.sharedTaskStore(storeConfig(first, shared)); again == nil || again == one {
@@ -82,9 +81,6 @@ func TestStoreReleaseIsSafeWithInFlightUse(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				resolver.sharedMemoryStore(config)
-				if fetch := resolver.sharedFetchStore(config); fetch != nil {
-					fetch.Close()
-				}
 				if store := resolver.sharedTaskStore(config); store != nil {
 					_, _ = store.List(native.TaskListFilter{})
 				}
@@ -96,7 +92,7 @@ func TestStoreReleaseIsSafeWithInFlightUse(t *testing.T) {
 	}
 	wg.Wait()
 	resolver.releaseSessionChildren(path)
-	if tasks, memory, fetch, tracked := storeCounts(resolver); tasks+memory+fetch+tracked != 0 {
-		t.Fatalf("stores left: %d/%d/%d/%d", tasks, memory, fetch, tracked)
+	if tasks, memory, tracked := storeCounts(resolver); tasks+memory+tracked != 0 {
+		t.Fatalf("stores left: %d/%d/%d", tasks, memory, tracked)
 	}
 }

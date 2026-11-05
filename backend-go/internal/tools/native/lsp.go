@@ -101,7 +101,7 @@ func executeLSP(ctx context.Context, arguments map[string]any, settings sessionf
 		}
 		return tools.ExecutionError(callID, tools.StatusError, "no_language_server", "No language server is configured for this file",
 			tools.Information{Key: "path", Value: resolved.displayPath}, tools.Information{Key: "configured_extensions", Value: strings.Join(extensions, " ")},
-			tools.Information{Key: "suggestion", Value: "add a server to tools.native.lsp.servers, or use grep"}), nil
+			tools.Information{Key: "suggestion", Value: "add a server to tools.native.lsp.servers, or search with exec (rg)"}), nil
 	}
 	info, err := os.Stat(resolved.realPath)
 	if err != nil || info.IsDir() {

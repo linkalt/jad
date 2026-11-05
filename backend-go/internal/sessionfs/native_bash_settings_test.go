@@ -9,18 +9,28 @@ import (
 	"testing"
 )
 
-func TestNormalizeNativeBashSettingsDefaultsAndIgnoresWritePolicy(t *testing.T) {
+// normalizeExecChild reads tools.native.exec and returns its child-process settings, the
+// bash-style keys exec shares with tool_smith.
+func normalizeExecChild(setting map[string]json.RawMessage, globalRoot, settingPath, cwd, sessionDir string) (*NativeBashSettings, error) {
+	settings, err := normalizeNativeExecSettings(setting, globalRoot, settingPath, cwd, sessionDir, "", sessionDir)
+	if err != nil || settings == nil {
+		return nil, err
+	}
+	return &settings.Child, nil
+}
+
+func TestNormalizeNativeExecChildSettingsDefaults(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
-	settings, err := normalizeNativeBashSettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"write":{"paths":{"deny":["private"]}},"bash":{}}}`),
-	}, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
+	settings, err := normalizeExecChild(map[string]json.RawMessage{
+		"tools": json.RawMessage(`{"native":{"exec":{}}}`),
+	}, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir)
 	if err != nil {
-		t.Fatalf("normalizeNativeBashSettings() error = %v", err)
+		t.Fatalf("normalizeExecChild() error = %v", err)
 	}
 	if settings == nil {
-		t.Fatal("normalizeNativeBashSettings() returned nil")
+		t.Fatal("normalizeExecChild() returned nil")
 	}
 	if settings.Shell != "/bin/bash" || settings.LoginShell || settings.TimeoutMs != 120_000 || settings.MaxTimeoutMs != 600_000 || settings.KillGraceMs != 2_000 || settings.KillDeadlineMs != 2_000 || settings.DrainAfterExitMs != 500 || settings.KillProcessGroup != "always" || !settings.KillChildrenOnRunEnd {
 		t.Fatalf("default bash execution settings = %+v", settings)
@@ -28,7 +38,7 @@ func TestNormalizeNativeBashSettingsDefaultsAndIgnoresWritePolicy(t *testing.T) 
 	if settings.MaxBytes != 64*1024 || settings.Stdout != (NativeBashStreamBudget{HeadBytes: 16 * 1024, TailBytes: 32 * 1024}) || settings.Stderr != (NativeBashStreamBudget{HeadBytes: 4 * 1024, TailBytes: 12 * 1024}) {
 		t.Fatalf("default bash output budgets = %+v", settings)
 	}
-	if !settings.Spill.Enabled || settings.Spill.Keep != "truncated_only" || settings.Spill.CapBytes != 64*1024*1024 || settings.Spill.RetentionDays != 14 || settings.Spill.StorageDir != filepath.Join(cwd, ".bash-output") || settings.MaxLineChars != 2_000 || !settings.StripANSI {
+	if !settings.Spill.Enabled || settings.Spill.Keep != "truncated_only" || settings.Spill.CapBytes != 64*1024*1024 || settings.Spill.RetentionDays != 14 || settings.Spill.StorageDir != filepath.Join(cwd, ".exec-output") || settings.MaxLineChars != 2_000 || !settings.StripANSI {
 		t.Fatalf("default bash output settings = %+v", settings)
 	}
 	if settings.Spill.PruneIntervalSeconds != 3600 {
@@ -41,11 +51,11 @@ func TestNormalizeNativeBashSettingsDefaultsAndIgnoresWritePolicy(t *testing.T) 
 		t.Fatalf("default bash environment = %+v", settings)
 	}
 	if len(settings.Policy.Paths) != 0 || settings.Policy.UnrestrictedPaths {
-		t.Fatalf("bash path policy = %+v, want the empty default, not write's rules", settings.Policy)
+		t.Fatalf("exec path policy = %+v, want the empty default", settings.Policy)
 	}
 }
 
-func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
+func TestNormalizeNativeExecChildSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
@@ -55,11 +65,11 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	setting := map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"bash":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_deadline_ms":900,"drain_after_exit_ms":70,"kill_process_group":"timeout_only","kill_children_on_run_end":"off","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","prune_interval_seconds":0,"storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
+		"tools": json.RawMessage(`{"native":{"exec":{"shell":" /bin/sh ","login_shell":true,"timeout_ms":30000,"max_timeout_ms":45000,"kill_grace_ms":400,"kill_deadline_ms":900,"drain_after_exit_ms":70,"kill_process_group":"timeout_only","kill_children_on_run_end":"off","max_bytes":1024,"stdout":{"head_bytes":100,"tail_bytes":100},"stderr":{"head_bytes":50,"tail_bytes":50},"spill":{"enabled":false,"keep":"always","prune_interval_seconds":0,"storage_dir":"custom-spill"},"max_line_chars":200,"stdin_max_bytes":4096,"strip_ansi":false,"env_file":"command.env","env":{"OVERRIDDEN":"inline"},"env_deny":[" DENIED "],"paths":{"deny":["private"]}}}}`),
 	}
-	settings, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
+	settings, err := normalizeExecChild(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir)
 	if err != nil {
-		t.Fatalf("normalizeNativeBashSettings() error = %v", err)
+		t.Fatalf("normalizeExecChild() error = %v", err)
 	}
 	if settings.Shell != "/bin/sh" || !settings.LoginShell || settings.TimeoutMs != 30_000 || settings.MaxTimeoutMs != 45_000 || settings.KillGraceMs != 400 || settings.KillDeadlineMs != 900 || settings.DrainAfterExitMs != 70 || settings.KillProcessGroup != "timeout_only" || settings.KillChildrenOnRunEnd {
 		t.Fatalf("normalized execution settings = %+v", settings)
@@ -84,59 +94,78 @@ func TestNormalizeNativeBashSettingsOverridesAndLoadsEnvFile(t *testing.T) {
 	}
 	wantPolicy := NativePathPolicy{Paths: []NativePathRule{{Action: "deny", Path: filepath.Join(globalRoot, "private")}}, UnrestrictedPaths: true}
 	if !reflect.DeepEqual(settings.Policy, wantPolicy) {
-		t.Fatalf("bash path policy = %+v, want %+v", settings.Policy, wantPolicy)
+		t.Fatalf("exec path policy = %+v, want %+v", settings.Policy, wantPolicy)
 	}
 }
 
-func TestNormalizeNativeBashSettingsValidatesConfiguration(t *testing.T) {
+func TestNormalizeNativeExecChildSettingsValidatesConfiguration(t *testing.T) {
 	globalRoot := t.TempDir()
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "spill")
 	cases := []string{
-		`{"native":{"bash":{"shell":"  "}}}`,
-		`{"native":{"bash":{"login_shell":"yes"}}}`,
-		`{"native":{"bash":{"timeout_ms":0}}}`,
-		`{"native":{"bash":{"timeout_ms":5000,"max_timeout_ms":1000}}}`,
-		`{"native":{"bash":{"kill_grace_ms":-1}}}`,
-		`{"native":{"bash":{"kill_deadline_ms":0}}}`,
-		`{"native":{"bash":{"kill_deadline_ms":60001}}}`,
-		`{"native":{"bash":{"drain_after_exit_ms":0}}}`,
-		`{"native":{"bash":{"drain_after_exit_ms":"soon"}}}`,
-		`{"native":{"bash":{"kill_process_group":"sometimes"}}}`,
-		`{"native":{"bash":{"kill_children_on_run_end":"maybe"}}}`,
-		`{"native":{"bash":{"kill_children_on_run_end":true}}}`,
-		`{"native":{"bash":{"kill_children_on_run_end":null}}}`,
-		`{"native":{"bash":{"max_bytes":0}}}`,
-		`{"native":{"bash":{"max_bytes":1024,"stdout":{"head_bytes":2048,"tail_bytes":2048}}}}`,
-		`{"native":{"bash":{"stdout":{"head_bytes":-1}}}}`,
-		`{"native":{"bash":{"spill":{"stdout_full":"fixed.log"}}}}`,
-		`{"native":{"bash":{"spill":{"stdout_full":"{cwd}/{unknown}-{call_id}.log"}}}}`,
-		`{"native":{"bash":{"spill":{"stdout_full":"{cwd}/same-{call_id}.log","stderr_full":"{cwd}/same-{call_id}.log"}}}}`,
-		`{"native":{"bash":{"spill":{"keep":"sometimes"}}}}`,
-		`{"native":{"bash":{"spill":{"cap_bytes":0}}}}`,
-		`{"native":{"bash":{"spill":{"prune_interval_seconds":-1}}}}`,
-		`{"native":{"bash":{"spill":{"prune_interval_seconds":86401}}}}`,
-		`{"native":{"bash":{"spill":{"prune_interval_seconds":"60"}}}}`,
-		`{"native":{"bash":{"spill":{"storage_dir":"` + outside + `"}}}}`,
-		`{"native":{"bash":{"max_line_chars":5}}}`,
-		`{"native":{"bash":{"stdin_max_bytes":0}}}`,
-		`{"native":{"bash":{"stdin_max_bytes":-1}}}`,
-		`{"native":{"bash":{"stdin_max_bytes":1.5}}}`,
-		`{"native":{"bash":{"stdin_max_bytes":"10"}}}`,
-		`{"native":{"bash":{"stdin_max_bytes":10485761}}}`,
-		`{"native":{"bash":{"strip_ansi":"yes"}}}`,
-		`{"native":{"bash":{"env_file":null}}}`,
-		`{"native":{"bash":{"env":{"BAD_NAME":1}}}}`,
-		`{"native":{"bash":{"env_deny":["1BAD-NAME"]}}}`,
-		`{"native":{"bash":{"mystery":true}}}`,
+		`{"native":{"exec":{"shell":"  "}}}`,
+		`{"native":{"exec":{"login_shell":"yes"}}}`,
+		`{"native":{"exec":{"timeout_ms":0}}}`,
+		`{"native":{"exec":{"timeout_ms":5000,"max_timeout_ms":1000}}}`,
+		`{"native":{"exec":{"kill_grace_ms":-1}}}`,
+		`{"native":{"exec":{"kill_deadline_ms":0}}}`,
+		`{"native":{"exec":{"kill_deadline_ms":60001}}}`,
+		`{"native":{"exec":{"drain_after_exit_ms":0}}}`,
+		`{"native":{"exec":{"drain_after_exit_ms":"soon"}}}`,
+		`{"native":{"exec":{"kill_process_group":"sometimes"}}}`,
+		`{"native":{"exec":{"kill_children_on_run_end":"maybe"}}}`,
+		`{"native":{"exec":{"kill_children_on_run_end":true}}}`,
+		`{"native":{"exec":{"kill_children_on_run_end":null}}}`,
+		`{"native":{"exec":{"max_bytes":0}}}`,
+		`{"native":{"exec":{"max_bytes":1024,"stdout":{"head_bytes":2048,"tail_bytes":2048}}}}`,
+		`{"native":{"exec":{"stdout":{"head_bytes":-1}}}}`,
+		`{"native":{"exec":{"spill":{"stdout_full":"fixed.log"}}}}`,
+		`{"native":{"exec":{"spill":{"stdout_full":"{cwd}/{unknown}-{call_id}.log"}}}}`,
+		`{"native":{"exec":{"spill":{"stdout_full":"{cwd}/same-{call_id}.log","stderr_full":"{cwd}/same-{call_id}.log"}}}}`,
+		`{"native":{"exec":{"spill":{"keep":"sometimes"}}}}`,
+		`{"native":{"exec":{"spill":{"cap_bytes":0}}}}`,
+		`{"native":{"exec":{"spill":{"prune_interval_seconds":-1}}}}`,
+		`{"native":{"exec":{"spill":{"prune_interval_seconds":86401}}}}`,
+		`{"native":{"exec":{"spill":{"prune_interval_seconds":"60"}}}}`,
+		`{"native":{"exec":{"max_line_chars":5}}}`,
+		`{"native":{"exec":{"stdin_max_bytes":0}}}`,
+		`{"native":{"exec":{"stdin_max_bytes":-1}}}`,
+		`{"native":{"exec":{"stdin_max_bytes":1.5}}}`,
+		`{"native":{"exec":{"stdin_max_bytes":"10"}}}`,
+		`{"native":{"exec":{"stdin_max_bytes":10485761}}}`,
+		`{"native":{"exec":{"strip_ansi":"yes"}}}`,
+		`{"native":{"exec":{"env_file":null}}}`,
+		`{"native":{"exec":{"env":{"BAD_NAME":1}}}}`,
+		`{"native":{"exec":{"env_deny":["1BAD-NAME"]}}}`,
+		`{"native":{"exec":{"mystery":true}}}`,
 	}
 	for _, raw := range cases {
 		setting := map[string]json.RawMessage{"tools": json.RawMessage(raw)}
-		_, err := normalizeNativeBashSettings(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "", sessionDir, NativePathPolicy{}, NativePathPolicy{})
-		if err == nil || !strings.Contains(err.Error(), "tools.native.bash") {
-			t.Errorf("normalizeNativeBashSettings(%s) error = %v; want a bash config error", raw, err)
+		_, err := normalizeExecChild(setting, globalRoot, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir)
+		if err == nil || !strings.Contains(err.Error(), "tools.native.exec") {
+			t.Errorf("normalizeExecChild(%s) error = %v; want an exec config error", raw, err)
 		}
+	}
+}
+
+// allow_unreadable let a spill folder sit where read and grep could not reach it; with those
+// tools gone the readability check went too, and the key is refused by name.
+func TestNativeExecSpillAllowUnreadableIsRefused(t *testing.T) {
+	cwd := t.TempDir()
+	sessionDir := t.TempDir()
+	for _, section := range []string{"tools.native.exec", "tools.native.tool_smith"} {
+		for _, raw := range []string{`{"allow_unreadable":true}`, `{"allow_unreadable":false}`} {
+			_, err := normalizeNativeBashSpill(json.RawMessage(raw), section, filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "")
+			if err == nil || !strings.Contains(err.Error(), section+".spill.allow_unreadable was removed") {
+				t.Errorf("%s spill %s: error = %v, want a removal error", section, raw, err)
+			}
+		}
+	}
+	// A spill folder outside the workspace is no longer refused: nothing reads it back by path rules.
+	outside := filepath.Join(t.TempDir(), "spill")
+	spill, err := normalizeNativeBashSpill(json.RawMessage(`{"storage_dir":"`+outside+`"}`), "tools.native.exec", filepath.Join(sessionDir, "setting.json"), cwd, sessionDir, "")
+	if err != nil || spill.StorageDir != outside {
+		t.Fatalf("outside storage_dir: %+v, %v", spill, err)
 	}
 }
 
@@ -144,7 +173,7 @@ func TestNormalizeNativeBashSpillPruneInterval(t *testing.T) {
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
 	settingPath := filepath.Join(sessionDir, "setting.json")
-	for _, section := range []string{"tools.native.bash", "tools.native.exec"} {
+	for _, section := range []string{"tools.native.tool_smith", "tools.native.exec"} {
 		for raw, want := range map[string]int64{
 			``:                                 3600,
 			`{}`:                               3600,
@@ -153,7 +182,7 @@ func TestNormalizeNativeBashSpillPruneInterval(t *testing.T) {
 			`{"prune_interval_seconds":86400}`: 86400,
 			`{"prune_interval_seconds":0}`:     0,
 		} {
-			spill, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "", NativePathPolicy{}, NativePathPolicy{})
+			spill, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "")
 			if err != nil {
 				t.Fatalf("%s spill %q: error = %v", section, raw, err)
 			}
@@ -162,7 +191,7 @@ func TestNormalizeNativeBashSpillPruneInterval(t *testing.T) {
 			}
 		}
 		for _, raw := range []string{`{"prune_interval_seconds":-1}`, `{"prune_interval_seconds":86401}`, `{"prune_interval_seconds":1.5}`, `{"prune_interval_seconds":"60"}`} {
-			_, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "", NativePathPolicy{}, NativePathPolicy{})
+			_, err := normalizeNativeBashSpill(json.RawMessage(raw), section, settingPath, cwd, sessionDir, "")
 			if err == nil || !strings.Contains(err.Error(), section+".spill.prune_interval_seconds") {
 				t.Errorf("%s spill %q: error = %v; want one naming %s.spill.prune_interval_seconds", section, raw, err, section)
 			}

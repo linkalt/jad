@@ -165,7 +165,7 @@ func TestSubagentRunThatWasGoingAtARestartIsLostWithItsPartialWork(t *testing.T)
 	settings := subagentSettings(agentNamed("explore"))
 	settings.StorageDir = root
 	parent := withExecutors(t, readOnlyTool("read"))
-	firstTool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, firstManager, nil, host)
+	firstTool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, firstManager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

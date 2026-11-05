@@ -131,6 +131,9 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 			if key == "schema_version" {
 				continue
 			}
+			if key == "paths" {
+				return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingsPath, subagentDirSection, removedAgentPathsHint)
+			}
 			if !containsString(nativeSubagentAgentKeys, key) {
 				return NativeSubagentAgent{}, unsupportedToolKey(settingsPath+": "+subagentDirSection, key, nativeSubagentAgentKeys, "")
 			}

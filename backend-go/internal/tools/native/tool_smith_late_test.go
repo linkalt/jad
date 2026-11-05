@@ -33,7 +33,7 @@ func lateToolSmithCatalog(t *testing.T, root string, names, allow, deny, lazy []
 		ProfileTools:        sessionfs.ProfileToolSettings{Restricted: true, HasAllow: allow != nil, Allow: allow, Deny: deny, Lazy: lazy},
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, nil, nil, nil, nil, messenger, nil, set)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, nil, nil, messenger, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestChildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 		ProfileTools:        sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"subagent", "tool_smith"}},
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, nil, nil, nil, messenger, nil, nil)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, nil, nil, nil, messenger, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}

@@ -66,7 +66,6 @@ type NativeBashSpillSettings struct {
 	FilePrefix           string
 	StdoutFull           string
 	StderrFull           string
-	AllowUnreadable      bool
 }
 
 // NativeBashSettings contains normalized shell, path, output, and environment
@@ -102,59 +101,15 @@ type NativeBashSettings struct {
 	Sandbox *SandboxSettings
 }
 
-// nativeBashStyleKeys are the settings of a tool that runs a child process. native.bash and
-// native.exec each take them under their own name; neither reads the other's values.
+// nativeBashStyleKeys are the settings of a tool that runs a child process: native.exec and
+// native.tool_smith each take them under their own name; neither reads the other's values.
 var nativeBashStyleKeys = []string{"shell", "login_shell", "timeout_ms", "max_timeout_ms", "kill_grace_ms", "kill_deadline_ms", "drain_after_exit_ms", "kill_process_group", "kill_children_on_run_end", "max_bytes", "stdout", "stderr", "spill", "max_line_chars", "stdin_max_bytes", "strip_ansi", "env_file", "env", "env_deny", "paths"}
-
-func normalizeNativeBashSettings(
-	setting map[string]json.RawMessage,
-	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	readPolicy, grepPolicy NativePathPolicy,
-) (*NativeBashSettings, error) {
-	const section = "tools.native.bash"
-	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-	nativeFields, err := decodeConfigObject(nativeRaw, settingPath+": tools.native")
-	if err != nil {
-		return nil, err
-	}
-	raw, exists := nativeFields["bash"]
-	if !exists {
-		return nil, nil
-	}
-	fields, err := decodeConfigObject(raw, settingPath+": "+section)
-	if err != nil {
-		return nil, err
-	}
-	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
-		return nil, err
-	}
-	for key := range fields {
-		if !containsString(nativeBashStyleKeys, key) && key != "capture_bytes" && key != "head_ratio" {
-			return nil, configError("%s: %s.%s is not supported", settingPath, section, key)
-		}
-	}
-	if _, exists := fields["capture_bytes"]; exists {
-		return nil, configError("%s: %s.capture_bytes was removed; set %s.stdout and %s.stderr with head_bytes and tail_bytes instead", settingPath, section, section, section)
-	}
-	if _, exists := fields["head_ratio"]; exists {
-		return nil, configError("%s: %s.head_ratio was removed; each stream now has its own head_bytes and tail_bytes", settingPath, section)
-	}
-
-	return normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase, readPolicy, grepPolicy)
-}
 
 // normalizeBashStyleFields reads the child-process settings of one tool section. Every
 // message names section, so native.exec's errors say tools.native.exec.
 func normalizeBashStyleFields(
 	fields map[string]json.RawMessage,
 	section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeBashSettings, error) {
 	var err error
 	settings := &NativeBashSettings{}
@@ -202,7 +157,7 @@ func normalizeBashStyleFields(
 	if settings.Stdout.HeadBytes+settings.Stdout.TailBytes+settings.Stderr.HeadBytes+settings.Stderr.TailBytes > settings.MaxBytes {
 		return nil, configError("%s: %s stream budgets exceed %s.max_bytes", settingPath, section, section)
 	}
-	settings.Spill, err = normalizeNativeBashSpill(fields["spill"], section, settingPath, cwd, sessionDir, toolStorageDir, readPolicy, grepPolicy)
+	settings.Spill, err = normalizeNativeBashSpill(fields["spill"], section, settingPath, cwd, sessionDir, toolStorageDir)
 	if err != nil {
 		return nil, err
 	}
@@ -328,12 +283,12 @@ func normalizeNativeBashStream(raw json.RawMessage, fallback NativeBashStreamBud
 	return NativeBashStreamBudget{HeadBytes: head, TailBytes: tail}, nil
 }
 
-func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, sessionDir, toolStorageDir string, readPolicy, grepPolicy NativePathPolicy) (NativeBashSpillSettings, error) {
+func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, sessionDir, toolStorageDir string) (NativeBashSpillSettings, error) {
 	defaultDir, defaultPath, filePrefix := defaultNativeBashSpillDir, defaultNativeBashSpillPath, defaultNativeBashSpillFilePrefix
 	if section == "tools.native.exec" {
 		defaultDir, defaultPath, filePrefix = defaultNativeExecSpillDir, defaultNativeExecSpillPath, defaultNativeExecSpillFilePrefix
 	}
-	settings := NativeBashSpillSettings{FilePrefix: filePrefix, Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, PruneIntervalSeconds: defaultNativeBashPruneInterval, AllowUnreadable: false}
+	settings := NativeBashSpillSettings{FilePrefix: filePrefix, Enabled: true, Keep: defaultNativeBashSpillKeep, CapBytes: defaultNativeBashSpillCap, RetentionDays: defaultNativeBashRetention, PruneIntervalSeconds: defaultNativeBashPruneInterval}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -344,7 +299,9 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	}
 	for key := range fields {
 		switch key {
-		case "enabled", "keep", "cap_bytes", "retention_days", "prune_interval_seconds", "storage_dir", "stdout_full", "stderr_full", "allow_unreadable":
+		case "enabled", "keep", "cap_bytes", "retention_days", "prune_interval_seconds", "storage_dir", "stdout_full", "stderr_full":
+		case "allow_unreadable":
+			return NativeBashSpillSettings{}, configError("%s: %s.spill.allow_unreadable was removed: no tool reads spill files back with path rules any more (exec reads them with cat); delete the key", settingPath, section)
 		default:
 			return NativeBashSpillSettings{}, configError("%s: %s.spill.%s is not supported", settingPath, section, key)
 		}
@@ -367,10 +324,6 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 	if settings.PruneIntervalSeconds, err = configuredInteger(fields, "prune_interval_seconds", settings.PruneIntervalSeconds, 0, maxNativeBashPruneInterval, settingPath, section+".spill"); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
-	if settings.AllowUnreadable, err = bashBool(fields, "allow_unreadable", false, settingPath+": "+section+".spill"); err != nil {
-		return NativeBashSpillSettings{}, err
-	}
-
 	_, hasStdoutTemplate := fields["stdout_full"]
 	_, hasStderrTemplate := fields["stderr_full"]
 	legacyTemplates := hasStdoutTemplate || hasStderrTemplate
@@ -397,14 +350,6 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 		if resolveBashSpillTemplate(stdout, cwd, sessionDir, "sample-call", "stdout") == resolveBashSpillTemplate(stderr, cwd, sessionDir, "sample-call", "stderr") {
 			return NativeBashSpillSettings{}, configError("%s: %s.spill.stdout_full and stderr_full resolve to the same file; give them different paths or include {stream}", settingPath, section)
 		}
-		if !settings.AllowUnreadable {
-			for stream, template := range map[string]string{"stdout": stdout, "stderr": stderr} {
-				target := resolveBashSpillTemplate(template, cwd, sessionDir, "sample-call", stream)
-				if !bashSpillReadable(target, cwd, readPolicy, grepPolicy) {
-					return NativeBashSpillSettings{}, configError("%s: %s.spill.%s_full resolves to a file the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set %s.spill.allow_unreadable", settingPath, section, stream, cwd, section)
-				}
-			}
-		}
 		settings.StdoutFull, settings.StderrFull = stdout, stderr
 		return settings, nil
 	}
@@ -422,15 +367,6 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 		storageDir = filepath.Join(base, storageDir)
 	}
 	settings.StorageDir = filepath.Clean(storageDir)
-	if !settings.AllowUnreadable {
-		for _, stream := range []string{"stdout", "stderr"} {
-			fileName := strings.NewReplacer("{call_id}", "sample-call", "{stream}", stream).Replace(filePrefix + "-{call_id}.{stream}.log")
-			target := filepath.Join(settings.StorageDir, fileName)
-			if !bashSpillReadable(target, cwd, readPolicy, grepPolicy) {
-				return NativeBashSpillSettings{}, configError("%s: %s.spill.storage_dir resolves to a location the model could not read back; keep it under the session cwd (%s) or extend tools.native.read.paths, or set %s.spill.allow_unreadable", settingPath, section, cwd, section)
-			}
-		}
-	}
 	return settings, nil
 }
 
@@ -467,34 +403,6 @@ func resolveBashSpillTemplate(template, cwd, sessionDir, callID, stream string) 
 	return bashSpillPlaceholderPattern.ReplaceAllStringFunc(template, func(placeholder string) string {
 		return values[strings.Trim(placeholder, "{}")]
 	})
-}
-
-func bashSpillReadable(target, cwd string, policies ...NativePathPolicy) bool {
-	absolute, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	for _, policy := range policies {
-		denied := false
-		for _, rule := range policy.Paths {
-			if rule.Action == "deny" && bashPathWithin(rule.Path, absolute) {
-				denied = true
-				break
-			}
-		}
-		if denied {
-			continue
-		}
-		if policy.UnrestrictedPaths || bashPathWithin(cwd, absolute) {
-			return true
-		}
-		for _, rule := range policy.Paths {
-			if rule.Action == "allow" && bashPathWithin(rule.Path, absolute) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func bashPathWithin(root, target string) bool {

@@ -36,7 +36,7 @@ func TestSubagentEndToEndHandleWaitStopAndNoLeak(t *testing.T) {
 			}
 		}}
 		parent := withExecutors(t, readOnlyTool("read"))
-		tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, nil, host)
+		tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, host)
 		if err != nil {
 			t.Fatal(err)
 		}

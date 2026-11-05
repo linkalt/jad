@@ -15,7 +15,7 @@ func TestSubagentTwoToolsetsUseTheCompositeKey(t *testing.T) {
 	launcher := &fakeLauncher{}
 	parent := withExecutors(t, readOnlyTool("read"))
 	tool, err := newSubagentTool(subagentSettings(agent), parent,
-		map[string]subagentToolset{mergedToolsetKey: {native: withExecutors(t, readOnlyTool("grep"), readOnlyTool("glob"))}}, launcher, nil, nil, nil)
+		map[string]subagentToolset{mergedToolsetKey: {native: withExecutors(t, readOnlyTool("grep"), readOnlyTool("glob"))}}, launcher, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestSubagentTwoToolsetsUseTheCompositeKey(t *testing.T) {
 	}
 
 	_, err = newSubagentTool(subagentSettings(agent), parent,
-		map[string]subagentToolset{"a/x": {native: withExecutors(t, readOnlyTool("grep"))}}, &fakeLauncher{}, nil, nil, nil)
+		map[string]subagentToolset{"a/x": {native: withExecutors(t, readOnlyTool("grep"))}}, &fakeLauncher{}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), `agents.finder.toolset "a/x+b/y" was not loaded`) {
 		t.Fatalf("error = %v", err)
 	}

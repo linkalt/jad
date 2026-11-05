@@ -11,7 +11,6 @@ import (
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
 	mcpclient "jad/backend-go/internal/tools/mcp"
-	"jad/backend-go/internal/tools/native"
 )
 
 func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFileInfo, bool, error) {
@@ -94,8 +93,8 @@ func sessionFileGone(file string) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// releaseSessionChildren stops the MCP server processes and the managed processes that
-// belong to the deleted session file, and drops the task, memory and fetch stores no other
+// releaseSessionChildren stops the MCP server processes that belong to the deleted session
+// file, and drops the task and memory stores no other
 // session uses. A store held by a run that outlives the delete keeps working; a later
 // access builds a new one over the same files. Without it they would run until the server stops,
 // with no session left to reach them. A session created again under the same name gets
@@ -111,19 +110,6 @@ func (r *Resolver) releaseSessionChildren(settingPath string) {
 			delete(r.mcpManagers, key)
 		}
 	}
-	var processManagers []*native.ManagedProcessManager
-	for key, sessions := range r.processSessions {
-		if _, used := sessions[settingPath]; !used {
-			continue
-		}
-		delete(sessions, settingPath)
-		if len(sessions) == 0 {
-			processManagers = append(processManagers, r.processManagers[key])
-			delete(r.processManagers, key)
-			delete(r.processSessions, key)
-		}
-	}
-	var fetchStores []*native.FetchStore
 	for key, sessions := range r.storeSessions {
 		if _, used := sessions[settingPath]; !used {
 			continue
@@ -139,19 +125,10 @@ func (r *Resolver) releaseSessionChildren(settingPath string) {
 			delete(r.taskStores, storageKey)
 		case "memory":
 			delete(r.memoryStores, storageKey)
-		case "fetch":
-			fetchStores = append(fetchStores, r.fetchStores[storageKey])
-			delete(r.fetchStores, storageKey)
 		}
 	}
 	r.mu.Unlock()
-	for _, store := range fetchStores {
-		store.Close()
-	}
 	for _, manager := range mcpManagers {
-		_ = manager.Close()
-	}
-	for _, manager := range processManagers {
 		_ = manager.Close()
 	}
 }

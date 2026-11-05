@@ -31,7 +31,7 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
 	launcher := &fakeLauncher{}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, set)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestNestedSubagentCopyIsGatedBeforeTheOwnerLoadsIt(t *testing.T) {
 	parent := withExecutors(t, readOnlyTool("read"))
 	// The owner's subagent tool is built first, then bound, as BuildCatalogWithAsync does: a lazy copy needs a
 	// real definition, validator and executor.
-	owner, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, mcp, nil, nil, nil)
+	owner, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, mcp, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestGrandchildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 		ProfileTools:        sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"subagent", "tool_smith"}},
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, nil)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestDepthThreeToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 		ProfileTools:        sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"subagent", "tool_smith"}},
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, nil)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, mcp, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}

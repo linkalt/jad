@@ -12,7 +12,7 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// hookedCatalogSettings builds a catalog that lists read, subagent and profile_message, with a
+// hookedCatalogSettings builds a catalog that lists read_image, subagent and profile_message, with a
 // pre_tool hook on every tool. The hook's marker is one line per call; a blocking hook is
 // added when block is set.
 func hookedCatalogFixture(t *testing.T, launcher SubagentLauncher, marker string, block bool) *tools.Catalog {
@@ -22,12 +22,12 @@ func hookedCatalogFixture(t *testing.T, launcher SubagentLauncher, marker string
 		pre = blockingHook("gate", "subagent", `echo no-subagents; exit 3`)
 	}
 	readerAgent := agentNamed("explore")
-	readerAgent.Tools, readerAgent.HasTools = []string{"read"}, true
+	readerAgent.Tools, readerAgent.HasTools = []string{"read_image"}, true
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{readerAgent}}
 	settings := sessionfs.SessionConfig{
 		SettingPath:          filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
-		NativeRead:           &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
+		NativeReadImage:      &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeSubagent:       &subagent,
 		NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024},
 		Profile:              "main",
@@ -35,7 +35,7 @@ func hookedCatalogFixture(t *testing.T, launcher SubagentLauncher, marker string
 		Hooks:                eventSettings([]sessionfs.ToolEventHook{pre}, nil),
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithMessenger(settings, nil, nil, nil, nil, nil, launcher, nil, nil, nil, messenger)
+	catalog, err := BuildCatalogWithMessenger(settings, nil, nil, nil, launcher, nil, nil, nil, messenger)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithMessenger: %v", err)
 	}
@@ -93,22 +93,22 @@ func TestBlockingPreToolStopsASubagentRun(t *testing.T) {
 // A native lazy tool is gated for a child too: the child's copy of read is the gated one, so a child
 // calling it before a load is refused with tool_not_loaded, and the real schema is not run.
 func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read"}, 256, nil, nil)
+	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image"}, 256, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	readerAgent := agentNamed("explore")
-	readerAgent.Tools, readerAgent.HasTools = []string{"read"}, true
+	readerAgent.Tools, readerAgent.HasTools = []string{"read_image"}, true
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{readerAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeSubagent:      &subagent,
 		Profile:             "main",
 	}
 	launcher := &fakeLauncher{}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, nil, nil, nil, nil, nil, set)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, nil, nil, nil, nil, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
 	if len(launcher.requests) != 1 {
 		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
 	}
-	childRead := executeNamedCall(t, launcher.requests[0].Tools, "read", `{"path":"notes.txt"}`)
+	childRead := executeNamedCall(t, launcher.requests[0].Tools, "read_image", `{"path":"notes.png"}`)
 	if !strings.Contains(childRead, "tool_not_loaded") {
 		t.Fatalf("the child's read of an unloaded lazy tool was not refused: %s", childRead)
 	}
@@ -135,8 +135,8 @@ func TestNotLazyBindableRefusesExactlyLoadTool(t *testing.T) {
 		{ID: transcriptsToolID, Source: "native", Name: "transcripts"},
 		{ID: profileToolID, Source: "native", Name: "profile"},
 		{ID: profileMessageToolID, Source: "native", Name: "profile_message"},
-		{ID: readToolID, Source: "native", Name: "read"},
-		{ID: bashToolID, Source: "native", Name: "bash"},
+		{ID: readImageToolID, Source: "native", Name: "read_image"},
+		{ID: execToolID, Source: "native", Name: "exec"},
 		{ID: "decide_systemone", Source: "extension", Name: "decide_systemone"},
 		{ID: "mcp:docs:search", Source: "mcp", Name: "search"},
 	} {
@@ -152,12 +152,12 @@ func TestPreToolHookFiresForACallMadeByAChild(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "fires")
 	pre := eventHook("log", "*", "echo fired >> "+marker)
 	childAgent := agentNamed("explore")
-	childAgent.Tools, childAgent.HasTools = []string{"read", "profile_message", "subagent"}, true
+	childAgent.Tools, childAgent.HasTools = []string{"read_image", "profile_message", "subagent"}, true
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:          filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
-		NativeRead:           &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
+		NativeReadImage:      &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeSubagent:       &subagent,
 		NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024},
 		Profile:              "main",
@@ -166,7 +166,7 @@ func TestPreToolHookFiresForACallMadeByAChild(t *testing.T) {
 	}
 	launcher := &fakeLauncher{}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, launcher, nil, nil, nil, messenger)
+	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, launcher, nil, nil, nil, messenger)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithMessenger: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestPreToolHookFiresForACallMadeByAChild(t *testing.T) {
 func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "post")
 	post := eventHook("log", "*", "echo fired >> "+marker)
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read"}, 256, nil, nil)
+	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image"}, 256, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
 	}
 	ran := 0
 	real := tools.Tool{
-		Definition: tools.Definition{ID: readToolID, Source: "native", Name: "read", Description: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Definition: tools.Definition{ID: readImageToolID, Source: "native", Name: "read_image", Description: "read_image", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Validator:  validator,
 		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
 			ran++
@@ -220,7 +220,7 @@ func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := executeNamedCall(t, catalog, "read", `{"path":"notes.txt"}`)
+	output := executeNamedCall(t, catalog, "read_image", `{"path":"notes.png"}`)
 	if !strings.Contains(output, "tool_not_loaded") {
 		t.Fatalf("output = %s, want the refusal", output)
 	}
@@ -238,18 +238,18 @@ func TestNestedCopyIsHookedBeforeAnyBindOrLazySet(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "fires")
 	pre := eventHook("log", "*", "echo fired >> "+marker)
 	childAgent := agentNamed("explore")
-	childAgent.Tools, childAgent.HasTools = []string{"read", "subagent"}, true
+	childAgent.Tools, childAgent.HasTools = []string{"read_image", "subagent"}, true
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	readTool := readOnlyTool("read")
+	readTool := readOnlyTool("read_image")
 	readTool.Validator = validator
 	readTool.Execute = func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "ok", nil }
 	mcp := NewSubagentMCP(eventSettings([]sessionfs.ToolEventHook{pre}, nil), "")
 	launcher := &fakeLauncher{}
-	parent, err := newSubagentTool(subagent, []tools.Tool{readTool}, nil, launcher, mcp, nil, nil)
+	parent, err := newSubagentTool(subagent, []tools.Tool{readTool}, nil, launcher, mcp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

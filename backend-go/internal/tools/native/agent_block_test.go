@@ -67,7 +67,7 @@ func TestSubagentCallWithoutBlockMsWaitsItsDefaultBlock(t *testing.T) {
 	}}
 	settings := subagentSettings(agentNamed("explore"))
 	settings.DefaultBlockMs = 300
-	sub, err := newSubagentToolAsync(settings, withExecutors(t, readOnlyTool("read")), nil, launcher, nil, manager, nil, host)
+	sub, err := newSubagentToolAsync(settings, withExecutors(t, readOnlyTool("read")), nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

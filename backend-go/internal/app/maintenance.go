@@ -40,14 +40,13 @@ func (r *Resolver) ResolveMaintenance(ctx context.Context, reference, profile st
 		return httpapi.ResolvedMutation{}, err
 	}
 	release()
-	processManager := r.sharedProcessManager(config)
 	taskStore := r.sharedTaskStore(config)
 	memoryStore := r.sharedMemoryStore(config)
 	return httpapi.ResolvedMutation{
 		Reference: location.Reference,
 		Profile:   config.Profile,
 		Session: boundMutation{
-			resolver: r, shared: shared, config: config, processManager: processManager, taskStore: taskStore, memoryStore: memoryStore,
+			resolver: r, shared: shared, config: config, taskStore: taskStore, memoryStore: memoryStore,
 			asyncManager: r.sessionAsyncManager(config), subagentManager: r.sharedSubagentManager(config), owner: sessionKey(location.Reference, config.Profile),
 			reference: location.Reference, logger: r.logger,
 		},
@@ -59,7 +58,6 @@ type boundMutation struct {
 	resolver        *Resolver
 	shared          *sharedSession
 	config          sessionfs.SessionConfig
-	processManager  native.ProcessManager
 	taskStore       *native.TaskStore
 	memoryStore     *native.MemoryStore
 	subagentManager *native.SubagentManager
@@ -133,7 +131,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	}
 	if compacted.Compacted {
 		snapshot, include, err := collectStateContextSnapshot(m.config, stateContextSources{
-			process: m.processManager, task: m.taskStore, memory: m.memoryStore,
+			task: m.taskStore, memory: m.memoryStore,
 			subagent: m.subagentManager, owner: m.owner, async: m.asyncManager,
 		}, "compaction")
 		if err != nil {

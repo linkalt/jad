@@ -8,7 +8,7 @@
     "statecontextTrigger": {
       "type": "object",
       "properties": {
-        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "process", "subagent", "async"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and async are Go backend only; async lists the pending (live or unread) async handles."},
+        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "subagent", "async"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and async are Go backend only; async lists the pending (live or unread) async handles."},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536},
         "prompt": {"type": "string", "pattern": "\\S", "description": "Trusted instruction text placed after the header and before the data. It is read from the setting, not from the data."},
         "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read, repeats an earlier path, or does not fit in what is left of max_bytes after the header and the text before it is a config error; such a file is refused from its size without being read. The files are read when settings load, so an edit applies to the next snapshot written."},
@@ -83,43 +83,8 @@
     },
     "read_style": {
       "type": "object",
-      "description": "Settings of a tool that reads files: its own path rules. grep, glob, read and read_image each take them under their own name.",
+      "description": "Settings of a tool that reads files: its own path rules. read_image and lsp each take them under their own name.",
       "properties": {
-        "paths": {
-          "$ref": "#/$defs/path_rules"
-        }
-      }
-    },
-    "edit_style": {
-      "type": "object",
-      "description": "Settings of a tool that changes files: backups, durability and its own path rules. write and edit each take them under their own name, with their own defaults.",
-      "properties": {
-        "backup_max_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000,
-          "default": 5,
-          "description": "Replacements of one file keep at most this many backups."
-        },
-        "backup_max_total_bytes": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 1073741824,
-          "default": 10485760,
-          "description": "Kept backups of one file may use this many bytes; 0 disables the size limit."
-        },
-        "backup_dir": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Directory that collects the backups of every replaced file. Relative paths resolve beneath the selected profile's tool_storage root, or from the session cwd without a profile; absolute paths are used as-is. Defaults to tool_storage/backups for a profile, otherwise the session's backups directory. null keeps each backup beside its own file."
-        },
-        "fsync": {
-          "type": "boolean",
-          "default": true,
-          "description": "Sync the new file and its directory before reporting success."
-        },
         "paths": {
           "$ref": "#/$defs/path_rules"
         }
@@ -127,7 +92,7 @@
     },
     "child_process_style": {
       "type": "object",
-      "description": "Settings every tool that starts a child process has: shell, kill grace, line cut, stdin limit, environment and path rules. bash, exec and process each take them under their own name.",
+      "description": "Settings every tool that starts a child process has: shell, kill grace, line cut, stdin limit, environment and path rules. exec, tool_smith and hooks take them under their own name.",
       "properties": {
         "shell": {
           "type": "string",
@@ -195,7 +160,7 @@
     },
     "bash_style": {
       "type": "object",
-      "description": "Settings of a tool that runs one command to completion: the child-process settings plus timeouts, output budgets and spill files. bash and exec each take them under their own name.",
+      "description": "Settings of a tool that runs one command to completion: the child-process settings plus timeouts, output budgets and spill files. exec and tool_smith each take them under their own name.",
       "allOf": [
         {
           "$ref": "#/$defs/child_process_style"
@@ -246,7 +211,7 @@
             "off"
           ],
           "default": "on",
-          "description": "When the run ends (done, failed or stopped), stop the process groups of this tool's calls that are still alive: SIGTERM, then SIGKILL after kill_grace_ms. Processes started with the process tool are never touched. Windows stops only the direct process."
+          "description": "When the run ends (done, failed or stopped), stop the process groups of this tool's calls that are still alive: SIGTERM, then SIGKILL after kill_grace_ms. Windows stops only the direct process."
         },
         "max_bytes": {
           "type": "integer",
@@ -354,11 +319,6 @@
               "minLength": 1,
               "deprecated": true,
               "description": "Deprecated legacy template for stderr, retained for existing settings. If either legacy template is set it takes precedence over storage_dir; remove both templates to migrate. Do not combine these templates with a custom storage_dir."
-            },
-            "allow_unreadable": {
-              "type": "boolean",
-              "default": false,
-              "description": "Allow a location the model could not read back with read or grep."
             }
           }
         }
@@ -482,12 +442,12 @@
         "env_file": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Dotenv file for the toolset's bash, process, exec and tool_smith when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
+          "description": "Dotenv file for the toolset's exec and tool_smith when they name no env_file of their own. A relative path is relative to the folder of the root setting.json. Defaults, session and profile may all set it; the nearer level wins. A tool the toolset lacks is not added."
         },
         "tool_storage_dir": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Folder that holds the tool storage (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit backups), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd, so the file tools reach it with no extra path rule; the default is .jad/state. An absolute path outside the cwd needs tools.native.read.paths to allow it. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
+          "description": "Folder that holds the tool storage (exec spill, memory, tasks, async handles, sub-agent runs), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd; the default is .jad/state. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
         }
       }
     }
@@ -538,7 +498,7 @@
     "tool_call_scheduling": {
       "type": "string",
       "enum": ["ordered", "concurrent"],
-      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except read, grep, glob, fetch, skill and decide (decide is an extension tool), and every MCP tool), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
+      "description": "How the calls of one provider response are scheduled. ordered runs them one at a time in the order the model wrote them whenever one of them can change state (every tool except the read-only ones such as read_image, lsp, skill and decide (decide is an extension tool), and every MCP tool; exec always counts as changing state), so a later call sees what an earlier one did; a response made only of those read-only tools still runs up to max_parallel_tool_calls at once. concurrent always runs them together, with no ordering guarantee between calls. Defaults to ordered.",
       "default": "ordered"
     },
     "provider_retry": {
@@ -648,9 +608,7 @@
         "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
         "file_names": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"}, "default": ["AGENTS.md", "CLAUDE.md"], "description": "Names looked for in each folder, most preferred first. A folder gives at most one file: the first name it has."},
         "stop_at": {"type": "string", "enum": ["git_root", "cwd", "filesystem_root"], "default": "git_root", "description": "Where the upward search stops: git_root searches up to the nearest folder with .git (cwd alone when there is none), cwd searches only cwd, filesystem_root searches every folder up to /."},
-        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 8388608, "default": 65536, "description": "Most bytes all the files found at and above cwd add to the prompt. The file that crosses the limit is cut, with a note; the ones after it are not read."},
-        "subfolders": {"type": "boolean", "default": false, "description": "Also give a subfolder's file to the model: the first read, write, edit, apply_patch or notebook call of a run that names a path inside a folder below the workspace gets the instruction files of the folders between the workspace and that path added to its result, each once per run. The added text is part of the tool result, so it is stored in messages.jsonl."},
-        "subfolder_max_bytes": {"type": "integer", "minimum": 1, "maximum": 8388608, "default": 16384, "description": "Most bytes of each subfolder file; a longer file is cut, with a note."}
+        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 8388608, "default": 65536, "description": "Most bytes all the files found at and above cwd add to the prompt. The file that crosses the limit is cut, with a note; the ones after it are not read."}
       }
     },
     "budget": {
@@ -669,15 +627,15 @@
     "sandbox": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Sandbox for the child processes of bash, exec, process and tool_smith, and of the hooks commands when tools lists hooks. Off by default; while disabled every child starts as before. With backend bwrap (Linux, bubblewrap installed) each child runs with the whole file system read-only except writable_paths, a fresh /dev and /proc, hide_paths covered, every namespace new (user, pid, ipc, uts, cgroup) and no network unless network is true. With backend command, command is put in front of the program and its arguments (for example a sandbox-exec or firejail call). An enabled sandbox whose program cannot be run is refused at load, so a session never runs without the sandbox it asked for. Paths and command parts may use {workspace} (the call's workspace root; a writer sub-agent's worktree), {cwd} (the call's working directory), {git_common_dir} (the git directory shared by the workspace's repository and its worktrees), {tmp} (the system temp folder) and {home}; a path whose placeholder names nothing, or that does not exist, is left out. With backend seatbelt (macOS, Go backend only) jad writes a sandbox-exec profile from the same settings: writes only to writable_paths and the terminal and null devices, hide_paths unreadable, and no network but local Unix sockets unless network is true (not run on macOS by the tests). Under bwrap, a command killed by a signal reports exit code 128+signal. glob, grep and jad's own git checkpoints are not sandboxed; stdio MCP servers are when tools lists mcp. The descriptions of the covered tools say that their calls run in the sandbox, what is writable, what is hidden and whether the network is on. jad check starts each distinct enabled sandbox once (the program true inside it) and reports one that does not start, for example bwrap on a host that forbids unprivileged user namespaces.",
+      "description": "Sandbox for the child processes of exec and tool_smith, and of the hooks commands when tools lists hooks. Off by default; while disabled every child starts as before. With backend bwrap (Linux, bubblewrap installed) each child runs with the whole file system read-only except writable_paths, a fresh /dev and /proc, hide_paths covered, every namespace new (user, pid, ipc, uts, cgroup) and no network unless network is true. With backend command, command is put in front of the program and its arguments (for example a sandbox-exec or firejail call). An enabled sandbox whose program cannot be run is refused at load, so a session never runs without the sandbox it asked for. Paths and command parts may use {workspace} (the call's workspace root; a writer sub-agent's worktree), {cwd} (the call's working directory), {git_common_dir} (the git directory shared by the workspace's repository and its worktrees), {tmp} (the system temp folder) and {home}; a path whose placeholder names nothing, or that does not exist, is left out. With backend seatbelt (macOS, Go backend only) jad writes a sandbox-exec profile from the same settings: writes only to writable_paths and the terminal and null devices, hide_paths unreadable, and no network but local Unix sockets unless network is true (not run on macOS by the tests). Under bwrap, a command killed by a signal reports exit code 128+signal. jad's own git checkpoints are not sandboxed; stdio MCP servers are when tools lists mcp. The descriptions of the covered tools say that their calls run in the sandbox, what is writable, what is hidden and whether the network is on. jad check starts each distinct enabled sandbox once (the program true inside it) and reports one that does not start, for example bwrap on a host that forbids unprivileged user namespaces.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
         "tools": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["bash", "exec", "process", "tool_smith", "hooks", "mcp"]},
-          "default": ["bash", "exec", "process", "tool_smith"],
+          "items": {"enum": ["exec", "tool_smith", "hooks", "mcp"]},
+          "default": ["exec", "tool_smith"],
           "description": "Tools whose child processes start in the sandbox. hooks (every command of the hooks setting) is not in the default: hook commands come from this file, not from the model, and checks such as go test often write outside the workspace. mcp (Go backend only) starts the session's stdio MCP servers in the sandbox, from their own cwd; a changed sandbox reconnects them. It is not in the default because a server often needs the network or files outside the project."
         },
         "backend": {"enum": ["bwrap", "seatbelt", "command"], "default": "bwrap", "description": "bwrap builds a bubblewrap call from the settings below; seatbelt (macOS, Go backend only) builds a sandbox-exec profile from them; command uses command as given."},
@@ -729,7 +687,7 @@
         "max_total_bytes": {"type": "integer", "minimum": 1, "maximum": 1099511627776, "default": 536870912, "description": "No snapshot is taken while the private git directory is larger than this."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 120000, "description": "Longest a single git command may run before the snapshot is abandoned."},
         "include_mcp_tools": {"type": "boolean", "default": true, "description": "Treat a call to any MCP tool as a change to the workspace, so it takes the checkpoint."},
-        "snapshot_on": {"type": "string", "enum": ["first_mutation", "run_start"], "default": "first_mutation", "description": "first_mutation snapshots just before the first call to write, edit, bash, a process start or an MCP tool, so a read-only run costs nothing; run_start snapshots at the start of every run."},
+        "snapshot_on": {"type": "string", "enum": ["first_mutation", "run_start"], "default": "first_mutation", "description": "first_mutation snapshots just before the first call to exec or an MCP tool, so a read-only run costs nothing; run_start snapshots at the start of every run."},
         "safe_restore": {"type": "boolean", "default": true, "description": "Default restore mode. Safe restore reverts only the paths the run changed and leaves paths changed since the run ended alone, reporting them as conflicts; when false the default is a full restore. A request can still choose the mode."}
       },
       "additionalProperties": false,
@@ -737,7 +695,7 @@
     },
     "plan_mode": {
       "type": "object",
-      "description": "How a run started in plan mode (a run request with plan: true, jad run --plan, /plan, an eval case with plan: true, the web client's Plan switch) differs from another run. It sees only the tools that never change anything (read, grep, glob, fetch, lsp, skill, read-only sub-agents and the like) plus allow_tools; a call that could change files, such as a sub-agent that may write, is refused. The instructions are sent after the history in every request of the run and are never stored in messages.jsonl. There is no approval step: the run ends with the plan, and the next run without plan mode does the work; execute_prompt is that run's message when it is started with execute_plan.",
+      "description": "How a run started in plan mode (a run request with plan: true, jad run --plan, /plan, an eval case with plan: true, the web client's Plan switch) differs from another run. It sees only the tools that never change anything (read_image, lsp, skill, read-only sub-agents and the like) plus allow_tools; exec can change files, so a plan-mode run reads the workspace only when allow_tools lists exec; a call that could change files, such as a sub-agent that may write, is refused. The instructions are sent after the history in every request of the run and are never stored in messages.jsonl. There is no approval step: the run ends with the plan, and the next run without plan mode does the work; execute_prompt is that run's message when it is started with execute_plan.",
       "properties": {
         "instructions": {"type": "string", "minLength": 1, "maxLength": 65536, "default": "Plan mode is on for this turn. Study the task with the tools you have, which only read, then answer with a plan: the goal, what you would change and where, the steps in order, the risks, and how you would check the result. Do not start the work: the tools that change files or run commands are not available in this turn. The person reads the plan and starts the work with their next message.", "description": "Text of the plan-mode message (at most 65536 bytes)."},
         "role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the plan-mode message."},
@@ -746,7 +704,7 @@
           "type": "array",
           "default": [],
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+          "items": {"type": "string", "pattern": "^(lsp|read_image|exec|async|task|memory|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
           "description": "Tools kept in plan mode although they can change something, as tools.allow entries: a native tool name, mcp:<server>:<tool> or mcp:<server>:*. tools.allow and tools.deny still apply to them."
         }
       },
@@ -755,7 +713,7 @@
     },
     "hooks": {
       "type": "object",
-      "description": "Optional commands around tool calls. post_edit runs checks after the native write and edit tools change a file, for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin; run_start and run_end run a command at the start and the end of each run of the session; prompt_submit runs before a run's input is stored and can refuse it or add context for the model; subagent_stop runs when a sub-agent run ends; pre_compact runs before a compaction and can skip it. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the write or edit; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.bash); nothing is read from tools.native.bash, and hooks need no other tool. A check runs because its command is part of this file; it also runs for write-capable sub-agents, on the files their paths allow.",
+      "description": "Optional commands around tool calls. post_edit runs checks on the files an exec call changed (found by shell_changes scan), for example a type check; pre_tool and post_tool run a command before and after any tool call, with the event as JSON on stdin; run_start and run_end run a command at the start and the end of each run of the session; prompt_submit runs before a run's input is stored and can refuse it or add context for the model; subagent_stop runs when a sub-agent run ends; pre_compact runs before a compaction and can skip it. Go backend only; the TypeScript backend does not read this key. Off by default: with enabled false (or the key absent) no command is started and no tool result changes. A check never fails the call; its outcome is appended to the tool result as text. The checks have their own child-process keys (kill_grace_ms, kill_process_group, max_line_chars, strip_ansi, env_file, env, env_deny, with the same meaning and defaults as in tools.native.exec); nothing is read from tools.native.exec, and hooks need no other tool. A check runs because its command is part of this file; it also runs for write-capable sub-agents.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Run the commands in post_edit, pre_tool, post_tool, run_start, run_end, pre_compact, prompt_submit and subagent_stop."},
         "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Longest one check may run. A check that is still running is stopped and reported as timed out."},
@@ -773,7 +731,7 @@
         "prompt_context_role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the message that carries the output of the prompt_submit and session_start context commands."},
         "stop_max_continues": {"type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Go backend only. How many times stop commands may make one run go on; 0 turns the stop commands off."},
         "stop_message_role": {"type": "string", "enum": ["user", "developer", "system"], "default": "user", "description": "Go backend only. Role of the message a stop command makes the run go on with."},
-        "shell_changes": {"type": "string", "enum": ["off", "scan"], "default": "off", "description": "Go backend only. scan: around each bash and exec call the workspace's regular files are listed (size and modification time; symlinks are not followed and shell_scan_skip_dirs are not entered) and every file the call created, changed or deleted is reported like a write or edit change: post_edit checks run on the created and changed files, and a sub-agent's change list names them. A file changed within the file system's time resolution with an unchanged size is missed, and an exec program still running in the background when the call returns is not followed. off: only write, edit, apply_patch and notebook report changes."},
+        "shell_changes": {"type": "string", "enum": ["off", "scan"], "default": "off", "description": "Go backend only. scan: around each exec call the workspace's regular files are listed (size and modification time; symlinks are not followed and shell_scan_skip_dirs are not entered) and every file the call created, changed or deleted is reported as a change: post_edit checks run on the created and changed files, and a sub-agent's change list names them. A file changed within the file system's time resolution with an unchanged size is missed, and an exec program still running in the background when the call returns is not followed. off: no call reports changes, so post_edit checks never run and a sub-agent lists no changed files."},
         "shell_scan_max_files": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 20000, "description": "Go backend only. Most files one scan lists; a workspace with more reports no change and the call's result says so."},
         "shell_max_changed_files": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 64, "description": "Go backend only. Most changed files one call reports, in path order; the result names how many more there were."},
         "shell_scan_skip_dirs": {"type": "array", "maxItems": 64, "items": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"}, "default": [".git", "node_modules", ".jad"], "description": "Go backend only. Directory names the scan does not enter, at any depth."},
@@ -1232,199 +1190,9 @@
         "native": {
           "type": "object",
           "properties": {
-            "read": {
-              "type": "object",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/read_style"
-                }
-              ],
-              "properties": {
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 65536
-                },
-                "max_file_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1073741824,
-                  "default": 67108864,
-                  "description": "Largest file the read tool will load; larger files are refused and reported as a size limit."
-                },
-                "default_limit": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "default": 250
-                }
-              },
-              "unevaluatedProperties": false
-            },
-            "write": {
-              "type": "object",
-              "description": "Native file writes. Parent directories are created automatically; backups default to true and collect in backup_dir (the active profile's tool_storage/backups directory, or the session's backups directory without a profile); identical content is left unchanged.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/edit_style"
-                }
-              ],
-              "properties": {
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 10485760
-                }
-              },
-              "unevaluatedProperties": false
-            },
-            "edit": {
-              "type": "object",
-              "description": "Native surgical text edits. oldText must match the file exactly and occur once unless replaceAll is true. Backups, durability and path rules are edit's own settings (edit_style); none is taken from write, so a key left out gets the default shown, not write's value.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/edit_style"
-                }
-              ],
-              "properties": {
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 1048576,
-                  "description": "Largest file the edit tool will read and write."
-                }
-              },
-              "unevaluatedProperties": false
-            },
-            "apply_patch": {
-              "type": "object",
-              "description": "Go backend only. Native multi-file patches in the *** Begin Patch format: one call adds, updates, moves and deletes files. Every operation is parsed and checked against the files before any file is written, so a patch that does not apply changes nothing. Needs tool_definition_paths to list tools/native/apply_patch.json. Backups (also of deleted files), durability and path rules are apply_patch's own settings (edit_style).",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/edit_style"
-                }
-              ],
-              "properties": {
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 1048576,
-                  "description": "Largest file the patch reads or writes, before and after the change."
-                },
-                "max_files": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1000,
-                  "default": 50,
-                  "description": "Most file operations (Add, Update, Delete) in one patch."
-                },
-                "max_patch_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 1048576,
-                  "description": "Largest patch text one call accepts."
-                }
-              },
-              "unevaluatedProperties": false
-            },
-            "grep": {
-              "type": "object",
-              "description": "Native content search backed by ripgrep. Bounds the matches, payload bytes, matches per file, line length, file size, and wall clock. The path rules are grep's own (read_style); a grep without paths gets the workspace-only default, not read's rules.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/read_style"
-                }
-              ],
-              "properties": {
-                "binary": {
-                  "type": "string",
-                  "pattern": "\\S",
-                  "default": "rg",
-                  "description": "ripgrep executable: a PATH name or an absolute path."
-                },
-                "max_results": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10000,
-                  "default": 200,
-                  "description": "Matches returned before the search is stopped."
-                },
-                "max_matches_per_file": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1000,
-                  "default": 20,
-                  "description": "Matches returned per file (ripgrep --max-count)."
-                },
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 65536,
-                  "description": "Payload bytes returned before the search is stopped."
-                },
-                "max_line_chars": {
-                  "type": "integer",
-                  "minimum": 20,
-                  "maximum": 4000,
-                  "default": 240,
-                  "description": "Longest rendered match line before it is cut."
-                },
-                "max_file_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1073741824,
-                  "default": 8388608,
-                  "description": "Files larger than this are not searched."
-                },
-                "timeout_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 600000,
-                  "default": 10000,
-                  "description": "Wall-clock budget for one search; the partial result is returned."
-                },
-                "kill_grace_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 60000,
-                  "default": 250,
-                  "description": "Wait between SIGTERM and SIGKILL when a search is stopped."
-                },
-                "kill_deadline_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 60000,
-                  "default": 1000,
-                  "description": "How long the call waits for ripgrep after SIGKILL or a stop request before it returns anyway."
-                },
-                "drain_after_exit_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 60000,
-                  "default": 500,
-                  "description": "How long the output pipes may stay open after ripgrep exited, because a descendant still holds them, before the output is cut."
-                }
-              },
-              "unevaluatedProperties": false
-            },
-            "bash": {
-              "type": "object",
-              "description": "Shell command execution. Each call gets a fresh shell in a resolved working directory; the path rules only decide that directory, because the command itself runs with the backend user's rights.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/bash_style"
-                }
-              ],
-              "unevaluatedProperties": false
-            },
             "exec": {
               "type": "object",
-              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec with bash's keys and defaults, and nothing is taken from tools.native.bash. Its spill files default to the folder .exec-output and are named exec-<call>.<stream>.log, not bash's .bash-output and bash-... (spill.storage_dir and the legacy templates still override the folder). exec adds the interpreter table, per-language helper folders, line-aware cutting and a result file. A call has no timeout of its own: timeout_ms here is the limit of every call (at most 6 hours), and max_timeout_ms has no effect on exec.",
+              "description": "Inline code in a configured interpreter. It has its own child-process settings (bash_style): environment, timeouts, output budgets, spill files and path rules are read from tools.native.exec (the keys bash_style lists). Its spill files default to the folder .exec-output and are named exec-<call>.<stream>.log (spill.storage_dir and the legacy templates still override the folder). exec adds the interpreter table, per-language helper folders, line-aware cutting and a result file. A call has no timeout of its own: timeout_ms here is the limit of every call (at most 6 hours), and max_timeout_ms has no effect on exec.",
               "allOf": [
                 {
                   "$ref": "#/$defs/bash_style"
@@ -1544,7 +1312,7 @@
             },
             "tool_smith": {
               "type": "object",
-              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions (a call with no function lists them; filters narrow the list and accept * and ? wildcards). A call takes flat top-level parameters: function (the code), input and block_ms; a run key is refused. It waits up to block_ms (default and cap from tools.native.async) and, if the script is still going, returns an async handle collected with the async tool; needs tools.native.async. A session without the async tool runs the script to its end inside the call. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read with bash's keys and defaults from tools.native.tool_smith; nothing is taken from tools.native.bash. paths is not a key here: the child has no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent gets it only when its tools list names it.",
+              "description": "Go backend only. Runs a TypeScript function body in an external interpreter child and lists a library of saved functions (a call with no function lists them; filters narrow the list and accept * and ? wildcards). A call takes flat top-level parameters: function (the code), input and block_ms; a run key is refused. It waits up to block_ms (default and cap from tools.native.async) and, if the script is still going, returns an async handle collected with the async tool; needs tools.native.async. A session without the async tool runs the script to its end inside the call. The body calls native tools through a Go-owned bridge (a Unix socket in a private per-run directory; its path and a per-run token reach the child as environment variables). It has its own child-process settings, read from tools.native.tool_smith (the keys bash_style lists); nothing is taken from tools.native.exec. paths is not a key here: the child has no path policy of its own. Off unless this key is present. Needs tool_smith in tool_definition_paths. A sub-agent gets it only when its tools list names it.",
               "properties": {
                 "shell": {"$ref": "#/$defs/child_process_style/properties/shell"},
                 "login_shell": {"$ref": "#/$defs/child_process_style/properties/login_shell"},
@@ -1644,12 +1412,12 @@
                 "tools": {
                   "type": "array",
                   "uniqueItems": true,
-                  "default": ["read", "grep", "glob"],
-                  "description": "Native tools a script may call, in this order. bash, exec, process, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself has exec/bash trust and may use raw fs, network and process APIs; only the sandbox setting (when its tools list tool_smith) limits it.",
+                  "default": [],
+                  "description": "Native tools a script may call, in this order; none by default. exec, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself has exec/bash trust and may use raw fs, network and process APIs; only the sandbox setting (when its tools list tool_smith) limits it.",
                   "items": {
                     "type": "string",
                     "minLength": 1,
-                    "not": {"enum": ["bash", "exec", "process", "async", "subagent", "tool_smith", "task"]}
+                    "not": {"enum": ["exec", "async", "subagent", "tool_smith", "task"]}
                   }
                 },
                 "interpreter": {
@@ -1668,78 +1436,6 @@
                 "standby_max": {"type": "integer", "minimum": 1, "maximum": 256, "default": 8, "description": "Most waiting interpreters in the whole backend (exec's and tool_smith's together). Past it a call starts its interpreter itself."}
               },
               "additionalProperties": false
-            },
-            "glob": {
-              "type": "object",
-              "description": "File listing by name pattern. Read-only. The path rules for the searched directory are its own (read_style): without paths it reaches the workspace only, not what read allows.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/read_style"
-                }
-              ],
-              "properties": {
-                "binary": {
-                  "type": "string",
-                  "pattern": "\\S",
-                  "default": "rg",
-                  "description": "ripgrep executable: a PATH name or an absolute path."
-                },
-                "include_hidden": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "List hidden files. Files ignored by git stay invisible either way."
-                },
-                "max_results": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100000,
-                  "default": 500,
-                  "description": "Files returned before the listing is stopped."
-                },
-                "max_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "default": 65536,
-                  "description": "Payload bytes returned before the listing is stopped."
-                },
-                "max_line_chars": {
-                  "type": "integer",
-                  "minimum": 20,
-                  "maximum": 8000,
-                  "default": 1000,
-                  "description": "Longest rendered path before it is cut."
-                },
-                "timeout_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 600000,
-                  "default": 10000,
-                  "description": "Wall-clock budget for one listing."
-                },
-                "kill_grace_ms": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 60000,
-                  "default": 2000,
-                  "description": "Wait between SIGTERM and SIGKILL when a listing is stopped. 0 sends SIGKILL at once."
-                },
-                "kill_deadline_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 60000,
-                  "default": 2000,
-                  "description": "How long the call waits for ripgrep after SIGKILL or a stop request before it returns anyway."
-                },
-                "drain_after_exit_ms": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 60000,
-                  "default": 500,
-                  "description": "How long the output pipes may stay open after ripgrep exited, because a descendant still holds them, before the output is cut."
-                }
-              },
-              "unevaluatedProperties": false
             },
             "lsp": {
               "type": "object",
@@ -1774,14 +1470,6 @@
               },
               "unevaluatedProperties": false
             },
-            "notebook": {
-              "type": "object",
-              "description": "Reads and changes the cells of a Jupyter notebook (.ipynb, nbformat 4): read shows cells and their outputs as text, edit, insert and delete change cells and rewrite the file in Jupyter's layout (sorted keys, one-space indent), so a diff shows only the changed cell. Nothing is executed. Needs tools.native.edit: where it may write, max_bytes and backups are edit's settings, so a profile that may edit a file may edit the notebook. Not read-only: its calls run in order with other changes, read-only sub-agents do not get it, and writer sub-agents may list it. post_edit hooks run on a changed notebook. Needs notebook in tool_definition_paths.",
-              "properties": {
-                "max_output_chars": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 2000, "description": "Characters of each cell output a read shows; the rest is cut and counted. 0 shows no output text."}
-              },
-              "additionalProperties": false
-            },
             "read_image": {
               "type": "object",
               "description": "Shows an image file (png, jpeg, webp or gif) to the model as an image. Read-only. The path rules are its own (read_style): without paths it reaches the workspace only, not what read allows. Needs read_image in tool_definition_paths. Large images are kept in files when image_store is on, and image_resize applies to them.",
@@ -1803,7 +1491,7 @@
             },
             "transcript": {
               "type": "object",
-              "description": "Go backend only. Reads messages.jsonl transcripts as bounded text: the session's own, another profile's or session's, or a sub-agent run's. Read-only: the tool opens the file for reading and never repairs or writes it. It has no paths key; a path read follows the read path rules (tools.native.read.paths). Off unless this key is present. Needs transcript in tool_definition_paths.",
+              "description": "Go backend only. Reads messages.jsonl transcripts as bounded text: the session's own, another profile's or session's, or a sub-agent run's. Read-only: the tool opens the file for reading and never repairs or writes it. It has no paths key; a path read follows session_files.paths. Off unless this key is present. Needs transcript in tool_definition_paths.",
               "properties": {
                 "response_max_bytes": {
                   "type": "integer",
@@ -1907,7 +1595,7 @@
             },
             "transcripts": {
               "type": "object",
-              "description": "Go backend only. Lists what the transcript tool can read, newest first: the sessions, or the sub-agent runs of a profile (the profiles of a session are listed by the profile tool), each with the path to give transcript and the full messages.jsonl path, size and time of last activity. Read-only: it stats files and reads run manifests and never opens a transcript. It has no paths key; a listed file the read path rules deny is left out (tools.native.read.paths). Off unless this key is present. Needs transcripts in tool_definition_paths.",
+              "description": "Go backend only. Lists what the transcript tool can read, newest first: the sessions, or the sub-agent runs of a profile (the profiles of a session are listed by the profile tool), each with the path to give transcript and the full messages.jsonl path, size and time of last activity. Read-only: it stats files and reads run manifests and never opens a transcript. It has no paths key; a listed file session_files.paths denies is left out. Off unless this key is present. Needs transcripts in tool_definition_paths.",
               "properties": {
                 "max_entries": {
                   "type": "integer",
@@ -1993,133 +1681,6 @@
               "description": "Go backend only. Lists the profile's tools.lazy tools (name and one-line summary), or loads the named ones; a loaded tool is listed with its full definition from the next request. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent gets it only when the owning profile has tools.lazy and the agent lists load_tool, and then it loads from the owner's lazy_tools.json.",
               "additionalProperties": false
             },
-            "process": {
-              "type": "object",
-              "description": "Long-running shell process management. Processes are session-owned and stopped on orderly backend shutdown. A process gets the same environment allowlist as bash (PATH, HOME, locale and temp variables) plus env_file and env; other server variables are not inherited.",
-              "allOf": [
-                {
-                  "$ref": "#/$defs/child_process_style"
-                }
-              ],
-              "properties": {
-                "drain_after_exit_ms": {
-                  "$ref": "#/$defs/bash_style/properties/drain_after_exit_ms"
-                },
-                "statecontext": {
-                  "type": "object",
-                  "description": "Process state included in statecontext snapshots.",
-                  "properties": {
-                    "states": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": [
-                          "running",
-                          "exited",
-                          "stopped",
-                          "failed",
-                          "lost"
-                        ]
-                      },
-                      "uniqueItems": true,
-                      "default": [
-                        "running"
-                      ]
-                    },
-                    "limit": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 100000,
-                      "default": 20
-                    },
-                    "mode": {"type": "string", "enum": ["items", "summary"], "default": "items", "description": "items lists the matching records. summary adds a count per state and lists in full only the processes named in detail_states, so a large section stays small; the model fetches the rest with the tool. Counts and the listed records come from one read."},
-                    "detail_states": {"type": "array", "items": {"type": "string", "enum": ["running", "exited", "stopped", "failed", "lost"]}, "uniqueItems": true, "default": ["running"], "description": "Only with mode summary: states listed in full, each of which must be in states."}
-                  },
-                  "additionalProperties": true
-                },
-                "max_running": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1024,
-                  "default": 8
-                },
-                "status_log_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10485760,
-                  "description": "Deprecated compatibility setting. It supplies a tail-only budget for both streams; do not combine with stdout or stderr."
-                },
-                "log_cap_bytes": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1073741824,
-                  "default": 8388608,
-                  "description": "Bytes each stream of a process writes to its log file before the file is left incomplete. A process has two streams, so it can reach twice this, and a storage directory keeps max_completed finished processes: 8 MiB x 2 x 100 is 1.6 GiB at the defaults. A stream budget (stdout, stderr) cannot exceed this value."
-                },
-                "stop_orphans": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "When the server starts and finds a process a crashed server left running, stop its process group (after kill_grace_ms, then by force) instead of only marking it lost. The process is signalled only when its owner record names a server that is gone, its pid still has the start time recorded, and it still leads its own process group; otherwise it is only marked lost. A stopped orphan has stop_reason backend_restarted_stopped. Linux only for the start-time check; elsewhere nothing is signalled."
-                },
-                "max_completed": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100000,
-                  "default": 100
-                },
-                "retention_days": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 3650,
-                  "default": 14
-                },
-                "stdout": {
-                  "type": "object",
-                  "description": "Bounded stdout excerpt for the result of a process that ended within block_ms, and for async status and wait.",
-                  "properties": {
-                    "head_bytes": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 10485760,
-                      "default": 16384
-                    },
-                    "tail_bytes": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 10485760,
-                      "default": 32768
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "stderr": {
-                  "type": "object",
-                  "description": "Bounded stderr excerpt for the result of a process that ended within block_ms, and for async status and wait.",
-                  "properties": {
-                    "head_bytes": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 10485760,
-                      "default": 4096
-                    },
-                    "tail_bytes": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 10485760,
-                      "default": 12288
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "storage_dir": {
-                  "type": "string",
-                  "pattern": "\\S",
-                  "default": ".processes",
-                  "description": "Managed-process manifests and full logs. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
-                }
-              },
-              "unevaluatedProperties": false
-            },
             "task": {
               "type": "object",
               "description": "Persistent session task-plan policy. The task tool is exposed only when configured and its definition manifest is supplied.",
@@ -2201,30 +1762,6 @@
                   "default": ".tasks",
                   "description": "Persistent task-plan directory. The harness stores tasks.json inside it. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
                 }
-              },
-              "additionalProperties": false
-            },
-            "fetch": {
-              "type": "object",
-              "description": "Public web-page fetch policy. The fetch tool is exposed only when configured and its definition manifest is supplied.",
-              "properties": {
-                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".fetch", "description": "Stored Markdown documents and opaque cursor state. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."},
-                "default_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 12000},
-                "max_limit": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 50000},
-                "max_response_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 2000000},
-                "max_document_chars": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1000000},
-                "max_storage_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576000, "default": 67108864},
-                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 15000},
-                "max_redirects": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
-                "keep_alive_ms": {"type": "integer", "minimum": 0, "maximum": 300000, "default": 30000, "description": "How long an idle connection to a fetched host stays open so the next fetch from that host skips the TCP and TLS handshake. 0 opens a fresh connection for every request. A connection is reused only for the exact validated IP address."},
-                "max_keep_alive_hosts": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8, "description": "How many hosts may keep an idle connection open at once; the least recently used host is closed first."},
-                "include_metadata": {"type": "boolean", "default": false, "description": "Include document metadata in the fetch result."},
-                "include_images": {"type": "boolean", "default": false, "description": "Include images in the converted Markdown."},
-                "user_agent": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$", "default": "Mozilla/5.0 (compatible; jad-fetch/1.0)", "description": "User-Agent header sent with every fetch request. Control characters are rejected."},
-                "truncate_oversized_response": {"type": "boolean", "default": false, "description": "When a response exceeds max_response_bytes, store the first max_response_bytes instead of failing; the stored document is marked truncated: true."},
-                "cache_ttl_ms": {"type": "integer", "minimum": 0, "maximum": 86400000, "default": 0, "description": "How long a repeated url call reuses the stored document instead of downloading again. 0 disables the cache."},
-                "allowed_hosts": {"type": "array", "items": {"type": "string"}, "default": []},
-                "denied_hosts": {"type": "array", "items": {"type": "string"}, "default": []}
               },
               "additionalProperties": false
             },
@@ -2416,17 +1953,7 @@
                       "compaction_trigger_tokens": {"type": "integer", "minimum": 1, "maximum": 10000000, "description": "Input size, in tokens, at which this agent's child compacts. Absent uses the session's compaction.trigger_tokens, which is sized for the master's model, so set it for a model with a different context window or price. Not allowed with auto_compaction false."},
                       "state_context": {"type": "boolean", "default": false, "description": "Send the newest state-context block stored for the session to this agent's child, in every request. A child collects none of its own. Nothing is sent when the session's statecontext is off or has no block yet."},
                       "isolation": {"type": "string", "enum": ["none", "worktree"], "default": "none", "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules and the agent's paths apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit."},
-                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."},
-                      "paths": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "minProperties": 1,
-                        "properties": {
-                          "allow": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may change only paths inside one of these. A relative entry is taken from the workspace root. Narrows the session's own write and edit rules, never widens them."},
-                          "deny": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "description": "The agent's write and edit may not change a path inside any of these, even one allow permits."}
-                        },
-                        "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused. It does not limit what the agent reads: read, grep, glob and fetch ignore it."
-                      }
+                      "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 21600000, "default": 600000, "description": "Wall-clock limit of one run, including provider waits."}
                     },
                     "additionalProperties": false
                   }
@@ -2438,7 +1965,6 @@
                 "persist_runs": {"type": "boolean", "default": true, "description": "Write a small manifest per run into a .runs folder of storage_dir, so run ids and finished results survive a server restart. A run that was going at the restart is reported as lost; its child died with the server, and only the transcript it wrote remains. false keeps runs in memory only."},
                 "deny_agents": {"type": ["array", "null"], "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "uniqueItems": true, "default": [], "description": "Names of agents (inline or from agents_dir) removed from the subagent tool: not listed and not launchable. A name that matches no agent is ignored."},
                 "delete_transcripts": {"type": "boolean", "default": false, "description": "Delete a child's transcript folder from storage_dir when keep_finished drops its run (also at startup), so the folders stop growing. Only a folder directly under storage_dir is deleted. false keeps every transcript. A deleted transcript can no longer give the answer or partial work of its run, but the run was already dropped by then."},
-                "process_max_running": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 4, "description": "Most background processes one child run may have running at once (an agent that lists process in its tools). A start beyond it is refused with a message naming the limit. The session's tools.native.process.max_running still caps all processes together, so a child can never take the whole capacity unless this is raised."},
                 "background_writers": {"type": "boolean", "default": false, "description": "Let an agent that can change files (it lists write, edit, bash, exec or process) run as an async handle: the call honours block_ms and returns a run id, and the run is collected with the async tool like any other. An agent that can change files is handed off only when background_writers is on. Other writers keep running to their end. A handed-off writer keeps changing files after the starting turn ends, so those changes are not in that turn's checkpoint, and a checkpoint restore is refused (409) while one runs. false keeps every writer running to its end."},
                 "max_background_writers": {"type": "integer", "minimum": 1, "maximum": 32, "default": 1, "description": "Most writer runs one session may have going as handles at once (queued ones count). A writer started beyond it is not handed off: the call runs to its end and its result carries a note saying why. Only used with background_writers."},
                 "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) whose sub-agents the model may start with agent: \"remote:<name>/<session>/<category>/<profile>/<agent>\" (session may be left out when the entry has a default_session). The remote runs the agent as that profile's subagent tool would and returns only the final answer; the call is a handle of the async tool, and async wait/status/stop act on the remote run. Each name must have a valid file, checked when the session loads. Default none. The remote's token table decides what is allowed there. A remote agent that changes files changes them on the remote machine, never here, so this server's checkpoint does not cover it."},
@@ -2648,6 +2174,7 @@
       "type": "object",
       "description": "The read-only file list the UI shows for a session's working directory (GET .../files). With enabled false the route answers 403 \"file listing is disabled\". Objects merge key by key across root defaults, session and profile; ignore_directories replaces the list of the level above.",
       "properties": {
+        "paths": {"$ref": "#/$defs/path_rules", "description": "Path rules of the listing and of the transcript, transcripts and profile tools (it was tools.native.read.paths): allow rules add folders outside the working directory, deny rules hide paths. Absent, only the working directory is listed."},
         "enabled": {"type": "boolean", "default": true, "description": "Turns the listing on or off."},
         "include_hidden": {"type": "boolean", "default": false, "description": "List files and folders whose name starts with a dot."},
         "include_directories": {"type": "boolean", "default": true, "description": "List each readable folder too, as its path with a trailing slash (src/). Folders count against max_results."},

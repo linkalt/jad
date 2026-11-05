@@ -35,9 +35,9 @@ const (
 // SandboxTools are the tools whose child processes a sandbox can wrap. hooks (the commands of
 // the hooks setting) and mcp (the session's stdio MCP servers) are choices: the default
 // covers only the tools the model drives.
-var SandboxTools = []string{"bash", "exec", "process", "tool_smith", "hooks", "mcp"}
+var SandboxTools = []string{"exec", "tool_smith", "hooks", "mcp"}
 
-var defaultSandboxTools = []string{"bash", "exec", "process", "tool_smith"}
+var defaultSandboxTools = []string{"exec", "tool_smith"}
 
 // defaultSandboxWritablePaths keep the project, its git directory and the system temp folder
 // writable: git in a worktree writes to the repository's git directory, outside the worktree,
@@ -119,6 +119,9 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 		}
 		settings.Tools = nil
 		for index, name := range names {
+			if hint, removed := removedNativeTools[name]; removed {
+				return nil, configError("%s: %s.tools[%d]: tools.native.%s was removed; %s", path, section, index, name, hint)
+			}
 			if !containsString(SandboxTools, name) {
 				return nil, configError("%s: %s.tools[%d] must be one of %s", path, section, index, strings.Join(SandboxTools, ", "))
 			}
@@ -271,23 +274,17 @@ func (s *SandboxSettings) ForPlanMode() *SandboxSettings {
 
 // applySandbox hands an enabled sandbox to each enabled tool it covers, and to the hooks
 // when it covers them.
-func applySandbox(sandbox *SandboxSettings, bash *NativeBashSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, process *NativeProcessSettings, hooks *HooksSettings) {
+func applySandbox(sandbox *SandboxSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, hooks *HooksSettings) {
 	if sandbox == nil {
 		return
 	}
 	if hooks != nil && sandbox.Covers("hooks") {
 		hooks.Sandbox = sandbox
 	}
-	if bash != nil && sandbox.Covers("bash") {
-		bash.Sandbox = sandbox
-	}
 	if execSettings != nil && sandbox.Covers("exec") {
 		execSettings.Child.Sandbox = sandbox
 	}
 	if toolSmith != nil && sandbox.Covers("tool_smith") {
 		toolSmith.Child.Sandbox = sandbox
-	}
-	if process != nil && sandbox.Covers("process") {
-		process.Sandbox = sandbox
 	}
 }

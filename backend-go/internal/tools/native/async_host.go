@@ -29,8 +29,6 @@ type AsyncHost struct {
 	// those it stopped, so a finisher cannot outlive the host.
 	shellRuns    map[string]*shellRun
 	shellSwept   map[string]time.Time
-	processes    []processStopper
-	processAdded bool
 	subagents    []*SubagentManager
 	subagentSeen bool
 
@@ -137,29 +135,6 @@ func asyncHostFor(config asyncHostSource, resources AsyncResources) (*AsyncHost,
 type asyncHostSource struct {
 	dir string
 	cfg asyncmgr.Config
-}
-
-// attachProcess lets the process driver reach a process manager. The first call registers
-// the driver; attaching the same manager again is a no-op.
-func (h *AsyncHost) attachProcess(stopper processStopper) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, attached := range h.processes {
-		if attached == stopper {
-			return
-		}
-	}
-	h.processes = append(h.processes, stopper)
-	if !h.processAdded {
-		h.processAdded = true
-		_ = h.manager.AddDriver(&processDriver{host: h})
-	}
-}
-
-func (h *AsyncHost) processManagers() []processStopper {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]processStopper(nil), h.processes...)
 }
 
 // attachSubagent lets the sub-agent driver reach a sub-agent manager. The first call

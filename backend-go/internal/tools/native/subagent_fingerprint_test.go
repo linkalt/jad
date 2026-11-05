@@ -23,7 +23,7 @@ func fingerprintOf(t *testing.T, root string, agent sessionfs.NativeSubagentAgen
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
 	hook := &SubagentMCP{}
-	tool, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, hook, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, hook, manager, host)
 	if err != nil {
 		t.Fatalf("newSubagentToolAsync: %v", err)
 	}

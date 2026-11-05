@@ -122,7 +122,7 @@ func TestResumeRefusesARunThatIsNotFinished(t *testing.T) {
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestResumeRefusesALostRun(t *testing.T) {
 	settings.StorageDir = root
 	settings.PersistRuns = true
 	parent := withExecutors(t, readOnlyTool("read"))
-	firstTool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, firstManager, nil, host)
+	firstTool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, firstManager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestResumedRunIsAnAsyncHandleAndWaitStatusStopWorkOnIt(t *testing.T) {
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, transcribingLauncher(t, root), nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, transcribingLauncher(t, root), nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestResumedLocalRunAsyncWaitNamesItsSourceAndConfigNote(t *testing.T) {
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, transcribingLauncher(t, root), nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, transcribingLauncher(t, root), nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

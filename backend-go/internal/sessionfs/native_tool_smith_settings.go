@@ -35,10 +35,11 @@ var (
 	}
 	nativeToolSmithKeys = append(nativeBashStyleKeysWithout("paths"), nativeToolSmithOwnKeys...)
 
-	// defaultNativeToolSmithTools are the native tools a script may call without configuration.
-	defaultNativeToolSmithTools = []string{"read", "grep", "glob"}
+	// defaultNativeToolSmithTools are the native tools a script may call without configuration:
+	// none. A script runs code itself; the tools list names the ones it may also call.
+	defaultNativeToolSmithTools = []string{}
 	// nativeToolSmithExcludedTools can never be called from a script.
-	nativeToolSmithExcludedTools = []string{"bash", "exec", "process", "async", "subagent", "tool_smith", "task"}
+	nativeToolSmithExcludedTools = []string{"exec", "async", "subagent", "tool_smith", "task"}
 )
 
 // NativeToolSmithExcludedTools returns the native tools a script can never call.
@@ -93,7 +94,6 @@ type NativeToolSmithSettings struct {
 func normalizeNativeToolSmithSettings(
 	setting map[string]json.RawMessage,
 	globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase string,
-	readPolicy, grepPolicy NativePathPolicy,
 ) (*NativeToolSmithSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
@@ -128,7 +128,7 @@ func normalizeNativeToolSmithSettings(
 		}
 	}
 
-	child, err := normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase, readPolicy, grepPolicy)
+	child, err := normalizeBashStyleFields(fields, section, globalJadRoot, settingPath, cwd, sessionDir, toolStorageDir, envFileBase)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +227,9 @@ func normalizeNativeToolSmithTools(fields map[string]json.RawMessage, path strin
 		var name string
 		if json.Unmarshal(item, &name) != nil || name == "" {
 			return nil, configError("%s[%d] must be a native tool name", path, index)
+		}
+		if hint, removed := removedNativeTools[name]; removed {
+			return nil, configError("%s[%d] \"%s\" was removed; %s", path, index, name, hint)
 		}
 		if containsString(nativeToolSmithExcludedTools, name) {
 			return nil, configError("%s[%d] \"%s\" cannot be called from a script", path, index, name)

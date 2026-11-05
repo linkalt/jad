@@ -70,7 +70,7 @@ export const BUILTIN_MENTION_FILES: readonly string[] = [
   'frontend_new/src/themes/neutral/neutralTheme.ts',
   'frontend_new/src/themes/neutral/icons.tsx',
   'sample/schemes/setting.schema.json',
-  'sample/tools/native/read.json',
+  'sample/tools/native/exec.json',
 ];
 
 /** A configured list wins once it has entries; otherwise the built-in one stands. */

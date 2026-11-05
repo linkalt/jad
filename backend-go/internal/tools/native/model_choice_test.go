@@ -107,7 +107,7 @@ func TestDefinitionFilesFromBeforeModelChoiceStillLoad(t *testing.T) {
 			Profile:              "main",
 			Profiles:             []string{"main", "reviewer"},
 		}
-		_, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, &fakeLauncher{}, nil, nil, nil, &fakeMessenger{})
+		_, err := BuildCatalogWithMessenger(config, nil, nil, nil, &fakeLauncher{}, nil, nil, nil, &fakeMessenger{})
 		return err
 	}
 	for _, choice := range []bool{false, true} {

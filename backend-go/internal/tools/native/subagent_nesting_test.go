@@ -44,7 +44,7 @@ func nestingFixture(t *testing.T, settings sessionfs.NativeSubagentSettings, beh
 	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 		return behaviours[request.Agent.Name](ctx, request)
 	}}
-	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestANestedToolRunsAtOnceInAChild(t *testing.T) {
 		saw = childCall(t, ctx, request, "tool_smith", `{}`)
 		return SubagentResult{Text: "done"}, nil
 	}}
-	tool, err := newSubagentToolAsync(nestingSettings(nestingAgent("scripter", "read", "tool_smith")), parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(nestingSettings(nestingAgent("scripter", "read", "tool_smith")), parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

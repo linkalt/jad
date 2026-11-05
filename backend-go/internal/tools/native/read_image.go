@@ -52,7 +52,7 @@ func NewReadImageTool(settings sessionfs.NativeReadImageSettings, store *imagest
 			ID:          readImageToolID,
 			Source:      "native",
 			Name:        "read_image",
-			Description: "Look at an image file (png, jpeg, webp or gif); use read for text.",
+			Description: "Look at an image file (png, jpeg, webp or gif); read text files with exec.",
 			InputSchema: append(json.RawMessage(nil), readImageInputSchema...),
 		},
 		Validator:          validator,

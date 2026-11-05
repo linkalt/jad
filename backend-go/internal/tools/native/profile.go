@@ -234,7 +234,7 @@ func (t *profileTool) info(ctx context.Context, execution tools.ExecutionContext
 	if t.profiles != nil {
 		target, err := t.profiles.Profile(ctx, execution.SessionKey, session, profile)
 		if err == nil && transcriptDenied(scopedPolicy(t.settings.Policy, execution), target.Files.Messages) {
-			return t.fail(execution, tools.StatusForbidden, "profile_denied", "This profile's transcript is not readable by this tool: tools.native.read.paths denies it")
+			return t.fail(execution, tools.StatusForbidden, "profile_denied", "This profile's transcript is not readable by this tool: session_files.paths denies it")
 		}
 	}
 	tokens, err := t.actions.ProfileInfo(ctx, session, profile)

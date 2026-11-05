@@ -98,10 +98,6 @@ type subagentAgent struct {
 	// empty for an agent that uses native tools only.
 	nativeTools []tools.Tool
 	mcpIDs      []string
-	// processes is the process manager a child that lists process starts its processes
-	// in, under its run id; the run's end stops them. It is the session's, or the one of
-	// the toolset the agent names, and nil when that source has no process tool.
-	processes ProcessManager
 	// background is set when a call to this agent may run as an async handle although
 	// the agent can change files; see backgroundSafe.
 	background bool
@@ -227,25 +223,17 @@ func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentToo
 // closes it at shutdown. A nil manager gives the tool a private one that nothing
 // closes, which suits tests only.
 func NewSubagentToolWithManager(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager) (tools.Tool, error) {
-	return NewSubagentToolWithProcesses(settings, parentTools, launcher, mcp, manager, nil)
+	return newSubagentTool(settings, parentTools, nil, launcher, mcp, manager)
 }
 
-// NewSubagentToolWithProcesses is NewSubagentToolWithManager plus the session's process
-// manager, which a child that lists the process tool needs: its processes are stopped
-// when its run ends.
-func NewSubagentToolWithProcesses(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager) (tools.Tool, error) {
-	return newSubagentTool(settings, parentTools, nil, launcher, mcp, manager, processes)
+func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager) (tools.Tool, error) {
+	return newSubagentToolAsync(settings, parentTools, toolsets, launcher, mcp, manager, nil)
 }
 
-func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager) (tools.Tool, error) {
-	return newSubagentToolAsync(settings, parentTools, toolsets, launcher, mcp, manager, processes, nil)
-}
-
-// subagentToolset is the native tools built from one toolset file an agent names, and the
-// process manager they use. The parent's model never sees them.
+// subagentToolset is the native tools built from one toolset file an agent names. The
+// parent's model never sees them.
 type subagentToolset struct {
-	native    []tools.Tool
-	processes ProcessManager
+	native []tools.Tool
 }
 
 // childToolPools splits tools into the read-only ones and the ones that change files,
@@ -270,13 +258,13 @@ func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools
 
 // newSubagentToolAsync is newSubagentTool plus the async host that tracks every read-only run
 // the tool starts as a handle owned by the calling session. A nil host starts no handles.
-func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost) (tools.Tool, error) {
-	return newSubagentToolRemotes(settings, parentTools, toolsets, launcher, mcp, manager, processes, host, nil)
+func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, host *AsyncHost) (tools.Tool, error) {
+	return newSubagentToolRemotes(settings, parentTools, toolsets, launcher, mcp, manager, host, nil)
 }
 
 // newSubagentToolRemotes is newSubagentToolAsync plus the remotes folder the session's
 // tools.native.subagent.remotes names are read from.
-func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
+func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
 	schema := modelChoiceSchema(subagentInputSchema, subagentModelProperty, settings.ModelChoice)
 	validator, err := tools.CompileSchema(schema)
 	if err != nil {
@@ -304,7 +292,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 	}
 	for _, agent := range settings.Agents {
 		agent = withoutDeniedTools(agent, settings.DenyTools)
-		agentReadOnly, agentChangers, agentProcesses := readOnly, changers, processes
+		agentReadOnly, agentChangers := readOnly, changers
 		toolsetKey := agent.ToolsetKey()
 		if toolsetKey != "" {
 			toolset, built := toolsets[toolsetKey]
@@ -318,7 +306,6 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 					agentReadOnly = append(agentReadOnly[:len(agentReadOnly):len(agentReadOnly)], tool)
 				}
 			}
-			agentProcesses = toolset.processes
 		}
 		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers)
 		if err != nil {
@@ -330,7 +317,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			}
 			return tools.Tool{}, err
 		}
-		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs, processes: agentProcesses}
+		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs}
 		if len(mcpIDs) == 0 {
 			catalog, err := tools.NewCatalog(childTools)
 			if err != nil {
@@ -670,7 +657,7 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 		}
 	}
 	if len(chosen) == 0 && len(mcpIDs) == 0 && !containsName(agent.Tools, "subagent") {
-		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: enable at least one read-only native tool (read, grep, glob, fetch, skill, decide_systemone or web_search)", agent.Name)
+		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: list exec, or enable at least one read-only native tool (read_image, lsp, skill, transcript, decide_systemone or web_search)", agent.Name)
 	}
 	return chosen, mcpIDs, nil
 }

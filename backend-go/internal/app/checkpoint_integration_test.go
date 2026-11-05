@@ -29,16 +29,22 @@ type providerStep struct {
 	hold    chan struct{} // the provider answers only once this is closed
 }
 
+// writeCall is an exec call that writes content to path (relative to the workspace).
 func writeCall(callID, path, content string) providerStep {
-	arguments, _ := json.Marshal(map[string]string{"path": path, "content": content})
-	item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": callID, "name": "write", "arguments": string(arguments)})
+	arguments, _ := json.Marshal(map[string]string{"code": "printf %s " + shellQuote(content) + " > " + shellQuote(path)})
+	item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": callID, "name": "exec", "arguments": string(arguments)})
 	return providerStep{call: string(item)}
 }
 
+// readCall is a call to read_image, a tool that only reads.
 func readCall(callID, path string) providerStep {
 	arguments, _ := json.Marshal(map[string]string{"path": path})
-	item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": callID, "name": "read", "arguments": string(arguments)})
+	item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": callID, "name": "read_image", "arguments": string(arguments)})
 	return providerStep{call: string(item)}
+}
+
+func shellQuote(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'"
 }
 
 type checkpointFixtureOptions struct {
@@ -69,15 +75,15 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 		t.Fatal(err)
 	}
 	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}
-	writeTool, err := native.NewWriteTool(sessionfs.NativeWriteSettings{Policy: policy, MaxBytes: 4096}, native.NewPathLocks())
+	execTool, err := native.NewExecTool(execHandleSettings(t, root), "FIXTURE_OPENAI_KEY", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	readTool, err := native.NewReadTool(sessionfs.NativeReadSettings{Policy: policy, MaxBytes: 4096, MaxFileBytes: 4096, DefaultLimit: 100})
+	readTool, err := native.NewReadImageTool(sessionfs.NativeReadImageSettings{Policy: policy, MaxImageBytes: 4096}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, _ := json.Marshal(map[string]any{"schema_version": 1, "tools": []any{readTool.Definition, writeTool.Definition}})
+	manifest, _ := json.Marshal(map[string]any{"schema_version": 1, "tools": []any{readTool.Definition, execTool.Definition}})
 	if err := os.WriteFile(filepath.Join(root, "tools.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +128,6 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 	}))
 	t.Cleanup(provider.Close)
 
-	writeSettings := map[string]any{"max_bytes": 4096}
 	settings := map[string]any{"max_tool_rounds": 4}
 	if options.checkpoint != "" {
 		settings["checkpoint"] = json.RawMessage(options.checkpoint)
@@ -131,7 +136,7 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 		CWD:                 workspace,
 		ToolDefinitionPaths: []string{filepath.Join(root, "tools.json")},
 		Settings:            settings,
-		Native:              map[string]any{"read": map[string]any{}, "write": writeSettings},
+		Native:              map[string]any{"read_image": map[string]any{}, "exec": map[string]any{"spill": map[string]any{"enabled": false}}},
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}
 	if options.nested {

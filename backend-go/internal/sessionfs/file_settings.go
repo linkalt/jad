@@ -27,7 +27,7 @@ type SessionFileListingSettings struct {
 	IgnoreDirectories  []string
 }
 
-// NativePathRule is one resolved allow/deny path rule for native read access.
+// NativePathRule is one resolved allow/deny path rule.
 type NativePathRule struct {
 	Action string
 	Path   string
@@ -65,7 +65,7 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 	if err != nil {
 		return SessionFileListingSettings{}, err
 	}
-	if err := rejectUnknownKeys(fields, path+": session_files", []string{"enabled", "include_hidden", "include_directories", "max_depth", "max_entries", "max_results", "ignore_directories"}); err != nil {
+	if err := rejectUnknownKeys(fields, path+": session_files", []string{"enabled", "include_hidden", "include_directories", "max_depth", "max_entries", "max_results", "ignore_directories", "paths"}); err != nil {
 		return SessionFileListingSettings{}, err
 	}
 	if settings.Enabled, err = sessionFileBool(fields, "enabled", settings.Enabled, path); err != nil {
@@ -103,32 +103,23 @@ func normalizeSessionFileListing(raw json.RawMessage, path string) (SessionFileL
 	return settings, nil
 }
 
-func normalizeNativeReadPolicy(setting map[string]json.RawMessage, globalJadRoot, path string) (NativePathPolicy, error) {
+// normalizeSessionFilesPolicy reads session_files.paths, the path rules of the UI file list
+// and of the transcript, transcripts and profile tools: allow rules add roots outside the
+// working directory, deny rules hide paths. Absent, only the working directory is listed.
+func normalizeSessionFilesPolicy(raw json.RawMessage, globalJadRoot, path string) (NativePathPolicy, error) {
 	policy := NativePathPolicy{Paths: []NativePathRule{}}
-	nativeRaw, exists, err := nativeEnvelope(setting, path)
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return policy, nil
+	}
+	fields, err := decodeConfigObject(raw, path+": session_files")
 	if err != nil {
 		return NativePathPolicy{}, err
 	}
+	pathsRaw, exists := fields["paths"]
 	if !exists {
 		return policy, nil
 	}
-	native, err := decodeConfigObject(nativeRaw, path+": tools.native")
-	if err != nil {
-		return NativePathPolicy{}, err
-	}
-	readRaw, exists := native["read"]
-	if !exists {
-		return policy, nil
-	}
-	read, err := decodeConfigObject(readRaw, path+": tools.native.read")
-	if err != nil {
-		return NativePathPolicy{}, err
-	}
-	pathsRaw, exists := read["paths"]
-	if !exists {
-		return policy, nil
-	}
-	return normalizeNativePathPolicy(pathsRaw, globalJadRoot, path+": tools.native.read.paths")
+	return normalizeNativePathPolicy(pathsRaw, globalJadRoot, path+": session_files.paths")
 }
 
 func normalizeNativePathPolicy(raw json.RawMessage, globalJadRoot, path string) (NativePathPolicy, error) {

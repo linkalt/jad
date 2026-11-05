@@ -445,7 +445,7 @@ func planExec(arguments map[string]any, settings sessionfs.NativeExecSettings, e
 		}
 		if size := int64(len(encoded)) + 1; size > settings.InputMaxBytes {
 			return invalid("input_too_large", fmt.Sprintf("input is %d bytes, over the limit of %d", size, settings.InputMaxBytes),
-				tools.Information{Key: "suggestion", Value: "write the data to a file with the write tool and pass its path in input"})
+				tools.Information{Key: "suggestion", Value: "write the data to a file in earlier exec calls and pass its path in input"})
 		}
 		stdin = string(encoded) + "\n"
 	}
@@ -470,13 +470,13 @@ func planExecCode(arguments map[string]any, settings sessionfs.NativeExecSetting
 	}
 	if codeBytes := int64(len(code)); codeBytes > settings.CodeMaxBytes {
 		return invalid("code_too_large", fmt.Sprintf("code is %d bytes, over the limit of %d", codeBytes, settings.CodeMaxBytes),
-			tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash"})
+			tools.Information{Key: "suggestion", Value: "write the program to a file in several exec calls (cat >> file) and run the file"})
 	}
 	if lang.Mode == sessionfs.NativeExecModeArg {
 		if int64(len(code)) > settings.ArgMaxBytes {
 			return invalid("code_too_large",
 				fmt.Sprintf("code is %d bytes, over the limit of %d for a runner that takes it as an argument", len(code), settings.ArgMaxBytes),
-				tools.Information{Key: "suggestion", Value: "write the program to a file with the write tool and run it with bash, or give the runner mode file"})
+				tools.Information{Key: "suggestion", Value: "write the program to a file in several exec calls (cat >> file) and run the file, or give the runner mode file"})
 		}
 		if strings.ContainsRune(code, 0) {
 			return invalid("invalid_code", "code contains a NUL byte, which an argument cannot carry")

@@ -29,7 +29,7 @@ func toolsetAgentChildTools(t *testing.T, listed ...string) ([]string, error) {
 		got = toolNames(request.Tools)
 		return SubagentResult{Text: "done"}, nil
 	}}
-	tool, err := newSubagentToolAsync(settings, parent, toolsets, launcher, nil, manager, nil, nil)
+	tool, err := newSubagentToolAsync(settings, parent, toolsets, launcher, nil, manager, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func TestToolsetAgentCannotListProfileMessageTheSessionDoesNotEnable(t *testing.
 	agent := nestingAgent("finder", "grep", "profile_message")
 	agent.Toolset = []string{"extra/search"}
 	toolsets := map[string]subagentToolset{"extra/search": {native: withExecutors(t, readOnlyTool("grep"))}}
-	_, err := newSubagentToolAsync(subagentSettings(agent), withExecutors(t, readOnlyTool("read")), toolsets, &fakeLauncher{}, nil, NewSubagentManager(), nil, nil)
+	_, err := newSubagentToolAsync(subagentSettings(agent), withExecutors(t, readOnlyTool("read")), toolsets, &fakeLauncher{}, nil, NewSubagentManager(), nil)
 	if err == nil || !strings.Contains(err.Error(), "does not enable tools.native.profile_message") {
 		t.Fatalf("error = %v, want the session-does-not-enable error", err)
 	}

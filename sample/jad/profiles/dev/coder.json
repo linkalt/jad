@@ -12,12 +12,9 @@
   "toolset": "coding/full",
   "tools": {
     "allow": [
-      "read",
-      "grep",
-      "glob",
-      "bash",
-      "edit",
-      "write",
+      "exec",
+      "async",
+      "subagent",
       "mcp:zvec-grep:*"
     ]
   },

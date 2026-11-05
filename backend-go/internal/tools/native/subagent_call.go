@@ -50,20 +50,15 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 // childExecutionContext is the context of a sub-agent's tools. It is this call's context
 // with its run scope carried over (ForNested), minus what belongs to the calling call and
 // not to the run: the child asks its own questions and reports its own changes, and the
-// manager fills ProcessOwner, ProcessOwnerLimit, ProcessAsync, AgentDepth, RootRun and
-// OnFileChange when it starts the run. The path scope is narrowed to what both the caller
-// and the agent allow.
+// manager fills ProcessOwner, ProcessAsync, AgentDepth, RootRun and OnFileChange when it
+// starts the run. The caller's path scope (a worktree) carries over.
 func childExecutionContext(execution tools.ExecutionContext, agent sessionfs.NativeSubagentAgent) tools.ExecutionContext {
 	child := execution.ForNested()
 	child.RequestInteraction = nil
 	child.OnInteractionResolved = nil
 	child.OnFileChange = nil
 	child.AgentName = agent.Name
-	var ownScope *tools.PathScope
-	if agent.Paths.Set() {
-		ownScope = &tools.PathScope{Allow: agent.Paths.Allow, Deny: agent.Paths.Deny}
-	}
-	child.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, ownScope)
+	child.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, nil)
 	return child
 }
 
@@ -154,11 +149,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 			// Values only: a background child outlives the call that started it.
 			CallerValues: context.WithoutCancel(ctx),
 		},
-		processes:  agent.processes,
 		limit:      int(s.settings.MaxConcurrent),
 		maxQueued:  int(s.settings.MaxQueued),
 		changedMax: int(s.settings.ChangedFilesMax),
-		processMax: int(s.settings.ProcessMaxRunning),
 		keep:       int(s.settings.KeepFinished),
 		resultMax:  s.settings.ResultMaxBytes,
 	})

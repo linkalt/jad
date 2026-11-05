@@ -26,7 +26,7 @@ func backgroundCatalog(t *testing.T, settings sessionfs.NativeSubagentSettings, 
 	host := newTestAsyncHost(t)
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
-	tool, err := newSubagentToolAsync(settings, parentTools, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parentTools, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestLostBackgroundWriterKeepsItsRecordedFiles(t *testing.T) {
 	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "write"))
 	settings.StorageDir = root
 	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
-	tool, err := newSubagentToolAsync(settings, parent, nil, writingLauncher(release, nil), nil, first, nil, host)
+	tool, err := newSubagentToolAsync(settings, parent, nil, writingLauncher(release, nil), nil, first, host)
 	if err != nil {
 		t.Fatal(err)
 	}

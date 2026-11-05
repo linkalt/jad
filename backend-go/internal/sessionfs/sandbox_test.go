@@ -26,24 +26,24 @@ func TestSandboxDefaultsAndValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &SandboxSettings{
-		Tools: []string{"bash", "exec", "process", "tool_smith"}, Backend: "command", Executable: "sh",
+		Tools: []string{"exec", "tool_smith"}, Backend: "command", Executable: "sh",
 		WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
 		CheckTimeoutMs: 10000, ProxyPort: 3128,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v", got)
 	}
-	got, err = normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"command","command":["env"],"tools":["process","bash","hooks"],"network":true,"check_timeout_ms":250,"writable_paths":["{cwd}","/var/cache/x"],"plan_writable_paths":["{tmp}","/var/cache/x"],"hide_paths":["{home}/.ssh"]}`), "s")
+	got, err = normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"command","command":["env"],"tools":["tool_smith","exec","hooks"],"network":true,"check_timeout_ms":250,"writable_paths":["{cwd}","/var/cache/x"],"plan_writable_paths":["{tmp}","/var/cache/x"],"hide_paths":["{home}/.ssh"]}`), "s")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Tools, []string{"process", "bash", "hooks"}) || !got.Network || got.CheckTimeoutMs != 250 || !got.Covers("hooks") || !reflect.DeepEqual(got.WritablePaths, []string{"{cwd}", "/var/cache/x"}) ||
-		!reflect.DeepEqual(got.HidePaths, []string{"{home}/.ssh"}) || !got.Covers("bash") || got.Covers("exec") ||
+	if !reflect.DeepEqual(got.Tools, []string{"tool_smith", "exec", "hooks"}) || !got.Network || got.CheckTimeoutMs != 250 || !got.Covers("hooks") || !reflect.DeepEqual(got.WritablePaths, []string{"{cwd}", "/var/cache/x"}) ||
+		!reflect.DeepEqual(got.HidePaths, []string{"{home}/.ssh"}) || !got.Covers("exec") || got.Covers("mcp") ||
 		!reflect.DeepEqual(got.PlanWritablePaths, []string{"{tmp}", "/var/cache/x"}) {
 		t.Fatalf("values = %+v", got)
 	}
 	var none *SandboxSettings
-	if none.Covers("bash") {
+	if none.Covers("exec") {
 		t.Fatal("no sandbox covers nothing")
 	}
 }
@@ -53,9 +53,11 @@ func TestSandboxRefusals(t *testing.T) {
 		"not an object":       {`[]`, "sandbox must be an object"},
 		"unknown key":         {`{"enabled":true,"netwrk":true}`, "did you mean network"},
 		"enabled not bool":    {`{"enabled":"yes"}`, "sandbox.enabled must be a boolean"},
-		"unknown tool":        {`{"tools":["grep"]}`, "tools[0] must be one of"},
+		"unknown tool":        {`{"tools":["lsp"]}`, "tools[0] must be one of"},
+		"removed bash":        {`{"tools":["exec","bash"]}`, "tools[1]: tools.native.bash was removed; exec runs shell commands"},
+		"removed process":     {`{"tools":["process"]}`, "tools[0]: tools.native.process was removed"},
 		"empty tools":         {`{"tools":[]}`, "tools must list one or more"},
-		"tool twice":          {`{"tools":["bash","bash"]}`, "lists bash twice"},
+		"tool twice":          {`{"tools":["exec","exec"]}`, "lists exec twice"},
 		"backend":             {`{"backend":"docker"}`, `backend must be "bwrap", "seatbelt" or "command"`},
 		"relative path":       {`{"writable_paths":["build"]}`, "writable_paths[0] must be an absolute path"},
 		"relative plan path":  {`{"plan_writable_paths":["/x","build"]}`, "plan_writable_paths[1] must be an absolute path"},
@@ -86,26 +88,26 @@ func TestSandboxRefusals(t *testing.T) {
 }
 
 func TestApplySandboxReachesOnlyTheCoveredTools(t *testing.T) {
-	sandbox := &SandboxSettings{Tools: []string{"bash", "tool_smith"}}
-	bash, execSettings, smith, process, hooks := &NativeBashSettings{}, &NativeExecSettings{}, &NativeToolSmithSettings{}, &NativeProcessSettings{}, &HooksSettings{}
-	applySandbox(sandbox, bash, execSettings, smith, process, hooks)
-	if bash.Sandbox != sandbox || smith.Child.Sandbox != sandbox || execSettings.Child.Sandbox != nil || process.Sandbox != nil || hooks.Sandbox != nil {
-		t.Fatalf("bash %v exec %v smith %v process %v hooks %v", bash.Sandbox, execSettings.Child.Sandbox, smith.Child.Sandbox, process.Sandbox, hooks.Sandbox)
+	sandbox := &SandboxSettings{Tools: []string{"exec"}}
+	execSettings, smith, hooks := &NativeExecSettings{}, &NativeToolSmithSettings{}, &HooksSettings{}
+	applySandbox(sandbox, execSettings, smith, hooks)
+	if execSettings.Child.Sandbox != sandbox || smith.Child.Sandbox != nil || hooks.Sandbox != nil {
+		t.Fatalf("exec %v smith %v hooks %v", execSettings.Child.Sandbox, smith.Child.Sandbox, hooks.Sandbox)
 	}
 	withHooks := &SandboxSettings{Tools: []string{"hooks"}}
-	applySandbox(withHooks, bash, execSettings, smith, process, hooks)
-	if hooks.Sandbox != withHooks || bash.Sandbox != sandbox {
-		t.Fatalf("hooks %v bash %v", hooks.Sandbox, bash.Sandbox)
+	applySandbox(withHooks, execSettings, smith, hooks)
+	if hooks.Sandbox != withHooks || execSettings.Child.Sandbox != sandbox {
+		t.Fatalf("hooks %v exec %v", hooks.Sandbox, execSettings.Child.Sandbox)
 	}
-	applySandbox(sandbox, nil, nil, nil, nil, nil)
-	applySandbox(nil, bash, execSettings, smith, process, hooks)
+	applySandbox(sandbox, nil, nil, nil)
+	applySandbox(nil, execSettings, smith, hooks)
 }
 
 // The sandbox key is a setting of the layout: a session's settings carry it to the tools.
 func TestSandboxLoadsFromTheSessionSettings(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{
-		Native:   map[string]any{"bash": map[string]any{}, "process": map[string]any{}, "async": map[string]any{}},
-		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}, "tools": []string{"bash"}}},
+		Native:   map[string]any{"exec": map[string]any{}, "tool_smith": map[string]any{}, "async": map[string]any{}},
+		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}, "tools": []string{"exec"}}},
 	})
 	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
 	if err != nil {
@@ -119,14 +121,14 @@ func TestSandboxLoadsFromTheSessionSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Sandbox == nil || loaded.Sandbox.Backend != "command" || !reflect.DeepEqual(loaded.Sandbox.Tools, []string{"bash"}) {
+	if loaded.Sandbox == nil || loaded.Sandbox.Backend != "command" || !reflect.DeepEqual(loaded.Sandbox.Tools, []string{"exec"}) {
 		t.Fatalf("sandbox = %+v", loaded.Sandbox)
 	}
-	if loaded.NativeBash == nil || loaded.NativeBash.Sandbox != loaded.Sandbox {
-		t.Fatal("native.bash did not get the sandbox")
+	if loaded.NativeExec == nil || loaded.NativeExec.Child.Sandbox != loaded.Sandbox {
+		t.Fatal("native.exec did not get the sandbox")
 	}
-	if loaded.NativeProcess == nil || loaded.NativeProcess.Sandbox != nil {
-		t.Fatal("native.process is not in sandbox.tools and must run without it")
+	if loaded.NativeToolSmith == nil || loaded.NativeToolSmith.Child.Sandbox != nil {
+		t.Fatal("native.tool_smith is not in sandbox.tools and must run without it")
 	}
 	if loaded.Hooks.Sandbox != nil {
 		t.Fatal("hooks are not in sandbox.tools and must run without it")
@@ -142,16 +144,18 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 		accept bool
 	}{
 		{`{}`, true},
-		{`{"enabled":false,"tools":["bash","process"],"network":true,"writable_paths":["{workspace}","/var/x"],"hide_paths":["{home}/.ssh"]}`, true},
+		{`{"enabled":false,"tools":["exec","tool_smith"],"network":true,"writable_paths":["{workspace}","/var/x"],"hide_paths":["{home}/.ssh"]}`, true},
 		{`{"backend":"command","command":["sandbox-exec","-f","/p.sb"]}`, true},
 		{`{"backend":"bwrap","executable":"/usr/bin/bwrap"}`, true},
 		{`{"backend":"command"}`, false},
 		{`{"command":["env"]}`, false},
 		{`{"backend":"command","command":["env"],"executable":"env"}`, false},
 		{`{"backend":"docker"}`, false},
-		{`{"tools":["grep"]}`, false},
+		{`{"tools":["lsp"]}`, false},
+		{`{"tools":["bash"]}`, false},
+		{`{"tools":["process"]}`, false},
 		{`{"tools":[]}`, false},
-		{`{"tools":["bash","bash"]}`, false},
+		{`{"tools":["exec","exec"]}`, false},
 		{`{"writable_paths":["build"]}`, false},
 		{`{"enabled":"yes"}`, false},
 		{`{"netwrk":true}`, false},
@@ -168,18 +172,18 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 	}
 }
 
-// The default covers the four tools the model drives; hooks only when listed.
+// The default covers the tools the model drives; hooks only when listed.
 func TestSandboxDefaultLeavesHooksOutAndListedHooksLoad(t *testing.T) {
 	for _, test := range []struct {
 		tools []string
 		hooks bool
-	}{{nil, false}, {[]string{"hooks", "bash"}, true}} {
+	}{{nil, false}, {[]string{"hooks", "exec"}, true}} {
 		sandbox := map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}}
 		if test.tools != nil {
 			sandbox["tools"] = test.tools
 		}
 		fixture := layouttest.Write(t, layouttest.Spec{
-			Native:   map[string]any{"bash": map[string]any{}, "async": map[string]any{}},
+			Native:   map[string]any{"exec": map[string]any{}, "async": map[string]any{}},
 			Settings: map[string]any{"sandbox": sandbox, "hooks": map[string]any{"enabled": true}},
 		})
 		config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
@@ -194,8 +198,8 @@ func TestSandboxDefaultLeavesHooksOutAndListedHooksLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if (loaded.Hooks.Sandbox != nil) != test.hooks || loaded.NativeBash.Sandbox == nil {
-			t.Errorf("tools %v: hooks sandbox %v, bash sandbox %v", test.tools, loaded.Hooks.Sandbox, loaded.NativeBash.Sandbox)
+		if (loaded.Hooks.Sandbox != nil) != test.hooks || loaded.NativeExec.Child.Sandbox == nil {
+			t.Errorf("tools %v: hooks sandbox %v, exec sandbox %v", test.tools, loaded.Hooks.Sandbox, loaded.NativeExec.Child.Sandbox)
 		}
 	}
 }
@@ -203,7 +207,7 @@ func TestSandboxDefaultLeavesHooksOutAndListedHooksLoad(t *testing.T) {
 // jad check gets each distinct enabled sandbox once, with the first session that uses it.
 func TestCheckLayoutCollectsTheEnabledSandbox(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{
-		Native:   map[string]any{"bash": map[string]any{}, "async": map[string]any{}},
+		Native:   map[string]any{"exec": map[string]any{}, "async": map[string]any{}},
 		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}}},
 	})
 	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
@@ -240,11 +244,11 @@ func TestSandboxForPlanMode(t *testing.T) {
 
 func TestSandboxNetworkAllowSeatbeltAndMCP(t *testing.T) {
 	// enabled false skips the program and platform checks, so every backend loads here.
-	got, err := normalizeSandbox(json.RawMessage(`{"enabled":false,"network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["bash","mcp"]}`), "s")
+	got, err := normalizeSandbox(json.RawMessage(`{"enabled":false,"network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["exec","mcp"]}`), "s")
 	if err != nil || got != nil {
 		t.Fatalf("disabled sandbox = %+v, %v", got, err)
 	}
-	enabled, err := normalizeSandbox(json.RawMessage(`{"enabled":true,"executable":"sh","network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["bash","mcp"]}`), "s")
+	enabled, err := normalizeSandbox(json.RawMessage(`{"enabled":true,"executable":"sh","network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["exec","mcp"]}`), "s")
 	if runtime.GOOS == "linux" {
 		if err != nil || !reflect.DeepEqual(enabled.NetworkAllow, []string{"pypi.org", "github.com"}) || enabled.ProxyPort != 8080 || !enabled.Covers("mcp") {
 			t.Fatalf("network_allow sandbox = %+v, %v", enabled, err)

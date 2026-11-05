@@ -178,24 +178,16 @@ type SessionConfig struct {
 	StoragePaths             SessionStoragePaths
 	WorkingDir               string
 	SessionFiles             SessionFileListingSettings
-	NativeReadPolicy         NativePathPolicy
-	NativeRead               *NativeReadSettings
-	NativeGrep               *NativeGrepSettings
-	NativeWrite              *NativeWriteSettings
-	NativeEdit               *NativeEditSettings
-	NativeApplyPatch         *NativeApplyPatchSettings
-	NativeBash               *NativeBashSettings
+	// FilePolicy is session_files.paths: the path rules of the UI file list and of the
+	// transcript, transcripts and profile tools.
+	FilePolicy NativePathPolicy
 	NativeExec               *NativeExecSettings
-	NativeGlob               *NativeGlobSettings
 	NativeReadImage          *NativeReadImageSettings
-	NativeNotebook           *NativeNotebookSettings
 	NativeLSP                *NativeLSPSettings
 	ExtensionWebSearch       *ExtensionWebSearchSettings
-	NativeProcess            *NativeProcessSettings
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
 	NativeMemory             *NativeMemorySettings
-	NativeFetch              *NativeFetchSettings
 	NativeRequestDraft       *NativeRequestDraftSettings
 	NativeSkill              *NativeSkillSettings
 	ExtensionDecideSystemone *ExtensionDecideSystemoneSettings
@@ -463,57 +455,11 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeRead, err := normalizeNativeReadSettings(setting, location.Root.GlobalJadRoot, settingPath)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeReadPolicy := NativePathPolicy{Paths: []NativePathRule{}}
-	if nativeRead != nil {
-		nativeReadPolicy = nativeRead.Policy
-	}
-	nativeGrep, err := normalizeNativeGrepSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-	)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeGlob, err := normalizeNativeGlobSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-	)
+	filePolicy, err := normalizeSessionFilesPolicy(setting["session_files"], location.Root.GlobalJadRoot, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
 	nativeReadImage, err := normalizeNativeReadImageSettings(setting, location.Root.GlobalJadRoot, settingPath)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeWrite, nativeEdit, err := normalizeNativeWriteEditSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-		cwd,
-		location.StateDir(),
-		storagePaths.ToolStorage,
-	)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeApplyPatch, err := normalizeNativeApplyPatchSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-		cwd,
-		location.StateDir(),
-		storagePaths.ToolStorage,
-	)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeNotebook, err := normalizeNativeNotebookSettings(setting, nativeEdit, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -525,25 +471,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	grepPolicy := NativePathPolicy{Paths: []NativePathRule{}}
-	if nativeGrep != nil {
-		grepPolicy = nativeGrep.Policy
-	}
-	nativeBash, err := normalizeNativeBashSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-		cwd,
-		location.StateDir(),
-		storagePaths.ToolStorage,
-		envFileBase,
-		nativeReadPolicy,
-		grepPolicy,
-	)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
+	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -552,10 +480,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	nativeMemory, err := normalizeNativeMemorySettings(setting, settingPath, cwd, storagePaths.ToolStorage)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	nativeFetch, err := normalizeNativeFetchSettings(setting, settingPath, cwd, storagePaths.ToolStorage)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -579,19 +503,19 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeToolSmith, err := normalizeNativeToolSmithSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase, nativeReadPolicy, grepPolicy)
+	nativeToolSmith, err := normalizeNativeToolSmithSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeTranscript, err := normalizeNativeTranscriptSettings(setting, settingPath, nativeReadPolicy)
+	nativeTranscript, err := normalizeNativeTranscriptSettings(setting, settingPath, filePolicy)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeTranscripts, err := normalizeNativeTranscriptsSettings(setting, settingPath, nativeReadPolicy)
+	nativeTranscripts, err := normalizeNativeTranscriptsSettings(setting, settingPath, filePolicy)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeProfile, err := normalizeNativeProfileSettings(setting, settingPath, nativeReadPolicy)
+	nativeProfile, err := normalizeNativeProfileSettings(setting, settingPath, filePolicy)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -602,31 +526,19 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err := checkLazyNeedsLoadTool(settingPath, profile, profileTools, nativeLoadTool); err != nil {
 		return SessionConfig{}, err
 	}
-	nativeProcess, err := normalizeNativeProcessSettings(
-		setting,
-		location.Root.GlobalJadRoot,
-		settingPath,
-		cwd,
-		location.StateDir(),
-		storagePaths.ToolStorage,
-		envFileBase,
-	)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	applySandbox(sandbox, nativeBash, nativeExec, nativeToolSmith, nativeProcess, &hooks)
+	applySandbox(sandbox, nativeExec, nativeToolSmith, &hooks)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
 	if nativeAsync == nil {
-		for name, enabled := range map[string]bool{"process": nativeProcess != nil, "subagent": nativeSubagent != nil, "tool_smith": nativeToolSmith != nil} {
+		for name, enabled := range map[string]bool{"subagent": nativeSubagent != nil, "tool_smith": nativeToolSmith != nil} {
 			if enabled {
 				return SessionConfig{}, configError("%s: tools.native.%s needs tools.native.async to collect, list and stop its handles", settingPath, name)
 			}
 		}
 	}
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeProcess, nativeTask, nativeMemory, nativeSubagent, nativeAsync)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeTask, nativeMemory, nativeSubagent, nativeAsync)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -729,24 +641,14 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		StoragePaths:             storagePaths,
 		WorkingDir:               cwd,
 		SessionFiles:             sessionFiles,
-		NativeReadPolicy:         nativeReadPolicy,
-		NativeRead:               nativeRead,
-		NativeGrep:               nativeGrep,
-		NativeWrite:              nativeWrite,
-		NativeEdit:               nativeEdit,
-		NativeApplyPatch:         nativeApplyPatch,
-		NativeBash:               nativeBash,
+		FilePolicy:               filePolicy,
 		NativeExec:               nativeExec,
-		NativeGlob:               nativeGlob,
 		NativeReadImage:          nativeReadImage,
-		NativeNotebook:           nativeNotebook,
 		NativeLSP:                nativeLSP,
 		ExtensionWebSearch:       extensionWebSearch,
-		NativeProcess:            nativeProcess,
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
 		NativeMemory:             nativeMemory,
-		NativeFetch:              nativeFetch,
 		NativeRequestDraft:       nativeRequestDraft,
 		NativeSkill:              nativeSkill,
 		ExtensionDecideSystemone: extensionDecideSystemone,

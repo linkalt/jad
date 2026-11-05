@@ -34,7 +34,7 @@ func TestChildGetsAsyncOnlyWhenItsToolsListNamesIt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			launcher := &fakeLauncher{}
-			tool, err := newSubagentToolAsync(subagentSettings(tc.agent), parent, nil, launcher, nil, NewSubagentManager(), nil, host)
+			tool, err := newSubagentToolAsync(subagentSettings(tc.agent), parent, nil, launcher, nil, NewSubagentManager(), host)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +127,7 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 
 	agent := writerAgent("runner", "read", "process", "async")
 	parentTools := append(withExecutors(t, readOnlyTool("read")), process, async)
-	sub, err := newSubagentToolAsync(writeSettings(agent), parentTools, nil, launcher, nil, manager, processes, host)
+	sub, err := newSubagentToolAsync(writeSettings(agent), parentTools, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

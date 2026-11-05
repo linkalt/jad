@@ -25,7 +25,7 @@ func toolsetAgent(name string, names ...string) sessionfs.NativeSubagentAgent {
 func buildWithToolset(t *testing.T, settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher, toolset []tools.Tool, parent ...tools.Tool) (*tools.Catalog, error) {
 	t.Helper()
 	parentTools := withExecutors(t, parent...)
-	tool, err := newSubagentTool(settings, parentTools, map[string]subagentToolset{searchToolset: {native: withExecutors(t, toolset...)}}, launcher, nil, nil, nil)
+	tool, err := newSubagentTool(settings, parentTools, map[string]subagentToolset{searchToolset: {native: withExecutors(t, toolset...)}}, launcher, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func TestSubagentToolsetNeverGivesTheChildTheSubagentTool(t *testing.T) {
 // buildSubagentCatalogWithToolset returns the subagent tool built over one toolset.
 func buildSubagentCatalogWithToolset(t *testing.T, settings sessionfs.NativeSubagentSettings, toolset []tools.Tool, parent ...tools.Tool) (*tools.Catalog, tools.Tool) {
 	t.Helper()
-	tool, err := newSubagentTool(settings, withExecutors(t, parent...), map[string]subagentToolset{searchToolset: {native: withExecutors(t, toolset...)}}, &fakeLauncher{}, nil, nil, nil)
+	tool, err := newSubagentTool(settings, withExecutors(t, parent...), map[string]subagentToolset{searchToolset: {native: withExecutors(t, toolset...)}}, &fakeLauncher{}, nil, nil)
 	if err != nil {
 		t.Fatalf("newSubagentTool: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestSubagentToolsetProcessesAreStoppedInTheToolsetsManager(t *testing.T) {
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentTool(settings, parent, map[string]subagentToolset{searchToolset: {native: []tools.Tool{process}, processes: toolset.manager}}, launcher, nil, manager, session.manager)
+	tool, err := newSubagentTool(settings, parent, map[string]subagentToolset{searchToolset: {native: []tools.Tool{process}, processes: toolset.manager}}, launcher, nil, manager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestSubagentToolsetResolvesMCPEntriesAgainstItsOwnServers(t *testing.T) {
 	build := func(settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher) (*tools.Catalog, error) {
 		hook := &SubagentMCP{}
 		parentTools := withExecutors(t, readOnlyTool("read"))
-		tool, err := newSubagentTool(settings, parentTools, map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, launcher, hook, nil, nil)
+		tool, err := newSubagentTool(settings, parentTools, map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, launcher, hook, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -277,7 +277,7 @@ func TestSubagentToolsetWithNoLoadedMCPToolsNamesNone(t *testing.T) {
 	hook := &SubagentMCP{}
 	parentTools := withExecutors(t, readOnlyTool("read"))
 	if _, err := newSubagentTool(subagentSettings(toolsetAgent("finder", "grep", "mcp:zvec:search")), parentTools,
-		map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, &fakeLauncher{}, hook, nil, nil); err != nil {
+		map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, &fakeLauncher{}, hook, nil); err != nil {
 		t.Fatal(err)
 	}
 	err := hook.BindToolsets([]tools.Tool{mcpStub(t, "zvec", "search")}, nil)

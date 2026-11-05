@@ -647,9 +647,9 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 }
 
 // envFileTools are the native tools that read an env_file.
-var envFileTools = []string{"bash", "process", "exec", "tool_smith"}
+var envFileTools = []string{"exec", "tool_smith"}
 
-// withDefaultEnvFile gives each of bash, process, exec and tool_smith that the toolset has, and that
+// withDefaultEnvFile gives each of exec and tool_smith that the toolset has, and that
 // names no env_file, the default env_file. It adds no tool and does not change the toolset's
 // own map.
 func withDefaultEnvFile(native map[string]json.RawMessage, envFile json.RawMessage, toolsetPath string) (map[string]json.RawMessage, error) {

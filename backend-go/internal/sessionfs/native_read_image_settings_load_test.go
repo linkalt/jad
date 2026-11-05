@@ -9,11 +9,10 @@ import (
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
-func TestLoadSessionConfigReadImageHasItsOwnPathsAndNotReads(t *testing.T) {
+func TestLoadSessionConfigReadImageHasItsOwnPathsAndNotTheFilePolicy(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{Native: map[string]any{
-		"read":       map[string]any{"paths": map[string]any{"allow": []any{"allowed"}}},
 		"read_image": map[string]any{"max_image_bytes": 777, "paths": map[string]any{"allow": []any{"pictures"}, "deny": []any{"private"}}},
-	}})
+	}, Settings: map[string]any{"session_files": map[string]any{"paths": map[string]any{"allow": []any{"allowed"}}}}})
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
@@ -25,38 +24,37 @@ func TestLoadSessionConfigReadImageHasItsOwnPathsAndNotReads(t *testing.T) {
 	if !reflect.DeepEqual(config.NativeReadImage.Policy.Paths, want) {
 		t.Fatalf("read_image policy %+v, want its own %+v", config.NativeReadImage.Policy.Paths, want)
 	}
-	if reflect.DeepEqual(config.NativeRead.Policy.Paths, want) {
-		t.Fatalf("read policy %+v follows read_image", config.NativeRead.Policy.Paths)
+	if reflect.DeepEqual(config.FilePolicy.Paths, want) {
+		t.Fatalf("session_files policy %+v follows read_image", config.FilePolicy.Paths)
 	}
 }
 
-func TestLoadSessionConfigReadImageWithoutPathsDoesNotTakeReadsRules(t *testing.T) {
+func TestLoadSessionConfigReadImageWithoutPathsDoesNotTakeTheFilePolicy(t *testing.T) {
 	location, _ := layoutLocation(t, layouttest.Spec{Native: map[string]any{
-		"read":       map[string]any{"paths": map[string]any{"allow": []any{"allowed"}}},
 		"read_image": map[string]any{},
-	}})
+	}, Settings: map[string]any{"session_files": map[string]any{"paths": map[string]any{"allow": []any{"allowed"}}}}})
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.NativeReadImage.Policy.Paths) != 0 || len(config.NativeRead.Policy.Paths) != 1 {
-		t.Fatalf("read_image %+v, read %+v", config.NativeReadImage.Policy.Paths, config.NativeRead.Policy.Paths)
+	if len(config.NativeReadImage.Policy.Paths) != 0 || len(config.FilePolicy.Paths) != 1 {
+		t.Fatalf("read_image %+v, session_files %+v", config.NativeReadImage.Policy.Paths, config.FilePolicy.Paths)
 	}
 }
 
-func TestLoadSessionConfigReadImageWorksWithoutTheReadTool(t *testing.T) {
+func TestLoadSessionConfigReadImageWorksAlone(t *testing.T) {
 	location, _ := layoutLocation(t, layouttest.Spec{Native: map[string]any{"read_image": map[string]any{}}})
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)
 	}
-	if config.NativeRead != nil || config.NativeReadImage == nil || config.NativeReadImage.MaxImageBytes != 5*1024*1024 {
-		t.Fatalf("read %+v, read_image %+v", config.NativeRead, config.NativeReadImage)
+	if config.NativeReadImage == nil || config.NativeReadImage.MaxImageBytes != 5*1024*1024 {
+		t.Fatalf("read_image %+v", config.NativeReadImage)
 	}
 }
 
 func TestLoadSessionConfigReadImageIsOffUnlessConfigured(t *testing.T) {
-	location, _ := layoutLocation(t, layouttest.Spec{Native: map[string]any{"read": map[string]any{}}})
+	location, _ := layoutLocation(t, layouttest.Spec{Native: map[string]any{"exec": map[string]any{}}})
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil || config.NativeReadImage != nil {
 		t.Fatalf("read_image = %+v, err=%v; want off", config.NativeReadImage, err)

@@ -25,19 +25,74 @@ func shHook(name, script string, extensions ...string) sessionfs.PostEditHook {
 	return sessionfs.PostEditHook{Name: name, Ext: extensions, Argv: []string{"sh", "-c", script, "{rel}"}, Cwd: sessionfs.HookCwdFileDir}
 }
 
-// hookedTools returns write and edit wrapped with hooks, over a workspace with src/ and docs/.
+// fileChangeTool is a stand-in for a tool that changes one file per call and tells
+// OnFileChange about it, as exec does under hooks.shell_changes scan: a write (path,
+// content) or, with edit, a replacement (path, oldText, newText). It refuses a path
+// outside the workspace or outside the call's PathScope allow list, and reports an
+// unchanged file without calling OnFileChange.
+func fileChangeTool(edit bool) tools.Tool {
+	return tools.Tool{Definition: tools.Definition{ID: "test.change", Source: "native", Name: "change"}, Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+		rel, _ := arguments["path"].(string)
+		target := filepath.Join(execution.WorkspaceRoot, filepath.FromSlash(rel))
+		allowed := sessionfs.PathWithin(execution.WorkspaceRoot, target)
+		if scope := execution.PathScope; allowed && scope != nil && len(scope.Allow) > 0 {
+			allowed = false
+			for _, entry := range scope.Allow {
+				if sessionfs.PathWithin(filepath.Join(execution.WorkspaceRoot, entry), target) {
+					allowed = true
+				}
+			}
+		}
+		if !allowed {
+			return tools.ExecutionError(execution.CallID, tools.StatusForbidden, "path_outside_workspace", "The requested path is outside the workspace"), nil
+		}
+		old, readErr := os.ReadFile(target)
+		content, _ := arguments["content"].(string)
+		verb, action := "Created", "created"
+		if readErr == nil {
+			verb, action = "Updated", "updated"
+		}
+		if edit {
+			from, _ := arguments["oldText"].(string)
+			to, _ := arguments["newText"].(string)
+			if readErr != nil || !strings.Contains(string(old), from) {
+				return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "no_match", "oldText was not found"), nil
+			}
+			content, verb, action = strings.Replace(string(old), from, to, 1), "Edited", "edited"
+		}
+		if readErr == nil && string(old) == content {
+			return tools.RenderToolResult(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "Unchanged " + rel})
+		}
+		if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+			return tools.ExecutionError(execution.CallID, tools.StatusError, "write_failed", err.Error()), nil
+		}
+		if execution.OnFileChange != nil {
+			execution.OnFileChange(rel, action)
+		}
+		return tools.RenderToolResult(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: verb + " " + rel})
+	}}
+}
+
+// hookedTools returns a write and an edit stand-in wrapped with hooks, over a workspace
+// with src/ and docs/.
 func hookedTools(t *testing.T, hooks sessionfs.HooksSettings) (write, edit tools.Tool, root string) {
 	t.Helper()
 	root = scopeWorkspace(t)
-	plainWrite, err := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	if err != nil {
-		t.Fatal(err)
+	return WithPostEditHooks(fileChangeTool(false), hooks, ""), WithPostEditHooks(fileChangeTool(true), hooks, ""), root
+}
+
+func assertMutationStatus(t *testing.T, output, want string) {
+	t.Helper()
+	line, _, _ := strings.Cut(output, "\n")
+	var header struct {
+		Status string `json:"status"`
 	}
-	plainEdit, err := NewEditTool(testEditSettings(root, 1<<20), NewPathLocks())
-	if err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal([]byte(line), &header); err != nil {
+		t.Fatalf("invalid result header %q: %v", line, err)
 	}
-	return WithPostEditHooks(plainWrite, hooks, ""), WithPostEditHooks(plainEdit, hooks, ""), root
+	if header.Status != want {
+		t.Fatalf("status = %q, want %q; output: %s", header.Status, want, output)
+	}
 }
 
 func callTool(t *testing.T, tool tools.Tool, root string, arguments map[string]any, onChange func(string, string)) string {
@@ -77,7 +132,7 @@ func TestHooksRunAfterAnEditAndNameTheFile(t *testing.T) {
 func TestHooksLeaveTheResultAloneWhenNothingShouldRun(t *testing.T) {
 	hooks := hookTestSettings(shHook("lint", `echo ran > ran.txt`, ".go"))
 	write, edit, root := hookedTools(t, hooks)
-	plainWrite, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	plainWrite := fileChangeTool(false)
 	ran := filepath.Join(root, "src", "ran.txt")
 
 	// A file with another extension: byte-identical to the unhooked tool, no check started.
@@ -104,7 +159,7 @@ func TestHooksLeaveTheResultAloneWhenNothingShouldRun(t *testing.T) {
 }
 
 func TestHooksOffMeansTheToolIsReturnedAsIs(t *testing.T) {
-	plain, _ := NewWriteTool(testWriteSettings(scopeWorkspace(t), 1<<20), NewPathLocks())
+	plain := fileChangeTool(false)
 	for name, hooks := range map[string]sessionfs.HooksSettings{
 		"disabled":   {Enabled: false, PostEdit: []sessionfs.PostEditHook{shHook("x", "true", ".go")}},
 		"no entries": {Enabled: true},
@@ -261,32 +316,59 @@ func TestHooksGetNoShellSoAFileNameIsNeverParsed(t *testing.T) {
 	}
 }
 
-func TestHooksBuildAndRunInTheCatalogWithoutTheBashTool(t *testing.T) {
-	root := scopeWorkspace(t)
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "write.json"))
+func hookExecCatalog(t *testing.T, root string, hooks sessionfs.HooksSettings) *tools.Catalog {
+	t.Helper()
+	requireInterpreters(t, "bash")
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "exec.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := filepath.Join(root, "write.json")
+	definition := filepath.Join(root, "exec.json")
 	if err := os.WriteFile(definition, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	write := testWriteSettings(root, 1<<20)
-	config := sessionfs.SessionConfig{
-		SettingPath: "setting.json", ToolDefinitionPaths: []string{definition},
-		NativeWrite: &write, Hooks: hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt")),
-	}
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, root)
+	config := sessionfs.SessionConfig{SettingPath: "setting.json", ToolDefinitionPaths: []string{definition}, NativeExec: &settings, Hooks: hooks}
 	catalog, err := BuildCatalog(config)
-	if err != nil {
-		t.Fatalf("hooks without tools.native.bash must build: %v", err)
-	}
-	item := `{"type":"function_call","call_id":"c","name":"write","arguments":` + jsonString(`{"path":"docs/d.txt","content":"x\n"}`) + `}`
-	output, err := catalog.ExecuteFunctionCall(context.Background(), []byte(item), tools.ExecutionContext{CallID: "c", ToolName: "write", WorkspaceRoot: root, SessionDir: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(output), "[lint] passed") || !strings.Contains(string(output), "saw d.txt") {
-		t.Fatalf("the check did not run without the bash tool:\n%s", output)
+	return catalog
+}
+
+func callCatalog(t *testing.T, catalog *tools.Catalog, root, name, arguments string) string {
+	t.Helper()
+	item := `{"type":"function_call","call_id":"c","name":"` + name + `","arguments":` + jsonString(arguments) + `}`
+	output, err := catalog.ExecuteFunctionCall(context.Background(), []byte(item), tools.ExecutionContext{CallID: "c", ToolName: name, WorkspaceRoot: root, SessionDir: root, OnFileChange: func(string, string) {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
+}
+
+// The catalog hooks exec: with hooks.shell_changes scan, a file an exec call wrote gets its
+// post-edit checks.
+func TestHooksAreWiredIntoExecWithTheChangeScan(t *testing.T) {
+	root := scopeWorkspace(t)
+	hooks := hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt"))
+	hooks.ShellChanges = sessionfs.HookShellChangesScan
+	hooks.ShellScanMaxFiles = 1000
+	hooks.ShellMaxChangedFiles = 10
+	catalog := hookExecCatalog(t, root, hooks)
+	if out := callCatalog(t, catalog, root, "exec", `{"lang":"bash","code":"printf 'x\\n' > docs/d.txt"}`); !strings.Contains(out, "[lint] passed") || !strings.Contains(out, "saw d.txt") {
+		t.Fatalf("exec from the catalog ran no check:\n%s", out)
+	}
+}
+
+// Without the scan exec names no file, so no check runs.
+func TestHooksDoNotRunForExecWithoutTheChangeScan(t *testing.T) {
+	root := scopeWorkspace(t)
+	hooks := hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt"))
+	hooks.ShellChanges = sessionfs.HookShellChangesOff
+	catalog := hookExecCatalog(t, root, hooks)
+	if out := callCatalog(t, catalog, root, "exec", `{"lang":"bash","code":"printf 'x\\n' > docs/e.txt"}`); strings.Contains(out, "post-edit") {
+		t.Fatalf("exec without the scan ran a post-edit check:\n%s", out)
 	}
 }
 
@@ -306,50 +388,6 @@ func TestHooksUseTheirOwnChildSettings(t *testing.T) {
 	output = callTool(t, write, root, map[string]any{"path": "docs/f.txt", "content": "x\n"}, nil)
 	if strings.Contains(output, strings.Repeat("0", 100)) {
 		t.Fatalf("hooks ignored their own max_line_chars:\n%s", output)
-	}
-}
-
-func TestHooksAreWiredIntoBothToolsOfTheCatalog(t *testing.T) {
-	root := scopeWorkspace(t)
-	definition := func(file string) string {
-		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", file))
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(root, file)
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	write, edit, bash := testWriteSettings(root, 1<<20), testEditSettings(root, 1<<20), bashTestSettings(t, root)
-	config := sessionfs.SessionConfig{
-		SettingPath: "setting.json", NativeWrite: &write, NativeEdit: &edit, NativeBash: &bash,
-		ToolDefinitionPaths: []string{definition("write.json"), definition("edit.json"), definition("bash.json")},
-		Hooks:               hookTestSettings(shHook("lint", `echo "saw $0"`, ".txt")),
-	}
-	catalog, err := BuildCatalog(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call := func(name, arguments string) string {
-		t.Helper()
-		item := `{"type":"function_call","call_id":"c","name":"` + name + `","arguments":` + jsonString(arguments) + `}`
-		output, err := catalog.ExecuteFunctionCall(context.Background(), []byte(item), tools.ExecutionContext{CallID: "c", ToolName: name, WorkspaceRoot: root, SessionDir: root})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(output)
-	}
-	if out := call("write", `{"path":"docs/c.txt","content":"one\n"}`); !strings.Contains(out, "[lint] passed") || !strings.Contains(out, "saw c.txt") {
-		t.Errorf("write from the catalog ran no check:\n%s", out)
-	}
-	if out := call("edit", `{"path":"docs/c.txt","oldText":"one","newText":"two"}`); !strings.Contains(out, "[lint] passed") || !strings.Contains(out, "saw c.txt") {
-		t.Errorf("edit from the catalog ran no check:\n%s", out)
-	}
-	// bash is not hooked: it changes files the tools cannot name.
-	if out := call("bash", `{"command":"echo hi"}`); strings.Contains(out, "post-edit") {
-		t.Errorf("bash ran a post-edit check:\n%s", out)
 	}
 }
 
@@ -440,7 +478,7 @@ func TestHooksFollowASymlinkedFileToItsTarget(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skip("symlinks are not available")
 	}
-	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	plain := fileChangeTool(false)
 	hooked := WithPostEditHooks(plain, hookTestSettings(check), "")
 	output := callTool(t, hooked, root, map[string]any{"path": "docs/link.txt", "content": "y\n"}, nil)
 	if !strings.Contains(output, filepath.Join(root, "src")) {
@@ -459,7 +497,7 @@ func TestHooksNeverRunWithoutAChangedFileEvenWhenTheRootLooksLikeOne(t *testing.
 	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	plain, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
+	plain := fileChangeTool(false)
 	write := WithPostEditHooks(plain, hookTestSettings(shHook("lint", `echo ran`, ".txt")), "")
 	callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)
 	output := callTool(t, write, root, map[string]any{"path": "src/a.dat", "content": "x\n"}, nil)

@@ -20,14 +20,13 @@ const (
 )
 
 const (
-	projectInstructionsSection                     = "project_instructions"
-	defaultProjectInstructionsMaxBytes       int64 = 65_536
-	defaultProjectInstructionsSubfolderBytes int64 = 16_384
-	maxProjectInstructionsFileNames                = 16
+	projectInstructionsSection               = "project_instructions"
+	defaultProjectInstructionsMaxBytes int64 = 65_536
+	maxProjectInstructionsFileNames          = 16
 )
 
 var (
-	projectInstructionsKeys         = []string{"enabled", "file_names", "stop_at", "max_bytes", "subfolders", "subfolder_max_bytes"}
+	projectInstructionsKeys         = []string{"enabled", "file_names", "stop_at", "max_bytes"}
 	defaultProjectInstructionsNames = []string{"AGENTS.md", "CLAUDE.md"}
 )
 
@@ -44,25 +43,14 @@ type ProjectInstructionsSettings struct {
 	StopAt string
 	// MaxBytes bounds the text all the files found upward add to the prompt.
 	MaxBytes int64
-	// Subfolders adds a subfolder's file to the result of the first read, write, edit,
-	// apply_patch or notebook call of a run that touches a path inside that subfolder.
-	Subfolders bool
-	// SubfolderMaxBytes bounds each subfolder file.
-	SubfolderMaxBytes int64
-}
-
-// SubfoldersActive reports whether subfolder files are added to tool results.
-func (settings ProjectInstructionsSettings) SubfoldersActive() bool {
-	return settings.Enabled && settings.Subfolders
 }
 
 // DefaultProjectInstructionsSettings is the setting when the key is absent: off.
 func DefaultProjectInstructionsSettings() ProjectInstructionsSettings {
 	return ProjectInstructionsSettings{
-		FileNames:         append([]string(nil), defaultProjectInstructionsNames...),
-		StopAt:            ProjectInstructionsStopGitRoot,
-		MaxBytes:          defaultProjectInstructionsMaxBytes,
-		SubfolderMaxBytes: defaultProjectInstructionsSubfolderBytes,
+		FileNames: append([]string(nil), defaultProjectInstructionsNames...),
+		StopAt:    ProjectInstructionsStopGitRoot,
+		MaxBytes:  defaultProjectInstructionsMaxBytes,
 	}
 }
 
@@ -76,6 +64,9 @@ func normalizeProjectInstructions(raw json.RawMessage, settingPath string) (Proj
 		return ProjectInstructionsSettings{}, err
 	}
 	for key := range fields {
+		if key == "subfolders" || key == "subfolder_max_bytes" {
+			return ProjectInstructionsSettings{}, configError("%s: %s.%s was removed: a subfolder's file was added to the result of the read, write, edit, apply_patch and notebook tools, which exec replaced; delete the key", settingPath, projectInstructionsSection, key)
+		}
 		if !slices.Contains(projectInstructionsKeys, key) {
 			return ProjectInstructionsSettings{}, configError("%s: %s.%s is not supported", settingPath, projectInstructionsSection, key)
 		}
@@ -84,13 +75,7 @@ func normalizeProjectInstructions(raw json.RawMessage, settingPath string) (Proj
 	if settings.Enabled, err = bashBool(fields, "enabled", false, prefix); err != nil {
 		return ProjectInstructionsSettings{}, err
 	}
-	if settings.Subfolders, err = bashBool(fields, "subfolders", false, prefix); err != nil {
-		return ProjectInstructionsSettings{}, err
-	}
 	if settings.MaxBytes, err = configuredInteger(fields, "max_bytes", defaultProjectInstructionsMaxBytes, 1, maxPromptDocumentBytes, settingPath, projectInstructionsSection); err != nil {
-		return ProjectInstructionsSettings{}, err
-	}
-	if settings.SubfolderMaxBytes, err = configuredInteger(fields, "subfolder_max_bytes", defaultProjectInstructionsSubfolderBytes, 1, maxPromptDocumentBytes, settingPath, projectInstructionsSection); err != nil {
 		return ProjectInstructionsSettings{}, err
 	}
 	if settings.StopAt, err = bashString(fields, "stop_at", ProjectInstructionsStopGitRoot, prefix, false); err != nil {

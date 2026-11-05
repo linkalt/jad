@@ -80,11 +80,9 @@ type ServerSettings struct {
 	LogLevel  string
 	LogFormat string
 	LogFile   string
-	// RecoverProcessesAtStart makes the Go backend recover the managed-process storage
-	// of every session when it starts, instead of at the first use of the process tool.
-	RecoverProcessesAtStart bool
-	// RecoverSubagentRunsAtStart does the same for the sub-agent run manifests: a run the
-	// last server left running is marked lost at start, not at the first use of the tool.
+	// RecoverSubagentRunsAtStart makes the Go backend recover the sub-agent run manifests of
+	// every session when it starts: a run the last server left running is marked lost at
+	// start, not at the first use of the tool.
 	RecoverSubagentRunsAtStart bool
 	ConditionalRequests        bool
 	SnapshotTurns              int
@@ -201,7 +199,6 @@ func Defaults() ServerSettings {
 		SessionStoreIdle:           time.Duration(serverconfig.DefaultSessionStoreIdleMS) * time.Millisecond,
 		LogLevel:                   serverconfig.DefaultLogLevel,
 		LogFormat:                  serverconfig.DefaultLogFormat,
-		RecoverProcessesAtStart:    serverconfig.DefaultRecoverProcessesAtStart,
 		RecoverSubagentRunsAtStart: serverconfig.DefaultRecoverSubagentRunsAtStart,
 		ConditionalRequests:        true,
 		SnapshotTurns:              24,
@@ -699,8 +696,8 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		}
 		settings.LogFile = strings.TrimSpace(parsed)
 	}
-	if err := readBool(fields, "recover_processes_at_start", &settings.RecoverProcessesAtStart, path); err != nil {
-		return ServerSettings{}, err
+	if _, exists := fields["recover_processes_at_start"]; exists {
+		return ServerSettings{}, fmt.Errorf("%s: server.recover_processes_at_start was removed with tools.native.process: there are no managed processes to recover; delete the key", path)
 	}
 	if err := readBool(fields, "recover_subagent_runs_at_start", &settings.RecoverSubagentRunsAtStart, path); err != nil {
 		return ServerSettings{}, err

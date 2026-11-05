@@ -10,15 +10,6 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-type processListStub struct{ snapshots []ProcessSnapshot }
-
-func (stub *processListStub) Recover() error                { return nil }
-func (stub *processListStub) List(string) []ProcessSnapshot { return stub.snapshots }
-
-func summaryProcess(id string, state ProcessState, startedAt string) ProcessSnapshot {
-	return ProcessSnapshot{ProcessManifest: ProcessManifest{SchemaVersion: 1, ID: id, State: state, CWD: "/w", StartedAt: startedAt, ExitCode: json.RawMessage("null"), Signal: json.RawMessage("null")}}
-}
-
 func TestTaskStateContextSummaryCountsEveryStatusAndListsOnlyDetailStatuses(t *testing.T) {
 	settings := taskTestSettings(t.TempDir())
 	store := NewTaskStore(settings.StorageDir)
@@ -76,38 +67,6 @@ func TestTaskStateContextItemsModeHasNoCounts(t *testing.T) {
 	}
 }
 
-func TestProcessStateContextSummaryCountsEveryStateAndListsOnlyDetailStates(t *testing.T) {
-	source := &processListStub{snapshots: []ProcessSnapshot{
-		summaryProcess("p1", ProcessRunning, "2026-10-01T00:00:01.000Z"),
-		summaryProcess("p2", ProcessRunning, "2026-10-01T00:00:02.000Z"),
-		summaryProcess("p3", ProcessExited, "2026-10-01T00:00:03.000Z"),
-		summaryProcess("p4", ProcessExited, "2026-10-01T00:00:04.000Z"),
-		summaryProcess("p5", ProcessExited, "2026-10-01T00:00:05.000Z"),
-		summaryProcess("p6", ProcessFailed, "2026-10-01T00:00:06.000Z"),
-	}}
-	settings := sessionfs.NativeProcessStateContextSettings{
-		States: []string{"running", "exited", "failed", "lost"}, Limit: 1,
-		Mode: sessionfs.NativeStateContextModeSummary, DetailStates: []string{"running"},
-	}
-	state, err := CollectProcessStateContext(source, settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []StateContextCount{{"running", 2}, {"exited", 3}, {"failed", 1}}
-	if fmt.Sprint(state.Counts) != fmt.Sprint(want) {
-		t.Fatalf("counts = %+v, want %+v", state.Counts, want)
-	}
-	if len(state.Items) != 1 || state.Items[0].ID != "p2" || !state.HasMore {
-		t.Fatalf("items = %+v, has_more = %v; want the newest running process and more", state.Items, state.HasMore)
-	}
-	for state.StateContextItemCount() > len(state.Counts) {
-		state.TrimStateContextItem()
-	}
-	if !state.TrimStateContextItem() || len(state.Counts) != 2 || state.OmittedCounts != 1 || state.OmittedBySnapshot != 1 {
-		t.Fatalf("trim = %+v", state)
-	}
-}
-
 func TestSubagentStateContextSummaryCountsEveryStateAndListsOnlyDetailStates(t *testing.T) {
 	release := make(chan struct{})
 	first, _, manager := sharedManagerCatalogs(t, blockedLauncher(release, nil))
@@ -150,12 +109,6 @@ func TestSubagentStateContextSummaryCountsEveryStateAndListsOnlyDetailStates(t *
 }
 
 func TestSummaryStateContextCountsAloneAreData(t *testing.T) {
-	process, err := CollectProcessStateContext(&processListStub{snapshots: []ProcessSnapshot{summaryProcess("p1", ProcessExited, "2026-10-01T00:00:01.000Z")}}, sessionfs.NativeProcessStateContextSettings{
-		States: []string{"running", "exited"}, Limit: 5, Mode: sessionfs.NativeStateContextModeSummary, DetailStates: []string{"running"},
-	})
-	if err != nil || len(process.Items) != 0 || process.StateContextItemCount() != 1 {
-		t.Fatalf("process counts only: %+v, count %d, err %v; want one entry that counts as data", process, process.StateContextItemCount(), err)
-	}
 	release := make(chan struct{})
 	defer close(release)
 	first, _, manager := sharedManagerCatalogs(t, blockedLauncher(release, nil))

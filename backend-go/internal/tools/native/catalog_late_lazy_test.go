@@ -48,7 +48,7 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 		config.NativeSubagent = &sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{reader}}
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, &fakeLauncher{}, nil, nil, nil, messenger, nil, set)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, &fakeLauncher{}, nil, nil, nil, messenger, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync(%s): %v", name, err)
 	}
@@ -129,7 +129,7 @@ func TestChildOfAParentWithALazyProfileMessageGetsTheGatedCopy(t *testing.T) {
 	}
 	launcher := &fakeLauncher{}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
-	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, launcher, nil, nil, nil, messenger, nil, set)
+	catalog, err := BuildCatalogWithAsync(config, nil, nil, nil, launcher, nil, nil, nil, messenger, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
 		ProfileTools:        sessionfs.ProfileToolSettings{Lazy: []string{"subagent", "read"}},
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
-	_, err = BuildCatalogWithAsync(config, nil, nil, nil, nil, nil, &fakeLauncher{}, mcp, nil, nil, nil, nil, set)
+	_, err = BuildCatalogWithAsync(config, nil, nil, nil, &fakeLauncher{}, mcp, nil, nil, nil, nil, set)
 	if err != nil {
 		t.Fatalf("BuildCatalogWithAsync: %v", err)
 	}

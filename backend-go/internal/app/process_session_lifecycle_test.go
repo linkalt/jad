@@ -3,11 +3,16 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,32 +22,56 @@ import (
 	"jad/backend-go/internal/tools/native"
 )
 
-// A user stop, a reset and a session delete reach the session's process handles through
+// A user stop, a reset and a session delete reach the session's exec handles through
 // the async manager, also on a storage other sessions share.
 
 type processHandleFixture struct {
 	f       *layoutFixture
-	manager *native.ManagedProcessManager
 	host    *native.AsyncHost
-	process tools.Tool
+	exec    tools.Tool
 	async   tools.Tool
 	storage string
 }
 
+func execHandleSettings(t *testing.T, dir string) sessionfs.NativeExecSettings {
+	t.Helper()
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	return sessionfs.NativeExecSettings{
+		Child: sessionfs.NativeBashSettings{
+			Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}, Shell: shell,
+			TimeoutMs: 120_000, MaxTimeoutMs: 120_000, KillGraceMs: 100, KillProcessGroup: "always", MaxBytes: 2048,
+			Stdout: sessionfs.NativeBashStreamBudget{HeadBytes: 512, TailBytes: 512}, Stderr: sessionfs.NativeBashStreamBudget{HeadBytes: 512, TailBytes: 512},
+			Spill:        sessionfs.NativeBashSpillSettings{Keep: "truncated_only", CapBytes: 1024, StorageDir: filepath.Join(dir, ".exec-output")},
+			MaxLineChars: 2000, StdinMaxBytes: 64 * 1024, Env: map[string]string{}, EnvDeny: []string{},
+		},
+		LangNames:   []string{"bash"},
+		Langs:       map[string]sessionfs.NativeExecLang{"bash": {Argv: []string{"bash", "-c", "{code}", "exec"}, Mode: sessionfs.NativeExecModeArg, Ext: ".sh", Aliases: []string{}, LibEnv: "PATH"}},
+		DefaultLang: "bash", CodeMaxBytes: 64 * 1024, InputMaxBytes: 4096, ArgMaxBytes: 64 * 1024, ResultMaxBytes: 1024,
+	}
+}
+
 func newProcessHandleFixture(t *testing.T, f *layoutFixture, storage string) processHandleFixture {
 	t.Helper()
+	return newProcessHandleFixtureWith(t, f, storage, asyncmgr.DefaultConfig())
+}
+
+func newProcessHandleFixtureWith(t *testing.T, f *layoutFixture, storage string, config asyncmgr.Config) processHandleFixture {
+	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("managed process groups require a POSIX platform")
+		t.Skip("exec handles need a POSIX shell")
 	}
 	dir := filepath.Join(f.cwd, storage)
-	settings := sessionfs.NativeProcessSettings{StorageDir: dir, KillGraceMs: 250, Shell: "/bin/sh", MaxRunning: 8, MaxCompleted: 10,
-		LogCapBytes: 1 << 16, MaxLineChars: 1000, StdinMaxBytes: 1024, Env: map[string]string{}, EnvDeny: []string{}}
-	manager := f.service.resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: demoSettingPath(t, f), NativeProcess: &settings}).(*native.ManagedProcessManager)
-	host, err := f.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(dir), Config: asyncmgr.DefaultConfig()})
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	host, err := f.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(dir), Config: config})
 	if err != nil {
 		t.Fatal(err)
 	}
-	process, err := native.NewProcessToolWithAsync(settings, manager, "KEY", host)
+	execTool, err := native.NewExecTool(execHandleSettings(t, dir), "KEY", host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,21 +79,42 @@ func newProcessHandleFixture(t *testing.T, f *layoutFixture, storage string) pro
 	if err != nil {
 		t.Fatal(err)
 	}
-	return processHandleFixture{f: f, manager: manager, host: host, process: process, async: async, storage: dir}
+	return processHandleFixture{f: f, host: host, exec: execTool, async: async, storage: dir}
 }
 
-func (p processHandleFixture) start(t *testing.T, sessionKey, command string) string {
+// handle is one started exec handle: its id and the pid of the program it runs.
+type handle struct {
+	id  string
+	pid int
+}
+
+// start runs code under exec with block_ms 0, so it becomes a handle; the program writes
+// its pid first and then becomes the command (exec), so the pid is the command's.
+func (p processHandleFixture) start(t *testing.T, sessionKey, command string) handle {
 	t.Helper()
-	out, err := p.process.Execute(context.Background(), map[string]any{"command": command, "block_ms": json.Number("0")},
-		tools.ExecutionContext{CallID: "c", WorkspaceRoot: p.f.cwd, SessionKey: sessionKey})
+	pidFile := filepath.Join(p.storage, fmt.Sprintf("pid-%d", time.Now().UnixNano()))
+	code := fmt.Sprintf("echo $$ > %q; exec bash -c %q", pidFile, command)
+	arguments := p.exec.NormalizeArguments(map[string]any{"code": code, "block_ms": json.Number("0")})
+	out, err := p.exec.Execute(context.Background(), arguments, tools.ExecutionContext{CallID: "c", WorkspaceRoot: p.f.cwd, SessionDir: p.storage, SessionKey: sessionKey})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := regexp.MustCompile(`proc_[0-9a-f-]+`).FindString(out)
+	id := regexp.MustCompile(`exec_[0-9a-f]+`).FindString(out)
 	if id == "" {
-		t.Fatalf("no process id in %s", out)
+		t.Fatalf("no exec handle id in %s", out)
 	}
-	return id
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if data, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+				return handle{id: id, pid: pid}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("handle %s wrote no pid", id)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (p processHandleFixture) key(t *testing.T) string {
@@ -80,27 +130,33 @@ func (p processHandleFixture) key(t *testing.T) string {
 	return sessionKey(reference, profile)
 }
 
-func (p processHandleFixture) requireState(t *testing.T, id string, want native.ProcessState, what string) {
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
+// requireGone waits for the handle's program to end.
+func (p processHandleFixture) requireGone(t *testing.T, h handle, what string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		snapshot, found := p.manager.Snapshot(id)
-		if found && snapshot.State == want {
-			return
-		}
+	for processAlive(h.pid) {
 		if time.Now().After(deadline) {
-			t.Fatalf("process after %s = %+v found=%v, want %s", what, snapshot, found, want)
+			t.Fatalf("handle %s (pid %d) still runs after %s", h.id, h.pid, what)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (p processHandleFixture) requireStillRunning(t *testing.T, id, what string) {
+func (p processHandleFixture) requireStillRunning(t *testing.T, h handle, what string) {
 	t.Helper()
 	time.Sleep(300 * time.Millisecond)
-	if snapshot, found := p.manager.Snapshot(id); !found || snapshot.State != native.ProcessRunning {
-		t.Fatalf("process after %s = %+v found=%v, want running", what, snapshot, found)
+	if !processAlive(h.pid) {
+		t.Fatalf("handle %s (pid %d) ended after %s, want running", h.id, h.pid, what)
 	}
+}
+
+// stop ends a handle the test started for another session.
+func (p processHandleFixture) stop(h handle) {
+	_ = syscall.Kill(h.pid, syscall.SIGKILL)
 }
 
 func (p processHandleFixture) wait(t *testing.T, owner string) string {
@@ -119,13 +175,13 @@ func TestUserStopStopsTheSessionsProcessHandlesAndQueuesTheSignal(t *testing.T) 
 	owner := p.key(t)
 	mine := p.start(t, owner, "sleep 60 & sleep 60; wait")
 	other := p.start(t, "another|session", "sleep 60")
-	defer p.manager.Stop(other, "test_cleanup")
+	defer p.stop(other)
 	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run/stop", ""); status != http.StatusOK {
 		t.Fatalf("stop: %d %s", status, body)
 	}
-	p.requireState(t, mine, native.ProcessStopped, "a user stop")
+	p.requireGone(t, mine, "a user stop")
 	p.requireStillRunning(t, other, "a user stop of another session")
-	if got := p.wait(t, owner); !strings.Contains(got, mine) || !strings.Contains(got, "stopped") || !strings.Contains(got, "user_stop") {
+	if got := p.wait(t, owner); !strings.Contains(got, mine.id) || !strings.Contains(got, "stopped") || !strings.Contains(got, "user_stop") {
 		t.Fatalf("the next wait does not explain the stop:\n%s", got)
 	}
 }
@@ -135,17 +191,17 @@ func TestUserResetStopsTheSessionsProcessHandlesAndDropsItsUnreadSignals(t *test
 	p := newProcessHandleFixture(t, f, "reset-processes")
 	owner := p.key(t)
 	finished := p.start(t, owner, "exit 0")
-	p.requireState(t, finished, native.ProcessExited, "a quick exit")
+	p.requireGone(t, finished, "a quick exit")
 	running := p.start(t, owner, "sleep 60")
 	other := p.start(t, "another|session", "sleep 60")
-	defer p.manager.Stop(other, "test_cleanup")
+	defer p.stop(other)
 	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/reset", ""); status != http.StatusOK {
 		t.Fatalf("reset: %d %s", status, body)
 	}
-	p.requireState(t, running, native.ProcessStopped, "a reset")
+	p.requireGone(t, running, "a reset")
 	p.requireStillRunning(t, other, "a reset of another session")
 	got := p.wait(t, owner)
-	if strings.Contains(got, finished) || strings.Contains(got, running) {
+	if strings.Contains(got, finished.id) || strings.Contains(got, running.id) {
 		t.Fatalf("a reset left unread signals behind:\n%s", got)
 	}
 }
@@ -156,15 +212,13 @@ func TestSharedStorageSessionDeleteStopsItsProcessesAndLeavesOtherSessionsAlone(
 	owner := p.key(t)
 	mine := p.start(t, owner, "sleep 60")
 	twin := p.start(t, "twin|session", "sleep 60")
-	defer p.manager.Stop(twin, "test_cleanup")
+	defer p.stop(twin)
 	finished := p.start(t, owner, "exit 0")
-	p.requireState(t, finished, native.ProcessExited, "a quick exit")
-	settings := sessionfs.NativeProcessSettings{StorageDir: p.storage, KillGraceMs: 250}
-	f.service.resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: filepath.Join(f.root, "sessions", "twin.json"), NativeProcess: &settings})
+	p.requireGone(t, finished, "a quick exit")
 	deleteDemoSession(t, f)
-	p.requireState(t, mine, native.ProcessStopped, "deleting the session")
+	p.requireGone(t, mine, "deleting the session")
 	p.requireStillRunning(t, twin, "deleting another session on the same storage")
-	if got := p.wait(t, owner); strings.Contains(got, mine) || strings.Contains(got, finished) {
+	if got := p.wait(t, owner); strings.Contains(got, mine.id) || strings.Contains(got, finished.id) {
 		t.Fatalf("the deleted session's handles are still known:\n%s", got)
 	}
 	if got := p.wait(t, "twin|session"); strings.Contains(got, "unknown") {
@@ -177,7 +231,7 @@ func TestEndingARunLeavesProcessHandlesRunning(t *testing.T) {
 	p := newProcessHandleFixture(t, f, "run-end-processes")
 	owner := p.key(t)
 	id := p.start(t, owner, "sleep 60")
-	defer p.manager.Stop(id, "test_cleanup")
+	defer p.stop(id)
 	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"hello"}`); status != http.StatusOK && status != http.StatusAccepted {
 		t.Fatalf("run: %d %s", status, body)
 	}
@@ -207,12 +261,12 @@ func TestWatchSessionAsyncReportsCountsAndBoundedIDsOfOneSession(t *testing.T) {
 		t.Fatalf("initial state = %+v", state)
 	}
 
-	var mine []string
+	var mine []handle
 	for i := 0; i < 3; i++ {
 		mine = append(mine, p.start(t, owner, "sleep 60"))
 	}
 	other := p.start(t, "another|session", "sleep 60")
-	defer p.manager.Stop(other, "test_cleanup")
+	defer p.stop(other)
 	select {
 	case <-changed:
 	case <-time.After(time.Second):
@@ -223,7 +277,7 @@ func TestWatchSessionAsyncReportsCountsAndBoundedIDsOfOneSession(t *testing.T) {
 		t.Fatalf("state = %+v, want 3 active and their ids", state)
 	}
 	for _, id := range state.IDs {
-		if id == other {
+		if id == other.id {
 			t.Fatal("another session's handle id reached this session's state")
 		}
 	}
@@ -231,7 +285,7 @@ func TestWatchSessionAsyncReportsCountsAndBoundedIDsOfOneSession(t *testing.T) {
 	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run/stop", ""); status != http.StatusOK {
 		t.Fatalf("stop: %d %s", status, body)
 	}
-	p.requireState(t, mine[0], native.ProcessStopped, "a user stop")
+	p.requireGone(t, mine[0], "a user stop")
 	deadline := time.Now().Add(5 * time.Second)
 	for read().Active != 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -249,7 +303,7 @@ func TestSessionAsyncStateContextListsPendingHandlesAndCountsTheRest(t *testing.
 		p.start(t, owner, "sleep 60")
 	}
 	other := p.start(t, "another|session", "sleep 60")
-	defer p.manager.Stop(other, "test_cleanup")
+	defer p.stop(other)
 
 	section, err := native.CollectAsyncStateContext(p.host.Manager(), owner)
 	if err != nil {
@@ -259,7 +313,7 @@ func TestSessionAsyncStateContextListsPendingHandlesAndCountsTheRest(t *testing.
 		t.Fatalf("section = %+v", section)
 	}
 	for _, item := range section.Items {
-		if item.Kind != "process" || item.State == "" || item.ID == other {
+		if item.Kind != "exec" || item.State == "" || item.ID == other.id {
 			t.Fatalf("item = %+v", item)
 		}
 	}
@@ -291,19 +345,7 @@ func TestWatchSessionAsyncMergesManagersNewestFirstWithTheSmallestCap(t *testing
 	// The first fixture creates its host with the default config; the second is created
 	// directly with the small cap, so the two managers disagree.
 	a := newProcessHandleFixture(t, f, "merge-a")
-	dirB := filepath.Join(f.cwd, "merge-b")
-	hostB, err := f.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(dirB), Config: small})
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings := sessionfs.NativeProcessSettings{StorageDir: dirB, KillGraceMs: 250, Shell: "/bin/sh", MaxRunning: 8, MaxCompleted: 10,
-		LogCapBytes: 1 << 16, MaxLineChars: 1000, StdinMaxBytes: 1024, Env: map[string]string{}, EnvDeny: []string{}}
-	managerB := f.service.resolver.sharedProcessManager(sessionfs.SessionConfig{SettingPath: demoSettingPath(t, f), NativeProcess: &settings}).(*native.ManagedProcessManager)
-	toolB, err := native.NewProcessToolWithAsync(settings, managerB, "KEY", hostB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := processHandleFixture{f: f, manager: managerB, host: hostB, process: toolB, storage: dirB}
+	b := newProcessHandleFixtureWith(t, f, "merge-b", small)
 
 	owner := a.key(t)
 	reference, profile, _ := strings.Cut(owner, "\x00")
@@ -314,11 +356,10 @@ func TestWatchSessionAsyncMergesManagersNewestFirstWithTheSmallestCap(t *testing
 	defer stop()
 
 	var started []string
-	for i, p := range []processHandleFixture{a, b, a, b, a} {
-		id := p.start(t, owner, "sleep 60")
-		defer p.manager.Stop(id, "test_cleanup")
-		started = append(started, id)
-		_ = i
+	for _, p := range []processHandleFixture{a, b, a, b, a} {
+		h := p.start(t, owner, "sleep 60")
+		defer p.stop(h)
+		started = append(started, h.id)
 		time.Sleep(2 * time.Millisecond)
 	}
 	for i := 0; i < 20; i++ {

@@ -18,22 +18,9 @@ const (
 	// MAX_CONFIGURED_PARALLEL_TOOL_CALLS.
 	defaultMaxParallelToolCalls    int64 = 8
 	maxConfiguredParallelToolCalls int64 = 64
-	defaultNativeReadMaxBytes      int64 = 64 * 1024
 	maxNativeToolBytes             int64 = 10 * 1024 * 1024
-	defaultNativeReadMaxFile       int64 = 64 * 1024 * 1024
-	maxNativeReadMaxFile           int64 = 1024 * 1024 * 1024
-	defaultNativeReadLimit         int64 = 250
 	maxSafeInteger                 int64 = 9_007_199_254_740_991
 )
-
-// NativeReadSettings are the normalized safety limits for the initial native
-// read tool. Path rules are shared with session file listing behavior.
-type NativeReadSettings struct {
-	Policy       NativePathPolicy
-	MaxBytes     int64
-	MaxFileBytes int64
-	DefaultLimit int64
-}
 
 func normalizeMaxToolRounds(raw json.RawMessage, path string) (int64, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
@@ -151,53 +138,6 @@ func normalizeToolDefinitionPaths(raw json.RawMessage, globalJadRoot, path strin
 		paths = append(paths, filepath.Clean(absolute))
 	}
 	return paths, nil
-}
-
-func normalizeNativeReadSettings(setting map[string]json.RawMessage, globalJadRoot, path string) (*NativeReadSettings, error) {
-	nativeRaw, exists, err := nativeEnvelope(setting, path)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-	native, err := decodeConfigObject(nativeRaw, path+": tools.native")
-	if err != nil {
-		return nil, err
-	}
-	readRaw, exists := native["read"]
-	if !exists {
-		return nil, nil
-	}
-	read, err := decodeConfigObject(readRaw, path+": tools.native.read")
-	if err != nil {
-		return nil, err
-	}
-	for key := range read {
-		if key != "max_bytes" && key != "max_file_bytes" && key != "default_limit" && key != "paths" {
-			return nil, configError("%s: tools.native.read.%s is not supported", path, key)
-		}
-	}
-	policy, err := normalizeNativeReadPolicy(setting, globalJadRoot, path)
-	if err != nil {
-		return nil, err
-	}
-	maxBytes, err := configuredInteger(read, "max_bytes", defaultNativeReadMaxBytes, 1, maxNativeToolBytes, path, "tools.native.read")
-	if err != nil {
-		return nil, err
-	}
-	maxFileBytes, err := configuredInteger(read, "max_file_bytes", defaultNativeReadMaxFile, 1, maxNativeReadMaxFile, path, "tools.native.read")
-	if err != nil {
-		return nil, err
-	}
-	defaultLimit, err := configuredInteger(read, "default_limit", defaultNativeReadLimit, 1, maxSafeInteger, path, "tools.native.read")
-	if err != nil {
-		return nil, err
-	}
-	if uint64(defaultLimit) > uint64(^uint(0)>>1) {
-		return nil, configError("%s: tools.native.read.default_limit must be a positive safe integer", path)
-	}
-	return &NativeReadSettings{Policy: policy, MaxBytes: maxBytes, MaxFileBytes: maxFileBytes, DefaultLimit: defaultLimit}, nil
 }
 
 func configuredInteger(fields map[string]json.RawMessage, name string, fallback, minimum, maximum int64, path, section string) (int64, error) {

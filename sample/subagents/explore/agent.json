@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "description": "Read-only code search. Use it to find files and symbols and report paths and line numbers.",
-  "tools": ["read", "grep", "glob"],
+  "description": "Code search. Use it to find files and symbols and report paths and line numbers; it is told not to change files, but exec could.",
+  "tools": ["exec"],
   "max_tool_rounds": 30,
   "timeout_ms": 600000
 }

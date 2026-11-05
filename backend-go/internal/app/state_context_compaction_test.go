@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
@@ -20,16 +19,8 @@ import (
 	"jad/backend-go/internal/transcript"
 )
 
-func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextRequest(t *testing.T) {
+func TestHTTPCompactPersistsTaskStateContextAndInjectsItIntoNextRequest(t *testing.T) {
 	workspace := t.TempDir()
-	processStorage := filepath.Join(workspace, "processes")
-	processTool, err := native.NewProcessToolWithAsync(sessionfs.NativeProcessSettings{
-		StorageDir: processStorage,
-		Shell:      "/bin/sh",
-	}, nil, "UNSET_PROVIDER_KEY", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	taskStorage := filepath.Join(workspace, "tasks")
 	taskSettings := sessionfs.NativeTaskSettings{
 		MaxTasks: 10, MaxStorageBytes: 64 * 1024,
@@ -49,24 +40,13 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	manifest, err := json.Marshal(struct {
 		SchemaVersion int   `json:"schema_version"`
 		Tools         []any `json:"tools"`
-	}{SchemaVersion: 1, Tools: []any{processTool.Definition, taskTool.Definition}})
+	}{SchemaVersion: 1, Tools: []any{taskTool.Definition}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "process.json"), manifest, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "task.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	startedAt, endedAt := recentProcessTimes()
-	writeProcessManifest(t, processStorage, native.ProcessManifest{
-		SchemaVersion: 1,
-		ID:            "proc_saved",
-		State:         native.ProcessExited,
-		CWD:           "/workspace/project",
-		StartedAt:     startedAt,
-		EndedAt:       endedAt,
-		ExitCode:      json.RawMessage("0"),
-		Signal:        json.RawMessage("null"),
-	})
 
 	var providerCalls atomic.Int32
 	var requestIncludedStateContext atomic.Bool
@@ -98,7 +78,7 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 				continue
 			}
 			for _, content := range message.Content {
-				if strings.Contains(content.Text, "STATE CONTEXT SNAPSHOT") && strings.Contains(content.Text, "proc_saved") && strings.Contains(content.Text, "T-001") {
+				if strings.Contains(content.Text, "STATE CONTEXT SNAPSHOT") && strings.Contains(content.Text, "T-001") {
 					requestIncludedStateContext.Store(true)
 				}
 			}
@@ -120,15 +100,14 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	config, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID:           "one",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{filepath.Join(workspace, "process.json"), asyncSampleToolPath(t)},
+		ToolDefinitionPaths: []string{filepath.Join(workspace, "task.json"), asyncSampleToolPath(t)},
 		Settings: map[string]any{
 			"max_tool_rounds": 2,
 			"compaction":      map[string]any{"keepbatch": map[string]any{"turn": map[string]any{"type": "assistant_final", "keep": 1}}},
-			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"process", "task"}, "max_bytes": 4096}}},
+			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"task"}, "max_bytes": 4096}}},
 		},
 		Native: map[string]any{
 			"async":   map[string]any{},
-			"process": map[string]any{"shell": "/bin/sh", "storage_dir": processStorage, "statecontext": map[string]any{"states": []string{"exited"}, "limit": 5}},
 			"task":    map[string]any{"storage_dir": taskStorage, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
@@ -192,7 +171,7 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	if err := json.Unmarshal(snapshotBytes, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SchemaVersion != 1 || snapshot.Trigger != "compaction" || !strings.Contains(snapshot.Text, "proc_saved") || !strings.Contains(snapshot.Text, "T-001") {
+	if snapshot.SchemaVersion != 1 || snapshot.Trigger != "compaction" || !strings.Contains(snapshot.Text, "T-001") {
 		t.Fatalf("persisted state context snapshot = %#v", snapshot)
 	}
 
@@ -221,7 +200,7 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(transcriptBytes), "STATE CONTEXT SNAPSHOT") || strings.Contains(string(transcriptBytes), "proc_saved") || strings.Contains(string(transcriptBytes), "T-001") {
+	if strings.Contains(string(transcriptBytes), "STATE CONTEXT SNAPSHOT") || strings.Contains(string(transcriptBytes), "T-001") {
 		t.Fatalf("derived state context was written into messages.jsonl: %s", transcriptBytes)
 	}
 	var lines []string
@@ -234,28 +213,5 @@ func TestHTTPCompactPersistsProcessAndTaskStateContextAndInjectsItIntoNextReques
 	}
 	if len(lines) != 2 {
 		t.Fatalf("messages.jsonl after compact and run has %d lines, want only new user and response records", len(lines))
-	}
-}
-
-// recentProcessTimes is a start and end inside retention_days. A recovered manifest older than
-// tools.native.process.retention_days is pruned while it is read back (P6BM-24), so a fixture
-// that wants to see its process in the state context has to date it as recent.
-func recentProcessTimes() (startedAt, endedAt string) {
-	now := time.Now().UTC()
-	return now.Add(-time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)
-}
-
-func writeProcessManifest(t *testing.T, storageDir string, manifest native.ProcessManifest) {
-	t.Helper()
-	processDir := filepath.Join(storageDir, manifest.ID)
-	if err := os.MkdirAll(processDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(processDir, "manifest.json"), encoded, 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

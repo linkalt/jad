@@ -222,7 +222,7 @@ func TestQueuedRunIsRefusedAsActiveWhenResumed(t *testing.T) {
 	host := newTestAsyncHost(t)
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
-	tool, err := newSubagentToolAsync(settings, parentTools, nil, blockedLauncher(release, nil), nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(settings, parentTools, nil, blockedLauncher(release, nil), nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

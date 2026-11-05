@@ -1,10 +1,8 @@
 {
   "schema_version": 1,
-  "description": "Search and read only.",
+  "description": "Search and read only: the MCP search tools and images, no shell (exec can change files).",
   "native": {
-    "read": {},
-    "grep": {},
-    "glob": {}
+    "read_image": {}
   },
   "mcp": {
     "code/zvec-grep": {},

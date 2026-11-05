@@ -336,14 +336,13 @@ func (f Fixture) AddSessionInRoot(t *testing.T, rootID, id, cwd, profile string,
 	}
 }
 
-// withAsync adds the async tool to a native block that enables process, subagent or tool_smith, as the
+// withAsync adds the async tool to a native block that enables subagent or tool_smith, as the
 // loader requires; a block that already names async is returned as is.
 func withAsync(native map[string]any) map[string]any {
 	_, hasAsync := native["async"]
-	_, hasProcess := native["process"]
 	_, hasSubagent := native["subagent"]
 	_, hasToolSmith := native["tool_smith"]
-	if hasAsync || (!hasProcess && !hasSubagent && !hasToolSmith) {
+	if hasAsync || (!hasSubagent && !hasToolSmith) {
 		return native
 	}
 	out := make(map[string]any, len(native)+1)

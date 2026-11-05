@@ -16,7 +16,7 @@ func toolSmithSettingsFor(native string) map[string]json.RawMessage {
 func normalizeToolSmithForTest(t *testing.T, native string) (*NativeToolSmithSettings, error) {
 	t.Helper()
 	dir := t.TempDir()
-	return normalizeNativeToolSmithSettings(toolSmithSettingsFor(native), dir, filepath.Join(dir, "setting.json"), dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+	return normalizeNativeToolSmithSettings(toolSmithSettingsFor(native), dir, filepath.Join(dir, "setting.json"), dir, dir, "", dir)
 }
 
 func TestNormalizeNativeToolSmithSettingsAbsent(t *testing.T) {
@@ -25,13 +25,13 @@ func TestNormalizeNativeToolSmithSettingsAbsent(t *testing.T) {
 		"no tool_smith": toolSmithSettingsFor(`{}`),
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := normalizeNativeToolSmithSettings(setting, "", "setting.json", "", "", "", "", NativePathPolicy{}, NativePathPolicy{})
+			got, err := normalizeNativeToolSmithSettings(setting, "", "setting.json", "", "", "", "")
 			if err != nil || got != nil {
 				t.Fatalf("settings = %+v, %v; want nil", got, err)
 			}
 		})
 	}
-	if got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(`null`), "", "setting.json", "", "", "", "", NativePathPolicy{}, NativePathPolicy{}); err == nil || got != nil {
+	if got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(`null`), "", "setting.json", "", "", "", ""); err == nil || got != nil {
 		t.Fatalf("null native: got %+v, %v; want refusal", got, err)
 	}
 }
@@ -167,7 +167,7 @@ func TestNormalizeNativeToolSmithSettingsEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	native := `{"tool_smith":{"env_file":"ts.env","env":{"OVERRIDDEN":"inline"}}}`
-	got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(native), dir, filepath.Join(dir, "setting.json"), dir, dir, "", dir, NativePathPolicy{}, NativePathPolicy{})
+	got, err := normalizeNativeToolSmithSettings(toolSmithSettingsFor(native), dir, filepath.Join(dir, "setting.json"), dir, dir, "", dir)
 	if err != nil {
 		t.Fatal(err)
 	}

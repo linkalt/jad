@@ -132,10 +132,10 @@ func TestProcessSubagentAndToolSmithNeedTheAsyncTool(t *testing.T) {
 func TestStateContextAsyncProviderNeedsTheAsyncTool(t *testing.T) {
 	const settingPath = "/session/setting.json"
 	enabled := map[string]json.RawMessage{"statecontext": json.RawMessage(`{"enabled":true,"triggers":{"compaction":{"tools":["async"]}}}`)}
-	if _, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "requires tools.native.async") {
+	if _, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "requires tools.native.async") {
 		t.Fatalf("missing async provider error = %v", err)
 	}
-	configured, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, nil, &NativeAsyncSettings{})
+	configured, err := normalizeStateContextSettings(enabled, settingPath, "", nil, nil, nil, &NativeAsyncSettings{})
 	if err != nil || len(configured.Triggers["compaction"].Tools) != 1 || configured.Triggers["compaction"].Tools[0] != "async" {
 		t.Fatalf("configured async provider = %+v, error = %v", configured, err)
 	}

@@ -53,7 +53,7 @@ func TestSubagentManagerCloseWithDetachedRunsLeavesNoGoroutines(t *testing.T) {
 func buildSubagentCatalogOver(t *testing.T, manager *SubagentManager, host *AsyncHost, launcher SubagentLauncher) (*tools.Catalog, tools.Tool) {
 	t.Helper()
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, nil, host)
+	tool, err := newSubagentToolAsync(subagentSettings(agentNamed("explore")), parent, nil, launcher, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,17 +33,11 @@ func (in *settingsInputs) collect(config SessionConfig) {
 		}
 	}
 	in.addFile(config.Hooks.EnvFile)
-	if config.NativeBash != nil {
-		in.addFile(config.NativeBash.EnvFile)
-	}
 	if config.NativeExec != nil {
 		in.addFile(config.NativeExec.Child.EnvFile)
 	}
 	if config.NativeToolSmith != nil {
 		in.addFile(config.NativeToolSmith.Child.EnvFile)
-	}
-	if config.NativeProcess != nil {
-		in.addFile(config.NativeProcess.EnvFile)
 	}
 	if subagent := config.NativeSubagent; subagent != nil {
 		in.listings = append(in.listings, subagent.ConfiguredAgentDirs...)

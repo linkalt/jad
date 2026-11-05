@@ -46,24 +46,19 @@ type ExecutionContext struct {
 	// RawArguments retains the provider's original JSON text for tools whose
 	// persisted format depends on object insertion order.
 	RawArguments json.RawMessage
-	// PathScope narrows the paths a file-changing tool may touch for this call, on top
-	// of the tool's own policy. The sub-agent tool sets it for an agent with paths; nil
-	// means no further narrowing.
+	// PathScope narrows the paths a tool may touch for this call, on top of the tool's own
+	// policy. The sub-agent tool sets it for a child in a worktree; nil means no further
+	// narrowing.
 	PathScope *PathScope
-	// OnFileChange, when set, is told about each file a native write or edit changed
-	// (path as the tool reports it, action created, updated or edited). A call that
-	// left the file as it was, or failed, is not reported. The sub-agent tool uses it
-	// to list what a child changed.
+	// OnFileChange, when set, is told about each file a call changed (path as reported,
+	// action created, updated, edited or deleted); for exec the hooks.shell_changes scan
+	// finds them. The sub-agent tool uses it to list what a child changed.
 	OnFileChange func(path, action string)
-	// ProcessOwner, when set, limits the process tool to the processes this owner
-	// started: it lists, reads and stops only those, and what it starts belongs to the
-	// owner. The sub-agent tool sets it to the run's id for a child that lists process,
-	// so a child cannot see or stop the parent's processes. Empty means no limit.
+	// ProcessOwner, when set, is the owner of the async handles this call starts (an exec
+	// run that outlasts block_ms, a nested child): the sub-agent tool sets it to the run's
+	// id, so a child sees and stops only its own handles. Empty means the session's.
 	ProcessOwner string
-	// ProcessOwnerLimit is the most processes ProcessOwner may have running at once;
-	// zero means no limit beyond the session's own. It only counts with ProcessOwner.
-	ProcessOwnerLimit int64
-	// ProcessAsync, with ProcessOwner, makes the child's processes handles of the async
+	// ProcessAsync, with ProcessOwner, makes the child's long calls handles of the async
 	// manager owned by ProcessOwner. It is set only for a child that has the async tool.
 	ProcessAsync bool
 	// AgentName is the sub-agent the call runs for; empty in the session's own run.

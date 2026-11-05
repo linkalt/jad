@@ -15,5 +15,12 @@ func rejectRemovedApproval(fields map[string]json.RawMessage, fieldPath, setting
 	return nil
 }
 
+// removedAgentPathsHint: an agent's paths only narrowed its write and edit tools, which
+// exec replaced, and paths was always refused next to a shell.
+const removedAgentPathsHint = "it narrowed the agent's write and edit, which were removed; exec cannot be confined by paths, so run the agent in a worktree (isolation) or a container instead; delete the key"
+
+// removedProcessMaxRunningHint: the per-child process limit went with the process tool.
+const removedProcessMaxRunningHint = "it limited a child's managed processes, and tools.native.process was removed; delete the key"
+
 // removedAllowWriteHint: allow_write only existed to gate children behind approvals.
 const removedAllowWriteHint = "an agent's tools list alone decides whether a child can write, edit or run commands; delete the key"

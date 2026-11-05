@@ -1,13 +1,8 @@
 {
   "schema_version": 1,
-  "description": "Read, write, run and search.",
+  "description": "Read, write, run and search, all through exec.",
   "native": {
-    "read": {},
-    "write": {},
-    "edit": {},
-    "grep": {},
-    "glob": {},
-    "bash": {},
+    "exec": {},
     "async": {},
     "subagent": {
       "agents_dir": [
