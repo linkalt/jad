@@ -14,6 +14,11 @@ import (
 const (
 	SessionInputBatchIDField    = "__agent_session_input_batch_id"
 	SessionInputBatchIndexField = "__agent_session_input_batch_index"
+	// SessionInputSteerField marks an input record that a steering message stored in the
+	// middle of a run (AppendSteerInputItemsAt). It is true when present. Compaction keeps
+	// such a user message in the turn before it instead of starting a turn at it. Like the
+	// batch fields it is stripped before the item is sent anywhere.
+	SessionInputSteerField = "__agent_session_input_steer"
 )
 
 // AppendInputItems persists one atomic-in-process batch of Responses API input
@@ -37,6 +42,16 @@ type InputAppendResult struct {
 // AppendInputItemsAt is AppendInputItems that also reports the offset of the
 // batch's visible user message.
 func (s *TurnStore) AppendInputItemsAt(items ...[]byte) (InputAppendResult, error) {
+	return s.appendInputItems(false, items)
+}
+
+// AppendSteerInputItemsAt is AppendInputItemsAt for a steering message of a running run:
+// each record also carries SessionInputSteerField, so compaction keeps it in the run's turn.
+func (s *TurnStore) AppendSteerInputItemsAt(items ...[]byte) (InputAppendResult, error) {
+	return s.appendInputItems(true, items)
+}
+
+func (s *TurnStore) appendInputItems(steer bool, items [][]byte) (InputAppendResult, error) {
 	if s == nil || s.journal == nil {
 		return InputAppendResult{}, errors.New("turn store is not initialized")
 	}
@@ -71,7 +86,7 @@ func (s *TurnStore) AppendInputItemsAt(items ...[]byte) (InputAppendResult, erro
 	batchID := hex.EncodeToString(batchBytes[:])
 	persisted := make([][]byte, len(canonicalItems))
 	for index, item := range canonicalItems {
-		persistedItem, err := persistInputItem(item, batchID, index)
+		persistedItem, err := persistInputItem(item, batchID, index, steer)
 		if err != nil {
 			return InputAppendResult{}, fmt.Errorf("persist input item %d: %w", index, err)
 		}
@@ -113,7 +128,7 @@ func isVisibleUserInput(item []byte) bool {
 	return false
 }
 
-func persistInputItem(canonicalItem []byte, batchID string, index int) ([]byte, error) {
+func persistInputItem(canonicalItem []byte, batchID string, index int, steer bool) ([]byte, error) {
 	fields, err := objectFields(canonicalItem)
 	if err != nil {
 		return nil, fmt.Errorf("read canonical input item: %w", err)
@@ -122,6 +137,9 @@ func persistInputItem(canonicalItem []byte, batchID string, index int) ([]byte, 
 		jsonField{key: SessionInputBatchIDField, value: appendJSONString(nil, batchID)},
 		jsonField{key: SessionInputBatchIndexField, value: []byte(strconv.Itoa(index))},
 	)
+	if steer {
+		fields = append(fields, jsonField{key: SessionInputSteerField, value: []byte("true")})
+	}
 	return encodeJSONObject(fields), nil
 }
 
@@ -149,23 +167,32 @@ func (s *TurnStore) readInputItems(handle *InputHistory) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.readInputItemsWithCache(handle, cache, prefix)
+	return s.readInputItemsWithCache(handle, cache, prefix, nil)
 }
 
 // readInputItemsWithCache is readInputItems after the compaction cache was
 // read. A caller that already holds the cache (a compaction, which also needs
 // it for the assistant-final items) passes it in so the cache file is parsed
 // and validated once. prefix is the cache's items as a handle shares them and
-// is used only with a handle.
-func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compactionCache, prefix [][]byte) ([][]byte, error) {
+// is used only with a handle. continued, when not nil (only without a handle), gets one
+// flag per returned item: true for a user message that continues the turn before it (a
+// steering message, from the cache's continued_items or the record's SessionInputSteerField).
+func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compactionCache, prefix [][]byte, continued *[]bool) ([][]byte, error) {
 	var err error
 	items := make([][]byte, 0)
+	var flags []bool
+	if continued != nil {
+		defer func() { *continued = flags }()
+	}
 	if cache != nil {
 		if handle != nil {
 			items = append(items, prefix...)
 		} else {
 			for _, item := range cache.Items {
 				items = append(items, append([]byte(nil), item...))
+			}
+			if continued != nil {
+				flags = cache.continuedFlags()
 			}
 		}
 		sourceIsTranscript, err := s.cacheSourceIsTranscript(cache)
@@ -186,6 +213,9 @@ func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compact
 					return nil, err
 				}
 				items = append(items, expanded...)
+				if continued != nil {
+					flags = append(flags, make([]bool, len(expanded))...)
+				}
 			}
 			return items, nil
 		}
@@ -203,6 +233,12 @@ func (s *TurnStore) readInputItemsWithCache(handle *InputHistory, cache *compact
 			return fmt.Errorf("expand transcript record: %w", err)
 		}
 		items = append(items, expanded...)
+		if continued != nil {
+			steered := recordIsSteered(line)
+			for range expanded {
+				flags = append(flags, steered)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -226,6 +262,9 @@ func ValidateInputItem(index int, item []byte) error {
 		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
 	}
 	if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
+		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
+	}
+	if _, reserved := fieldValue(fields, SessionInputSteerField); reserved {
 		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
 	}
 	return nil
@@ -260,6 +299,8 @@ func expandTranscriptRecord(raw []byte) ([][]byte, error) {
 	if _, hasBatchID := fieldValue(fields, SessionInputBatchIDField); hasBatchID {
 		fields = removeInputBatchFields(fields)
 	} else if _, hasBatchIndex := fieldValue(fields, SessionInputBatchIndexField); hasBatchIndex {
+		fields = removeInputBatchFields(fields)
+	} else if _, hasSteer := fieldValue(fields, SessionInputSteerField); hasSteer {
 		fields = removeInputBatchFields(fields)
 	}
 	if err := validateInputFields(fields); err != nil {
@@ -336,10 +377,21 @@ func canonicalJSONFields(fields []jsonField) ([]byte, error) {
 func removeInputBatchFields(fields []jsonField) []jsonField {
 	filtered := make([]jsonField, 0, len(fields))
 	for _, field := range fields {
-		if field.key == SessionInputBatchIDField || field.key == SessionInputBatchIndexField {
+		if field.key == SessionInputBatchIDField || field.key == SessionInputBatchIndexField || field.key == SessionInputSteerField {
 			continue
 		}
 		filtered = append(filtered, field)
 	}
 	return filtered
+}
+
+// recordIsSteered reports whether a messages.jsonl record carries SessionInputSteerField
+// set to true.
+func recordIsSteered(record []byte) bool {
+	fields, err := objectFields(record)
+	if err != nil {
+		return false
+	}
+	raw, exists := fieldValue(fields, SessionInputSteerField)
+	return exists && string(raw) == "true"
 }

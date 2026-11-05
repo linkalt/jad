@@ -676,9 +676,6 @@ type runRounds struct {
 	// declined is set when the user declined a draft, which ends the run whatever a stop
 	// hook says.
 	declined bool
-	// steeredUserMessages counts the user messages steering stored in this run. They
-	// continue the run's turn, so its compactions do not split the run at them.
-	steeredUserMessages int
 }
 
 // runRound sends one provider round and runs the function calls it returned. It reports
@@ -692,9 +689,7 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	// A declined draft ends the round it happened in, not the rounds a steering message
 	// adds after it.
 	run.declined = false
-	steered, err := r.storeSteerMessages(*options)
-	run.steeredUserMessages += steered
-	if err != nil {
+	if err := r.storeSteerMessages(*options); err != nil {
 		return false, err
 	}
 	// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
@@ -743,7 +738,7 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err := r.recordBudget(run, tokens); err != nil {
 		return false, err
 	}
-	refreshStateContext, err := r.compactAfterResponse(ctx, run.result.Event, calls, run.steeredUserMessages, *options)
+	refreshStateContext, err := r.compactAfterResponse(ctx, run.result.Event, calls, *options)
 	if err != nil {
 		return false, err
 	}
@@ -827,7 +822,6 @@ func IsContextOverflow(err error, patterns []string) bool {
 func (r *Runner) compactForOverflow(ctx context.Context, run *runRounds) (bool, error) {
 	compactionOptions := r.automaticCompactionOptions(ctx, run.options)
 	compactionOptions.KeepLatestTurn = true
-	compactionOptions.ContinuedUserMessages = run.steeredUserMessages
 	compacted, err := r.compactAutomatically(compactionOptions, run.options)
 	if err != nil || !compacted {
 		return false, err
@@ -918,13 +912,12 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 
 // compactAfterResponse compacts the transcript when the automatic compaction trigger
 // fires for the response. It reports whether the state context must be refreshed.
-func (r *Runner) compactAfterResponse(ctx context.Context, event json.RawMessage, calls []json.RawMessage, steeredUserMessages int, options RunOptions) (bool, error) {
+func (r *Runner) compactAfterResponse(ctx context.Context, event json.RawMessage, calls []json.RawMessage, options RunOptions) (bool, error) {
 	responseID, shouldCompact := automaticCompactionTrigger(event, options.AutomaticCompaction)
 	if !shouldCompact {
 		return false, nil
 	}
 	compactionOptions := r.automaticCompactionOptions(ctx, options)
-	compactionOptions.ContinuedUserMessages = steeredUserMessages
 	if len(calls) > 0 && responseID != "" {
 		compactionOptions.PreserveResponseID = responseID
 	}

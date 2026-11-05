@@ -33,8 +33,9 @@ func (p compactionPlan) dropped() [][]byte {
 }
 
 // planCompaction reads the history, the preserved response and the assistant-final items,
-// splits the compactable history into turns (a user message starts one, except the last
-// options.ContinuedUserMessages of them) and selects the kept ones. The caller holds s.mu.
+// splits the compactable history into turns (a user message starts one, except a steering
+// message, which continues the turn before it) and selects the kept ones. The caller holds
+// s.mu.
 func (s *TurnStore) planCompaction(options CompactionOptions) (compactionPlan, error) {
 	plan := compactionPlan{}
 	if s.recovering {
@@ -50,7 +51,8 @@ func (s *TurnStore) planCompaction(options CompactionOptions) (compactionPlan, e
 	if err != nil {
 		return plan, fmt.Errorf("read request history for compaction: %w", err)
 	}
-	plan.history, err = s.readInputItemsWithCache(nil, previousCache, nil)
+	var continued []bool
+	plan.history, err = s.readInputItemsWithCache(nil, previousCache, nil, &continued)
 	if err != nil {
 		return plan, fmt.Errorf("read request history for compaction: %w", err)
 	}
@@ -59,13 +61,12 @@ func (s *TurnStore) planCompaction(options CompactionOptions) (compactionPlan, e
 		return plan, err
 	}
 	plan.activeTail = activeTail
-	compactableHistory := excludePreservedItems(plan.history, excluded)
+	compactableHistory, compactableContinued := excludePreservedItems(plan.history, continued, excluded)
 	plan.finalAssistant, err = s.assistantFinalItems(previousCache)
 	if err != nil {
 		return plan, fmt.Errorf("read assistant final items for compaction: %w", err)
 	}
-	isUser := make([]bool, len(compactableHistory))
-	userMessages := 0
+	plan.turns = make([][][]byte, 0)
 	for index, item := range compactableHistory {
 		fields, err := objectFields(item)
 		if err != nil {
@@ -73,21 +74,7 @@ func (s *TurnStore) planCompaction(options CompactionOptions) (compactionPlan, e
 		}
 		roleRaw, _ := fieldValue(fields, "role")
 		role, _ := stringValue(roleRaw)
-		if role == "user" {
-			isUser[index] = true
-			userMessages++
-		}
-	}
-	// The user messages up to startingUsers start turns; the ones after continue.
-	startingUsers := userMessages - options.ContinuedUserMessages
-	plan.turns = make([][][]byte, 0)
-	seenUsers := 0
-	for index, item := range compactableHistory {
-		startsTurn := false
-		if isUser[index] {
-			seenUsers++
-			startsTurn = seenUsers <= startingUsers
-		}
+		startsTurn := role == "user" && !(index < len(compactableContinued) && compactableContinued[index])
 		if startsTurn || len(plan.turns) == 0 {
 			plan.turns = append(plan.turns, make([][]byte, 0))
 		}

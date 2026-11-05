@@ -17,7 +17,7 @@ func TestPersistInputItemMatchesNodeGeneratedMessagesJSONLFixture(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := persistInputItem(canonical, "0123456789abcdef0123456789abcdef", 0)
+	got, err := persistInputItem(canonical, "0123456789abcdef0123456789abcdef", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

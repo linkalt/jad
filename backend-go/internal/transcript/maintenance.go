@@ -21,6 +21,22 @@ type compactionCache struct {
 	AssistantFinalItems      []string          `json:"assistant_final_items"`
 	ActiveTail               []json.RawMessage `json:"active_tail"`
 	ResetLatestResponseUsage bool              `json:"reset_latest_response_usage"`
+	// ContinuedItems are the indexes in Items of user messages that continue the turn
+	// before them (steering messages, SessionInputSteerField), ascending. Absent in a cache
+	// written before the field existed, so every user message starts a turn there.
+	ContinuedItems []int `json:"continued_items,omitempty"`
+}
+
+// continuedFlags returns one flag per item of the cache: true at ContinuedItems. An index
+// out of range is ignored.
+func (c *compactionCache) continuedFlags() []bool {
+	flags := make([]bool, len(c.Items))
+	for _, index := range c.ContinuedItems {
+		if index >= 0 && index < len(flags) {
+			flags[index] = true
+		}
+	}
+	return flags
 }
 
 type CompactionOptions struct {
@@ -35,13 +51,6 @@ type CompactionOptions struct {
 	// strip. The overflow compaction of a run sets it, so the run's own tool work is not
 	// dropped while it is still going.
 	KeepLatestTurn bool
-	// ContinuedUserMessages is how many of the last user messages of the history continue
-	// the turn before them instead of starting one: the steering messages a running run
-	// stored between its rounds. They belong to that run, so a compaction keeps or drops
-	// them with the run's first message and its tool work. A count larger than the user
-	// messages there are joins every one of them to the first turn. Zero splits at every
-	// user message.
-	ContinuedUserMessages int
 	// Summarize, when set, is handed the items of the turns this compaction drops and
 	// returns one history item that is kept in front of the retained turns (see
 	// compaction_summary.go). It runs without the store lock held. Nil drops the turns
@@ -70,7 +79,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if options.TurnType != "assistant_final" && options.TurnType != "full" {
 		return result, errors.New("turn type must be assistant_final or full")
 	}
-	if options.KeepTurns < 0 || options.KeepToolPairs < 0 || options.ContinuedUserMessages < 0 {
+	if options.KeepTurns < 0 || options.KeepToolPairs < 0 {
 		return result, errors.New("compaction counts must not be negative")
 	}
 	if options.BackupMode != "replace" && options.BackupMode != "append" {
@@ -103,12 +112,21 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		pairTurns = selected[:len(selected)-1]
 	}
 	keepPairs := keptToolPairs(pairTurns, options)
+	// continuedItems are the user messages of the retained items that continue their turn:
+	// every user message of a turn except the one that started it (see planCompaction).
+	continuedItems := make([]int, 0)
 	for index, turn := range selected {
-		if options.KeepLatestTurn && index == len(selected)-1 {
-			retained = append(retained, turn...)
-			continue
+		kept := turn
+		if !options.KeepLatestTurn || index != len(selected)-1 {
+			kept = retainCompactedTurn(turn, options, finalAssistant, keepPairs)
 		}
-		retained = append(retained, retainCompactedTurn(turn, options, finalAssistant, keepPairs)...)
+		startedByUser := len(turn) > 0 && isUserItem(turn[0])
+		for position, item := range kept {
+			if isUserItem(item) && !(startedByUser && position == 0) {
+				continuedItems = append(continuedItems, len(retained))
+			}
+			retained = append(retained, item)
+		}
 	}
 	compactedActiveTail := activeTail
 	if options.TurnType == "assistant_final" {
@@ -152,6 +170,9 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		AssistantFinalItems:      make([]string, 0),
 		ActiveTail:               compactedActiveTail,
 		ResetLatestResponseUsage: true,
+	}
+	if len(continuedItems) > 0 {
+		cache.ContinuedItems = continuedItems
 	}
 	for index, item := range retained {
 		cache.Items[index] = append(json.RawMessage(nil), item...)
@@ -243,24 +264,37 @@ func (s *TurnStore) preservedResponseTail(responseID string) ([]json.RawMessage,
 	return activeTail, excluded, nil
 }
 
-func excludePreservedItems(history [][]byte, excluded map[string]int) [][]byte {
+func excludePreservedItems(history [][]byte, continued []bool, excluded map[string]int) ([][]byte, []bool) {
 	if len(excluded) == 0 {
-		return history
+		return history, continued
 	}
 	remaining := make(map[string]int, len(excluded))
 	for key, count := range excluded {
 		remaining[key] = count
 	}
 	filtered := make([][]byte, 0, len(history))
-	for _, item := range history {
+	filteredContinued := make([]bool, 0, len(history))
+	for index, item := range history {
 		key := string(item)
 		if remaining[key] > 0 {
 			remaining[key]--
 			continue
 		}
 		filtered = append(filtered, item)
+		filteredContinued = append(filteredContinued, index < len(continued) && continued[index])
 	}
-	return filtered
+	return filtered, filteredContinued
+}
+
+// isUserItem reports whether a history item is a message with role user.
+func isUserItem(item []byte) bool {
+	fields, err := objectFields(item)
+	if err != nil {
+		return false
+	}
+	roleRaw, _ := fieldValue(fields, "role")
+	role, _ := stringValue(roleRaw)
+	return role == "user"
 }
 
 func assistantFinalActiveTailRecord(record []byte) (json.RawMessage, error) {
