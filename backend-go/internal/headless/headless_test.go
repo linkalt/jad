@@ -2,6 +2,7 @@ package headless
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -107,6 +108,29 @@ func TestRunReportsAFailedRun(t *testing.T) {
 	}
 	if result.Status != StatusFailed || result.Error == "" || result.Text != "so far" {
 		t.Fatalf("result = %+v, want failed with the message and the text so far", result)
+	}
+}
+
+// The report of stop commands skipped at a cap reaches the result; other hook reports,
+// a stop command's own among them, do not.
+func TestRunKeepsTheReportOfSkippedStopHooks(t *testing.T) {
+	stub := newStub(
+		frame("hook_report", `{"turn_id":"t","event":"stop","trigger":"","report":"[verify] passed (2 ms, in .)"}`),
+		frame("hook_report", `{"turn_id":"t","event":"run_end","trigger":"cap_reached","report":"[audit] passed"}`),
+		frame("hook_report", `{"turn_id":"t","event":"stop","trigger":"cap_reached","report":"[stop hooks] not run: max_run_tokens reached"}`),
+		frame("completed", `{"message":{"text":"done"}}`),
+		frame("done", `{}`),
+	)
+	result, err := NewRunner(stub, testToken).Run(context.Background(), Request{Session: "s", Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusCompleted || result.StopHooksSkipped != "[stop hooks] not run: max_run_tokens reached" {
+		t.Fatalf("result = %+v, want completed with the skip report", result)
+	}
+	encoded, _ := json.Marshal(Result{Status: StatusCompleted})
+	if strings.Contains(string(encoded), "stop_hooks_skipped") {
+		t.Fatalf("a run without the report encodes it: %s", encoded)
 	}
 }
 

@@ -60,6 +60,7 @@ type notifyBody struct {
 // Go names, with the cost a plain number (0 when unknown) so printf and if take it.
 type notifyTemplateData struct {
 	ID, Trigger, Source, Session, Profile, Status, TurnID, Error string
+	StopHooksSkipped                                             string
 	StartedAt, EndedAt                                           time.Time
 	CostUSD                                                      float64
 	DurationMS                                                   int64
@@ -70,7 +71,7 @@ type notifyTemplateData struct {
 func templateData(body notifyBody) notifyTemplateData {
 	data := notifyTemplateData{
 		ID: body.ID, Trigger: body.Trigger, Source: body.Source, Session: body.Session, Profile: body.Profile,
-		Status: body.Status, TurnID: body.TurnID, Error: body.Error, StartedAt: body.StartedAt, EndedAt: body.EndedAt,
+		Status: body.Status, TurnID: body.TurnID, Error: body.Error, StopHooksSkipped: body.StopHooksSkipped, StartedAt: body.StartedAt, EndedAt: body.EndedAt,
 		DurationMS: body.DurationMS, Text: body.Text, Answer: body.Answer, AnswerTruncated: body.AnswerTruncated,
 	}
 	if body.CostUSD != nil {
@@ -248,10 +249,10 @@ func notificationBody(target *notifier, record Record, answer string) ([]byte, s
 	}
 	switch settings.Format {
 	case sessionfs.TriggerNotifyFormatText:
-		return []byte(plainNotification(text, record.Error, answer, truncated) + "\n"), contentType, nil
+		return []byte(plainNotification(text, record.Error, record.StopHooksSkipped, answer, truncated) + "\n"), contentType, nil
 	case sessionfs.TriggerNotifyFormatSlack:
 		// A Slack incoming webhook takes {"text": ...}; &, < and > must be escaped in it.
-		encoded, _ := json.Marshal(map[string]string{"text": sessionfs.SlackEscape(plainNotification(text, record.Error, answer, truncated))})
+		encoded, _ := json.Marshal(map[string]string{"text": sessionfs.SlackEscape(plainNotification(text, record.Error, record.StopHooksSkipped, answer, truncated))})
 		return encoded, contentType, nil
 	}
 	// Every field is a string, a number or a time, so encoding cannot fail.
@@ -259,12 +260,16 @@ func notificationBody(target *notifier, record Record, answer string) ([]byte, s
 	return encoded, contentType, nil
 }
 
-// plainNotification is the text and slack body: the line, the error and the answer.
-func plainNotification(text, runError, answer string, truncated bool) string {
+// plainNotification is the text and slack body: the line, the error, the report of stop
+// commands skipped at a cap, and the answer.
+func plainNotification(text, runError, stopSkipped, answer string, truncated bool) string {
 	var out strings.Builder
 	out.WriteString(text)
 	if runError != "" {
 		out.WriteString("\n" + runError)
+	}
+	if stopSkipped != "" {
+		out.WriteString("\n" + stopSkipped)
 	}
 	if answer != "" {
 		out.WriteString("\n\n" + answer)

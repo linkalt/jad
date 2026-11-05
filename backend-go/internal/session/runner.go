@@ -111,6 +111,10 @@ type HookReport struct {
 	Report  string
 }
 
+// StopSkippedTrigger is the Trigger of the HookReport (Event "stop") that says the stop
+// commands were not run because the run reached a cap (OnStopSkipped).
+const StopSkippedTrigger = "cap_reached"
+
 type RunOptions struct {
 	TurnID string
 	// OnHookReport receives each run hook report as it happens; nil drops them (they are

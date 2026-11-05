@@ -349,3 +349,45 @@ func TestSlackFormatAndTemplates(t *testing.T) {
 		t.Fatalf("text template body = %q", bodies[0])
 	}
 }
+
+// A run whose stop commands were skipped at a cap keeps the report in its record, and the
+// notifications carry it: as stop_hooks_skipped in json, as a line in text, and as
+// .StopHooksSkipped in a template.
+func TestSkippedStopHooksReachTheRecordAndTheNotifications(t *testing.T) {
+	jsonSink, textSink := newNotifySink(t), newNotifySink(t)
+	text := testNotifier("phone", textSink.server.URL)
+	text.Format = sessionfs.TriggerNotifyFormatText
+	runner := newFakeRunner()
+	skipped := "[stop hooks] not run: it used 7 tokens, which reached the max_run_tokens limit of 5."
+	runner.result = headless.Result{Status: headless.StatusCompleted, TurnID: "t1", StopHooksSkipped: skipped}
+	entry := webhookEntry()
+	entry.Notify = []string{"ops", "phone"}
+	manager := notifyManager(t, runner, []sessionfs.TriggerNotifier{testNotifier("ops", jsonSink.server.URL), text}, nil, entry)
+	handler := manager.Wrap(http.NotFoundHandler())
+	body := `{"x":1}`
+	if response := post(handler, "/api/triggers/ci", body, sign("s3cret", body)); response.Code != http.StatusAccepted {
+		t.Fatalf("webhook: %d %s", response.Code, response.Body)
+	}
+	close(runner.release)
+	if run := waitNotified(t, handler); run.StopHooksSkipped != skipped {
+		t.Fatalf("record = %+v", run)
+	}
+	_, bodies := jsonSink.received()
+	var sent map[string]any
+	if len(bodies) != 1 || json.Unmarshal([]byte(bodies[0]), &sent) != nil || sent["stop_hooks_skipped"] != skipped {
+		t.Fatalf("json notification = %v", bodies)
+	}
+	if _, bodies := textSink.received(); len(bodies) != 1 || !strings.Contains(bodies[0], ")\n"+skipped+"\n") {
+		t.Fatalf("text notification = %q", bodies)
+	}
+	templated := testNotifier("chat", "http://127.0.0.1")
+	templated.Format, templated.Template = sessionfs.TriggerNotifyFormatText, `{{.Status}}{{if .StopHooksSkipped}}: {{.StopHooksSkipped}}{{end}}`
+	parsed, err := sessionfs.ParseTriggerNotifyTemplate(templated.Name, templated.Template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, _, err := notificationBody(&notifier{settings: templated, template: parsed}, Record{Status: "completed", StopHooksSkipped: skipped}, "")
+	if err != nil || string(rendered) != "completed: "+skipped {
+		t.Fatalf("template = %q, %v", rendered, err)
+	}
+}

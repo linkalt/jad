@@ -231,7 +231,7 @@ func TestSkippedStopHooksAreReported(t *testing.T) {
 		t.Fatal("applyStopHooks set no OnStopSkipped")
 	}
 	options.OnStopSkipped(context.Background(), "turn-1", &session.RunTokenLimitError{Used: 70, Limit: 50})
-	if len(reports) != 1 || reports[0].Event != "stop" || reports[0].Trigger != "cap_reached" || !strings.HasPrefix(reports[0].Report, "[stop] not run: ") || !strings.Contains(reports[0].Report, "max_run_tokens") {
+	if len(reports) != 1 || reports[0].Event != "stop" || reports[0].Trigger != "cap_reached" || !strings.HasPrefix(reports[0].Report, "[stop hooks] not run: ") || !strings.Contains(reports[0].Report, "max_run_tokens") {
 		t.Fatalf("reports = %+v", reports)
 	}
 	if !strings.Contains(logs.String(), "cap_reached") || !strings.Contains(logs.String(), "turn-1") {

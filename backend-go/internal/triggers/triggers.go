@@ -79,6 +79,9 @@ type Record struct {
 	Error      string    `json:"error,omitempty"`
 	CostUSD    *float64  `json:"cost_usd,omitempty"`
 	DurationMS int64     `json:"duration_ms,omitempty"`
+	// StopHooksSkipped is the report that the run's stop commands were not run because it
+	// reached a cap (headless.Result.StopHooksSkipped).
+	StopHooksSkipped string `json:"stop_hooks_skipped,omitempty"`
 	// Notifications are the deliveries to the trigger's notifiers, pending until each ends.
 	Notifications []Notification `json:"notifications,omitempty"`
 }
@@ -255,6 +258,7 @@ func (m *Manager) run(entry sessionfs.TriggerEntry, record Record, input string)
 		record.Status, record.Error = headless.StatusFailed, err.Error()
 	default:
 		record.Status, record.Error, record.TurnID, record.CostUSD, record.DurationMS = result.Status, result.Error, result.TurnID, result.CostUSD, result.DurationMS
+		record.StopHooksSkipped = result.StopHooksSkipped
 	}
 	record.Notifications = m.pendingNotifications(entry, record.Status)
 	m.mu.Lock()

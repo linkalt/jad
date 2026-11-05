@@ -114,7 +114,18 @@ type Result struct {
 	// Model is the model the turn asked for (--model, or a custom command's front matter);
 	// empty for the profile's default.
 	Model string `json:"model,omitempty"`
+	// StopHooksSkipped is the report that the stop commands were not run because the run
+	// reached max_run_tokens, max_run_cost_usd or the budget; empty when they ran or the
+	// profile has none.
+	StopHooksSkipped string `json:"stop_hooks_skipped,omitempty"`
 }
+
+// The hook_report event's event and trigger of the stop commands skipped at a cap
+// (session.StopSkippedTrigger); this client reads the wire, not the session package.
+const (
+	hookEventStop      = "stop"
+	stopSkippedTrigger = "cap_reached"
+)
 
 // Runner sends headless turns to an API handler.
 type Runner struct {
@@ -315,6 +326,15 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 			case "ui.message":
 				if text, ok := messageText(event.Data); ok {
 					streamed = text
+				}
+			case "hook_report":
+				var report struct {
+					Event   string `json:"event"`
+					Trigger string `json:"trigger"`
+					Report  string `json:"report"`
+				}
+				if json.Unmarshal(event.Data, &report) == nil && report.Event == hookEventStop && report.Trigger == stopSkippedTrigger {
+					result.StopHooksSkipped = report.Report
 				}
 			case "usage":
 				var payload struct {

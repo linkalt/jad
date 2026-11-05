@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -89,5 +90,35 @@ func TestRunRetriesARequestPastTheHeaderTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 8*time.Second {
 		t.Fatalf("the retried run took %s", elapsed)
+	}
+}
+
+// A run that reaches max_run_tokens does not run its stop commands; jad run says so on
+// stderr in text format and in stop_hooks_skipped in json, and the run still completes.
+func TestRunReportsStopHooksSkippedAtTheTokenCap(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, limitAnswer)
+	}))
+	t.Cleanup(provider.Close)
+	marker := t.TempDir() + "/ran"
+	session := limitFixture(t, provider, map[string]any{"max_run_tokens": 5, "hooks": map[string]any{
+		"enabled": true, "stop": []any{map[string]any{"name": "verify", "argv": []any{"sh", "-c", "touch " + marker}}},
+	}})
+
+	stdout, stderr, err := runJad(t, "", "run", "--session", session, "--timeout", "30s", "hello")
+	if err != nil || strings.TrimSpace(stdout) != "done" || !strings.Contains(stderr, "jad: [stop hooks] not run: ") || !strings.Contains(stderr, "max_run_tokens") {
+		t.Fatalf("text run: stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+	stdout, stderr, err = runJad(t, "", "run", "--session", session, "--format", "json", "--timeout", "30s", "hello")
+	var result headless.Result
+	if json.Unmarshal([]byte(stdout), &result) != nil || err != nil {
+		t.Fatalf("json run: %q %q %v", stdout, stderr, err)
+	}
+	if result.Status != headless.StatusCompleted || !strings.HasPrefix(result.StopHooksSkipped, "[stop hooks] not run: ") {
+		t.Fatalf("result = %+v", result)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the stop command ran")
 	}
 }

@@ -373,9 +373,15 @@ func runOnce(ctx context.Context, runner *headless.Runner, options runOptions, s
 	return resultExit(result, options.format == formatText, streams.stderr)
 }
 
-// resultExit maps a result to the command's exit. In text format the failure message is
-// printed on stderr, since stdout carries only the answer.
+// resultExit maps a result to the command's exit. In text format the failure message, and
+// the report of stop hooks skipped at a cap, are printed on stderr, since stdout carries
+// only the answer.
 func resultExit(result headless.Result, describe bool, stderr io.Writer) error {
+	if describe && result.StopHooksSkipped != "" {
+		// Not a failure, but a stop hook may be the run's check, so it is said on stderr
+		// whatever the status.
+		_, _ = fmt.Fprintf(stderr, "jad: %s\n", result.StopHooksSkipped)
+	}
 	code := 0
 	switch result.Status {
 	case headless.StatusCompleted:
