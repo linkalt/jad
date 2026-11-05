@@ -2,6 +2,9 @@ package native
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -71,5 +74,49 @@ func TestSubagentModelTextNeedsModelChoice(t *testing.T) {
 	}
 	if text := subagentModelText(sessionfs.NativeSubagentSettings{ModelChoice: true, ProfileModels: models}); text != " Models for model: openai/a, openai/b." {
 		t.Fatalf("model_choice on: %q", text)
+	}
+}
+
+// A subagent.json or profile_message.json copied before the model argument existed still
+// loads, with model_choice off or on: the tools build the schema the model sees themselves.
+// Any other schema is still refused.
+func TestDefinitionFilesFromBeforeModelChoiceStillLoad(t *testing.T) {
+	directory := t.TempDir()
+	write := func(name, id, schema string) string {
+		path := filepath.Join(directory, name+".json")
+		document, _ := json.Marshal(map[string]any{"tools": []map[string]any{{"id": id, "source": "native", "name": name, "description": name + " tool", "inputSchema": json.RawMessage(schema)}}})
+		if err := os.WriteFile(path, document, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	build := func(choice bool, subagentSchema string) error {
+		agent := agentNamed("explore")
+		agent.Tools, agent.HasTools = []string{"read"}, true
+		subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{agent}, ModelChoice: choice}
+		config := sessionfs.SessionConfig{
+			SettingPath: filepath.Join(directory, "setting.json"),
+			ToolDefinitionPaths: []string{
+				filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"),
+				write("subagent", subagentToolID, subagentSchema),
+				write("profile_message", profileMessageToolID, profileMessageSchemaWithoutModel),
+			},
+			NativeRead:           &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+			NativeSubagent:       &subagent,
+			NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, ModelChoice: choice},
+			Profile:              "main",
+			Profiles:             []string{"main", "reviewer"},
+		}
+		_, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, &fakeLauncher{}, nil, nil, nil, &fakeMessenger{})
+		return err
+	}
+	for _, choice := range []bool{false, true} {
+		if err := build(choice, subagentSchemaWithoutModel); err != nil {
+			t.Fatalf("model_choice %v: definition files from before the model argument refused: %v", choice, err)
+		}
+	}
+	changed := strings.Replace(subagentSchemaWithoutModel, `"minLength":1`, `"minLength":2`, 1)
+	if err := build(false, changed); err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") {
+		t.Fatalf("a changed subagent schema: error %v, want the mismatch", err)
 	}
 }

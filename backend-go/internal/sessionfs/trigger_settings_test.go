@@ -106,6 +106,9 @@ func TestTriggerSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"timestamp_header":"X-Time"}`, false},
 		{`{"replay_window_ms":1,"timestamp_header":"X Time"}`, false},
 		{`{"replay_window_ms":1,"timestamp_header":""}`, false},
+		{`{"replay_window_ms":999,"timestamp_header":"X-Time"}`, false},
+		{`{"replay_window_ms":1000,"timestamp_header":"X-Time"}`, true},
+		{`{"replay_window_ms":999}`, true},
 	} {
 		if got := schemaAccepts(t, schema, test.raw); got != test.accept {
 			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
@@ -236,6 +239,7 @@ func TestTriggerReplaySettings(t *testing.T) {
 		`{"replay_window_ms":-1}`:                                            "replay_window_ms must be a safe integer between 0 and 86400000",
 		`{"replay_window_ms":86400001}`:                                      "replay_window_ms must be a safe integer between 0 and 86400000",
 		`{"timestamp_header":"X-Time"}`:                                      "timestamp_header needs replay_window_ms",
+		`{"replay_window_ms":999,"timestamp_header":"X-Time"}`:               "timestamp_header needs replay_window_ms of at least 1000",
 		`{"replay_window_ms":1000,"timestamp_header":"X Time"}`:              "timestamp_header must be an HTTP header name",
 		`{"replay_window_ms":1000,"timestamp_header":""}`:                    "timestamp_header must be a non-empty string",
 		`{"replay_window_ms":1000,"timestamp_header":"x-hub-signature-256"}`: "timestamp_header must differ from signature_header",

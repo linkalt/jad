@@ -158,6 +158,58 @@ func TestResourceSubscriptionsRecordChangesAndTellTheNextRunOnce(t *testing.T) {
 	}
 }
 
+// Two subscribes to one resource at the same time both succeed at once and leave the
+// subscription working: the second must not send a listen the SDK drops, then withdraw the
+// first one's when its acknowledgement never comes.
+func TestConcurrentSubscribesToOneResourceKeepTheSubscription(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "watch.json")
+	config, _ := json.Marshal(map[string]any{
+		"transport":           map[string]any{"type": "stdio", "command": mustExecutable(t), "args": []string{"-test.run=^TestMCPWatchFixtureProcess$"}, "cwd": directory, "env": map[string]string{watchFixtureEnvironment: "1"}},
+		"timeout_ms":          2_000,
+		"resource_events_max": 10,
+	})
+	if err := os.WriteFile(configPath, config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers := []sessionfs.MCPServerReference{{ID: "docs", ConfigPath: configPath, Enabled: true, Resources: true}}
+	manager := NewManager(currentEnvironment())
+	defer manager.Close()
+	loaded, err := manager.LoadTools(context.Background(), servers, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			errs <- manager.SubscribeUserResource(context.Background(), servers, directory, "docs", "docs://plan", true)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent subscribe: %v", err)
+		}
+	}
+	var touch *tools.Tool
+	for index := range loaded {
+		if loaded[index].Definition.ID == "mcp:docs:touch" {
+			touch = &loaded[index]
+		}
+	}
+	if touch == nil {
+		t.Fatal("no touch tool")
+	}
+	if _, err := touch.ExecuteOutput(context.Background(), map[string]any{}, tools.ExecutionContext{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range waitForEvents(t, manager, 2) {
+		if event.Kind == ResourceEventUpdated && event.URI == "docs://plan" {
+			return
+		}
+	}
+	t.Fatalf("no update of docs://plan after the concurrent subscribes: %+v", waitForEvents(t, manager, 2))
+}
+
 // A server without subscriptions offers no watch tools, and a subscribe request is refused;
 // so does a streamable_http server that offers them, whose notifications could not arrive.
 func TestResourceSubscriptionsNeedAServerThatOffersThem(t *testing.T) {

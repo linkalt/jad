@@ -27,6 +27,9 @@ const (
 	defaultTriggerTimezone              = "Local"
 	// maxTriggerReplayWindowMS bounds server.triggers.replay_window_ms: one day.
 	maxTriggerReplayWindowMS int64 = 24 * 60 * 60 * 1000
+	// minTriggerTimestampWindowMS is the least replay_window_ms that timestamp_header takes:
+	// one second, the timestamp's resolution.
+	minTriggerTimestampWindowMS int64 = 1000
 
 	defaultTriggerNotifyTimeoutMS    int64 = 10_000
 	maxTriggerNotifyTimeoutMS        int64 = 120_000
@@ -201,6 +204,11 @@ func normalizeTriggers(raw json.RawMessage, path string) (TriggerSettings, error
 		}
 		if settings.ReplayWindowMS == 0 {
 			return TriggerSettings{}, fmt.Errorf("%s: %s.timestamp_header needs replay_window_ms, the age a timestamp may have", path, section)
+		}
+		// The timestamp has whole-second resolution, so a shorter window would refuse a
+		// request from a sender whose clock is exactly right.
+		if settings.ReplayWindowMS < minTriggerTimestampWindowMS {
+			return TriggerSettings{}, fmt.Errorf("%s: %s.timestamp_header needs replay_window_ms of at least %d (the timestamp counts whole seconds)", path, section, minTriggerTimestampWindowMS)
 		}
 	}
 	if settings.Notifiers, err = normalizeTriggerNotifiers(fields["notify"], path); err != nil {

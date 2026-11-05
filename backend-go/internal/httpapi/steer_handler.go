@@ -10,8 +10,8 @@ import (
 )
 
 // handleRunSteer queues a user message for the session's running run: POST
-// /api/sessions/{ref}/run/steer with {"input": <string or input items>}, the input shapes
-// POST /run takes. The run stores it as user input before its next provider round, so the
+// /api/sessions/{ref}/run/steer with {"input": <non-empty string or array of parts>}, the
+// input shapes POST /run takes (an array of Responses input items is refused with 400). The run stores it as user input before its next provider round, so the
 // model sees it without the run stopping; the stored items are published as a "steer"
 // event on the run stream. 202 answers {"steer":{"turn_id","pending"}}. The input is checked
 // as POST /run checks it (shape, images and files against the server.max_request_* limits).

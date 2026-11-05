@@ -579,10 +579,12 @@ func compactedInputBytes(items [][]byte) int {
 	return total
 }
 
-// countUserTurns counts the records of a transcript file that are user messages,
-// the same role == "user" rule CompactHistory uses to split turns. It reads the
-// file as it is on disk: no compaction overlay, and each record of an input
-// batch counts, where the web UI's backup reader merges a batch into one turn.
+// countUserTurns counts the records of a transcript file that are user messages
+// (role == "user"). It reads the file as it is on disk: no compaction overlay, and
+// each record of an input batch counts, where the web UI's backup reader merges a
+// batch into one turn. A steering message (SessionInputSteerField) counts as a turn
+// here, as it does for the session's turn numbers and the web UI, while
+// CompactHistory keeps it in the turn of the run it steered.
 func countUserTurns(path string) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {

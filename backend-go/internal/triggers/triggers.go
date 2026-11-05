@@ -104,9 +104,9 @@ type Manager struct {
 	history []Record
 	started bool
 	closed  bool
-	// delivered holds the signatures accepted in the last replay window, by trigger name
-	// and signature, with the time each was accepted. Only signed requests enter it, so it
-	// grows with the senders' own traffic. Empty when replay_window_ms is 0.
+	// delivered holds the accepted signatures still inside their replay window, by trigger
+	// name and signature, with the time each record expires. Only signed requests enter
+	// it, so it grows with the senders' own traffic. Empty when replay_window_ms is 0.
 	delivered map[string]time.Time
 }
 
@@ -306,7 +306,7 @@ func (m *Manager) serveWebhook(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, http.StatusBadRequest, "the body could not be read")
 		return
 	}
-	signed, refusal := m.signedContent(r, body)
+	signed, stamp, refusal := m.signedContent(r, body)
 	if refusal != "" {
 		m.logger.Warn("trigger webhook with a bad timestamp", slog.String("trigger", name))
 		writeError(w, http.StatusUnauthorized, refusal)
@@ -322,12 +322,17 @@ func (m *Manager) serveWebhook(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, http.StatusUnauthorized, "missing or wrong "+m.settings.SignatureHeader+" (HMAC-SHA256 of "+what+")")
 		return
 	}
-	if !m.firstDelivery(name, signature) {
+	key, first := m.firstDelivery(name, signature, stamp)
+	if !first {
 		m.logger.Warn("trigger webhook repeated a delivery", slog.String("trigger", name))
 		writeError(w, http.StatusConflict, "this signed request was already accepted (setting: server.triggers.replay_window_ms)")
 		return
 	}
 	record, err := m.Fire(name, SourceWebhook, body)
+	if err != nil {
+		// No run started, so the sender may deliver the same request again.
+		m.forgetDelivery(key)
+	}
 	switch {
 	case errors.Is(err, ErrBusy):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "run": record})
@@ -387,50 +392,73 @@ func (m *Manager) serveList(w http.ResponseWriter, r *http.Request) {
 }
 
 // signedContent returns what the signature covers: the body, or with timestamp_header set
-// "<timestamp>.<body>". A missing, malformed or out-of-window timestamp is refused with the
-// message to answer.
-func (m *Manager) signedContent(r *http.Request, body []byte) ([]byte, string) {
+// "<timestamp>.<body>" and the timestamp's time. A missing, malformed or out-of-window
+// timestamp is refused with the message to answer.
+func (m *Manager) signedContent(r *http.Request, body []byte) ([]byte, time.Time, string) {
 	header := m.settings.TimestampHeader
 	if header == "" {
-		return body, ""
+		return body, time.Time{}, ""
 	}
 	raw := strings.TrimSpace(r.Header.Get(header))
 	seconds, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return nil, "missing or malformed " + header + " (the request time in Unix seconds)"
+		return nil, time.Time{}, "missing or malformed " + header + " (the request time in Unix seconds)"
 	}
-	window := time.Duration(m.settings.ReplayWindowMS) * time.Millisecond
-	// Compared in seconds, so a far-off value cannot overflow a time.Duration.
-	if age := m.now().Unix() - seconds; age > int64(window/time.Second) || -age > int64(window/time.Second) {
-		return nil, header + " is further than replay_window_ms from the server's time"
+	now := m.now()
+	windowMS := m.settings.ReplayWindowMS
+	// A value beyond the window in whole seconds is refused first, so the milliseconds
+	// below cannot overflow; the window itself is compared to the millisecond.
+	if bound := windowMS/1000 + 1; seconds < now.Unix()-bound || seconds > now.Unix()+bound {
+		return nil, time.Time{}, header + " is further than replay_window_ms from the server's time"
+	}
+	if age := now.UnixMilli() - seconds*1000; age > windowMS || -age > windowMS {
+		return nil, time.Time{}, header + " is further than replay_window_ms from the server's time"
 	}
 	signed := make([]byte, 0, len(raw)+1+len(body))
 	signed = append(append(append(signed, raw...), '.'), body...)
-	return signed, ""
+	return signed, time.Unix(seconds, 0), ""
 }
 
 // firstDelivery records an accepted signature and reports whether it was new: false when
-// the same trigger accepted it within replay_window_ms. Expired records are dropped on the
-// way. With replay_window_ms 0 every delivery is new and nothing is kept.
-func (m *Manager) firstDelivery(name string, signature []byte) bool {
+// the same trigger still holds it. A record is kept until replay_window_ms after the later
+// of its acceptance and its timestamp (zero without timestamp_header), so it outlives the
+// time the timestamp is accepted even from a sender whose clock runs ahead. Expired records
+// are dropped on the way. It returns the record's key for forgetDelivery. With
+// replay_window_ms 0 every delivery is new and nothing is kept.
+func (m *Manager) firstDelivery(name string, signature []byte, stamp time.Time) (string, bool) {
 	if m.settings.ReplayWindowMS <= 0 {
-		return true
+		return "", true
 	}
 	now := m.now()
-	window := time.Duration(m.settings.ReplayWindowMS) * time.Millisecond
+	from := now
+	if stamp.After(from) {
+		from = stamp
+	}
+	expires := from.Add(time.Duration(m.settings.ReplayWindowMS) * time.Millisecond)
 	key := name + "\x00" + string(signature)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for seen, at := range m.delivered {
-		if now.Sub(at) > window {
+	for seen, until := range m.delivered {
+		if now.After(until) {
 			delete(m.delivered, seen)
 		}
 	}
 	if _, repeated := m.delivered[key]; repeated {
-		return false
+		return key, false
 	}
-	m.delivered[key] = now
-	return true
+	m.delivered[key] = expires
+	return key, true
+}
+
+// forgetDelivery drops the record firstDelivery made, for a request that started no run
+// (the trigger was busy or the server is stopping), so the sender's retry is accepted.
+func (m *Manager) forgetDelivery(key string) {
+	if key == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.delivered, key)
+	m.mu.Unlock()
 }
 
 // validSignature checks header, the hex HMAC-SHA256 of signed with or without "sha256=",

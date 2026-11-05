@@ -259,21 +259,28 @@ func subscribe(ctx context.Context, m *Manager, current *connection, uri string,
 	if !current.receivesNotifications() {
 		return fmt.Errorf("resource subscriptions work with stdio servers only for now: a streamable_http connection does not open the stream the server's notifications travel on")
 	}
-	if on && m.events.isSubscribed(current.serverID, uri) {
-		// The session already holds it; under the listen protocol a second Subscribe sends
-		// nothing, so no acknowledgement would come.
-		return nil
-	}
+	// The check and the record are made inside the request, under the connection's call
+	// lock, so two concurrent subscribes to one URI cannot both send: the second sees the
+	// first's subscription. Under the listen protocol the SDK makes a second Subscribe a
+	// local no-op, so its acknowledgement would never come, and its timeout cleanup would
+	// withdraw the first call's listen.
 	err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
 		if on {
-			return m.subscribeAcknowledged(ctx, current.serverID, session, uri)
+			if m.events.isSubscribed(current.serverID, uri) {
+				return nil
+			}
+			if err := m.subscribeAcknowledged(ctx, current.serverID, session, uri); err != nil {
+				return err
+			}
+		} else if err := session.Unsubscribe(ctx, &mcpSDK.UnsubscribeParams{URI: uri}); err != nil {
+			return err
 		}
-		return session.Unsubscribe(ctx, &mcpSDK.UnsubscribeParams{URI: uri})
+		m.events.setSubscribed(current.serverID, uri, on)
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("resource %s: %s", uri, userRequestError(err, current))
 	}
-	m.events.setSubscribed(current.serverID, uri, on)
 	return nil
 }
 

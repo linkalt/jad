@@ -145,14 +145,93 @@ func TestDeliveredSignaturesExpire(t *testing.T) {
 	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
 	manager := &Manager{settings: sessionfs.TriggerSettings{ReplayWindowMS: 1000}, now: clock.Now, delivered: map[string]time.Time{}}
 	for index := range 5 {
-		manager.firstDelivery("ci", []byte{byte(index)})
+		manager.firstDelivery("ci", []byte{byte(index)}, time.Time{})
 	}
 	clock.advance(1001 * time.Millisecond)
-	manager.firstDelivery("ci", []byte{9})
+	manager.firstDelivery("ci", []byte{9}, time.Time{})
 	if len(manager.delivered) != 1 {
 		t.Fatalf("delivered holds %d signatures, want 1", len(manager.delivered))
 	}
-	if manager.firstDelivery("other", []byte{9}) != true {
+	if _, first := manager.firstDelivery("other", []byte{9}, time.Time{}); !first {
 		t.Fatal("a signature accepted by one trigger was refused by another")
+	}
+}
+
+// A signed request that started no run (the trigger was busy) does not use up its
+// signature: the sender's retry after the run ended is accepted, and only once.
+func TestWebhookRefusedFiringKeepsTheSignature(t *testing.T) {
+	runner := newFakeRunner()
+	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
+	config := settings(webhookEntry())
+	config.HistoryLimit, config.ReplayWindowMS = 100, 60_000
+	manager, err := New(Options{Settings: config, Environment: map[string]string{"CI_SECRET": "s3cret"}, Runner: runner, APIToken: "api-token", Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	handler := manager.Wrap(http.NotFoundHandler())
+	if response := post(handler, "/api/triggers/ci", "a", sign("s3cret", "a")); response.Code != http.StatusAccepted {
+		t.Fatalf("first = %d %s", response.Code, response.Body)
+	}
+	<-runner.started
+	busy := post(handler, "/api/triggers/ci", "b", sign("s3cret", "b"))
+	if busy.Code != http.StatusConflict || !strings.Contains(busy.Body.String(), `"status":"skipped"`) {
+		t.Fatalf("busy = %d %s", busy.Code, busy.Body)
+	}
+	close(runner.release)
+	waitRuns(t, handler, 2)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if triggers, _ := list(t, handler); triggers[0]["running"] == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first run did not end")
+		}
+	}
+	if code := deliver(t, handler, "b", map[string]string{"X-Hub-Signature-256": sign("s3cret", "b")}); code != http.StatusAccepted {
+		t.Fatalf("retry after the run ended = %d, want 202", code)
+	}
+	if code := deliver(t, handler, "b", map[string]string{"X-Hub-Signature-256": sign("s3cret", "b")}); code != http.StatusConflict {
+		t.Fatalf("repeat of the accepted retry = %d, want 409", code)
+	}
+}
+
+// A sender whose clock runs ahead gets a timestamp the server accepts until window after
+// that time, so the record of the request must last as long: a replay is refused at every
+// moment the timestamp is still valid.
+func TestWebhookTimestampAheadCannotBeReplayed(t *testing.T) {
+	handler, clock := replayManager(t, 300_000, "X-Jad-Timestamp")
+	stamp := strconv.FormatInt(clock.Now().Add(200*time.Second).Unix(), 10)
+	captured := map[string]string{"X-Jad-Timestamp": stamp, "X-Hub-Signature-256": sign("s3cret", stamp+".{}")}
+	if code := deliver(t, handler, "{}", captured); code != http.StatusAccepted {
+		t.Fatalf("delivery ahead by 200 s = %d", code)
+	}
+	for _, after := range []time.Duration{299 * time.Second, 2 * time.Second, 198 * time.Second} {
+		clock.advance(after)
+		if code := deliver(t, handler, "{}", captured); code != http.StatusConflict {
+			t.Fatalf("replay %v later = %d, want 409", after, code)
+		}
+	}
+	clock.advance(2 * time.Second)
+	if code := deliver(t, handler, "{}", captured); code != http.StatusUnauthorized {
+		t.Fatalf("replay after the timestamp's window = %d, want 401", code)
+	}
+}
+
+// The timestamp's age is compared to the window in milliseconds, not whole seconds.
+func TestWebhookTimestampWindowCountsMilliseconds(t *testing.T) {
+	handler, clock := replayManager(t, 1500, "X-Jad-Timestamp")
+	at := func(seconds int64) map[string]string {
+		stamp := strconv.FormatInt(seconds, 10)
+		return map[string]string{"X-Jad-Timestamp": stamp, "X-Hub-Signature-256": sign("s3cret", stamp+".{}")}
+	}
+	start := clock.Now().Unix()
+	clock.advance(1400 * time.Millisecond)
+	if code := deliver(t, handler, "{}", at(start)); code != http.StatusAccepted {
+		t.Fatalf("age 1.4 s in a 1.5 s window = %d, want 202", code)
+	}
+	clock.advance(200 * time.Millisecond)
+	if code := deliver(t, handler, "{}", at(start)); code != http.StatusUnauthorized {
+		t.Fatalf("age 1.6 s in a 1.5 s window = %d, want 401", code)
 	}
 }

@@ -162,7 +162,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 	// added to the catalog after the subagent tool, where it always was.
 	var profileMessageTool *tools.Tool
 	if config.NativeProfileMessage != nil && messenger != nil {
-		definition, err := requireNativeDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema)
+		definition, err := requireModelChoiceDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema, profileMessageModelProperty)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +184,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, man
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
 	if config.NativeSubagent != nil {
-		definition, err := requireNativeDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema)
+		definition, err := requireModelChoiceDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema, subagentModelProperty)
 		if err != nil {
 			return nil, err
 		}
@@ -706,6 +706,20 @@ func extensionToolConfigured(config sessionfs.SessionConfig, name string) bool {
 
 func requireNativeDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage) (tools.Definition, error) {
 	return requireDefinition(config, definitions, "native", name, id, schema)
+}
+
+// requireModelChoiceDefinition is requireNativeDefinition for a tool with a model_choice
+// switch: the definition file may hold the schema with the model property or the one the
+// tool had before the property existed, so a file copied from an older version still loads.
+// The tool builds the schema the model sees itself (modelChoiceSchema), so the file's copy
+// is only checked.
+func requireModelChoiceDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage, property string) (tools.Definition, error) {
+	if definition, exists := definitions[id]; exists && definition.Name == name && definition.Source == "native" {
+		if matches, err := sameJSON(definition.InputSchema, modelChoiceSchema(schema, property, false)); err == nil && matches {
+			return definition, nil
+		}
+	}
+	return requireNativeDefinition(config, definitions, name, id, schema)
 }
 
 // requireDefinition checks that the tool definition files define tool name with this id,

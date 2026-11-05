@@ -10,7 +10,10 @@ import (
 // CostMeter adds up what a run's model responses cost, in US dollars, from the pricing of
 // the model that answered each one. A run's meter also adds into the meter of the context
 // the run started in: the HTTP executor puts one there to report the run's cost. Sub-agent
-// runs start on their manager's context, not the calling run's, so they are not counted.
+// runs start on their manager's context, not the calling run's; the sub-agent launcher puts
+// the calling run's meter on the child's context, so the child's spend counts toward the
+// caller's cost, max_run_cost_usd and budget. Spend a background child makes after the
+// caller's last round is in the caller's meter but in no budget record.
 type CostMeter struct {
 	parent *CostMeter
 	mu     sync.Mutex
