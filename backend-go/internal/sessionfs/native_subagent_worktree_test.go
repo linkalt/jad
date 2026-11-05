@@ -6,7 +6,7 @@ import (
 )
 
 func TestNativeSubagentWorktreeDefaultsAndValues(t *testing.T) {
-	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"plain":{"tools":["write"]}}}`), "/s/setting.json", "/w", "")
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"plain":{"tools":["exec"]}}}`), "/s/setting.json", "/w", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestNativeSubagentWorktreeDefaultsAndValues(t *testing.T) {
 
 	custom, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{
 		"worktree": {"dir": "trees", "branch_prefix": "agents/", "git": "/usr/bin/git", "author_name": "Bot", "author_email": "bot@example.com", "commit_hooks": true, "timeout_ms": 5000},
-		"agents": {"iso": {"tools": ["read","write"], "isolation": "worktree"}, "none": {"tools": ["bash"], "isolation": "none"}}}`), "/s/setting.json", "/w", "")
+		"agents": {"iso": {"tools": ["read_image","exec"], "isolation": "worktree"}, "none": {"tools": ["exec"], "isolation": "none"}}}`), "/s/setting.json", "/w", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,10 +37,10 @@ func TestNativeSubagentWorktreeDefaultsAndValues(t *testing.T) {
 
 func TestNativeSubagentWorktreeRefusals(t *testing.T) {
 	for name, test := range map[string]struct{ section, want string }{
-		"unknown isolation":    {`{"agents":{"a":{"tools":["write"],"isolation":"container"}}}`, `isolation must be "none" or "worktree"`},
-		"isolation not text":   {`{"agents":{"a":{"tools":["write"],"isolation":true}}}`, "isolation must be a non-empty string"},
+		"unknown isolation":    {`{"agents":{"a":{"tools":["exec"],"isolation":"container"}}}`, `isolation must be "none" or "worktree"`},
+		"isolation not text":   {`{"agents":{"a":{"tools":["exec"],"isolation":true}}}`, "isolation must be a non-empty string"},
 		"read-only isolated":   {`{"agents":{"a":{"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
-		"read tools isolated":  {`{"agents":{"a":{"tools":["read"],"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
+		"read tools isolated":  {`{"agents":{"a":{"tools":["read_image"],"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
 		"worktree not object":  {`{"worktree":[],"agents":{}}`, "worktree must be an object"},
 		"unknown worktree key": {`{"worktree":{"keep":true},"agents":{}}`, "keep"},
 		"bad prefix":           {`{"worktree":{"branch_prefix":"a b/"},"agents":{}}`, "cannot start a git branch name"},

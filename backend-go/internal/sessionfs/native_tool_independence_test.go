@@ -14,15 +14,14 @@ func TestToolsDoNotTakeEachOthersPathRules(t *testing.T) {
 	cases := []struct {
 		source, dependent string
 	}{
-		{"read", "grep"}, {"read", "glob"}, {"read", "read_image"},
-		{"write", "edit"}, {"write", "bash"}, {"write", "process"},
-		{"bash", "process"}, {"bash", "exec"},
+		{"read_image", "exec"}, {"read_image", "lsp"},
+		{"exec", "read_image"}, {"exec", "lsp"}, {"lsp", "exec"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.source+" to "+tc.dependent, func(t *testing.T) {
 			config, err := loadSetting(t, nativeTools(map[string]any{
-				tc.source:    map[string]any{"paths": rules},
-				tc.dependent: map[string]any{},
+				tc.source:    withLSPServer(tc.source, map[string]any{"paths": rules}),
+				tc.dependent: withLSPServer(tc.dependent, map[string]any{}),
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -38,10 +37,10 @@ func TestToolsDoNotTakeEachOthersPathRules(t *testing.T) {
 }
 
 func TestEveryPathToolTakesItsOwnPathRules(t *testing.T) {
-	for _, tool := range []string{"read", "write", "edit", "grep", "glob", "read_image", "bash", "process", "exec"} {
+	for _, tool := range []string{"read_image", "lsp", "exec"} {
 		t.Run(tool, func(t *testing.T) {
 			config, err := loadSetting(t, nativeTools(map[string]any{
-				tool: map[string]any{"paths": map[string]any{"allow": []any{"mine"}}},
+				tool: withLSPServer(tool, map[string]any{"paths": map[string]any{"allow": []any{"mine"}}}),
 			}))
 			if err != nil {
 				t.Fatal(err)
@@ -54,53 +53,51 @@ func TestEveryPathToolTakesItsOwnPathRules(t *testing.T) {
 	}
 }
 
+// withLSPServer adds the server the lsp tool requires to its block; other blocks are kept.
+func withLSPServer(tool string, block map[string]any) map[string]any {
+	if tool == "lsp" {
+		block["servers"] = map[string]any{"go": map[string]any{"command": []any{"gopls"}, "extensions": []any{".go"}, "language_id": "go"}}
+	}
+	return block
+}
+
 func toolPolicy(config SessionConfig, tool string) NativePathPolicy {
 	switch tool {
-	case "read":
-		return config.NativeRead.Policy
-	case "write":
-		return config.NativeWrite.Policy
-	case "edit":
-		return config.NativeEdit.Policy
-	case "grep":
-		return config.NativeGrep.Policy
-	case "glob":
-		return config.NativeGlob.Policy
 	case "read_image":
 		return config.NativeReadImage.Policy
-	case "bash":
-		return config.NativeBash.Policy
-	case "process":
-		return config.NativeProcess.Policy
+	case "lsp":
+		return config.NativeLSP.Policy
 	case "exec":
 		return config.NativeExec.Child.Policy
 	}
 	panic("unknown tool " + tool)
 }
 
-func TestEditDoesNotTakeWritesBackupSettings(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{
-		"write": map[string]any{"backup_max_count": 9, "backup_max_total_bytes": 1, "fsync": false, "backup_dir": "write-backups"},
-		"edit":  map[string]any{},
-	}))
+// session_files.paths is the file list's and the transcript tools' policy; no tool with
+// path rules of its own takes it.
+func TestToolsDoNotTakeTheSessionFilesPathRules(t *testing.T) {
+	config, err := loadSetting(t, map[string]any{
+		"tools":         map[string]any{"native": map[string]any{"read_image": map[string]any{}, "exec": map[string]any{}, "lsp": withLSPServer("lsp", map[string]any{})}},
+		"session_files": map[string]any{"paths": map[string]any{"allow": []any{"shared"}, "deny": []any{"private"}}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	edit := config.NativeEdit
-	if edit.BackupMaxCount != defaultNativeMutationBackupMaxCount || edit.BackupMaxTotalBytes != defaultNativeMutationBackupMaxBytes || !edit.Fsync {
-		t.Fatalf("edit took write's values: %+v", edit.NativeMutationSettings)
+	if len(config.FilePolicy.Paths) != 2 {
+		t.Fatalf("session_files policy = %+v, want its two rules", config.FilePolicy)
 	}
-	if edit.BackupDir == nil || strings.HasSuffix(*edit.BackupDir, "write-backups") {
-		t.Fatalf("edit backup dir = %v, want its own default", edit.BackupDir)
+	for _, tool := range []string{"read_image", "lsp", "exec"} {
+		if got := toolPolicy(config, tool); len(got.Paths) != 0 || got.UnrestrictedPaths {
+			t.Errorf("%s took session_files.paths: %+v", tool, got)
+		}
 	}
 }
 
-func TestProcessAndExecDoNotTakeBashsOutputBudgets(t *testing.T) {
-	bashBudget := map[string]any{"head_bytes": 11, "tail_bytes": 22}
+func TestExecDoesNotTakeToolSmithsOutputBudgets(t *testing.T) {
+	smithBudget := map[string]any{"head_bytes": 11, "tail_bytes": 22}
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash":    map[string]any{"stdout": bashBudget, "stderr": bashBudget, "timeout_ms": 5000, "max_timeout_ms": 6000, "max_line_chars": 77, "strip_ansi": false},
-		"process": map[string]any{},
-		"exec":    map[string]any{},
+		"tool_smith": map[string]any{"stdout": smithBudget, "stderr": smithBudget, "timeout_ms": 5000, "max_timeout_ms": 6000, "max_line_chars": 77, "strip_ansi": false},
+		"exec":       map[string]any{},
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -108,11 +105,14 @@ func TestProcessAndExecDoNotTakeBashsOutputBudgets(t *testing.T) {
 	wantStdout := NativeBashStreamBudget{HeadBytes: defaultNativeBashStdoutHead, TailBytes: defaultNativeBashStdoutTail}
 	wantStderr := NativeBashStreamBudget{HeadBytes: defaultNativeBashStderrHead, TailBytes: defaultNativeBashStderrTail}
 	child := config.NativeExec.Child
-	if config.NativeProcess.Stdout != wantStdout || config.NativeProcess.Stderr != wantStderr || child.Stdout != wantStdout || child.Stderr != wantStderr {
-		t.Fatalf("process %+v/%+v exec %+v/%+v, want the defaults %+v/%+v", config.NativeProcess.Stdout, config.NativeProcess.Stderr, child.Stdout, child.Stderr, wantStdout, wantStderr)
+	if child.Stdout != wantStdout || child.Stderr != wantStderr {
+		t.Fatalf("exec %+v/%+v, want the defaults %+v/%+v", child.Stdout, child.Stderr, wantStdout, wantStderr)
 	}
 	if child.TimeoutMs != defaultNativeBashTimeoutMs || child.MaxTimeoutMs != defaultNativeBashMaxTimeoutMs || child.MaxLineChars != defaultNativeBashMaxLine || !child.StripANSI {
-		t.Fatalf("exec took bash's execution settings: %+v", child)
+		t.Fatalf("exec took tool_smith's execution settings: %+v", child)
+	}
+	if smith := config.NativeToolSmith.Child; smith.Stdout.HeadBytes != 11 || smith.MaxLineChars != 77 {
+		t.Fatalf("tool_smith lost its own settings: %+v", smith)
 	}
 }
 
@@ -131,8 +131,8 @@ func TestExecOwnsItsChildProcessSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeBash != nil {
-		t.Fatalf("exec created a bash tool: %+v", config.NativeBash)
+	if config.NativeToolSmith != nil {
+		t.Fatalf("exec created a tool_smith tool: %+v", config.NativeToolSmith)
 	}
 	exec := config.NativeExec
 	child := exec.Child

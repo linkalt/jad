@@ -114,7 +114,7 @@ func TestLoadSessionConfigProfileMessage(t *testing.T) {
 		t.Fatalf("native.profile_message = %+v, want %+v", config.NativeProfileMessage, want)
 	}
 
-	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"read": map[string]any{}}})
+	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"read_image": map[string]any{}}})
 	config, err = LoadSessionConfig(location, "", "")
 	if err != nil || config.NativeProfileMessage != nil {
 		t.Fatalf("profile_message = %+v, err=%v; want off", config.NativeProfileMessage, err)

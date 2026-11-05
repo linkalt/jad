@@ -8,13 +8,13 @@ import (
 )
 
 func modelChoiceSpec(subagent, profileMessage map[string]any) layouttest.Spec {
-	subagent["agents"] = map[string]any{"finder": map[string]any{"description": "Finds facts.", "tools": []string{"read"}}}
+	subagent["agents"] = map[string]any{"finder": map[string]any{"description": "Finds facts.", "tools": []string{"read_image"}}}
 	return layouttest.Spec{
 		Models: map[string]map[string]any{
 			"openai/default": {"model": "default-model"},
 			"openai/other":   {"model": "other-model"},
 		},
-		Native: map[string]any{"read": map[string]any{}, "subagent": subagent, "profile_message": profileMessage},
+		Native: map[string]any{"read_image": map[string]any{}, "subagent": subagent, "profile_message": profileMessage},
 		Profiles: map[string]map[string]any{
 			"dev/coder":    {"models": []string{"openai/default", "openai/other"}, "model_default": "openai/default", "toolset": "coding/default"},
 			"dev/reviewer": {"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": "coding/default"},

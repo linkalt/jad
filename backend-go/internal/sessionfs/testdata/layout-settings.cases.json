@@ -173,7 +173,7 @@
   "native": {
    "unrelated": {}
   },
-  "error": "tools.native.unrelated is not supported; supported keys are async, bash, edit, exec, fetch, glob, grep, memory, process, profile, read, request_draft, skill, task, write; MCP servers are configured under tools.mcp"
+  "error": "tools.native.unrelated is not supported; supported keys are async, exec, memory, profile, request_draft, skill, task; MCP servers are configured under tools.mcp"
  },
  {
   "name": "checkpoint all keys",
@@ -746,7 +746,6 @@
  {
   "name": "exec defaults",
   "native": {
-   "bash": {},
    "exec": {}
   },
   "ok": true
@@ -761,7 +760,6 @@
  {
   "name": "exec null",
   "native": {
-   "bash": {},
    "exec": null
   },
   "error": "tools.native.exec must be an object"
@@ -769,7 +767,6 @@
  {
   "name": "exec not an object",
   "native": {
-   "bash": {},
    "exec": "python"
   },
   "error": "tools.native.exec must be an object"
@@ -777,7 +774,6 @@
  {
   "name": "exec unknown key",
   "native": {
-   "bash": {},
    "exec": {
     "unknown_key": 1
    }
@@ -787,7 +783,6 @@
  {
   "name": "exec code_max_bytes zero",
   "native": {
-   "bash": {},
    "exec": {
     "code_max_bytes": 0
    }
@@ -797,7 +792,6 @@
  {
   "name": "exec code_max_bytes over limit",
   "native": {
-   "bash": {},
    "exec": {
     "code_max_bytes": 10485761
    }
@@ -807,7 +801,6 @@
  {
   "name": "exec code_max_bytes fractional",
   "native": {
-   "bash": {},
    "exec": {
     "code_max_bytes": 1.5
    }
@@ -817,7 +810,6 @@
  {
   "name": "exec code_max_bytes string",
   "native": {
-   "bash": {},
    "exec": {
     "code_max_bytes": "10"
    }
@@ -827,7 +819,6 @@
  {
   "name": "exec code_max_bytes null",
   "native": {
-   "bash": {},
    "exec": {
     "code_max_bytes": null
    }
@@ -837,7 +828,6 @@
  {
   "name": "exec result_max_bytes string",
   "native": {
-   "bash": {},
    "exec": {
     "result_max_bytes": "10"
    }
@@ -847,7 +837,6 @@
  {
   "name": "exec result_max_bytes zero",
   "native": {
-   "bash": {},
    "exec": {
     "result_max_bytes": 0
    }
@@ -857,7 +846,6 @@
  {
   "name": "exec line_aware string",
   "native": {
-   "bash": {},
    "exec": {
     "line_aware": "yes"
    }
@@ -867,7 +855,6 @@
  {
   "name": "exec line_aware null",
   "native": {
-   "bash": {},
    "exec": {
     "line_aware": null
    }
@@ -877,7 +864,6 @@
  {
   "name": "exec default_lang python",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": "python"
    }
@@ -887,7 +873,6 @@
  {
   "name": "exec default_lang by alias and case",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": " PY "
    }
@@ -897,7 +882,6 @@
  {
   "name": "exec default_lang null",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": null
    }
@@ -907,7 +891,6 @@
  {
   "name": "exec default_lang unknown",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": "cobol"
    }
@@ -917,7 +900,6 @@
  {
   "name": "exec default_lang empty",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": ""
    }
@@ -927,7 +909,6 @@
  {
   "name": "exec default_lang number",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": 3
    }
@@ -937,7 +918,6 @@
  {
   "name": "exec default_lang a configured language",
   "native": {
-   "bash": {},
    "exec": {
     "default_lang": "mine",
     "runners": {
@@ -956,7 +936,6 @@
  {
   "name": "exec default_lang replaced built-in still resolves",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "bash": {
@@ -974,7 +953,6 @@
  {
   "name": "exec langs not an object",
   "native": {
-   "bash": {},
    "exec": {
     "runners": "python"
    }
@@ -984,7 +962,6 @@
  {
   "name": "exec langs renamed",
   "native": {
-   "bash": {},
    "exec": {
     "langs": {}
    }
@@ -994,7 +971,6 @@
  {
   "name": "exec langs bad name",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "Bad Name": {
@@ -1010,7 +986,6 @@
  {
   "name": "exec lang not an object",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": "python"
@@ -1022,7 +997,6 @@
  {
   "name": "exec lang without argv",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {}
@@ -1034,7 +1008,6 @@
  {
   "name": "exec lang empty argv",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1048,7 +1021,6 @@
  {
   "name": "exec lang empty argv item",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1065,7 +1037,6 @@
  {
   "name": "exec lang argv not strings",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1082,7 +1053,6 @@
  {
   "name": "exec lang argv too long",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1130,7 +1100,6 @@
  {
   "name": "exec lang bad mode",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1148,7 +1117,6 @@
  {
   "name": "exec lang file without placeholder",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1165,7 +1133,6 @@
  {
   "name": "exec lang stdin with placeholder",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1183,7 +1150,6 @@
  {
   "name": "exec lang arg without placeholder",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1199,7 +1165,6 @@
  {
   "name": "exec lang bad ext",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1217,7 +1182,6 @@
  {
   "name": "exec lang bad alias",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1237,7 +1201,6 @@
  {
   "name": "exec lang aliases not a list",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1255,7 +1218,6 @@
  {
   "name": "exec lang unknown key",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1273,7 +1235,6 @@
  {
   "name": "exec lang alias clashes with builtin",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1293,7 +1254,6 @@
  {
   "name": "exec lang alias clashes with another entry",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "x": {
@@ -1322,7 +1282,6 @@
  {
   "name": "exec lang replaces a builtin and takes its aliases",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "python": {
@@ -1343,7 +1302,6 @@
  {
   "name": "exec lang valid file entry",
   "native": {
-   "bash": {},
    "exec": {
     "runners": {
      "viafile": {

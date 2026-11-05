@@ -119,12 +119,12 @@ func TestSettingsStampSeesAnEnvFileEdit(t *testing.T) {
 	cwd := t.TempDir()
 	envFile := filepath.Join(cwd, "tool.env")
 	writeFileT(t, envFile, "A=1\n")
-	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"bash": map[string]any{"env_file": envFile}}})
+	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"exec": map[string]any{"env_file": envFile}}})
 	backdateTree(t, fixture.Root, cwd)
 
 	config, stamp := stampedLoad(t, fixture)
-	if config.NativeBash == nil || config.NativeBash.EnvFile != envFile {
-		t.Fatalf("NativeBash = %+v, want the env file read", config.NativeBash)
+	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != envFile {
+		t.Fatalf("NativeExec = %+v, want the env file read", config.NativeExec)
 	}
 	writeFileT(t, envFile, "A=22\n")
 	if stamp.Current() {

@@ -1007,7 +1007,7 @@ func TestLayoutEnvFileNearestLevelWins(t *testing.T) {
 func TestLayoutDefaultEnvFileMissingFileFails(t *testing.T) {
 	layout, location, root := sampleLayout(t)
 	editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-		m["native"].(map[string]any)["bash"] = map[string]any{}
+		m["native"].(map[string]any)["exec"] = map[string]any{}
 	})
 	layout.Defaults = map[string]json.RawMessage{"env_file": json.RawMessage(`"nope.env"`)}
 	_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
@@ -1377,10 +1377,10 @@ func TestLayoutRefusesTheRemovedApprovalKeysByName(t *testing.T) {
 	t.Run("toolset native tool", func(t *testing.T) {
 		layout, location, root := sampleLayout(t)
 		editJSON(t, filepath.Join(root, "tools", "coding", "full.json"), func(m map[string]any) {
-			m["native"].(map[string]any)["bash"] = map[string]any{"approval": "off"}
+			m["native"].(map[string]any)["exec"] = map[string]any{"approval": "off"}
 		})
 		_, err := LoadLayoutSessionSettings(location, layout, "dev/coder", "")
-		if err == nil || !strings.Contains(err.Error(), "tools.native.bash.approval was removed") {
+		if err == nil || !strings.Contains(err.Error(), "tools.native.exec.approval was removed") {
 			t.Fatalf("err = %v", err)
 		}
 	})

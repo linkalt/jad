@@ -40,15 +40,15 @@ func TestHooksTakeTheirOwnChildProcessKeys(t *testing.T) {
 	}
 }
 
-func TestHooksReadNothingFromTheBashTool(t *testing.T) {
+func TestHooksReadNothingFromTheExecTool(t *testing.T) {
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"bash": map[string]any{"kill_grace_ms": 7000, "max_line_chars": 77, "strip_ansi": false, "env": map[string]any{"FROM_BASH": "1"}, "env_deny": []any{"X"}},
+		"exec": map[string]any{"kill_grace_ms": 7000, "max_line_chars": 77, "strip_ansi": false, "env": map[string]any{"FROM_EXEC": "1"}, "env_deny": []any{"X"}},
 	}))
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
 	if want := defaultHooksWant(); !reflect.DeepEqual(config.Hooks, want) {
-		t.Fatalf("hooks picked up bash settings: %+v, want %+v", config.Hooks, want)
+		t.Fatalf("hooks picked up exec settings: %+v, want %+v", config.Hooks, want)
 	}
 }
 

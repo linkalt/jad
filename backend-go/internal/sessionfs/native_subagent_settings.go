@@ -26,7 +26,7 @@ const (
 	// result; a child that changes more says how many it left out.
 	defaultNativeSubagentChangedFilesMax int64 = 100
 	maxNativeSubagentChangedFilesMax     int64 = 10_000
-	maxNativeSubagentMaxQueued             int64 = 1024
+	maxNativeSubagentMaxQueued           int64 = 1024
 	// defaultNativeSubagentMaxBackgroundWriters is how many writer runs one session may
 	// have going as handles at once; a start beyond it waits for its end instead.
 	defaultNativeSubagentMaxBackgroundWriters int64 = 1

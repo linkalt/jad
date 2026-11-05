@@ -47,8 +47,8 @@ func TestNormalizeNativeToolSmithSettingsDefaults(t *testing.T) {
 	if got.MaxNestedCalls != 100 || got.MaxParallelCalls != 4 || got.ListMaxResults != 50 || got.ListMaxFiles != 200 || got.ListHeaderBytes != 2048 || got.FunctionMaxBytes != 65536 {
 		t.Fatalf("count defaults = %+v", got)
 	}
-	if !reflect.DeepEqual(got.Tools, []string{"read", "grep", "glob"}) {
-		t.Fatalf("tools = %v, want read, grep, glob", got.Tools)
+	if len(got.Tools) != 0 {
+		t.Fatalf("tools = %#v, want none", got.Tools)
 	}
 	if got.Child.TimeoutMs != 120000 || got.Child.MaxTimeoutMs != 600000 {
 		t.Fatalf("child defaults = %+v", got.Child)
@@ -90,11 +90,11 @@ func TestNormalizeNativeToolSmithSettingsInterpreter(t *testing.T) {
 }
 
 func TestNormalizeNativeToolSmithSettingsOverrides(t *testing.T) {
-	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["write","read"],"standby_pool":2,"standby_idle_ms":5000,"standby_max":3}}`)
+	got, err := normalizeToolSmithForTest(t, `{"tool_smith":{"functions_dir":"lib/fn","code_max_bytes":10,"result_max_bytes":20,"nested_result_max_bytes":30,"nested_request_max_bytes":40,"timeout_ms":1000,"max_timeout_ms":2000,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":7,"list_max_files":8,"list_header_bytes":9,"function_max_bytes":11,"tools":["lsp","read_image"],"standby_pool":2,"standby_idle_ms":5000,"standby_max":3}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"write", "read"}, Interpreter: []string{"bun", "run", "{file}"}, StandbyPool: 2, StandbyIdleMs: 5000, StandbyMax: 3}
+	want := NativeToolSmithSettings{FunctionsDir: "lib/fn", CodeMaxBytes: 10, ResultMaxBytes: 20, NestedResultMaxBytes: 30, NestedRequestMaxBytes: 40, MaxNestedCalls: 5, MaxParallelCalls: 2, ListMaxResults: 7, ListMaxFiles: 8, ListHeaderBytes: 9, FunctionMaxBytes: 11, Tools: []string{"lsp", "read_image"}, Interpreter: []string{"bun", "run", "{file}"}, StandbyPool: 2, StandbyIdleMs: 5000, StandbyMax: 3}
 	if got.Child.TimeoutMs != 1000 || got.Child.MaxTimeoutMs != 2000 {
 		t.Fatalf("child timeouts = %d, %d", got.Child.TimeoutMs, got.Child.MaxTimeoutMs)
 	}
@@ -135,17 +135,17 @@ func TestNormalizeNativeToolSmithSettingsRejectsInvalidSettings(t *testing.T) {
 		"function max over":  {`{"tool_smith":{"function_max_bytes":10485761}}`, "function_max_bytes must be a safe integer between 1 and 10485760"},
 		"timeout zero":       {`{"tool_smith":{"timeout_ms":0}}`, "timeout_ms must be a safe integer"},
 		"max below timeout":  {`{"tool_smith":{"timeout_ms":5000,"max_timeout_ms":1000}}`, "max_timeout_ms must be greater than or equal to tools.native.tool_smith.timeout_ms"},
-		"tools not array":    {`{"tool_smith":{"tools":"read"}}`, "tools must be an array of native tool names"},
+		"tools not array":    {`{"tool_smith":{"tools":"read_image"}}`, "tools must be an array of native tool names"},
 		"tools null item":    {`{"tool_smith":{"tools":[null]}}`, "tools[0] must be a native tool name"},
 		"tools empty name":   {`{"tool_smith":{"tools":[""]}}`, "tools[0] must be a native tool name"},
-		"tools bash":         {`{"tool_smith":{"tools":["read","bash"]}}`, "tools[1] \"bash\" cannot be called from a script"},
+		"tools exec second":  {`{"tool_smith":{"tools":["read_image","exec"]}}`, "tools[1] \"exec\" cannot be called from a script"},
 		"tools exec":         {`{"tool_smith":{"tools":["exec"]}}`, "\"exec\" cannot be called from a script"},
-		"tools process":      {`{"tool_smith":{"tools":["process"]}}`, "\"process\" cannot be called from a script"},
+		"tools async":        {`{"tool_smith":{"tools":["async"]}}`, "\"async\" cannot be called from a script"},
 		"tools subagent":     {`{"tool_smith":{"tools":["subagent"]}}`, "\"subagent\" cannot be called from a script"},
 		"tools tool_smith":   {`{"tool_smith":{"tools":["tool_smith"]}}`, "\"tool_smith\" cannot be called from a script"},
 		"tools task":         {`{"tool_smith":{"tools":["task"]}}`, "\"task\" cannot be called from a script"},
 		"tools non native":   {`{"tool_smith":{"tools":["mcp:x"]}}`, "\"mcp:x\" is not a native tool"},
-		"tools duplicate":    {`{"tool_smith":{"tools":["read","read"]}}`, "tools[1] \"read\" is listed twice"},
+		"tools duplicate":    {`{"tool_smith":{"tools":["read_image","read_image"]}}`, "tools[1] \"read_image\" is listed twice"},
 		"approval removed":   {`{"tool_smith":{"approval":"off"}}`, "tools.native.tool_smith.approval was removed"},
 		"upper limits valid": {`{"tool_smith":{"code_max_bytes":10485760,"max_nested_calls":10000,"max_parallel_calls":64,"list_max_results":1000,"list_max_files":10000,"list_header_bytes":65536,"function_max_bytes":10485760}}`, ""},
 	} {

@@ -10,8 +10,8 @@ import (
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
-func grepToolset(maxResults string, more string) string {
-	return `{"native":{"grep":{"max_results":` + maxResults + `}` + more + `}}`
+func imageToolset(maxResults string, more string) string {
+	return `{"native":{"read_image":{"max_image_bytes":` + maxResults + `}` + more + `}}`
 }
 
 func loadFixtureSession(t *testing.T, fixture layouttest.Fixture) SessionConfig {
@@ -33,14 +33,14 @@ func loadFixtureSession(t *testing.T, fixture layouttest.Fixture) SessionConfig 
 
 func TestProfileToolsetsMergeTheirNativeTools(t *testing.T) {
 	config, err := loadToolsetSession(t, profileSpec([]string{"a/one", "b/two"}), map[string]string{
-		"a/one": grepToolset("11", ""),
-		"b/two": `{"native":{"glob":{},"read":{}}}`,
+		"a/one": imageToolset("11", ""),
+		"b/two": `{"native":{"skill":{},"request_draft":{}}}`,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeGrep == nil || config.NativeGlob == nil || config.NativeRead == nil {
-		t.Errorf("grep %v glob %v read %v, want all three", config.NativeGrep != nil, config.NativeGlob != nil, config.NativeRead != nil)
+	if config.NativeReadImage == nil || config.NativeSkill == nil || config.NativeRequestDraft == nil {
+		t.Errorf("read_image %v skill %v request_draft %v, want all three", config.NativeReadImage != nil, config.NativeSkill != nil, config.NativeRequestDraft != nil)
 	}
 	if len(config.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want none", config.Warnings)
@@ -48,24 +48,24 @@ func TestProfileToolsetsMergeTheirNativeTools(t *testing.T) {
 }
 
 func TestProfileToolsetsFirstNativeToolWinsWithAWarning(t *testing.T) {
-	files := map[string]string{"a/one": grepToolset("11", ""), "b/two": grepToolset("22", `,"glob":{}`)}
+	files := map[string]string{"a/one": imageToolset("11", ""), "b/two": imageToolset("22", `,"skill":{}`)}
 	config, err := loadToolsetSession(t, profileSpec([]string{"a/one", "b/two"}), files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeGrep == nil || config.NativeGrep.MaxResults != 11 || config.NativeGlob == nil {
-		t.Fatalf("grep = %+v glob %v, want the first's grep (11) and the second's glob", config.NativeGrep, config.NativeGlob != nil)
+	if config.NativeReadImage == nil || config.NativeReadImage.MaxImageBytes != 11 || config.NativeSkill == nil {
+		t.Fatalf("read_image = %+v skill %v, want the first's read_image (11) and the second's skill", config.NativeReadImage, config.NativeSkill != nil)
 	}
-	if len(config.Warnings) != 1 || !strings.Contains(config.Warnings[0], "grep") || !strings.Contains(config.Warnings[0], "a/one") || !strings.Contains(config.Warnings[0], "b/two") {
-		t.Errorf("Warnings = %v, want one naming grep, a/one and b/two", config.Warnings)
+	if len(config.Warnings) != 1 || !strings.Contains(config.Warnings[0], "read_image") || !strings.Contains(config.Warnings[0], "a/one") || !strings.Contains(config.Warnings[0], "b/two") {
+		t.Errorf("Warnings = %v, want one naming read_image, a/one and b/two", config.Warnings)
 	}
 
 	config, err = loadToolsetSession(t, profileSpec([]string{"b/two", "a/one"}), files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.NativeGrep == nil || config.NativeGrep.MaxResults != 22 {
-		t.Errorf("reversed: grep = %+v, want the first listed (22)", config.NativeGrep)
+	if config.NativeReadImage == nil || config.NativeReadImage.MaxImageBytes != 22 {
+		t.Errorf("reversed: read_image = %+v, want the first listed (22)", config.NativeReadImage)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestProfileToolsetsSameMCPServerKeepsTheFirst(t *testing.T) {
 	spec.MCP = map[string]map[string]any{"srv/files": {}}
 	config, err := loadToolsetSession(t, spec, map[string]string{
 		"a/one": `{"mcp":{"srv/files":{"deny_tools":["rm"]}}}`,
-		"b/two": `{"native":{"glob":{}},"mcp":{"srv/files":{}}}`,
+		"b/two": `{"native":{"skill":{}},"mcp":{"srv/files":{}}}`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestProfileToolsetsHooksInSettingsAndALaterToolsetAreAnError(t *testing.T) 
 
 func TestOneToolsetGivesTheSameConfigAsAString(t *testing.T) {
 	fixture := layouttest.Write(t, profileSpec("a/one"))
-	writeToolsetFile(t, fixture, "a/one", grepToolset("11", `,"read":{}`))
+	writeToolsetFile(t, fixture, "a/one", imageToolset("11", `,"request_draft":{}`))
 	fromString := loadFixtureSession(t, fixture)
 
 	profile := filepath.Join(fixture.Root, "profiles", "dev", "coder.json")
@@ -144,8 +144,8 @@ func TestOneToolsetGivesTheSameConfigAsAString(t *testing.T) {
 func TestSubagentToolsetsMergeUnderTheCompositeKey(t *testing.T) {
 	agent := map[string]any{"toolset": []string{"a/one", "b/two"}}
 	config, err := loadToolsetSession(t, toolsetSpec(agent), map[string]string{
-		"a/one": grepToolset("11", ""),
-		"b/two": grepToolset("22", `,"glob":{}`),
+		"a/one": imageToolset("11", ""),
+		"b/two": imageToolset("22", `,"skill":{}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,14 +154,14 @@ func TestSubagentToolsetsMergeUnderTheCompositeKey(t *testing.T) {
 	if !ok || len(config.AgentToolsets) != 1 {
 		t.Fatalf("AgentToolsets = %v, want only a/one+b/two", config.AgentToolsets)
 	}
-	if derived.NativeGrep == nil || derived.NativeGrep.MaxResults != 11 || derived.NativeGlob == nil || derived.NativeRead != nil {
-		t.Errorf("merged tools: grep %+v glob %v read %v", derived.NativeGrep, derived.NativeGlob != nil, derived.NativeRead != nil)
+	if derived.NativeReadImage == nil || derived.NativeReadImage.MaxImageBytes != 11 || derived.NativeSkill == nil || derived.NativeRequestDraft != nil {
+		t.Errorf("merged tools: read_image %+v skill %v request_draft %v", derived.NativeReadImage, derived.NativeSkill != nil, derived.NativeRequestDraft != nil)
 	}
 	if derived.Warnings != nil {
 		t.Errorf("derived Warnings = %v, want nil", derived.Warnings)
 	}
-	if len(config.Warnings) != 1 || !strings.Contains(config.Warnings[0], "grep") {
-		t.Errorf("Warnings = %v, want one naming grep", config.Warnings)
+	if len(config.Warnings) != 1 || !strings.Contains(config.Warnings[0], "read_image") {
+		t.Errorf("Warnings = %v, want one naming read_image", config.Warnings)
 	}
 }
 
@@ -173,8 +173,8 @@ func TestSubagentsWithTheSameListLoadItOnceAndWarnOnce(t *testing.T) {
 		"three": map[string]any{"toolset": []string{"a/one", "b/two", "c/three"}},
 	}}
 	config, err := loadToolsetSession(t, spec, map[string]string{
-		"a/one":   grepToolset("11", ""),
-		"b/two":   grepToolset("22", ""),
+		"a/one":   imageToolset("11", ""),
+		"b/two":   imageToolset("22", ""),
 		"c/three": globToolsetText,
 	})
 	if err != nil {

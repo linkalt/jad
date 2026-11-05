@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeNativeReadImageSettings(t *testing.T) {
 	const root = "/jad"
-	absent, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}}}`), root, "setting.json")
+	absent, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"lsp":{"paths":{"allow":["/tmp/pics"]}}}`), root, "setting.json")
 	if err != nil || absent != nil {
 		t.Fatalf("a missing read_image key = %+v, err=%v; want the tool off", absent, err)
 	}
@@ -19,7 +19,7 @@ func TestNormalizeNativeReadImageSettings(t *testing.T) {
 	}
 
 	// read's rules are not read_image's: without its own paths it gets the empty default.
-	defaults, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"read":{"paths":{"allow":["/tmp/pics"]}},"read_image":{}}`), root, "setting.json")
+	defaults, err := normalizeNativeReadImageSettings(decideSystemoneSettingsFor(`{"lsp":{"paths":{"allow":["/tmp/pics"]}},"read_image":{}}`), root, "setting.json")
 	if err != nil {
 		t.Fatal(err)
 	}

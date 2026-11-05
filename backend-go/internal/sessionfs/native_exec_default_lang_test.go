@@ -63,7 +63,7 @@ func TestExecEnvironmentIsItsOwnAndNeverToolSmiths(t *testing.T) {
 	execFile := writeExecEnvFile(t, "EXEC_ONLY=1\nSHARED=exec\nWIN=exec-file\n")
 	config, err := loadSetting(t, nativeTools(map[string]any{
 		"tool_smith": map[string]any{"env_file": bashFile, "env": map[string]any{"WIN": "bash-inline", "BASH_INLINE": "1"}},
-		"exec": map[string]any{"env_file": execFile, "env": map[string]any{"WIN": "exec-inline"}},
+		"exec":       map[string]any{"env_file": execFile, "env": map[string]any{"WIN": "exec-inline"}},
 	}))
 	if err != nil {
 		t.Fatal(err)

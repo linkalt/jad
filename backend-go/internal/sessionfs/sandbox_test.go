@@ -262,7 +262,7 @@ func TestSandboxNetworkAllowSeatbeltAndMCP(t *testing.T) {
 		"allow not a list":      {`{"network_allow":"a.com"}`, "network_allow must be"},
 		"proxy port":            {`{"proxy_port":0}`, "proxy_port"},
 		"seatbelt with command": {`{"backend":"seatbelt","command":["env"]}`, "command is for backend"},
-		"unknown tool":          {`{"tools":["glob"]}`, "tools[0] must be one of"},
+		"unknown tool":          {`{"tools":["lsp"]}`, "tools[0] must be one of"},
 	} {
 		if _, err := normalizeSandbox(json.RawMessage(test.raw), "s"); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: error = %v, want %q", name, err, test.want)

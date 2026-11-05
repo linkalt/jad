@@ -15,7 +15,7 @@ func normalizeAsync(t *testing.T, tools string) (*NativeAsyncSettings, error) {
 }
 
 func TestNativeAsyncSettingsAbsentIsNil(t *testing.T) {
-	for _, tools := range []string{`{}`, `{"native":{"process":{}}}`} {
+	for _, tools := range []string{`{}`, `{"native":{"exec":{}}}`} {
 		settings, err := normalizeAsync(t, tools)
 		if err != nil || settings != nil {
 			t.Errorf("%s: settings = %+v, err = %v, want nil", tools, settings, err)
@@ -109,22 +109,21 @@ func TestNativeAsyncSSEMaxIDsDefaultsToTenAndAllowsZero(t *testing.T) {
 	}
 }
 
-func TestProcessSubagentAndToolSmithNeedTheAsyncTool(t *testing.T) {
+func TestSubagentAndToolSmithNeedTheAsyncTool(t *testing.T) {
 	cases := map[string]string{
-		"process":    `"process":{}`,
 		"tool_smith": `"tool_smith":{}`,
 		"subagent":   `"subagent":{"agents":{"a":{"description":"d","instructions":"p","model":"openai/default"}}}`,
 	}
 	for tool, entry := range cases {
-		_, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{},` + entry + `}}`})
+		_, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read_image":{},` + entry + `}}`})
 		if err == nil || !strings.Contains(err.Error(), "tools.native."+tool+" needs tools.native.async") {
 			t.Fatalf("%s without async: error = %v, want the async requirement", tool, err)
 		}
-		if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{},"async":{},` + entry + `}}`}); err != nil {
+		if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read_image":{},"async":{},` + entry + `}}`}); err != nil {
 			t.Fatalf("%s with async: %v", tool, err)
 		}
 	}
-	if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{}}}`}); err != nil {
+	if _, err := loadLayoutSpec(t, layouttest.Spec{ToolsetRaw: `{"native":{"read_image":{}}}`}); err != nil {
 		t.Fatalf("a session with neither tool: %v", err)
 	}
 }

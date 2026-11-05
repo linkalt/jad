@@ -15,8 +15,8 @@ import (
 func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 	config, err := loadToolsetSession(t, layouttest.Spec{
 		Native: map[string]any{
-			"grep": map[string]any{"max_results": 11},
-			"glob": map[string]any{"max_results": 22},
+			"read_image": map[string]any{"max_image_bytes": 11},
+			"skill":      map[string]any{"max_bytes": 22},
 		},
 		MCP: map[string]map[string]any{
 			"srv/zulu":  {"deny_tools": []string{"rm"}},
@@ -30,12 +30,12 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 		t.Errorf("Warnings = %v, want nil", config.Warnings)
 	}
 
-	const wantGrep = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","MaxResults":11,"MaxMatchesPerFile":20,"MaxBytes":65536,"MaxLineChars":240,"MaxFileBytes":8388608,"TimeoutMs":10000,"KillGraceMs":250,"KillDeadlineMs":1000,"DrainAfterExitMs":500}`
-	const wantGlob = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"Binary":"rg","IncludeHidden":true,"MaxResults":22,"MaxBytes":65536,"MaxLineChars":1000,"TimeoutMs":10000,"KillGraceMs":2000,"KillDeadlineMs":2000,"DrainAfterExitMs":500}`
+	const wantGrep = `{"Policy":{"Paths":[],"UnrestrictedPaths":false,"Within":null},"MaxImageBytes":11}`
+	const wantGlob = `{"MaxBytes":22}`
 	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[],"Resources":false,"Prompts":false,"TokenPath":""},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"],"Resources":false,"Prompts":false,"TokenPath":""}]`
 
-	assertJSON(t, "NativeGrep", config.NativeGrep, wantGrep)
-	assertJSON(t, "NativeGlob", config.NativeGlob, wantGlob)
+	assertJSON(t, "NativeReadImage", config.NativeReadImage, wantGrep)
+	assertJSON(t, "NativeSkill", config.NativeSkill, wantGlob)
 
 	servers := append([]MCPServerReference(nil), config.MCPServers...)
 	for index := range servers {

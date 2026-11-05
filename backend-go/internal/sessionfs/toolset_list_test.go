@@ -16,8 +16,8 @@ func profileSpec(toolset any) layouttest.Spec {
 }
 
 const (
-	grepToolsetText = `{"native":{"grep":{}}}`
-	globToolsetText = `{"native":{"glob":{}}}`
+	grepToolsetText = `{"native":{"read_image":{}}}`
+	globToolsetText = `{"native":{"skill":{}}}`
 )
 
 func TestProfileToolsetAcceptsAStringOrAnArray(t *testing.T) {
@@ -37,8 +37,8 @@ func TestProfileToolsetAcceptsAStringOrAnArray(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadSessionSettings: %v", err)
 			}
-			if (config.NativeGrep != nil) != tc.wantGrep || (config.NativeGlob != nil) != tc.wantGlob {
-				t.Errorf("grep %v glob %v, want grep %v glob %v", config.NativeGrep != nil, config.NativeGlob != nil, tc.wantGrep, tc.wantGlob)
+			if (config.NativeReadImage != nil) != tc.wantGrep || (config.NativeSkill != nil) != tc.wantGlob {
+				t.Errorf("read_image %v skill %v, want read_image %v skill %v", config.NativeReadImage != nil, config.NativeSkill != nil, tc.wantGrep, tc.wantGlob)
 			}
 		})
 	}

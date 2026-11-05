@@ -109,4 +109,3 @@ func compileGlob(pattern string) (*compiledGlob, error) {
 	}
 	return compiled, nil
 }
-

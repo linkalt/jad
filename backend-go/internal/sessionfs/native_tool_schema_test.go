@@ -29,7 +29,7 @@ func schemaAccepts(t *testing.T, schema *jsonschema.Schema, text string) bool {
 	return schema.Validate(value) == nil
 }
 
-// The shared setting shapes (read, edit, bash style) are defined once in the schema. The
+// The shared setting shapes (paths, child-process style) are defined once in the schema. The
 // schema and the loader must take and refuse the same tool settings, in the toolset file
 // and in the inline tools.native block.
 func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
@@ -50,32 +50,24 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		config string
 		ok     bool
 	}{
-		{"read paths", "read", `{"paths":` + paths + `,"max_bytes":100}`, true},
-		{"read unknown", "read", `{"path":"x"}`, false},
-		{"grep paths", "grep", `{"paths":` + paths + `,"max_results":3}`, true},
-		{"grep unknown", "grep", `{"nope":1}`, false},
-		{"glob paths", "glob", `{"paths":` + paths + `}`, true},
-		{"glob unknown", "glob", `{"nope":1}`, false},
 		{"read_image paths", "read_image", `{"paths":` + paths + `,"max_image_bytes":100}`, true},
 		{"read_image unknown", "read_image", `{"nope":1}`, false},
-		{"write backups", "write", `{"backup_max_count":2,"backup_max_total_bytes":3,"fsync":false,"backup_dir":null,"paths":` + paths + `}`, true},
-		{"write unknown", "write", `{"nope":1}`, false},
-		{"edit backups", "edit", `{"backup_max_count":2,"backup_max_total_bytes":3,"fsync":false,"backup_dir":"b","paths":` + paths + `,"max_bytes":9}`, true},
-		{"edit unknown", "edit", `{"nope":1}`, false},
-		{"bash every key", "bash", `{` + child + `,` + run + `}`, true},
-		{"bash unknown", "bash", `{"nope":1}`, false},
-		{"bash removed approval", "bash", `{"approval":"ask"}`, false},
-		{"write removed approval", "write", `{"approval":"ask"}`, false},
 		{"exec removed approval", "exec", `{"approval":"ask"}`, false},
-		{"process removed approval", "process", `{"approval":"ask"}`, false},
 		{"exec every bash key", "exec", `{` + child + `,` + run + `,"line_aware":false,"default_lang":"bash","code_max_bytes":10,"result_max_bytes":10,"input_max_bytes":10,"arg_max_bytes":10,"functions_dir":"f","list_max_results":1,"list_max_files":1,"list_header_bytes":1,"function_max_bytes":1}`, true},
 		{"exec unknown", "exec", `{"nope":1}`, false},
-		{"process child keys", "process", `{` + child + `,"stdout":{"head_bytes":1,"tail_bytes":1},"max_running":2}`, true},
-		{"process unknown", "process", `{"nope":1}`, false},
-		{"process has no run keys", "process", `{"timeout_ms":1000}`, false},
-		{"bash bad type", "bash", `{"timeout_ms":"slow"}`, false},
 		{"exec bad type", "exec", `{"timeout_ms":0}`, false},
+		{"exec removed spill allow_unreadable", "exec", `{"spill":{"allow_unreadable":true}}`, false},
 		{"read_image bad paths", "read_image", `{"paths":3}`, false},
+		{"removed read", "read", `{}`, false},
+		{"removed write", "write", `{}`, false},
+		{"removed edit", "edit", `{}`, false},
+		{"removed apply_patch", "apply_patch", `{}`, false},
+		{"removed notebook", "notebook", `{}`, false},
+		{"removed grep", "grep", `{}`, false},
+		{"removed glob", "glob", `{}`, false},
+		{"removed bash", "bash", `{}`, false},
+		{"removed process", "process", `{}`, false},
+		{"removed fetch", "fetch", `{}`, false},
 		{"decide_systemone keys", "decide_systemone", `{"max_questions":2}`, true},
 		{"decide_systemone unknown", "decide_systemone", `{"nope":1}`, false},
 		{"profile_message every key", "profile_message", `{"deny_profiles":["dev/a","exec/fast"],"timeout_ms":1000,"result_max_bytes":100}`, true},
@@ -90,7 +82,7 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"profile_message deny bare id", "profile_message", `{"deny_profiles":["coder"]}`, false},
 		{"profile_message deny bad id", "profile_message", `{"deny_profiles":["a b"]}`, false},
 		{"profile_message zero timeout", "profile_message", `{"timeout_ms":0}`, false},
-		{"tool_smith every key", "tool_smith", `{` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read","write"],"interpreter":["node","{file}"]}`, true},
+		{"tool_smith every key", "tool_smith", `{` + toolSmithChild + `,` + run + `,"functions_dir":".jad/functions","code_max_bytes":10,"result_max_bytes":10,"nested_result_max_bytes":10,"nested_request_max_bytes":10,"max_nested_calls":5,"max_parallel_calls":2,"list_max_results":3,"list_max_files":4,"list_header_bytes":512,"function_max_bytes":10,"tools":["read_image","lsp"],"interpreter":["node","{file}"]}`, true},
 		{"tool_smith no keys", "tool_smith", `{}`, true},
 		{"transcript every key", "transcript", `{"response_max_bytes":100,"preview_bytes":10,"value_bytes":10,"max_list_entries":5,"max_detail_bytes":100,"line_max_bytes":1000,"scan_max_bytes":1000,"suggest_max":3,"timeout_ms":1000,"allow_other_sessions":false,"allow_other_reasoning":true,"allow_other_profiles":false,"allow_children":false,"allow_path":true}`, true},
 		{"transcript bad allow_other_reasoning", "transcript", `{"allow_other_reasoning":"yes"}`, false},
@@ -118,8 +110,9 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"tool_smith zero request max", "tool_smith", `{"nested_request_max_bytes":0}`, false},
 		{"tool_smith request max too high", "tool_smith", `{"nested_request_max_bytes":10485761}`, false},
 		{"tool_smith parallel too high", "tool_smith", `{"max_parallel_calls":65}`, false},
-		{"tool_smith excluded tool", "tool_smith", `{"tools":["bash"]}`, false},
-		{"tool_smith duplicate tool", "tool_smith", `{"tools":["read","read"]}`, false},
+		{"tool_smith excluded tool", "tool_smith", `{"tools":["exec"]}`, false},
+		{"tool_smith removed tool", "tool_smith", `{"tools":["read"]}`, false},
+		{"tool_smith duplicate tool", "tool_smith", `{"tools":["lsp","lsp"]}`, false},
 		{"tool_smith empty interpreter", "tool_smith", `{"interpreter":[]}`, false},
 		{"tool_smith empty functions_dir", "tool_smith", `{"functions_dir":""}`, false},
 	}
@@ -177,7 +170,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 	if strings.Join(decideSystemoneKeys, ",") != strings.Join(wantDecideSystemone, ",") {
 		t.Errorf("decide_systemone schema keys\n  %v\nloader accepts\n  %v", decideSystemoneKeys, wantDecideSystemone)
 	}
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "bash": nativeBashStyleKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)

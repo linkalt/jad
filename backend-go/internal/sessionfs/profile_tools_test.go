@@ -44,12 +44,12 @@ func withToolset(profile map[string]any) map[string]any {
 }
 
 func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
-	allow := []any{"read", "mcp:docs:search", "mcp:docs:*"}
+	allow := []any{"read_image", "mcp:docs:search", "mcp:docs:*"}
 	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": allow}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "mcp:docs:search", "mcp:docs:*"}, Deny: nil, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read_image", "mcp:docs:search", "mcp:docs:*"}, Deny: nil, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
@@ -57,11 +57,11 @@ func TestProfileToolsLoadAndReachTheConfig(t *testing.T) {
 
 // deny alone subtracts from everything the session registers: HasAllow stays false.
 func TestProfileToolsDenyAloneLoadsWithoutAnAllowList(t *testing.T) {
-	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"deny": []any{"bash", "mcp:docs:*"}}})
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"deny": []any{"exec", "mcp:docs:*"}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, HasAllow: false, Deny: []string{"bash", "mcp:docs:*"}, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
+	want := ProfileToolSettings{Restricted: true, HasAllow: false, Deny: []string{"exec", "mcp:docs:*"}, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
@@ -69,11 +69,11 @@ func TestProfileToolsDenyAloneLoadsWithoutAnAllowList(t *testing.T) {
 
 // allow and deny together are both kept; an empty deny is a restriction that hides nothing.
 func TestProfileToolsAllowAndDenyTogether(t *testing.T) {
-	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "bash"}, "deny": []any{"bash"}}})
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec"}, "deny": []any{"exec"}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "bash"}, Deny: []string{"bash"}, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read_image", "exec"}, Deny: []string{"exec"}, LazySummaryBytes: defaultLazySummaryBytes, LazyLoadMax: defaultLazyLoadMax}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
@@ -106,7 +106,7 @@ func TestProfileToolsAbsentMeansUnrestricted(t *testing.T) {
 
 // Only the selected profile's block applies: another profile's restriction is not read.
 func TestProfileToolsApplyToTheSelectedProfileOnly(t *testing.T) {
-	config, err := loadProfileTools(t, "full", map[string]any{"tools": map[string]any{"allow": []any{"read"}}})
+	config, err := loadProfileTools(t, "full", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,29 +120,29 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 		tools any
 		want  string
 	}{
-		"not an object":    {[]any{"read"}, "tools must be an object"},
+		"not an object":    {[]any{"read_image"}, "tools must be an object"},
 		"null":             {nil, "tools must be an object"},
 		"no allow or deny": {map[string]any{}, "tools needs allow or deny; use an empty allow array to hide every tool"},
 		"unknown key":      {map[string]any{"allow": []any{}, "block": []any{}}, "tools.block is not supported"},
-		"deny not array":   {map[string]any{"deny": "bash"}, "tools.deny must be an array of tool names"},
+		"deny not array":   {map[string]any{"deny": "exec"}, "tools.deny must be an array of tool names"},
 		"deny null":        {map[string]any{"deny": nil}, "tools.deny must be an array of tool names"},
 		"deny not string":  {map[string]any{"deny": []any{3}}, "tools.deny[0] must be a non-empty string"},
 		"deny unknown":     {map[string]any{"deny": []any{"raed"}}, `tools.deny[0] "raed" is not a native tool`},
 		"deny bad mcp":     {map[string]any{"deny": []any{"mcp:docs"}}, `tools.deny[0] "mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
-		"deny duplicate":   {map[string]any{"deny": []any{"bash", "bash"}}, `tools.deny[1] repeats "bash"`},
+		"deny duplicate":   {map[string]any{"deny": []any{"exec", "exec"}}, `tools.deny[1] repeats "exec"`},
 		"typo key":         {map[string]any{"alow": []any{}}, "did you mean allow?"},
-		"allow not array":  {map[string]any{"allow": "read"}, "tools.allow must be an array of tool names"},
+		"allow not array":  {map[string]any{"allow": "read_image"}, "tools.allow must be an array of tool names"},
 		"allow null":       {map[string]any{"allow": nil}, "tools.allow must be an array of tool names"},
 		"entry not string": {map[string]any{"allow": []any{3}}, "tools.allow[0] must be a non-empty string"},
 		"entry blank":      {map[string]any{"allow": []any{"  "}}, "tools.allow[0] must be a non-empty string"},
-		"unknown native":   {map[string]any{"allow": []any{"raed"}}, `tools.allow[0] "raed" is not a native tool; use one of apply_patch, async, bash, decide_systemone`},
+		"unknown native":   {map[string]any{"allow": []any{"raed"}}, `tools.allow[0] "raed" is not a native tool; use one of async, decide_systemone, exec, load_tool, lsp`},
 		"mcp without tool": {map[string]any{"allow": []any{"mcp:docs"}}, `"mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
 		"mcp empty tool":   {map[string]any{"allow": []any{"mcp:docs:"}}, `"mcp:docs:" must be mcp:<server>:<tool>`},
 		"mcp bad server":   {map[string]any{"allow": []any{"mcp:do.cs:x"}}, `must be mcp:<server>:<tool>`},
 		"padded native":    {map[string]any{"allow": []any{" read "}}, `" read " must not contain whitespace`},
 		"space in mcp":     {map[string]any{"allow": []any{"mcp:docs:a b"}}, `"mcp:docs:a b" must not contain whitespace`},
 		"colon wildcard":   {map[string]any{"allow": []any{"mcp:docs:foo:*"}}, `"mcp:docs:foo:*" must be mcp:<server>:<tool>`},
-		"duplicate":        {map[string]any{"allow": []any{"read", "read"}}, `tools.allow[1] repeats "read"`},
+		"duplicate":        {map[string]any{"allow": []any{"read_image", "read_image"}}, `tools.allow[1] repeats "read_image"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := loadProfileTools(t, "lean", map[string]any{"tools": tc.tools})
@@ -183,7 +183,7 @@ func TestUnselectedProfilesAreCheckedAtLoad(t *testing.T) {
 		"blank instruct":   {map[string]any{"instructions": "  "}, "instructions must be a non-empty string"},
 		"null instruct":    {map[string]any{"instructions": nil}, "instructions must be a non-empty string"},
 		"blank prompt doc": {map[string]any{"prompt_documents": []any{" "}}, "prompt_documents[0] must be a non-empty string"},
-		"tools not object": {map[string]any{"tools": []any{"read"}}, "tools must be an object"},
+		"tools not object": {map[string]any{"tools": []any{"read_image"}}, "tools must be an object"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := loadProfileTools(t, "full", tc.lean)
@@ -282,11 +282,11 @@ func TestProfileToolsSchemaMatchesTheLoader(t *testing.T) {
 
 // lazy lists tools shown by name and summary; lazy_summary_bytes is its bound, with a default.
 func TestProfileToolsLazyLoadsWithItsSummaryBound(t *testing.T) {
-	config, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "bash", "mcp:docs:search"}, "lazy": []any{"bash", "mcp:docs:search"}, "lazy_summary_bytes": 64}}, map[string]any{"load_tool": map[string]any{}})
+	config, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec", "mcp:docs:search"}, "lazy": []any{"exec", "mcp:docs:search"}, "lazy_summary_bytes": 64}}, map[string]any{"load_tool": map[string]any{}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read", "bash", "mcp:docs:search"}, Lazy: []string{"bash", "mcp:docs:search"}, LazySummaryBytes: 64, LazyLoadMax: defaultLazyLoadMax}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read_image", "exec", "mcp:docs:search"}, Lazy: []string{"exec", "mcp:docs:search"}, LazySummaryBytes: 64, LazyLoadMax: defaultLazyLoadMax}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
@@ -295,7 +295,7 @@ func TestProfileToolsLazyLoadsWithItsSummaryBound(t *testing.T) {
 // lazy_summary_bytes outside 1 to 4096 is a configuration error that names the key.
 func TestProfileToolsLazySummaryBytesBounds(t *testing.T) {
 	for _, value := range []any{0, 4097, "256", 1.5} {
-		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}, "lazy_summary_bytes": value}})
+		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}, "lazy_summary_bytes": value}})
 		if err == nil || !strings.Contains(err.Error(), "tools.lazy_summary_bytes must be a safe integer between 1 and 4096") {
 			t.Errorf("lazy_summary_bytes %v: err = %v, want the bound error", value, err)
 		}
@@ -305,12 +305,12 @@ func TestProfileToolsLazySummaryBytesBounds(t *testing.T) {
 // lazy_load_max outside 1 to 100 is a configuration error that names the key; the default is 16.
 func TestProfileToolsLazyLoadMaxBounds(t *testing.T) {
 	for _, value := range []any{0, 101, "16", 2.5} {
-		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}, "lazy_load_max": value}})
+		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}, "lazy_load_max": value}})
 		if err == nil || !strings.Contains(err.Error(), "tools.lazy_load_max must be a safe integer between 1 and 100") {
 			t.Errorf("lazy_load_max %v: err = %v, want the bound error", value, err)
 		}
 	}
-	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}, "lazy_load_max": 3}})
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}, "lazy_load_max": 3}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestProfileToolsLazyLoadMaxBounds(t *testing.T) {
 
 // load_tool is the tool that shows the lazy ones, so it cannot be lazy itself.
 func TestProfileToolsRefusesLoadToolAsLazy(t *testing.T) {
-	_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"load_tool", "read"}, "lazy": []any{"read", "load_tool"}}})
+	_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"load_tool", "read_image"}, "lazy": []any{"read_image", "load_tool"}}})
 	if err == nil || !strings.Contains(err.Error(), `tools.lazy[1] "load_tool" cannot be lazy`) {
 		t.Fatalf("err = %v, want the load_tool refusal naming tools.lazy[1]", err)
 	}
@@ -330,14 +330,14 @@ func TestProfileToolsRefusesLoadToolAsLazy(t *testing.T) {
 // load_tool is a normal native tool: it is in the session's native settings only when the key
 // is present under tools.native, and the profile does not add it.
 func TestNativeLoadToolIsEnabledOnlyByItsKey(t *testing.T) {
-	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "load_tool"}}})
+	config, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "load_tool"}}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if config.NativeLoadTool != nil {
 		t.Fatalf("NativeLoadTool = %+v without tools.native.load_tool, want nil", config.NativeLoadTool)
 	}
-	config, err = loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "load_tool"}}}, map[string]any{"load_tool": map[string]any{}})
+	config, err = loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "load_tool"}}}, map[string]any{"load_tool": map[string]any{}})
 	if err != nil {
 		t.Fatalf("load with tools.native.load_tool: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestNativeLoadToolIsEnabledOnlyByItsKey(t *testing.T) {
 // A profile with tools.lazy is refused at load when tools.native.load_tool is not enabled, and
 // the error names both keys. With the key enabled the same profile loads.
 func TestLazyWithoutNativeLoadToolIsRefusedAtLoad(t *testing.T) {
-	lazy := map[string]any{"tools": map[string]any{"allow": []any{"read", "bash"}, "lazy": []any{"bash"}}}
+	lazy := map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec"}, "lazy": []any{"exec"}}}
 	_, err := loadProfileTools(t, "lean", lazy)
 	if err == nil || !strings.Contains(err.Error(), "tools.lazy") || !strings.Contains(err.Error(), "tools.native.load_tool") {
 		t.Fatalf("err = %v, want a refusal naming tools.lazy and tools.native.load_tool", err)
@@ -361,7 +361,7 @@ func TestLazyWithoutNativeLoadToolIsRefusedAtLoad(t *testing.T) {
 
 // tools.native.load_tool with no tools.lazy loads: the tool is listed and lists nothing.
 func TestNativeLoadToolWithoutLazyLoads(t *testing.T) {
-	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read", "load_tool"}}}, map[string]any{"load_tool": map[string]any{}})
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "load_tool"}}}, map[string]any{"load_tool": map[string]any{}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestNativeLoadToolWithoutLazyLoads(t *testing.T) {
 
 // tools.native.load_tool takes no keys: a key under it is refused by name.
 func TestNativeLoadToolRefusesKeys(t *testing.T) {
-	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}}}, map[string]any{"load_tool": map[string]any{"max": 1}})
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}}}, map[string]any{"load_tool": map[string]any{"max": 1}})
 	if err == nil || !strings.Contains(err.Error(), "tools.native.load_tool takes no keys") {
 		t.Fatalf("err = %v, want the no-keys refusal", err)
 	}
@@ -377,7 +377,7 @@ func TestNativeLoadToolRefusesKeys(t *testing.T) {
 
 // The supported-keys error for tools.native lists load_tool, so a typo near it is suggested.
 func TestNativeLoadToolIsInTheSupportedKeys(t *testing.T) {
-	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}}}, map[string]any{"load_tol": map[string]any{}})
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}}}, map[string]any{"load_tol": map[string]any{}})
 	if err == nil || !strings.Contains(err.Error(), "load_tool") {
 		t.Fatalf("err = %v, want the supported keys to name load_tool", err)
 	}
@@ -386,7 +386,7 @@ func TestNativeLoadToolIsInTheSupportedKeys(t *testing.T) {
 // A lazy entry follows the allow entry syntax: a whitespace or a bad form is refused.
 func TestProfileToolsLazyEntriesUseTheAllowSyntax(t *testing.T) {
 	for _, entry := range []string{"raed", "mcp:docs", " read"} {
-		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read"}, "lazy": []any{entry}}})
+		_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image"}, "lazy": []any{entry}}})
 		if err == nil || !strings.Contains(err.Error(), "tools.lazy[0]") {
 			t.Errorf("lazy entry %q: err = %v, want a tools.lazy[0] error", entry, err)
 		}
@@ -423,7 +423,7 @@ func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
 	if !allow.MatchString(LoadToolName) {
 		t.Errorf("the schema's allow pattern refuses %q, which the loader accepts", LoadToolName)
 	}
-	for _, entry := range []string{"read", "bash", "decide_systemone", "mcp:docs:search", "mcp:docs:*"} {
+	for _, entry := range []string{"read_image", "exec", "decide_systemone", "mcp:docs:search", "mcp:docs:*"} {
 		if !lazy.MatchString(entry) {
 			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts", entry)
 		}
@@ -470,7 +470,7 @@ func TestProfileToolsSchemaLazyPatternAgreesWithTheLoaderForEveryNativeName(t *t
 // A tools block with lazy and neither allow nor deny is refused by the loader, as the schema's
 // anyOf refuses it: the block must say which tools it shows.
 func TestLazyOnlyToolsBlockIsRefusedLikeTheSchema(t *testing.T) {
-	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"lazy": []any{"bash"}}}, map[string]any{"load_tool": map[string]any{}})
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"lazy": []any{"exec"}}}, map[string]any{"load_tool": map[string]any{}})
 	if err == nil || !strings.Contains(err.Error(), "needs allow or deny") {
 		t.Fatalf("err = %v, want the loader to refuse a lazy-only tools block", err)
 	}

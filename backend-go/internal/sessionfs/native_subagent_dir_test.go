@@ -35,7 +35,7 @@ func loadWithDirs(t *testing.T, root, subagent string) (*NativeSubagentSettings,
 
 func TestSubagentAgentsDirLoadsOneAgentPerFolderInNameOrder(t *testing.T) {
 	root := subagentTree(t, map[string]string{
-		"agents/zeta/agent.json":    `{"schema_version":1,"description":"last","model":"zeta-model.json","tools":["read"],"max_tool_rounds":7,"max_run_tokens":5000,"timeout_ms":4000,"instructions":"Inline."}`,
+		"agents/zeta/agent.json":    `{"schema_version":1,"description":"last","model":"zeta-model.json","tools":["read_image"],"max_tool_rounds":7,"max_run_tokens":5000,"timeout_ms":4000,"instructions":"Inline."}`,
 		"agents/zeta/prompt.md":     "  Prompt file text.\n\n",
 		"agents/zeta/extra.md":      "Extra document.",
 		"agents/alpha/agent.json":   `{"description":"first","prompt_documents":["notes.md"]}`,
@@ -46,7 +46,7 @@ func TestSubagentAgentsDirLoadsOneAgentPerFolderInNameOrder(t *testing.T) {
 	})
 	// zeta also lists its extra document.
 	if err := os.WriteFile(filepath.Join(root, "agents/zeta/agent.json"),
-		[]byte(`{"schema_version":1,"description":"last","model":"zeta-model.json","tools":["read"],"max_tool_rounds":7,"max_run_tokens":5000,"timeout_ms":4000,"instructions":"Inline.","prompt_documents":["extra.md"]}`), 0o600); err != nil {
+		[]byte(`{"schema_version":1,"description":"last","model":"zeta-model.json","tools":["read_image"],"max_tool_rounds":7,"max_run_tokens":5000,"timeout_ms":4000,"instructions":"Inline.","prompt_documents":["extra.md"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,7 +89,7 @@ func TestSubagentAgentsDirLoadsOneAgentPerFolderInNameOrder(t *testing.T) {
 	if zeta.ModelPath != filepath.Join(root, "agents", "zeta", "zeta-model.json") {
 		t.Errorf("zeta model = %q", zeta.ModelPath)
 	}
-	if !zeta.HasTools || strings.Join(zeta.Tools, ",") != "read" || zeta.MaxToolRounds != 7 || zeta.MaxRunTokens != 5000 || zeta.TimeoutMS != 4000 {
+	if !zeta.HasTools || strings.Join(zeta.Tools, ",") != "read_image" || zeta.MaxToolRounds != 7 || zeta.MaxRunTokens != 5000 || zeta.TimeoutMS != 4000 {
 		t.Errorf("zeta = %+v", zeta)
 	}
 }
@@ -202,10 +202,12 @@ func TestSubagentAgentsDirRejectsInvalidSettings(t *testing.T) {
 		"nothing/x/notes.txt":         "no agent.json or prompt.md",
 		"badname/has space/prompt.md": "x",
 		"badjson/a/agent.json":        `{"description":`,
-		"typo/a/agent.json":           `{"tool":["read"]}`,
+		"typo/a/agent.json":           `{"tool":["read_image"]}`,
 		"version/a/agent.json":        `{"schema_version":2}`,
 		"blankinstr/a/agent.json":     `{"instructions":" "}`,
 		"timeout/a/agent.json":        `{"timeout_ms":5}`,
+		"paths/a/agent.json":          `{"tools":["exec"],"paths":{"allow":["src"]}}`,
+		"oldtool/a/agent.json":        `{"tools":["read_image","grep"]}`,
 		"missingdoc/a/agent.json":     `{"prompt_documents":["nope.md"]}`,
 		"emptyfile/a/agent.json":      ``,
 		"notobject/a/agent.json":      `[]`,
@@ -226,6 +228,8 @@ func TestSubagentAgentsDirRejectsInvalidSettings(t *testing.T) {
 		"schema version":   {`{"agents_dir":["version"]}`, "unsupported schema_version 2"},
 		"blank instr":      {`{"agents_dir":["blankinstr"]}`, "agent.instructions must be a non-empty string"},
 		"timeout":          {`{"agents_dir":["timeout"]}`, "agent.timeout_ms must be a safe integer between 1000 and 21600000"},
+		"removed paths":    {`{"agents_dir":["paths"]}`, "agent.paths was removed; it narrowed the agent's write and edit"},
+		"removed tool":     {`{"agents_dir":["oldtool"]}`, `tools[1] "grep" was removed; search with exec`},
 		"missing doc":      {`{"agents_dir":["missingdoc"]}`, "prompt_documents[0] could not be read: " + missingDoc},
 		"empty agent.json": {`{"agents_dir":["emptyfile"]}`, "file is empty"},
 		"not an object":    {`{"agents_dir":["notobject"]}`, "expected a JSON object"},
@@ -377,17 +381,17 @@ func TestAgentSchemaValidatesAgentFilesTheLoaderAccepts(t *testing.T) {
 	}
 	valid := []string{
 		`{}`,
-		`{"schema_version":1,"description":"d","model":"m.json","instructions":"i","prompt_documents":["a.md"],"tools":["read"],"max_tool_rounds":3,"max_run_tokens":100,"timeout_ms":1000}`,
+		`{"schema_version":1,"description":"d","model":"m.json","instructions":"i","prompt_documents":["a.md"],"tools":["read_image"],"max_tool_rounds":3,"max_run_tokens":100,"timeout_ms":1000}`,
 		`{"toolset":"extra/search"}`,
 		`{"toolset":"extra.v2/search-tools_1"}`,
 		`{"toolset":["extra/search","extra/more"]}`,
 		`{"toolset":["extra/search"]}`,
 	}
 	invalid := map[string]string{
-		"unknown key":            `{"tool":["read"]}`,
+		"unknown key":            `{"tool":["read_image"]}`,
 		"rounds zero":            `{"max_tool_rounds":0}`,
 		"timeout small":          `{"timeout_ms":999}`,
-		"tools twice":            `{"tools":["read","read"]}`,
+		"tools twice":            `{"tools":["read_image","read_image"]}`,
 		"documents once":         `{"prompt_documents":["a.md","a.md"]}`,
 		"version":                `{"schema_version":2}`,
 		"description":            `{"description":"` + strings.Repeat("x", 501) + `"}`,
@@ -478,7 +482,7 @@ func TestSampleSubagentFolderLoadsAndMatchesTheSchema(t *testing.T) {
 	}
 	explore, ok := got.Agent("explore")
 	if !ok || explore.Description == "" || !strings.Contains(explore.PromptText, "read-only research helper") ||
-		strings.Join(explore.Tools, ",") != "read,grep,glob" {
+		strings.Join(explore.Tools, ",") != "exec" {
 		t.Fatalf("explore = %+v", explore)
 	}
 	compiler := jsonschema.NewCompiler()

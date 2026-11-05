@@ -14,8 +14,8 @@ import (
 func toolsetSpec(agent map[string]any) layouttest.Spec {
 	return layouttest.Spec{
 		Native: map[string]any{
-			"read":     map[string]any{},
-			"subagent": map[string]any{"agents": map[string]any{"finder": agent}},
+			"request_draft": map[string]any{},
+			"subagent":      map[string]any{"agents": map[string]any{"finder": agent}},
 		},
 	}
 }
@@ -52,13 +52,13 @@ func loadToolsetSession(t *testing.T, spec layouttest.Spec, extra map[string]str
 // not gain them, and the toolset's settings never carry a subagent tool.
 func TestSubagentToolsetIsLoadedApartFromTheSessionToolset(t *testing.T) {
 	config, err := loadToolsetSession(t, toolsetSpec(map[string]any{"toolset": "extra/search"}), map[string]string{
-		"extra/search": `{"native":{"grep":{},"glob":{},"async":{},"subagent":{"agents":{"nested":{}}}}}`,
+		"extra/search": `{"native":{"read_image":{},"skill":{},"async":{},"subagent":{"agents":{"nested":{}}}}}`,
 	})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
-	if config.NativeGrep != nil || config.NativeRead == nil {
-		t.Errorf("session tools: grep %v read %v, want read only", config.NativeGrep != nil, config.NativeRead != nil)
+	if config.NativeReadImage != nil || config.NativeRequestDraft == nil {
+		t.Errorf("session tools: read_image %v request_draft %v, want request_draft only", config.NativeReadImage != nil, config.NativeRequestDraft != nil)
 	}
 	agent, ok := config.NativeSubagent.Agent("finder")
 	if !ok || agent.ToolsetKey() != "extra/search" {
@@ -68,8 +68,8 @@ func TestSubagentToolsetIsLoadedApartFromTheSessionToolset(t *testing.T) {
 	if !ok {
 		t.Fatalf("AgentToolsets = %v, want extra/search", config.AgentToolsets)
 	}
-	if derived.NativeGrep == nil || derived.NativeGlob == nil || derived.NativeRead != nil {
-		t.Errorf("toolset tools: grep %v glob %v read %v, want grep and glob only", derived.NativeGrep != nil, derived.NativeGlob != nil, derived.NativeRead != nil)
+	if derived.NativeReadImage == nil || derived.NativeSkill == nil || derived.NativeRequestDraft != nil {
+		t.Errorf("toolset tools: read_image %v skill %v request_draft %v, want read_image and skill only", derived.NativeReadImage != nil, derived.NativeSkill != nil, derived.NativeRequestDraft != nil)
 	}
 	if derived.NativeSubagent != nil {
 		t.Error("the toolset's own subagent entry was kept; a toolset-based agent gets no subagent tool")
@@ -88,7 +88,7 @@ func TestSubagentToolsetIsLoadedOncePerID(t *testing.T) {
 		"two":   map[string]any{"toolset": "extra/search"},
 		"plain": map[string]any{},
 	}}
-	config, err := loadToolsetSession(t, spec, map[string]string{"extra/search": `{"native":{"grep":{}}}`})
+	config, err := loadToolsetSession(t, spec, map[string]string{"extra/search": `{"native":{"read_image":{}}}`})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestSubagentToolsetIsLoadedOncePerID(t *testing.T) {
 func TestSubagentToolsetDoesNotReadTheSessionStateContext(t *testing.T) {
 	spec := toolsetSpec(map[string]any{"toolset": "extra/search"})
 	spec.Settings = map[string]any{"statecontext": map[string]any{"enabled": true, "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"subagent"}}}}}
-	config, err := loadToolsetSession(t, spec, map[string]string{"extra/search": `{"native":{"grep":{}}}`})
+	config, err := loadToolsetSession(t, spec, map[string]string{"extra/search": `{"native":{"read_image":{}}}`})
 	if err != nil {
 		t.Fatalf("LoadSessionSettings: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestSubagentToolsetErrors(t *testing.T) {
 	}{
 		"unknown toolset": {
 			agent: map[string]any{"toolset": "extra/missing"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{}}}`},
+			files: map[string]string{"extra/search": `{"native":{"read_image":{}}}`},
 			want:  `agent finder: toolset: toolset "extra/missing" is not available here (available: coding/default, extra/search)`,
 		},
 		"not a category/name": {
@@ -142,17 +142,17 @@ func TestSubagentToolsetErrors(t *testing.T) {
 		},
 		"profile_message in the toolset": {
 			agent: map[string]any{"toolset": "extra/search"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{}}}`},
+			files: map[string]string{"extra/search": `{"native":{"read_image":{},"profile_message":{}}}`},
 			want:  "agent finder uses toolset extra/search: ",
 		},
 		"profile_message in the toolset names the session and the toolset": {
 			agent: map[string]any{"toolset": "extra/search"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{},"profile_message":{}}}`},
+			files: map[string]string{"extra/search": `{"native":{"read_image":{},"profile_message":{}}}`},
 			want:  ".json: tools.native.profile_message is not allowed in a toolset used by an agent (toolset extra/search); a sub-agent cannot message a profile",
 		},
 		"the toolset's own settings are checked": {
 			agent: map[string]any{"toolset": "extra/search"},
-			files: map[string]string{"extra/search": `{"native":{"grep":{"max_matchs":1}}}`},
+			files: map[string]string{"extra/search": `{"native":{"read_image":{"max_imag_bytes":1}}}`},
 			want:  "agent finder uses toolset extra/search: ",
 		},
 	} {

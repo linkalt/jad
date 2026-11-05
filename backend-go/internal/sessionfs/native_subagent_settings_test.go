@@ -54,7 +54,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 		"result_max_bytes": 100, "max_concurrent": 2, "list_max_bytes": 0, "storage_dir": "kids",
 		"keep_finished": 7, "max_queued": 0,
 		"agents": {
-			"b": {"description": "second", "model": "model-b.json", "instructions": "Be brief.", "tools": ["read","grep"],
+			"b": {"description": "second", "model": "model-b.json", "instructions": "Be brief.", "tools": ["read_image","skill"],
 			      "max_tool_rounds": 5, "max_run_tokens": 9000, "timeout_ms": 2000},
 			"a": {}
 		}}`), "/s/setting.json", "/w", "/w/.jad/tools")
@@ -68,7 +68,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("agents are not in file order: %+v", custom.Agents)
 	}
 	b := custom.Agents[0]
-	if b.ModelPath != "/s/model-b.json" || b.Instructions != "Be brief." || !b.HasTools || strings.Join(b.Tools, ",") != "read,grep" ||
+	if b.ModelPath != "/s/model-b.json" || b.Instructions != "Be brief." || !b.HasTools || strings.Join(b.Tools, ",") != "read_image,skill" ||
 		b.MaxToolRounds != 5 || b.MaxRunTokens != 9000 || b.TimeoutMS != 2000 || b.Description != "second" {
 		t.Fatalf("agent b = %+v", b)
 	}
@@ -206,10 +206,10 @@ func TestNormalizeNativeSubagentSettingsRejectsInvalidSettings(t *testing.T) {
 		"model blank":        {`{"agents":{"a":{"model":" "}}}`, "agents.a.model must be a non-empty string"},
 		"instructions blank": {`{"agents":{"a":{"instructions":""}}}`, "agents.a.instructions must be a non-empty string"},
 		"description long":   {`{"agents":{"a":{"description":"` + long + `"}}}`, "agents.a.description must be at most 500 characters"},
-		"tools not array":    {`{"agents":{"a":{"tools":"read"}}}`, "agents.a.tools must be an array of tool names"},
-		"tools blank":        {`{"agents":{"a":{"tools":["read"," "]}}}`, "agents.a.tools[1] must be a non-empty string"},
-		"tools twice":        {`{"agents":{"a":{"tools":["read","read"]}}}`, "agents.a.tools lists read twice"},
-		"mcp wildcard ok":    {`{"agents":{"a":{"tools":["read","mcp:docs:*"]}}}`, ""},
+		"tools not array":    {`{"agents":{"a":{"tools":"read_image"}}}`, "agents.a.tools must be an array of tool names"},
+		"tools blank":        {`{"agents":{"a":{"tools":["read_image"," "]}}}`, "agents.a.tools[1] must be a non-empty string"},
+		"tools twice":        {`{"agents":{"a":{"tools":["read_image","read_image"]}}}`, "agents.a.tools lists read_image twice"},
+		"mcp wildcard ok":    {`{"agents":{"a":{"tools":["read_image","mcp:docs:*"]}}}`, ""},
 		"mcp no tool":        {`{"agents":{"a":{"tools":["mcp:docs"]}}}`, `agents.a.tools[0] "mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
 		"mcp bad server":     {`{"agents":{"a":{"tools":["mcp:do.cs:*"]}}}`, `agents.a.tools[0] "mcp:do.cs:*" must be mcp:<server>:<tool>`},
 		"mcp colon wildcard": {`{"agents":{"a":{"tools":["mcp:docs:foo:*"]}}}`, `agents.a.tools[0] "mcp:docs:foo:*" must be mcp:<server>:<tool>`},

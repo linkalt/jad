@@ -73,26 +73,26 @@ func TestSubagentAllowWriteIsRefusedByName(t *testing.T) {
 }
 
 func TestSubagentAgentMayListChangeToolsWithNoFlag(t *testing.T) {
-	for _, tool := range []string{"write", "edit", "bash", "exec", "process"} {
-		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["read","`+tool+`"]}}}`), "/s/setting.json", "/w", "")
+	for _, tool := range []string{"exec", "tool_smith"} {
+		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["read_image","`+tool+`"]}}}`), "/s/setting.json", "/w", "")
 		if err != nil || !got.Agents[0].ChangesFiles() {
 			t.Errorf("%s: %v, %v", tool, got, err)
 		}
 	}
-	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["bash","read","edit"]}}}`), "/s/setting.json", "/w", "")
-	if err != nil || strings.Join(got.Agents[0].ChangeTools(), ",") != "bash,edit" {
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["exec","read_image","tool_smith"]}}}`), "/s/setting.json", "/w", "")
+	if err != nil || strings.Join(got.Agents[0].ChangeTools(), ",") != "exec,tool_smith" {
 		t.Errorf("change tools = %v, %v", got, err)
 	}
 }
 
 func TestSubagentAgentListingToolSmithSubagentOrProfileMessageChangesFiles(t *testing.T) {
 	for _, tool := range []string{"tool_smith", "subagent", "profile_message"} {
-		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["read","`+tool+`"]}}}`), "/s/setting.json", "/w", "")
+		got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"fixer":{"tools":["read_image","`+tool+`"]}}}`), "/s/setting.json", "/w", "")
 		if err != nil || !got.Agents[0].ChangesFiles() {
 			t.Errorf("%s: %v, %v", tool, got, err)
 		}
 	}
-	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"reader":{"tools":["read","grep","glob"]}}}`), "/s/setting.json", "/w", "")
+	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"reader":{"tools":["read_image","skill","request_draft"]}}}`), "/s/setting.json", "/w", "")
 	if err != nil || got.Agents[0].ChangesFiles() {
 		t.Errorf("read-only agent: %v, %v", got, err)
 	}
@@ -103,7 +103,7 @@ func TestSubagentChangeToolsOfAnAgentFolderLoadWithNoFlag(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "fixer"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "fixer", "agent.json"), []byte(`{"schema_version":1,"tools":["read","write"]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fixer", "agent.json"), []byte(`{"schema_version":1,"tools":["read_image","exec"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents_dir":[`+strconv.Quote(dir)+`]}`), "/s/setting.json", "/w", "")

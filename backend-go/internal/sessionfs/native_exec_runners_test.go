@@ -6,7 +6,7 @@ import (
 )
 
 func TestExecRunnersDefaultsDeliverCodeAsAnArgument(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{}}))
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestExecRunnersDefaultsDeliverCodeAsAnArgument(t *testing.T) {
 }
 
 func TestExecRunnersKeepStdinModeForAnEntryThatAsksForIt(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
 		"runners": map[string]any{"legacy": map[string]any{"argv": []any{"python3", "-"}, "mode": "stdin"}},
 	}}))
 	if err != nil {
@@ -37,7 +37,7 @@ func TestExecRunnersKeepStdinModeForAnEntryThatAsksForIt(t *testing.T) {
 }
 
 func TestExecRunnersExposeTheirHelperFolderThroughLibEnv(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
 		"runners": map[string]any{
 			"python": map[string]any{"argv": []any{"python3", "-c", "{code}"}, "lib_env": "MYPATH"},
 			"deno":   map[string]any{"argv": []any{"deno", "eval", "{code}"}},
@@ -58,7 +58,7 @@ func TestExecRunnersExposeTheirHelperFolderThroughLibEnv(t *testing.T) {
 }
 
 func TestExecRunnersRefuseABadLibEnv(t *testing.T) {
-	_, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+	_, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
 		"runners": map[string]any{"x": map[string]any{"argv": []any{"x", "{code}"}, "lib_env": "NOT OK"}},
 	}}))
 	if err == nil || !strings.Contains(err.Error(), "tools.native.exec.runners.x.lib_env must be empty or an environment variable name") {
@@ -67,7 +67,7 @@ func TestExecRunnersRefuseABadLibEnv(t *testing.T) {
 }
 
 func TestExecRunnersDefaultTemplates(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{}}))
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestExecRunnersRefuseABadTemplate(t *testing.T) {
 		"python":      {map[string]any{"argv": []any{"x", "{template}", "{code}"}, "template": "python"}, "must not contain {template}"},
 		"orphan":      {map[string]any{"argv": []any{"x", "{template}", "{code}"}}, "has no template"},
 	} {
-		_, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+		_, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
 			"runners": map[string]any{"x": tc.entry},
 		}}))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -103,7 +103,7 @@ func TestExecRunnersRefuseABadTemplate(t *testing.T) {
 }
 
 func TestExecRunnersAcceptACustomTemplateRunner(t *testing.T) {
-	config, err := loadSetting(t, nativeTools(map[string]any{"bash": map[string]any{}, "exec": map[string]any{
+	config, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{
 		"runners": map[string]any{"deno": map[string]any{"argv": []any{"deno", "eval", "--preload", "{template}", "{code}"}, "template": "js", "ext": ".ts"}},
 	}}))
 	if err != nil {

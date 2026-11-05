@@ -83,7 +83,7 @@
       "type": "string",
       "enum": ["none", "worktree"],
       "default": "none",
-      "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules and the agent's paths apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit."
+      "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit."
     },
     "timeout_ms": {
       "type": "integer",
@@ -91,32 +91,6 @@
       "maximum": 21600000,
       "default": 600000,
       "description": "Wall-clock limit of one run, including provider waits."
-    },
-    "paths": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "allow": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true,
-          "description": "The agent's write and edit may change only paths inside one of these. A relative entry is taken from the workspace root. Narrows the session's own write and edit rules, never widens them."
-        },
-        "deny": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true,
-          "description": "The agent's write and edit may not change a path inside any of these, even one allow permits."
-        }
-      },
-      "minProperties": 1,
-      "description": "Narrows where this agent's write and edit may change files, on top of the session's rules. Only allowed for an agent that lists write or edit and no bash, exec or process: a shell can change any path, so a paths list cannot confine it and the combination is refused. It does not limit what the agent reads: read, grep, glob and fetch ignore it."
     }
   },
   "additionalProperties": false

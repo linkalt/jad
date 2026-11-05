@@ -170,17 +170,17 @@ type SessionConfig struct {
 	SettingPath     string
 	// StateDir is <state>/<session id>: the folder the session keeps its state in, and the
 	// "session directory" of relative image_store.dir and the {session_dir} spill placeholder.
-	StateDir                 string
-	MessagesPath             string
-	MessagesBackupPath       string
-	UsageCachePath           string
-	StagingDir               string
-	StoragePaths             SessionStoragePaths
-	WorkingDir               string
-	SessionFiles             SessionFileListingSettings
+	StateDir           string
+	MessagesPath       string
+	MessagesBackupPath string
+	UsageCachePath     string
+	StagingDir         string
+	StoragePaths       SessionStoragePaths
+	WorkingDir         string
+	SessionFiles       SessionFileListingSettings
 	// FilePolicy is session_files.paths: the path rules of the UI file list and of the
 	// transcript, transcripts and profile tools.
-	FilePolicy NativePathPolicy
+	FilePolicy               NativePathPolicy
 	NativeExec               *NativeExecSettings
 	NativeReadImage          *NativeReadImageSettings
 	NativeLSP                *NativeLSPSettings

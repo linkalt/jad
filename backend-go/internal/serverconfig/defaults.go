@@ -91,7 +91,6 @@ const (
 	MaxShutdownTimeoutMS     = 5 * 60 * 1000
 )
 
-
 // DefaultRecoverSubagentRunsAtStart is the default of server.recover_subagent_runs_at_start.
 const DefaultRecoverSubagentRunsAtStart = true
 

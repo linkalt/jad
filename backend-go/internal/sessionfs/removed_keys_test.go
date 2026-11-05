@@ -14,11 +14,7 @@ func TestRemovedApprovalKeysAreRefusedByName(t *testing.T) {
 	}{
 		"top level section": {map[string]any{"approval": map[string]any{"default": "ask"}}, "settings.approval was removed"},
 		"top level string":  {map[string]any{"approval": "ask"}, "settings.approval was removed"},
-		"write":             {nativeTools(map[string]any{"write": map[string]any{"approval": "ask"}}), "tools.native.write.approval was removed"},
-		"edit":              {nativeTools(map[string]any{"edit": map[string]any{"approval": "off"}}), "tools.native.edit.approval was removed"},
-		"bash":              {nativeTools(map[string]any{"bash": map[string]any{"approval": "ask"}}), "tools.native.bash.approval was removed"},
 		"exec":              {nativeTools(map[string]any{"exec": map[string]any{"approval": "ask"}}), "tools.native.exec.approval was removed"},
-		"process":           {nativeTools(map[string]any{"process": map[string]any{"approval": "ask"}}), "tools.native.process.approval was removed"},
 		"tool_smith":        {nativeTools(map[string]any{"tool_smith": map[string]any{"approval": "ask"}}), "tools.native.tool_smith.approval was removed"},
 		"profile_message":   {nativeTools(map[string]any{"profile_message": map[string]any{"approval": "ask"}}), "tools.native.profile_message.approval was removed"},
 	} {
@@ -33,7 +29,7 @@ func TestRemovedApprovalKeysAreRefusedByName(t *testing.T) {
 
 func TestRemovedApprovalKeyIsRefusedEvenWithAValidLookingValue(t *testing.T) {
 	for _, value := range []any{"off", "ask", nil, true, 5} {
-		_, err := loadSetting(t, nativeTools(map[string]any{"write": map[string]any{"approval": value}}))
+		_, err := loadSetting(t, nativeTools(map[string]any{"exec": map[string]any{"approval": value}}))
 		if err == nil || !strings.Contains(err.Error(), "approval was removed") {
 			t.Errorf("approval %v: err = %v", value, err)
 		}
@@ -43,8 +39,8 @@ func TestRemovedApprovalKeyIsRefusedEvenWithAValidLookingValue(t *testing.T) {
 func TestBackgroundWriterSettingsAreStillAccepted(t *testing.T) {
 	agent := map[string]any{"a": map[string]any{}}
 	config, err := loadSetting(t, nativeTools(map[string]any{
-		"read":     map[string]any{},
-		"subagent": map[string]any{"agents": agent, "background_writers": true, "max_background_writers": 2},
+		"read_image": map[string]any{},
+		"subagent":   map[string]any{"agents": agent, "background_writers": true, "max_background_writers": 2},
 	}))
 	if err != nil {
 		t.Fatal(err)

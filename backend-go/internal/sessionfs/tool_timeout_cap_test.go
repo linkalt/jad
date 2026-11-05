@@ -18,8 +18,6 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 			setting := map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"` + section + `":` + body + `}}`)}
 			var err error
 			switch section {
-			case "bash":
-				_, err = normalizeNativeBashSettings(setting, dir, settingPath, dir, dir, "", dir)
 			case "transcripts":
 				_, err = normalizeNativeTranscriptsSettings(setting, settingPath, NativePathPolicy{})
 			case "transcript":
@@ -40,8 +38,6 @@ func TestToolTimeoutSettingsAreCappedAtSixHours(t *testing.T) {
 		tooBig string
 		key    string
 	}{
-		{"bash timeout_ms", bashStyle("bash"), `{"timeout_ms":` + sixHours + `,"max_timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
-		{"bash max_timeout_ms", bashStyle("bash"), `{"max_timeout_ms":` + sixHours + `}`, `{"max_timeout_ms":` + over + `}`, "max_timeout_ms"},
 		{"exec timeout_ms", bashStyle("exec"), `{"timeout_ms":` + sixHours + `,"max_timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},
 		{"exec max_timeout_ms", bashStyle("exec"), `{"max_timeout_ms":` + sixHours + `}`, `{"max_timeout_ms":` + over + `}`, "max_timeout_ms"},
 		{"tool_smith timeout_ms", bashStyle("tool_smith"), `{"timeout_ms":` + sixHours + `,"max_timeout_ms":` + sixHours + `}`, `{"timeout_ms":` + over + `}`, "timeout_ms"},

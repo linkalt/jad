@@ -22,35 +22,37 @@ func TestToolLimitsRefuseExponentNotation(t *testing.T) {
 	}
 }
 
-func TestNormalizeNativeReadSettingsDefaultsAndOverrides(t *testing.T) {
+// session_files.paths took over the path rules of tools.native.read.paths: the file list and
+// the transcript tools read them from there.
+func TestNormalizeSessionFilesPolicyDefaultsAndRules(t *testing.T) {
 	global := t.TempDir()
-	defaults, err := normalizeNativeReadSettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"read":{}}}`),
-	}, global, "/session/setting.json")
+	for _, raw := range []string{``, `null`, `{}`, `{"enabled":false}`} {
+		policy, err := normalizeSessionFilesPolicy(json.RawMessage(raw), global, "/session/setting.json")
+		if err != nil || policy.UnrestrictedPaths || len(policy.Paths) != 0 || policy.Paths == nil {
+			t.Fatalf("session_files %q: policy = %+v, err = %v; want an empty rule list", raw, policy, err)
+		}
+	}
+	configured, err := normalizeSessionFilesPolicy(json.RawMessage(`{"paths":{"allow":["outside"],"deny":["private"]}}`), global, "/session/setting.json")
 	if err != nil {
-		t.Fatalf("normalizeNativeReadSettings(defaults) error = %v", err)
+		t.Fatalf("normalizeSessionFilesPolicy(configured) error = %v", err)
 	}
-	if defaults == nil || defaults.MaxBytes != 64*1024 || defaults.MaxFileBytes != 64*1024*1024 || defaults.DefaultLimit != 250 {
-		t.Fatalf("native read defaults = %+v", defaults)
+	if configured.UnrestrictedPaths || len(configured.Paths) != 2 {
+		t.Fatalf("configured policy = %+v", configured)
 	}
-	if defaults.Policy.UnrestrictedPaths || len(defaults.Policy.Paths) != 0 {
-		t.Fatalf("default path policy = %+v", defaults.Policy)
+	if configured.Paths[0].Action != "allow" || configured.Paths[0].Path != filepath.Join(global, "outside") {
+		t.Fatalf("allow path rule = %+v", configured.Paths[0])
 	}
-
-	configured, err := normalizeNativeReadSettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"read":{"max_bytes":128,"max_file_bytes":4096,"default_limit":7,"paths":{"allow":["outside"],"deny":["private"]}}}}`),
-	}, global, "/session/setting.json")
-	if err != nil {
-		t.Fatalf("normalizeNativeReadSettings(configured) error = %v", err)
+	for _, raw := range []string{`{"paths":null}`, `{"paths":3}`, `{"paths":[{"action":"maybe","path":"x"}]}`} {
+		if _, err := normalizeSessionFilesPolicy(json.RawMessage(raw), global, "/session/setting.json"); err == nil || !strings.Contains(err.Error(), "session_files.paths") {
+			t.Errorf("session_files %s: error = %v, want one naming session_files.paths", raw, err)
+		}
 	}
-	if configured.MaxBytes != 128 || configured.MaxFileBytes != 4096 || configured.DefaultLimit != 7 {
-		t.Fatalf("configured native read settings = %+v", configured)
+	// The file list accepts paths next to its own keys, and still refuses a key it does not know.
+	if _, err := normalizeSessionFileListing(json.RawMessage(`{"max_depth":3,"paths":{"deny":["private"]}}`), "/session/setting.json"); err != nil {
+		t.Fatalf("session_files with paths: %v", err)
 	}
-	if configured.Policy.UnrestrictedPaths || len(configured.Policy.Paths) != 2 {
-		t.Fatalf("configured native read path policy = %+v", configured.Policy)
-	}
-	if configured.Policy.Paths[0].Action != "allow" || configured.Policy.Paths[0].Path != filepath.Join(global, "outside") {
-		t.Fatalf("allow path rule = %+v", configured.Policy.Paths[0])
+	if _, err := normalizeSessionFileListing(json.RawMessage(`{"path":{"deny":["private"]}}`), "/session/setting.json"); err == nil || !strings.Contains(err.Error(), "session_files") {
+		t.Fatalf("session_files.path (a typo) error = %v, want it refused", err)
 	}
 }
 
@@ -83,15 +85,6 @@ func TestNormalizeNativeToolRoundLimitAndDefinitionPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
 		t.Fatalf("unexpected stat result for unresolved configured file: %v", err)
-	}
-}
-
-func TestNormalizeNativeReadSettingsRejectsUnknownKeys(t *testing.T) {
-	_, err := normalizeNativeReadSettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"read":{"max_bytes":4,"mystery":true}}}`),
-	}, t.TempDir(), "/session/setting.json")
-	if err == nil {
-		t.Fatal("normalizeNativeReadSettings() accepted an unknown setting")
 	}
 }
 

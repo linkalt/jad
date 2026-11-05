@@ -7,7 +7,7 @@ import (
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
-const hooksToolsetText = `{"native":{"read":{}},"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"]}]}}`
+const hooksToolsetText = `{"native":{"read_image":{}},"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"]}]}}`
 
 func loadHooksToolset(t *testing.T, spec layouttest.Spec) (SessionConfig, error) {
 	t.Helper()
@@ -33,18 +33,18 @@ func TestHooksInToolsetAndSettingsAreAnError(t *testing.T) {
 }
 
 func TestToolsetHooksAreValidatedLikeTheSettingsKey(t *testing.T) {
-	_, err := loadHooksToolset(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{}},"hooks":{"timeout_ms":1}}`})
+	_, err := loadHooksToolset(t, layouttest.Spec{ToolsetRaw: `{"native":{"read_image":{}},"hooks":{"timeout_ms":1}}`})
 	if err == nil || !strings.Contains(err.Error(), "hooks.timeout_ms") {
 		t.Fatalf("err = %v, want a hooks.timeout_ms error", err)
 	}
-	_, err = loadHooksToolset(t, layouttest.Spec{ToolsetRaw: `{"native":{"read":{}},"hooks":{"nope":1}}`})
+	_, err = loadHooksToolset(t, layouttest.Spec{ToolsetRaw: `{"native":{"read_image":{}},"hooks":{"nope":1}}`})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("err = %v, want an unknown-key error", err)
 	}
 }
 
 func TestToolsetWithoutHooksKeepsTheSettingsKey(t *testing.T) {
-	spec := layouttest.Spec{Native: map[string]any{"read": map[string]any{}}, Settings: map[string]any{"hooks": map[string]any{"enabled": true, "timeout_ms": 7000}}}
+	spec := layouttest.Spec{Native: map[string]any{"read_image": map[string]any{}}, Settings: map[string]any{"hooks": map[string]any{"enabled": true, "timeout_ms": 7000}}}
 	config, err := loadHooksToolset(t, spec)
 	if err != nil {
 		t.Fatal(err)

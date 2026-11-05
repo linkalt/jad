@@ -83,7 +83,7 @@ func TestStateContextSubagentProviderNeedsTheSubagentTool(t *testing.T) {
 	}
 	for _, raw := range []string{`{"enabled":true,"triggers":{"compaction":{"tools":["agent"]}}}`, `{"enabled":true,"triggers":{"compaction":{"tools":["request_draft"]}}}`, `{"enabled":true,"triggers":{"compaction":{"tools":["subagent",3]}}}`} {
 		_, err := normalizeStateContextSettings(map[string]json.RawMessage{"statecontext": json.RawMessage(raw)}, settingPath, "", nil, nil, &NativeSubagentSettings{}, nil)
-		if err == nil || !strings.Contains(err.Error(), "task, memory, process, subagent, or async") {
+		if err == nil || !strings.Contains(err.Error(), "task, memory, subagent, or async") {
 			t.Errorf("%s: error = %v, want the provider list", raw, err)
 		}
 	}
