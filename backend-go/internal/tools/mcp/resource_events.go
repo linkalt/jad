@@ -50,6 +50,19 @@ type resourceEvents struct {
 	subscribed map[string]map[string]bool
 	// noted is the last Seq a run was told about (TakeResourceChanges).
 	noted int64
+	// note holds the servers whose server file turns changes_note on: only their events
+	// are told to a run.
+	note map[string]bool
+}
+
+// setChangesNote records whether a run is told of server's changes.
+func (e *resourceEvents) setChangesNote(server string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.note == nil {
+		e.note = map[string]bool{}
+	}
+	e.note[server] = on
 }
 
 func (e *resourceEvents) record(server, kind, uri string, limit int) {
@@ -163,8 +176,9 @@ func (m *Manager) ResourceEvents(after int64) ([]ResourceEvent, int64, []Resourc
 	return events, latest, subscriptions
 }
 
-// TakeResourceChanges returns the notifications no run was told about yet and marks them
-// told: the next run of the profile hears of each change once.
+// TakeResourceChanges returns the notifications no run was told about yet of the servers
+// with changes_note on, and marks every notification told: the next run of the profile
+// hears of each change once, and never of a server with changes_note off.
 func (m *Manager) TakeResourceChanges() []ResourceEvent {
 	m.events.mu.Lock()
 	after := m.events.noted
@@ -174,8 +188,17 @@ func (m *Manager) TakeResourceChanges() []ResourceEvent {
 	if latest > m.events.noted {
 		m.events.noted = latest
 	}
+	told := events[:0]
+	for _, event := range events {
+		if m.events.note[event.Server] {
+			told = append(told, event)
+		}
+	}
 	m.events.mu.Unlock()
-	return events
+	if len(told) == 0 {
+		return nil
+	}
+	return told
 }
 
 // ResourceChangesNote words changes for the model, one line each, or "" for none.

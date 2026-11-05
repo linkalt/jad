@@ -682,7 +682,9 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     <>
                       <Button label="Delete" variant="destructive" isDisabled={isBusy} onClick={() => setPending({kind: 'delete'})} />
                       <Button label="Reload" variant="ghost" isDisabled={isBusy} onClick={reloadCurrent} />
-                      <Button label="Duplicate" variant="ghost" isDisabled={isBusy} onClick={startDuplicate} tooltip={`A new ${view.noun} with this text; name it, then Create`} />
+                      {appConfig.duplicate_enabled ? (
+                        <Button label="Duplicate" variant="ghost" isDisabled={isBusy} onClick={startDuplicate} tooltip={`A new ${view.noun} with this text; name it, then Create`} />
+                      ) : null}
                     </>
                   )}
                 </HStack>

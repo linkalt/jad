@@ -280,11 +280,17 @@ func TestUnsupportedFieldPolicy(t *testing.T) {
 }
 
 func TestJSONSchemaFormatBecomesOutputConfigFormat(t *testing.T) {
-	config := mustConfig(t, `{"models":[{"match":"^old","structured_output":"unsupported"},{"match":"^think","thinking":"adaptive"}]}`)
+	config := mustConfig(t, `{"default_profile":{"structured_output":"native"},"models":[{"match":"^old","structured_output":"unsupported"},{"match":"^think","thinking":"adaptive","structured_output":"native"}]}`)
 	body := func(model string) string {
 		return `{"model":"` + model + `","input":"x","reasoning":{"effort":"high"},"text":{"verbosity":"low","format":{"type":"json_schema","name":"n","strict":true,"schema":{ "type": "object" }}}}`
 	}
-	result, apiErr := translateRequest(config, []byte(body("claude-x")))
+	// Without structured_output a profile is unsupported, as the adapter was before native
+	// existed: the format goes through unsupported_fields and nothing new is sent upstream.
+	result, apiErr := translateRequest(mustConfig(t, `{"models":[{"match":"^claude"}]}`), []byte(body("claude-x")))
+	if apiErr != nil || result.Request.OutputConfig != nil || len(result.Ignored) != 1 || result.Ignored[0] != "text" {
+		t.Fatalf("default profile: %s ignored=%v err=%v", asJSON(t, result.Request.OutputConfig), result.Ignored, apiErr)
+	}
+	result, apiErr = translateRequest(config, []byte(body("claude-x")))
 	if apiErr != nil || len(result.Ignored) != 0 || asJSON(t, result.Request.OutputConfig) != `{"format":{"type":"json_schema","schema":{"type":"object"}}}` {
 		t.Fatalf("native: %s ignored=%v err=%v", asJSON(t, result.Request.OutputConfig), result, apiErr)
 	}

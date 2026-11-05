@@ -87,6 +87,7 @@ func TestResourceSubscriptionsRecordChangesAndTellTheNextRunOnce(t *testing.T) {
 		"transport":           map[string]any{"type": "stdio", "command": mustExecutable(t), "args": []string{"-test.run=^TestMCPWatchFixtureProcess$"}, "cwd": directory, "env": map[string]string{watchFixtureEnvironment: "1"}},
 		"timeout_ms":          10_000,
 		"resource_events_max": 10,
+		"changes_note":        true,
 	})
 	if err := os.WriteFile(configPath, config, 0o600); err != nil {
 		t.Fatal(err)
@@ -217,5 +218,31 @@ func TestResourceEventsKeepTheNewestPerServer(t *testing.T) {
 	kept, latest := events.since(0)
 	if len(kept) != 4 || kept[0].Seq != 3 || latest != 6 || kept[3].Server != "b" {
 		t.Fatalf("kept = %+v latest %d", kept, latest)
+	}
+}
+
+// A run is told only of the servers whose server file turns changes_note on (off by
+// default); every notification is still marked told and kept for the events list.
+func TestTakeResourceChangesTellsOnlyServersWithChangesNote(t *testing.T) {
+	manager := NewManager(nil)
+	defer manager.Close()
+	manager.events.setChangesNote("quiet", false)
+	manager.events.setChangesNote("loud", true)
+	manager.events.record("quiet", ResourceEventListChanged, "", 10)
+	manager.events.record("loud", ResourceEventToolsChanged, "", 10)
+	manager.events.record("unknown", ResourceEventPromptsChanged, "", 10)
+	told := manager.TakeResourceChanges()
+	if len(told) != 1 || told[0].Server != "loud" {
+		t.Fatalf("told = %+v", told)
+	}
+	if again := manager.TakeResourceChanges(); again != nil {
+		t.Fatalf("told again = %+v", again)
+	}
+	if listed, _, _ := manager.ResourceEvents(0); len(listed) != 3 {
+		t.Fatalf("listed = %+v", listed)
+	}
+	manager.events.record("quiet", ResourceEventListChanged, "", 10)
+	if told := manager.TakeResourceChanges(); told != nil {
+		t.Fatalf("a server with changes_note off was told: %+v", told)
 	}
 }

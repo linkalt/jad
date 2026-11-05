@@ -86,14 +86,19 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 10000,
-      "description": "How many resource change notifications (resources/updated of a subscribed resource, resources/list_changed) are kept for this server, the newest first. They are listed by GET /api/sessions/<ref>/mcp-resources/events and told to the model at the start of its next turn. Defaults to 100.",
+      "description": "How many resource change notifications (resources/updated of a subscribed resource, resources/list_changed) are kept for this server, the newest first. They are listed by GET /api/sessions/<ref>/mcp-resources/events, and told to the model at the start of its next turn when changes_note is true. Defaults to 100.",
       "default": 100
     },
     "roots": {
       "type": "string",
       "enum": ["workspace", "none"],
-      "default": "workspace",
-      "description": "Go backend only. workspace: the client's roots (roots/list) are the session's working directory as a file:// URI, so the server knows the project. none: an empty list."
+      "default": "none",
+      "description": "Go backend only. workspace: the client offers roots, and its roots (roots/list) are the session's working directory as a file:// URI, so the server knows the project. none (default): the client offers no roots capability."
+    },
+    "changes_note": {
+      "type": "boolean",
+      "default": false,
+      "description": "Go backend only. true: what this server reports changed since the profile's last run (its resource, tool or prompt list, a watched resource) is told to the model at the start of the next run, as a note in the model's prompt role that is not stored. false (default): nothing is told; the notifications are still kept for GET /api/sessions/<ref>/mcp-resources/events."
     },
     "server_log": {
       "type": "string",

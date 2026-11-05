@@ -1,6 +1,7 @@
 package native
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -19,12 +20,26 @@ func modelChoices(models map[string]string) []string {
 	return ids
 }
 
-// subagentModelText is the part of the tool description that names the models a call may pick.
-func subagentModelText(models map[string]string) string {
-	if len(models) == 0 {
+// subagentModelText is the part of the tool description that names the models a call may
+// pick; empty when model_choice is off.
+func subagentModelText(settings sessionfs.NativeSubagentSettings) string {
+	if !settings.ModelChoice || len(settings.ProfileModels) == 0 {
 		return ""
 	}
-	return " Models for model: " + strings.Join(modelChoices(models), ", ") + "."
+	return " Models for model: " + strings.Join(modelChoices(settings.ProfileModels), ", ") + "."
+}
+
+// modelChoiceSchema is schema as the tool offers it: with its model property when model choice
+// is on, and without it otherwise, which is the schema the tool had before the property
+// existed. property must occur in schema exactly once.
+func modelChoiceSchema(schema json.RawMessage, property string, choice bool) json.RawMessage {
+	if choice {
+		return append(json.RawMessage(nil), schema...)
+	}
+	if strings.Count(string(schema), property) != 1 {
+		panic("model property is not in the tool schema exactly once")
+	}
+	return json.RawMessage(strings.Replace(string(schema), property, "", 1))
 }
 
 // withCallModel is the agent with the model a call named in place of its own. An absent model

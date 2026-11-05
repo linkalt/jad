@@ -289,14 +289,14 @@ func TestSchemaStructuredOutputMatchesTheConstants(t *testing.T) {
 		t.Fatal(err)
 	}
 	property := schema.Defs.Profile.Properties.StructuredOutput
-	if property.Default != StructuredOutputNative || len(property.Enum) != 2 || property.Enum[0] != StructuredOutputNative || property.Enum[1] != StructuredOutputUnsupported {
+	if property.Default != StructuredOutputUnsupported || len(property.Enum) != 2 || property.Enum[0] != StructuredOutputNative || property.Enum[1] != StructuredOutputUnsupported {
 		t.Fatalf("schema structured_output = %+v", property)
 	}
 	if DefaultConfig().DefaultProfile.StructuredOutput != "" {
 		t.Fatal("the default profile must leave structured_output to finish")
 	}
 	config, err := LoadConfig("")
-	if err != nil || config.DefaultProfile.StructuredOutput != StructuredOutputNative {
+	if err != nil || config.DefaultProfile.StructuredOutput != StructuredOutputUnsupported {
 		t.Fatalf("loaded default = %v %v", config, err)
 	}
 }

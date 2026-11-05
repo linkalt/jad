@@ -212,8 +212,8 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 		}
 	}
 	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes", "resource_events_max",
-		"roots", "server_log", "server_log_max_bytes", "sampling", "elicitation"}
-	if schema.Properties["roots"].Default != RootsWorkspace || schema.Properties["server_log"].Default != ServerLogOff {
+		"roots", "changes_note", "server_log", "server_log_max_bytes", "sampling", "elicitation"}
+	if schema.Properties["roots"].Default != RootsNone || schema.Properties["changes_note"].Default != false || schema.Properties["server_log"].Default != ServerLogOff {
 		t.Errorf("roots default %v, server_log default %v", schema.Properties["roots"].Default, schema.Properties["server_log"].Default)
 	}
 	keys := make([]string, 0, len(schema.Properties))

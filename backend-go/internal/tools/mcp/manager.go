@@ -504,6 +504,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	state := &clientState{}
 	options := m.clientOptions(server.ID, config.resourceEventsMax)
 	m.featureClientOptions(options, server.ID, config.features, state, config.resourceEventsMax)
+	m.events.setChangesNote(server.ID, config.features.ChangesNote)
 	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, options)
 	client.AddReceivingMiddleware(m.subscriptionAckMiddleware(server.ID))
 	if config.features.Roots == RootsWorkspace {

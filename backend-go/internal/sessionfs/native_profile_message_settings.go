@@ -35,7 +35,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -78,6 +78,10 @@ type NativeProfileMessageSettings struct {
 	// CompactAfter is the input tokens above which a compaction runs: the target's last
 	// completed response must have more. Zero (default) compacts any target with usage.
 	CompactAfter int64
+	// ModelChoice (model_choice, off by default) gives the tool a model argument, the model
+	// the target answers with. Off, the tool's definition is the one it had before the model
+	// argument existed, and a call cannot name a model.
+	ModelChoice bool
 }
 
 func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
@@ -162,7 +166,11 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
+	modelChoice, err := bashBool(fields, "model_choice", false, settingPath+": "+section)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeProfileMessageSettings{ModelChoice: modelChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

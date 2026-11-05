@@ -161,9 +161,11 @@ func runProbe(t *testing.T, tool tools.Tool, execution tools.ExecutionContext, a
 
 func TestMCPClientOffersRootsSamplingElicitationAndLogs(t *testing.T) {
 	manager, probe, directory := probeServer(t, map[string]any{
-		"server_log":  "info",
-		"sampling":    map[string]any{"enabled": true, "max_output_tokens": 30, "max_requests": 1},
-		"elicitation": map[string]any{"enabled": true, "timeout_ms": 5000},
+		"roots":        "workspace",
+		"changes_note": true,
+		"server_log":   "info",
+		"sampling":     map[string]any{"enabled": true, "max_output_tokens": 30, "max_requests": 1},
+		"elicitation":  map[string]any{"enabled": true, "timeout_ms": 5000},
 	})
 	logs := &syncBuffer{}
 	manager.SetLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -232,9 +234,9 @@ func TestMCPClientOffersRootsSamplingElicitationAndLogs(t *testing.T) {
 
 func TestMCPClientFeaturesDefaults(t *testing.T) {
 	_, probe, _ := probeServer(t, nil)
-	// Roots are on by default; sampling and elicitation are not offered, so a server that
-	// asks for them fails its call.
-	if output := runProbe(t, probe, tools.ExecutionContext{CallID: "c"}, "roots"); !strings.Contains(output, "roots 1") {
+	// Roots are off by default, as are sampling and elicitation: a server that asks for
+	// them fails its call or gets no roots.
+	if output := runProbe(t, probe, tools.ExecutionContext{CallID: "c"}, "roots"); !strings.Contains(output, "roots 0") {
 		t.Fatalf("roots output:\n%s", output)
 	}
 	for _, ask := range []string{"sample", "elicit"} {
@@ -242,9 +244,10 @@ func TestMCPClientFeaturesDefaults(t *testing.T) {
 			t.Fatalf("%s output:\n%s", ask, output)
 		}
 	}
-	_, probe, _ = probeServer(t, map[string]any{"roots": "none"})
-	if output := runProbe(t, probe, tools.ExecutionContext{CallID: "c"}, "roots"); !strings.Contains(output, "roots 0") {
-		t.Fatalf("roots none output:\n%s", output)
+	_, probe, directory := probeServer(t, map[string]any{"roots": "workspace"})
+	output := runProbe(t, probe, tools.ExecutionContext{CallID: "c"}, "roots")
+	if !strings.Contains(output, "roots 1") || !strings.Contains(output, "root "+workspaceRoot(directory).URI) {
+		t.Fatalf("roots workspace output:\n%s", output)
 	}
 }
 
@@ -262,6 +265,7 @@ func probeState(t *testing.T, manager *Manager) *clientState {
 func TestMCPClientFeaturesConfigRefusals(t *testing.T) {
 	for name, raw := range map[string]string{
 		"roots":           `{"roots":"all"}`,
+		"changes_note":    `{"changes_note":"yes"}`,
 		"server_log":      `{"server_log":"loud"}`,
 		"log bytes":       `{"server_log_max_bytes":1}`,
 		"sampling shape":  `{"sampling":true}`,
@@ -278,7 +282,7 @@ func TestMCPClientFeaturesConfigRefusals(t *testing.T) {
 		}
 	}
 	features, err := normalizeClientFeatures(map[string]json.RawMessage{}, "server.json")
-	if err != nil || features.Roots != RootsWorkspace || features.ServerLog != ServerLogOff || features.Sampling || features.Elicitation {
+	if err != nil || features.Roots != RootsNone || features.ChangesNote || features.ServerLog != ServerLogOff || features.Sampling || features.Elicitation {
 		t.Fatalf("defaults = %+v, %v", features, err)
 	}
 }

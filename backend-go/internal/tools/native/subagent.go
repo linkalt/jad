@@ -17,12 +17,16 @@ import (
 
 const subagentToolID = "native.subagent"
 
+// subagentModelProperty is the schema line of the model argument; the tool has it only with
+// tools.native.subagent.model_choice on.
+const subagentModelProperty = `
+    "model":{"type":"string","description":"Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."},`
+
 var subagentInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
-    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
-    "model":{"type":"string","description":"Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."},
+    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},` + subagentModelProperty + `
     "resume":{"type":"string","description":"Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent marked [can change files; runs to its end] ignores it and runs to its end."}
   },
@@ -273,7 +277,8 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 // newSubagentToolRemotes is newSubagentToolAsync plus the remotes folder the session's
 // tools.native.subagent.remotes names are read from.
 func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, processes ProcessManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
-	validator, err := tools.CompileSchema(subagentInputSchema)
+	schema := modelChoiceSchema(subagentInputSchema, subagentModelProperty, settings.ModelChoice)
+	validator, err := tools.CompileSchema(schema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
 	}
@@ -344,8 +349,8 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings.ProfileModels),
-			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
+			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings),
+			InputSchema: schema,
 		},
 		Validator:        validator,
 		ExampleOperation: subagentExample,

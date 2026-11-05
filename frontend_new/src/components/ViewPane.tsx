@@ -379,7 +379,7 @@ export function ViewPane({
         isPromptLibraryOpen={panel === 'prompts'}
         onTogglePromptLibrary={() => togglePanel('prompts')}
         isResourcePanelOpen={panel === 'resources'}
-        onToggleResourcePanel={() => togglePanel('resources')}
+        onToggleResourcePanel={appConfig.resource_watch_enabled ? () => togglePanel('resources') : undefined}
         onRegisterInsert={insert => onRegisterComposerInsert(viewKey, insert)}
         slashCommands={slashCommands}
         onSlashCommand={onSlashCommand}
@@ -688,7 +688,7 @@ export function ViewPane({
           onUseSkill={onUseSkill}
         />
       )}
-      {panel === 'resources' && (
+      {appConfig.resource_watch_enabled && panel === 'resources' && (
         <ResourceWatchPanel
           sessionId={composerSessionId === '' ? undefined : composerSessionId}
           profile={profile}

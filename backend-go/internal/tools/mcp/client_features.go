@@ -18,7 +18,8 @@ import (
 
 // What the client offers a server beyond tools and resources, set in the server file:
 //
-//	"roots": "workspace" (default) or "none"
+//	"roots": "none" (default) or "workspace"
+//	"changes_note": false (default) or true
 //	"server_log": "off" (default), "error", "warning", "info" or "debug"
 //	"sampling": {"enabled": false, "max_output_tokens": 1024, "max_requests": 20}
 //	"elicitation": {"enabled": false, "timeout_ms": 300000, "max_draft_bytes": 65536, "max_draft_depth": 8}
@@ -55,7 +56,12 @@ var serverLogLevels = map[string]slog.Level{"error": slog.LevelError, "warning":
 
 // clientFeatures are the client capabilities of one server.
 type clientFeatures struct {
-	Roots             string `json:"roots"`
+	Roots string `json:"roots"`
+	// ChangesNote tells the profile's next run what the server reported changed (its
+	// resource, tool or prompt list, a watched resource). Off by default; the notifications
+	// are kept either way for GET .../mcp-resources/events. Left out of the fingerprint
+	// when off, so a server file without the key keeps its connection fingerprint.
+	ChangesNote       bool   `json:"changes_note,omitempty"`
 	ServerLog         string `json:"server_log"`
 	ServerLogMaxBytes int    `json:"server_log_max_bytes"`
 	Sampling          bool   `json:"sampling"`
@@ -68,12 +74,15 @@ type clientFeatures struct {
 }
 
 func normalizeClientFeatures(fields map[string]json.RawMessage, path string) (clientFeatures, error) {
-	features := clientFeatures{Roots: RootsWorkspace, ServerLog: ServerLogOff, ServerLogMaxBytes: defaultServerLogMaxBytes, SamplingMaxTokens: defaultSamplingMaxOutputTokens, SamplingMaxCalls: defaultSamplingMaxRequests,
+	features := clientFeatures{Roots: RootsNone, ServerLog: ServerLogOff, ServerLogMaxBytes: defaultServerLogMaxBytes, SamplingMaxTokens: defaultSamplingMaxOutputTokens, SamplingMaxCalls: defaultSamplingMaxRequests,
 		ElicitTimeoutMS: defaultElicitationTimeoutMS, ElicitDraftBytes: defaultElicitationDraftBytes, ElicitDraftDepth: defaultElicitationDraftDepth}
 	if raw, exists := fields["roots"]; exists {
 		if json.Unmarshal(raw, &features.Roots) != nil || (features.Roots != RootsWorkspace && features.Roots != RootsNone) {
 			return clientFeatures{}, configError(path, "roots must be \"workspace\" or \"none\"")
 		}
+	}
+	if raw, exists := fields["changes_note"]; exists && json.Unmarshal(raw, &features.ChangesNote) != nil {
+		return clientFeatures{}, configError(path, "changes_note must be a boolean")
 	}
 	if raw, exists := fields["server_log"]; exists {
 		known := json.Unmarshal(raw, &features.ServerLog) == nil

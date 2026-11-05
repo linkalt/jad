@@ -67,7 +67,7 @@
           "type": "object",
           "additionalProperties": { "type": "string" },
           "default": {},
-          "description": "Headers added to every upstream request, for a gateway or endpoint that wants more than the adapter sets. authorization, x-api-key, anthropic-version, anthropic-beta, content-type, content-length and host cannot be set here: they come from auth_header, beta and anthropic_version."
+          "description": "Headers added to every upstream request, for a gateway or endpoint that wants more than the adapter sets. authorization, x-api-key, anthropic-version, anthropic-beta, content-type, content-length and host cannot be set here: they come from auth_header, beta and anthropic_version. The adapter sends User-Agent jad-anthropic-adapter and no X-Stainless-* headers (an SDK sent its own User-Agent and X-Stainless-Lang, -OS, -Arch and so on); a gateway that checks them gets them from here, User-Agent included."
         },
         "request_timeout_ms": {
           "type": "integer",
@@ -227,8 +227,8 @@
         "structured_output": {
           "type": "string",
           "enum": ["native", "unsupported"],
-          "default": "native",
-          "description": "How a Responses text.format of type json_schema is sent. native: as output_config.format {\"type\":\"json_schema\",\"schema\":...} (name, description and strict are dropped; the schema is always enforced). unsupported: for models without structured outputs, the text field goes through unsupported_fields like any other field the adapter cannot send. A json_object format always goes through unsupported_fields."
+          "default": "unsupported",
+          "description": "How a Responses text.format of type json_schema is sent. native: as output_config.format {\"type\":\"json_schema\",\"schema\":...} (name, description and strict are dropped; the schema is always enforced); set it for models with structured outputs. unsupported (default): the text field goes through unsupported_fields like any other field the adapter cannot send, so an upstream without structured outputs is not sent a field it refuses. A json_object format always goes through unsupported_fields."
         },
         "extra_body": {
           "type": "object",

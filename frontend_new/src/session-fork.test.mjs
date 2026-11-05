@@ -59,7 +59,7 @@ test('the fork buttons open the name dialog and fork into a profile; the row men
   assert.match(app, /<ForkDialog\b/);
   assert.match(app, /setPendingFork\(\{\s*request: \{\s*mode: 'fork',\s*kind: 'profile'/);
   assert.match(app, /\{profile: answer\.name/);
-  assert.match(app, /onDuplicate=\{duplicateRow\}/);
+  assert.match(app, /onDuplicate=\{appConfig\.duplicate_enabled \? duplicateRow : undefined\}/);
   assert.ok(!/forkSession\(target\.sessionRef, \{session: newRef/.test(app), 'a message fork no longer makes a new session');
   assert.match(menu, /<Tooltip content="Duplicate" placement="end">/);
   assert.match(menu, /target\.kind === 'category' \|\| onDuplicate === undefined \|\| canDuplicate\?\.\(target\) === false \? null/);

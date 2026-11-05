@@ -3649,7 +3649,7 @@ function App({
           onOpenPane={openViewInPane}
           canOpenPane={canOpenAnotherPane}
           paneLimit={paneLimit}
-          onDuplicate={duplicateRow}
+          onDuplicate={appConfig.duplicate_enabled ? duplicateRow : undefined}
           canDuplicate={canDuplicateRow}
           paneCount={panes.keys.length}
           openLeftPanel={leftPanel}
@@ -3818,7 +3818,7 @@ function App({
                         }
                         onLoadFull={loadFullMessage}
                         onForkMessage={(() => {
-                          if (!pane.isLive || pane.isRunning || pane.session === undefined || pane.sessionRef === undefined) return undefined;
+                          if (!appConfig.fork_messages_enabled || !pane.isLive || pane.isRunning || pane.session === undefined || pane.sessionRef === undefined) return undefined;
                           const effectiveProfile = pane.profile ?? pane.session.activeProfile ?? pane.session.defaultProfile;
                           // Only a catalog profile can be forked; an unknown one still
                           // offers the button, which explains what is missing.

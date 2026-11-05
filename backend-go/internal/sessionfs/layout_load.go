@@ -101,7 +101,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	config.ModelPath = modelPaths[name]
 	config.ModelPaths = modelPaths
-	if config.NativeSubagent != nil {
+	if config.NativeSubagent != nil && config.NativeSubagent.ModelChoice {
 		config.NativeSubagent.ProfileModels = modelPaths
 	}
 	if config.ReasoningEffort != "" {

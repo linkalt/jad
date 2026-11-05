@@ -18,12 +18,16 @@ import (
 
 const profileMessageToolID = "native.profile_message"
 
+// profileMessageModelProperty is the schema line of the model argument; the tool has it only
+// with tools.native.profile_message.model_choice on.
+const profileMessageModelProperty = `
+    "model":{"type":"string","description":"Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."},`
+
 var profileMessageInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
-    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
-    "model":{"type":"string","description":"Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."},
+    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},` + profileMessageModelProperty + `
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer before an id is returned; collect it with the async tool."}
   },
   "required":["profile","message"],
@@ -273,7 +277,8 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 	if settings.ResultMaxBytes < 1 {
 		return tools.Tool{}, errors.New("tools.native.profile_message.result_max_bytes must be at least 1")
 	}
-	validator, err := tools.CompileSchema(profileMessageInputSchema)
+	schema := modelChoiceSchema(profileMessageInputSchema, profileMessageModelProperty, settings.ModelChoice)
+	validator, err := tools.CompileSchema(schema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native profile_message schema: %w", err)
 	}
@@ -287,7 +292,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 			Source:      "native",
 			Name:        "profile_message",
 			Description: profileMessageDescription + profileMessageListText(targets, settings.Sessions, remoteNames),
-			InputSchema: append(json.RawMessage(nil), profileMessageInputSchema...),
+			InputSchema: schema,
 		},
 		Validator:          validator,
 		ExampleOperation:   profileMessageExample,

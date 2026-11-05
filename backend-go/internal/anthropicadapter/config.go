@@ -140,7 +140,9 @@ type ModelProfile struct {
 	FixedSampling bool `json:"fixed_sampling"`
 	// StructuredOutput is native (a json_schema text.format becomes output_config.format)
 	// or unsupported (for models without structured outputs: the format is handled by
-	// unsupported_fields, like any other field the adapter cannot send). Empty means native.
+	// unsupported_fields, like any other field the adapter cannot send). Empty means
+	// unsupported, what the adapter did before native existed, so an upstream without
+	// structured outputs is not sent a field it refuses.
 	StructuredOutput string `json:"structured_output,omitempty"`
 	// ExtraBody holds top-level fields merged last into the /v1/messages body of requests
 	// this profile serves, as raw JSON. It cannot set a field the adapter builds from the client.
@@ -369,7 +371,7 @@ func (p *ModelProfile) finish(path string, needsMatch, cacheAutomatic bool) erro
 		return fmt.Errorf("config: %s.display must be empty, summarized or omitted, got %q", path, p.Display)
 	}
 	if p.StructuredOutput == "" {
-		p.StructuredOutput = StructuredOutputNative
+		p.StructuredOutput = StructuredOutputUnsupported
 	}
 	if p.StructuredOutput != StructuredOutputNative && p.StructuredOutput != StructuredOutputUnsupported {
 		return fmt.Errorf("config: %s.structured_output must be %q or %q, got %q", path, StructuredOutputNative, StructuredOutputUnsupported, p.StructuredOutput)

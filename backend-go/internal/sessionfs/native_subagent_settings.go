@@ -51,7 +51,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "process_max_running", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree", "model_choice"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -63,8 +63,13 @@ var (
 
 // NativeSubagentSettings contains the normalized settings of native.subagent.
 type NativeSubagentSettings struct {
+	// ModelChoice (model_choice, off by default) gives the tool a model argument and lists the
+	// calling profile's models in its description. Off, the tool's definition is the one it had
+	// before the model argument existed, and the loader leaves ProfileModels nil.
+	ModelChoice bool
 	// ProfileModels maps each model ID the calling profile lists to its file: the models a
-	// call's model argument may pick. The catalog-layout loader fills it; nil offers none.
+	// call's model argument may pick. The catalog-layout loader fills it when ModelChoice is
+	// on; nil offers none.
 	ProfileModels map[string]string
 	// ResultMaxBytes is the most child text one call returns; a longer answer is cut
 	// and the result says so.
@@ -298,6 +303,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.BackgroundWriters, err = bashBool(fields, "background_writers", false, settingPath+": "+section); err != nil {
+		return nil, err
+	}
+	if settings.ModelChoice, err = bashBool(fields, "model_choice", false, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.MaxBackgroundWriters, err = configuredInteger(fields, "max_background_writers", defaultNativeSubagentMaxBackgroundWriters, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {
