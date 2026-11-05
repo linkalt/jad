@@ -116,6 +116,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			AllowedOrigins:             append([]string(nil), loaded.Server.AllowedOrigins...),
 			MaxBodyBytes:               loaded.Server.MaxBodyBytes,
 			SSEMaxBufferedBytes:        loaded.Server.SSEMaxBufferedBytes,
+			SteerMaxPending:            loaded.Server.SteerMaxPending,
 			SSEHeartbeatInterval:       loaded.Server.SSEHeartbeatInterval,
 			SSEWriteTimeout:            loaded.Server.SSEWriteTimeout,
 			ShutdownTimeout:            loaded.Server.ShutdownTimeout,

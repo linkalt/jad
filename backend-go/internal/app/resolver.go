@@ -494,14 +494,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	runnerKey := fingerprintRunner(config, apiKey) + fallbackIdentity
 	runner := shared.runners[runnerKey]
 	if runner == nil {
-		runner, err = session.NewRunner(shared.store, streamer, session.ModelSettings{
-			Model:          config.Model.Name,
-			Request:        config.Model.Request,
-			HostedTools:    config.Model.HostedTools,
-			PromptRole:     config.Model.PromptRole,
-			PromptText:     config.Model.PromptText,
-			PromptCacheKey: promptCacheKey(config.Model, config.MessagesPath),
-		})
+		runner, err = session.NewRunner(shared.store, streamer, runnerModelSettings(config))
 		if err != nil {
 			return preparedRun{}, fmt.Errorf("create session runner: %w", err)
 		}

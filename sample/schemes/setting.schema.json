@@ -1062,6 +1062,110 @@
           },
           "additionalProperties": true,
           "default": {}
+        },
+        "summary": {
+          "type": "object",
+          "description": "Off by default. Before a compaction (automatic, overflow or manual) drops turns, the session's model writes a summary of them, stored in the compaction cache as one message in front of the retained turns; messages.jsonl is not changed. The dropped turns are sent as plain text (reasoning left out), each item cut to max_item_bytes and the whole to max_input_bytes, newest kept; an earlier summary is passed on first. The request goes through the run's model client (fallback, retry, pricing and max_run_cost_usd count it). Sub-agent compaction does not summarize.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "prompt": {
+              "type": "string",
+              "pattern": "\\S",
+              "default": "You are compacting a long conversation between a user and a coding agent so the agent can continue the work with less context. Write a summary of the transcript you are given that lets the agent carry on without it. Keep: the user's goals and requests (quote exact instructions and constraints), decisions made and why, files read or changed with what matters about them, commands run and their outcomes, errors and how they were resolved, open problems, and the work that remains. Keep an earlier summary's facts unless the transcript supersedes them. Be specific (paths, names, values), leave out pleasantries, and write only the summary.",
+              "description": "Instruction sent in place of the session's prompt."
+            },
+            "header": {
+              "type": "string",
+              "pattern": "\\S",
+              "default": "Summary of the earlier conversation, written by the model when it was compacted:",
+              "description": "First line of the stored summary; the next summary recognises an earlier one by it."
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "developer",
+                "user"
+              ],
+              "default": "developer",
+              "description": "Role of the stored summary message."
+            },
+            "max_input_bytes": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 10000000,
+              "default": 200000
+            },
+            "max_item_bytes": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 1000000,
+              "default": 4000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "default": 4096,
+              "description": "Replaces the model's max_output_tokens for the summary request; 0 keeps the model's."
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 1800000,
+              "default": 120000
+            },
+            "on_failure": {
+              "type": "string",
+              "enum": [
+                "compact",
+                "skip"
+              ],
+              "default": "compact",
+              "description": "compact: drop the turns without a summary (logged); skip: leave the transcript as it is."
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "overflow": {
+          "type": "object",
+          "description": "When the provider refuses a round because the history is over the model's context window (its error text contains one of patterns, case-insensitive), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. Needs auto_enabled; a compaction that finds nothing to drop returns the provider's error.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 1
+            },
+            "patterns": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "default": [
+                "context_length_exceeded",
+                "context window",
+                "maximum context length",
+                "prompt is too long",
+                "input is too long",
+                "too many tokens",
+                "exceeds the context",
+                "context length"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
         }
       },
       "additionalProperties": true,
@@ -1582,6 +1686,101 @@
               },
               "unevaluatedProperties": false
             },
+            "web_search": {
+                "type": "object",
+                "description": "Searches the web through a search API and returns result titles, URLs and snippets; fetch reads a result. For models whose provider runs no hosted web_search (Anthropic and Chat Completions models, local models). Read-only. The key is read from api_key_env on each call and never logged. Results are filtered by allowed_domains and blocked_domains; a call may narrow the allowed domains, never widen them, and adds blocked ones. Needs web_search in tool_definition_paths. Do not enable it next to a model.json hosted web_search tool: both use the name web_search.",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "brave",
+                      "tavily",
+                      "searxng"
+                    ],
+                    "description": "Required. brave: Brave Search API (X-Subscription-Token). tavily: Tavily search API (Bearer key, include/exclude domains sent). searxng: a SearXNG instance's JSON API (format=json must be enabled there); a key, when api_key_env is set, is sent as a Bearer token."
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "pattern": "^https?://",
+                    "description": "Search endpoint. Defaults: brave https://api.search.brave.com/res/v1/web/search, tavily https://api.tavily.com/search. Required for searxng (its /search URL)."
+                  },
+                  "api_key_env": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "description": "Environment variable holding the key. Defaults: brave BRAVE_SEARCH_API_KEY, tavily TAVILY_API_KEY, searxng none."
+                  },
+                  "default_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 5,
+                    "description": "Results when the call names no max_results; must not be larger than max_results (the default is lowered to max_results when only that is set)."
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 10,
+                    "description": "Most results one call returns. Brave returns at most 20 per request."
+                  },
+                  "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120000,
+                    "default": 15000
+                  },
+                  "max_response_bytes": {
+                    "type": "integer",
+                    "minimum": 1024,
+                    "maximum": 64000000,
+                    "default": 2000000,
+                    "description": "A larger search response fails the call."
+                  },
+                  "max_snippet_chars": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 20000,
+                    "default": 500,
+                    "description": "Characters of each snippet shown; 0 shows titles and URLs only."
+                  },
+                  "max_query_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4000,
+                    "default": 400
+                  },
+                  "user_agent": {
+                    "type": "string",
+                    "pattern": "\\S",
+                    "maxLength": 512,
+                    "default": "Mozilla/5.0 (compatible; jad-web-search/1.0)"
+                  },
+                  "allowed_domains": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
+                    },
+                    "default": [],
+                    "description": "When not empty, only results on these domains or their subdomains are returned (a leading www. is ignored)."
+                  },
+                  "blocked_domains": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
+                    },
+                    "default": [],
+                    "description": "Results on these domains or their subdomains are never returned."
+                  }
+                },
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false
+              },
             "notebook": {
               "type": "object",
               "description": "Reads and changes the cells of a Jupyter notebook (.ipynb, nbformat 4): read shows cells and their outputs as text, edit, insert and delete change cells and rewrite the file in Jupyter's layout (sorted keys, one-space indent), so a diff shows only the changed cell. Nothing is executed. Needs tools.native.edit: where it may write, max_bytes and backups are edit's settings, so a profile that may edit a file may edit the notebook. Not read-only: its calls run in order with other changes, read-only sub-agents do not get it, and writer sub-agents may list it. post_edit hooks run on a changed notebook. Needs notebook in tool_definition_paths.",

@@ -81,6 +81,25 @@ type AutomaticCompactionSettings struct {
 	KeepToolPairs  int
 	BackupMode     string
 	BackupMinTurns int
+	// Summary, when not nil, has the model summarize the turns a compaction drops; see
+	// CompactionSummarySettings.
+	Summary *CompactionSummarySettings
+	// OnSummaryError, when not nil, is told about a summary request that failed.
+	OnSummaryError func(error)
+	// Overflow, when not nil and Enabled is true, compacts and sends a round again when
+	// the provider refused it for being over the context window; see OverflowSettings.
+	Overflow *OverflowSettings
+}
+
+// OverflowSettings are the normalized compaction.overflow settings.
+type OverflowSettings struct {
+	// MaxAttempts is how many overflow compactions one run may make.
+	MaxAttempts int
+	// Patterns are matched, case-insensitively, against the provider error's text.
+	Patterns []string
+	// OnCompacted, when not nil, is told about each overflow compaction: the attempt
+	// number (from 1), whether it rewrote the transcript, and the provider's error.
+	OnCompacted func(attempt int, compacted bool, providerErr error)
 }
 
 // HookReport is the report of one run_start, run_end or pre_compact command, for a caller
@@ -168,6 +187,12 @@ type RunOptions struct {
 	// PlanPrompt, when its Text is set, is sent after the history in every request of the
 	// run, with its Role; its After is ignored. It never reaches the transcript.
 	PlanPrompt StateContextPrompt
+	// Steer holds the user messages sent while the run works. They are stored as user
+	// input before each provider round, and a message that waits when the run would end
+	// makes it take one more round. The run closes it when it returns. Nil takes none.
+	Steer *SteerQueue
+	// OnSteer, when not nil, is told about the items of each steering message once stored.
+	OnSteer func(items [][]byte)
 	// Notes are sent after the history (and before PlanPrompt) in every request of the run,
 	// each with its Role; their After is ignored. They never reach the transcript. The
 	// MCP resource changes since the profile's last run are one.
@@ -505,6 +530,8 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	trace := options.MemoryTrace.BeginRun()
 	defer trace.Stop()
 
+	// A message sent once the run returned is refused to its sender instead of being lost.
+	defer options.Steer.Close()
 	persisted, err := r.persistRunInput(input, options)
 	if err != nil {
 		return RunResult{}, err
@@ -551,8 +578,12 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	}
 	for round := 0; ; round++ {
 		done, err := r.runRound(run, round)
-		if err != nil || done {
+		if err != nil {
 			return run.result, err
+		}
+		// A steering message that is still waiting gets one more round.
+		if done && options.Steer.closeIfEmpty() {
+			return run.result, nil
 		}
 	}
 }
@@ -584,6 +615,8 @@ type runRounds struct {
 	// round re-sends the history, so this is what the run is billed, not the transcript size.
 	usedTokens int64
 	result     RunResult
+	// overflowAttempts counts the overflow compactions of this run.
+	overflowAttempts int
 }
 
 // runRound sends one provider round and runs the function calls it returned. It reports
@@ -592,6 +625,9 @@ type runRounds struct {
 func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	ctx, options := run.ctx, &run.options
 	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := r.storeSteerMessages(*options); err != nil {
 		return false, err
 	}
 	// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
@@ -603,17 +639,26 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 			return false, fmt.Errorf("build Responses tool definitions: %w", err)
 		}
 	}
-	request, err := r.buildRoundRequest(ctx, run.trace, run.inputHistory, *options, responseTools)
-	if err != nil {
-		return false, err
-	}
-
 	// TypeScript suffixes every round, including the first, so the staging
 	// directory of a response is always <turn>-<round>.
 	responseTurnID := run.result.TurnID + "-" + strconv.Itoa(round)
-	roundCtx, roundSpan := tracing.StartModelRequest(ctx, r.settings.Model, round)
-	responseResult, err := r.runResponse(roundCtx, request, run.sessionTurn, int64(round+1), responseTurnID, *options)
-	tracing.EndModelRequest(roundSpan, responseResult.Event, err)
+	responseResult, err := r.sendRound(run, round, responseTurnID, responseTools)
+	// A round the provider refused for being over the context window is sent again after
+	// a compaction, while compaction.overflow allows and the compaction drops something.
+	for err != nil && r.overflowRetryAllowed(ctx, err, *options, run.overflowAttempts) {
+		run.overflowAttempts++
+		compacted, compactErr := r.compactForOverflow(ctx, run)
+		if overflow := options.AutomaticCompaction.Overflow; overflow.OnCompacted != nil {
+			overflow.OnCompacted(run.overflowAttempts, compacted, err)
+		}
+		if compactErr != nil {
+			return false, errors.Join(err, compactErr)
+		}
+		if !compacted {
+			break
+		}
+		responseResult, err = r.sendRound(run, round, responseTurnID+"-overflow-"+strconv.Itoa(run.overflowAttempts), responseTools)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -628,7 +673,7 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	refreshStateContext, err := r.compactAfterResponse(run.result.Event, calls, *options)
+	refreshStateContext, err := r.compactAfterResponse(ctx, run.result.Event, calls, *options)
 	if err != nil {
 		return false, err
 	}
@@ -654,6 +699,64 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 		return false, err
 	}
 	return declined, nil
+}
+
+// sendRound builds the request of one provider round from the current history and sends it.
+func (r *Runner) sendRound(run *runRounds, round int, responseTurnID string, responseTools []json.RawMessage) (RunResult, error) {
+	request, err := r.buildRoundRequest(run.ctx, run.trace, run.inputHistory, run.options, responseTools)
+	if err != nil {
+		return RunResult{}, err
+	}
+	roundCtx, roundSpan := tracing.StartModelRequest(run.ctx, r.settings.Model, round)
+	responseResult, err := r.runResponse(roundCtx, request, run.sessionTurn, int64(round+1), responseTurnID, run.options)
+	tracing.EndModelRequest(roundSpan, responseResult.Event, err)
+	return responseResult, err
+}
+
+// overflowRetryAllowed reports whether err is the provider refusing a request for being
+// over the context window and the run may still compact for it.
+func (r *Runner) overflowRetryAllowed(ctx context.Context, err error, options RunOptions, attempts int) bool {
+	settings := options.AutomaticCompaction
+	if settings == nil || !settings.Enabled || settings.Overflow == nil || attempts >= settings.Overflow.MaxAttempts {
+		return false
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return IsContextOverflow(err, settings.Overflow.Patterns)
+}
+
+// IsContextOverflow reports whether the text of err contains one of patterns, ignoring case.
+func IsContextOverflow(err error, patterns []string) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, pattern := range patterns {
+		if pattern = strings.ToLower(strings.TrimSpace(pattern)); pattern != "" && strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// compactForOverflow compacts the history with the automatic compaction settings, keeping
+// no response whole (the latest round's calls already have their results, and the turn
+// rule keeps or drops each call with its result), and refreshes the state context when
+// the transcript was rewritten.
+func (r *Runner) compactForOverflow(ctx context.Context, run *runRounds) (bool, error) {
+	compacted, err := r.compactAutomatically(r.automaticCompactionOptions(ctx, run.options), run.options)
+	if err != nil || !compacted {
+		return false, err
+	}
+	if run.options.RefreshStateContext != nil {
+		stateContext, err := run.options.RefreshStateContext(ctx)
+		if err != nil {
+			return true, fmt.Errorf("refresh state context after overflow compaction: %w", err)
+		}
+		run.options.StateContext = stateContext
+	}
+	return true, nil
 }
 
 // persistRunInput stores the user input unless the caller already persisted it,
@@ -732,21 +835,38 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 
 // compactAfterResponse compacts the transcript when the automatic compaction trigger
 // fires for the response. It reports whether the state context must be refreshed.
-func (r *Runner) compactAfterResponse(event json.RawMessage, calls []json.RawMessage, options RunOptions) (bool, error) {
+func (r *Runner) compactAfterResponse(ctx context.Context, event json.RawMessage, calls []json.RawMessage, options RunOptions) (bool, error) {
 	responseID, shouldCompact := automaticCompactionTrigger(event, options.AutomaticCompaction)
 	if !shouldCompact {
 		return false, nil
 	}
-	compactionOptions := transcript.CompactionOptions{
-		TurnType:       options.AutomaticCompaction.TurnType,
-		KeepTurns:      options.AutomaticCompaction.KeepTurns,
-		KeepToolPairs:  options.AutomaticCompaction.KeepToolPairs,
-		BackupMode:     options.AutomaticCompaction.BackupMode,
-		BackupMinTurns: options.AutomaticCompaction.BackupMinTurns,
-	}
+	compactionOptions := r.automaticCompactionOptions(ctx, options)
 	if len(calls) > 0 && responseID != "" {
 		compactionOptions.PreserveResponseID = responseID
 	}
+	return r.compactAutomatically(compactionOptions, options)
+}
+
+// automaticCompactionOptions returns the compaction options of the run's automatic
+// compaction settings, with the summary callback when compaction.summary is on.
+func (r *Runner) automaticCompactionOptions(ctx context.Context, options RunOptions) transcript.CompactionOptions {
+	settings := options.AutomaticCompaction
+	compactionOptions := transcript.CompactionOptions{
+		TurnType:       settings.TurnType,
+		KeepTurns:      settings.KeepTurns,
+		KeepToolPairs:  settings.KeepToolPairs,
+		BackupMode:     settings.BackupMode,
+		BackupMinTurns: settings.BackupMinTurns,
+	}
+	if settings.Summary != nil {
+		compactionOptions.Summarize = NewCompactionSummarizer(ctx, r.streamer, r.settings, *settings.Summary, settings.OnSummaryError)
+	}
+	return compactionOptions
+}
+
+// compactAutomatically runs one automatic compaction through the caller's CompactHistory
+// (or the store's) and reports whether it rewrote the transcript.
+func (r *Runner) compactAutomatically(compactionOptions transcript.CompactionOptions, options RunOptions) (bool, error) {
 	compact := r.store.CompactHistory
 	if options.CompactHistory != nil {
 		compact = options.CompactHistory

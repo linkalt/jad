@@ -50,6 +50,8 @@ type ServerSettings struct {
 	AllowZeroRunStateRetention bool
 	ToolStreamInterval         time.Duration
 	SSEMaxBufferedBytes        int
+	// SteerMaxPending is server.steer_max_pending.
+	SteerMaxPending int
 	// SSEHeartbeatInterval is the gap between keep-alive frames on a quiet run
 	// stream; zero disables them.
 	SSEHeartbeatInterval time.Duration
@@ -182,6 +184,7 @@ func Defaults() ServerSettings {
 		RunStateRetention:          30 * time.Second,
 		ToolStreamInterval:         time.Duration(serverconfig.DefaultToolStreamIntervalMS) * time.Millisecond,
 		SSEMaxBufferedBytes:        1 << 20,
+		SteerMaxPending:            serverconfig.DefaultSteerMaxPending,
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		SSEWriteTimeout:            time.Duration(serverconfig.DefaultSSEWriteTimeoutMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
@@ -625,6 +628,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.SSEMaxBufferedBytes = int(sseBytes)
+	steerPending := int64(settings.SteerMaxPending)
+	if err := readInt("steer_max_pending", &steerPending, 0, serverconfig.MaxSteerMaxPending); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.SteerMaxPending = int(steerPending)
 	heartbeat := int64(settings.SSEHeartbeatInterval / time.Millisecond)
 	if err := readInt("sse_heartbeat_interval_ms", &heartbeat, 0, serverconfig.MaxSSEHeartbeatIntervalMS); err != nil {
 		return ServerSettings{}, err

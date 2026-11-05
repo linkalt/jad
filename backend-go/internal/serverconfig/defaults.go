@@ -37,6 +37,13 @@ const (
 	MaxRunContentIndexSegments        = 65_536
 )
 
+// server.steer_max_pending: the most steering messages one run holds before it stores
+// them; zero turns POST /run/steer off.
+const (
+	DefaultSteerMaxPending = 16
+	MaxSteerMaxPending     = 1000
+)
+
 // Images in a run request (server.max_request_images, server.max_request_image_bytes).
 const (
 	DefaultMaxRequestImages     = 8

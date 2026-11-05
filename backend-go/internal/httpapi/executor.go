@@ -90,6 +90,12 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		Tools:           run.tools,
 		ExecutePlan:     run.executePlan,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
+		Steer:           run.steer,
+		OnSteer: func(items [][]byte) {
+			if err := run.publish("steer", map[string]any{"turn_id": run.turnID, "items": rawItems(items)}); err != nil {
+				logger.Warn("failed to publish steering message", slog.Any("error", err))
+			}
+		},
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)
 		},

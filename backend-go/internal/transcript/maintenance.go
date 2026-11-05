@@ -30,6 +30,14 @@ type CompactionOptions struct {
 	BackupMode         string
 	BackupMinTurns     int
 	PreserveResponseID string
+	// Summarize, when set, is handed the items of the turns this compaction drops and
+	// returns one history item that is kept in front of the retained turns (see
+	// compaction_summary.go). It runs without the store lock held. Nil drops the turns
+	// as before.
+	Summarize func(dropped [][]byte) (json.RawMessage, error)
+	// summaryItem and summaryDigest carry what Summarize returned into the locked part.
+	summaryItem   json.RawMessage
+	summaryDigest string
 }
 
 type CompactionResult struct {
@@ -56,56 +64,27 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if options.BackupMode != "replace" && options.BackupMode != "append" {
 		return result, errors.New("backup mode must be replace or append")
 	}
+	if options.Summarize != nil {
+		skipped, err := s.summarizeDroppedTurns(&options)
+		if err != nil || skipped {
+			return result, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.recovering {
-		return result, errors.New("turn store recovery is in progress")
-	}
-	if len(s.activeTurns) != 0 {
-		return result, errors.New("cannot compact while a response turn is active")
-	}
-
-	// The compaction cache is read once for the history and for the
-	// assistant-final items. The store lock is held and no turn is active, so
-	// nothing rewrites the cache between the two uses.
-	previousCache, err := s.readCompactionCache()
-	if err != nil {
-		return result, fmt.Errorf("read request history for compaction: %w", err)
-	}
-	history, err := s.readInputItemsWithCache(nil, previousCache, nil)
-	if err != nil {
-		return result, fmt.Errorf("read request history for compaction: %w", err)
-	}
-	activeTail, excluded, err := s.preservedResponseTail(options.PreserveResponseID)
+	plan, err := s.planCompaction(options)
 	if err != nil {
 		return result, err
 	}
-	compactableHistory := excludePreservedItems(history, excluded)
-	finalAssistant, err := s.assistantFinalItems(previousCache)
-	if err != nil {
-		return result, fmt.Errorf("read assistant final items for compaction: %w", err)
-	}
-	turns := make([][][]byte, 0)
-	for _, item := range compactableHistory {
-		fields, err := objectFields(item)
-		if err != nil {
-			return result, err
-		}
-		roleRaw, _ := fieldValue(fields, "role")
-		role, _ := stringValue(roleRaw)
-		if role == "user" || len(turns) == 0 {
-			turns = append(turns, make([][]byte, 0))
-		}
-		turns[len(turns)-1] = append(turns[len(turns)-1], item)
-	}
-	selected := turns
-	if options.KeepTurns == 0 {
-		selected = nil
-	} else if len(selected) > options.KeepTurns {
-		selected = selected[len(selected)-options.KeepTurns:]
+	history, activeTail, finalAssistant, selected := plan.history, plan.activeTail, plan.finalAssistant, plan.selected
+	if len(options.summaryItem) > 0 && droppedDigest(plan.dropped()) != options.summaryDigest {
+		return result, errors.New("the transcript changed while the compaction summary was written")
 	}
 
-	retained := make([][]byte, 0, len(history))
+	retained := make([][]byte, 0, len(history)+1)
+	if len(options.summaryItem) > 0 {
+		retained = append(retained, append([]byte(nil), options.summaryItem...))
+	}
 	keepPairs := keptToolPairs(selected, options)
 	for _, turn := range selected {
 		retained = append(retained, retainCompactedTurn(turn, options, finalAssistant, keepPairs)...)

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.web_search",
+      "source": "native",
+      "name": "web_search",
+      "description": "Search the web and get result titles, URLs and snippets. Use fetch to read a result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What to search the web for."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many results to return; the setting's max_results caps it."
+          },
+          "allowed_domains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Only return results from these domains (and their subdomains)."
+          },
+          "blocked_domains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Never return results from these domains."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

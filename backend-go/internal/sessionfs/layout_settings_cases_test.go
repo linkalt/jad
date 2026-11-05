@@ -20,7 +20,7 @@ type layoutSettingsCase struct {
 }
 
 // goOnlyNativeTools are native tools older error texts in the case file do not list.
-var goOnlyNativeTools = []string{"notebook", "lsp", "subagent", "read_image", "profile_message", "tool_smith", "transcript", "transcripts", "load_tool"}
+var goOnlyNativeTools = []string{"notebook", "lsp", "web_search", "subagent", "read_image", "profile_message", "tool_smith", "transcript", "transcripts", "load_tool"}
 
 // layoutErrorPrefix strips the file path (and the "settings" label) a layout error starts with.
 var layoutErrorPrefix = regexp.MustCompile(`^\S+\.json(: settings)?: `)

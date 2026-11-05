@@ -68,6 +68,9 @@ type Config struct {
 	SnapshotTurns              int
 	MaxPageTurns               int
 	MaxInlinePartBytes         int
+	// SteerMaxPending is the most steering messages one run holds (server.steer_max_pending);
+	// zero turns POST /run/steer off.
+	SteerMaxPending int
 	// MaxRequestImages and MaxRequestImageBytes bound the images a run request may
 	// carry (server.max_request_images, server.max_request_image_bytes). Zero images
 	// turns image input off.
@@ -184,6 +187,9 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	if config.SnapshotTurns < 0 {
 		return nil, errors.New("snapshot turns must not be negative")
 	}
+	if config.SteerMaxPending < 0 || config.SteerMaxPending > serverconfig.MaxSteerMaxPending {
+		return nil, fmt.Errorf("steer max pending must be between 0 and %d", serverconfig.MaxSteerMaxPending)
+	}
 	if config.MaxPageTurns < 1 {
 		return nil, errors.New("maximum page turns must be positive")
 	}
@@ -281,7 +287,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		shutdownTimeout:           config.ShutdownTimeout,
 		runContentWriteBatchBytes: config.RunContentWriteBatchBytes,
 		runContentFlushInterval:   config.RunContentFlushInterval,
-		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns),
+		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns).withSteerLimit(config.SteerMaxPending),
 		gate:                      gate,
 	}, nil
 }
@@ -424,6 +430,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleLiveRunImage(w, r, reference, profile, segments[5], segments[6])
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "run" && segments[4] == "stop":
 		h.handleRunStop(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "run" && segments[4] == "steer":
+		h.handleRunSteer(w, r, reference, profile)
 	default:
 		writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "not found"})
 	}

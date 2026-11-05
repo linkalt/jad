@@ -69,6 +69,10 @@ type Compaction struct {
 	KeepBackupTurns int
 	// BackupMinTurns keeps a replace backup that holds at least this many user turns from being overwritten by a snapshot with fewer; 0 turns it off.
 	BackupMinTurns int
+	// Summary is compaction.summary (off by default).
+	Summary CompactionSummary
+	// Overflow is compaction.overflow (on by default, with auto_enabled).
+	Overflow CompactionOverflow
 }
 
 type FrontCompactionSettings struct {
@@ -184,6 +188,7 @@ type SessionConfig struct {
 	NativeReadImage          *NativeReadImageSettings
 	NativeNotebook           *NativeNotebookSettings
 	NativeLSP                *NativeLSPSettings
+	NativeWebSearch          *NativeWebSearchSettings
 	NativeProcess            *NativeProcessSettings
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
@@ -488,6 +493,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeWebSearch, err := normalizeNativeWebSearchSettings(setting, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	grepPolicy := NativePathPolicy{Paths: []NativePathRule{}}
 	if nativeGrep != nil {
 		grepPolicy = nativeGrep.Policy
@@ -696,6 +705,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeReadImage:          nativeReadImage,
 		NativeNotebook:           nativeNotebook,
 		NativeLSP:                nativeLSP,
+		NativeWebSearch:          nativeWebSearch,
 		NativeProcess:            nativeProcess,
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
@@ -881,6 +891,8 @@ func normalizeCompaction(raw json.RawMessage, path string) (Compaction, error) {
 		KeepTurns:       1,
 		BackupMode:      "append",
 		KeepBackupTurns: defaultKeepBackupTurns,
+		Summary:         DefaultCompactionSummary(),
+		Overflow:        DefaultCompactionOverflow(),
 	}
 	if len(raw) == 0 {
 		return settings, nil
@@ -954,6 +966,12 @@ func normalizeCompaction(raw json.RawMessage, path string) (Compaction, error) {
 			}
 			settings.BackupMinTurns = int(configured)
 		}
+	}
+	if settings.Summary, err = normalizeCompactionSummary(fields["summary"], path); err != nil {
+		return Compaction{}, err
+	}
+	if settings.Overflow, err = normalizeCompactionOverflow(fields["overflow"], path); err != nil {
+		return Compaction{}, err
 	}
 	return settings, nil
 }

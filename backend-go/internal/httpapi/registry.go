@@ -13,6 +13,7 @@ import (
 
 	interactionbroker "jad/backend-go/internal/interactions"
 	"jad/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/webui"
 )
@@ -280,6 +281,8 @@ type activeRun struct {
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker
 	supportsInteraction bool
+	// steer holds the messages POST /run/steer sent; the run stores them before its next round.
+	steer *session.SteerQueue
 	// onCommitted and onResult observe the run's committed responses and its final
 	// response. They are set before the run starts and called on the run's goroutine.
 	onCommitted func(event json.RawMessage)
@@ -335,6 +338,8 @@ type runRegistry struct {
 	maxQueue  int
 	// maxRuns is the most runs that may be running at once; 0 means no cap.
 	maxRuns int
+	// steerLimit is the most steering messages one run holds; 0 refuses them.
+	steerLimit int
 	// running counts the runs whose status is "running": begin adds one under mu, finish
 	// removes one when the run leaves that state, so the cap check never scans retained runs.
 	running atomic.Int64
@@ -348,6 +353,12 @@ func newRunRegistry(retention time.Duration, maxBufferedBytes, maxRuns int) *run
 		maxQueue:  maxBufferedBytes,
 		maxRuns:   maxRuns,
 	}
+}
+
+// withSteerLimit sets how many steering messages each run holds and returns r.
+func (r *runRegistry) withSteerLimit(limit int) *runRegistry {
+	r.steerLimit = limit
+	return r
 }
 
 func (r *runRegistry) begin(key, turnID string) (*activeRun, error) {
@@ -382,6 +393,7 @@ func (r *runRegistry) beginFrom(key, turnID, source, caller string) (*activeRun,
 		done:        make(chan struct{}),
 	}
 	run.interactions = interactionbroker.NewBroker(run.setPendingInteraction)
+	run.steer = session.NewSteerQueue(r.steerLimit)
 	r.runs[key] = append(r.runs[key], run)
 	if source == "" {
 		r.running.Add(1)

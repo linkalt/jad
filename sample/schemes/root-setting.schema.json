@@ -46,6 +46,13 @@
           "default": 120,
           "description": "Coalescing window for in-progress tool-call snapshots. Long arguments stream as one snapshot per window instead of one per delta; 0 streams every delta."
         },
+        "steer_max_pending": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 16,
+          "description": "Most messages POST /api/sessions/{ref}/run/steer may queue for one running run before it stores them (it stores them as user input before its next provider round, and a message that arrives as it would end makes it take one more round). 0 turns steering off."
+        },
         "run_content_memory_bytes": {
           "type": "integer",
           "minimum": 0,
@@ -223,7 +230,7 @@
           "minimum": 1,
           "maximum": 1024,
           "default": 256,
-          "description": "Go backend only. The most leaf tool calls (bash, edit, notebook, lsp, write, read, grep, glob, fetch, read_image) that may run at once in the whole process, across every session and sub-agent. A leaf call waits for a free slot; nothing is refused. Wrapper, MCP and other tools are not counted."},
+          "description": "Go backend only. The most leaf tool calls (bash, edit, notebook, lsp, write, read, grep, glob, fetch, web_search, read_image) that may run at once in the whole process, across every session and sub-agent. A leaf call waits for a free slot; nothing is refused. Wrapper, MCP and other tools are not counted."},
         "max_request_file_bytes": {
           "type": "integer",
           "minimum": 1,
