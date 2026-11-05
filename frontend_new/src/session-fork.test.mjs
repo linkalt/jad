@@ -36,8 +36,10 @@ test('a profile fork proposes a name in the same category and checks the names i
   const {forkProfileName, forkNameProblem, sessionRefInRootOf, sessionIdOf} = await import('./session-fork.ts');
   assert.equal(forkProfileName('dev/coder', '-fork-', 36), 'coder-fork-10');
   assert.equal(forkProfileName('coder', '-fork-', 0), 'coder-fork-0');
+  const {default: appConfig} = await import('./config.json', {with: {type: 'json'}});
   const long = forkProfileName('dev/' + 'b'.repeat(300), '-fork-', 1);
-  assert.equal(long.length, 200);
+  assert.equal(long.length, appConfig.fork_profile_name_max);
+  assert.match(forkNameProblem(long + 'x', 'profile'), new RegExp(`At most ${appConfig.fork_profile_name_max}`));
   assert.equal(forkNameProblem(long, 'profile'), null);
   assert.equal(forkNameProblem('coder-try', 'profile'), null);
   assert.match(forkNameProblem('', 'profile'), /Enter a profile name/);

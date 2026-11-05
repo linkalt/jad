@@ -52,6 +52,8 @@ type ServerSettings struct {
 	SSEMaxBufferedBytes        int
 	// SteerMaxPending is server.steer_max_pending.
 	SteerMaxPending int
+	// ForkNameMaxBytes is server.fork_name_max_bytes.
+	ForkNameMaxBytes int
 	// SSEHeartbeatInterval is the gap between keep-alive frames on a quiet run
 	// stream; zero disables them.
 	SSEHeartbeatInterval time.Duration
@@ -132,8 +134,10 @@ type Root struct {
 
 // Config is the filesystem and root-server configuration loaded at startup.
 type Config struct {
-	Roots       []Root
-	Server      ServerSettings
+	Roots  []Root
+	Server ServerSettings
+	// CLI is the root setting's cli section, the defaults of jad subcommands.
+	CLI         CLISettings
 	SettingPath string
 	// Warnings are notices about the root setting, not errors: keys the loader does not read.
 	Warnings []string
@@ -187,6 +191,7 @@ func Defaults() ServerSettings {
 		ToolStreamInterval:         time.Duration(serverconfig.DefaultToolStreamIntervalMS) * time.Millisecond,
 		SSEMaxBufferedBytes:        1 << 20,
 		SteerMaxPending:            serverconfig.DefaultSteerMaxPending,
+		ForkNameMaxBytes:           serverconfig.DefaultForkNameMaxBytes,
 		SSEHeartbeatInterval:       time.Duration(serverconfig.DefaultSSEHeartbeatIntervalMS) * time.Millisecond,
 		SSEWriteTimeout:            time.Duration(serverconfig.DefaultSSEWriteTimeoutMS) * time.Millisecond,
 		ReadHeaderTimeout:          time.Duration(serverconfig.DefaultReadHeaderTimeoutMS) * time.Millisecond,
@@ -254,6 +259,7 @@ func Load(options LoadOptions) (Config, error) {
 				GlobalJadRoot: directory,
 			}},
 			Server: Defaults(),
+			CLI:    DefaultCLISettings(),
 		}, nil
 	}
 
@@ -266,7 +272,7 @@ func Load(options LoadOptions) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		return Config{Roots: roots, Server: Defaults()}, nil
+		return Config{Roots: roots, Server: Defaults(), CLI: DefaultCLISettings()}, nil
 	}
 
 	setting, err := readObject(settingPath)
@@ -284,7 +290,11 @@ func Load(options LoadOptions) (Config, error) {
 	if serverSettings.LogFile != "" {
 		serverSettings.LogFile = resolveFrom(filepath.Dir(settingPath), serverSettings.LogFile)
 	}
-	return Config{Roots: roots, Server: serverSettings, SettingPath: settingPath, Warnings: warnings}, nil
+	cliSettings, err := normalizeCLISettings(setting["cli"], settingPath)
+	if err != nil {
+		return Config{}, err
+	}
+	return Config{Roots: roots, Server: serverSettings, CLI: cliSettings, SettingPath: settingPath, Warnings: warnings}, nil
 }
 
 // Resolve selects a root from an unqualified session ID or a root:session
@@ -483,7 +493,7 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 // rootSettingKeys are the keys the root setting object reads; rootEntryKeys are the keys of
 // an object session_roots entry. A key outside these lists is ignored and warned about.
 var (
-	rootSettingKeys = []string{"schema_version", "server", "session_roots", "session_paths", "libraries", "catalogs", "defaults"}
+	rootSettingKeys = []string{"schema_version", "server", "cli", "session_roots", "session_paths", "libraries", "catalogs", "defaults"}
 	rootEntryKeys   = []string{"id", "label", "path"}
 )
 
@@ -636,6 +646,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.SteerMaxPending = int(steerPending)
+	forkName := int64(settings.ForkNameMaxBytes)
+	if err := readInt("fork_name_max_bytes", &forkName, 1, serverconfig.MaxForkNameMaxBytes); err != nil {
+		return ServerSettings{}, err
+	}
+	settings.ForkNameMaxBytes = int(forkName)
 	heartbeat := int64(settings.SSEHeartbeatInterval / time.Millisecond)
 	if err := readInt("sse_heartbeat_interval_ms", &heartbeat, 0, serverconfig.MaxSSEHeartbeatIntervalMS); err != nil {
 		return ServerSettings{}, err

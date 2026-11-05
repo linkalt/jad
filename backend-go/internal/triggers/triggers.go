@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +104,10 @@ type Manager struct {
 	history []Record
 	started bool
 	closed  bool
+	// delivered holds the signatures accepted in the last replay window, by trigger name
+	// and signature, with the time each was accepted. Only signed requests enter it, so it
+	// grows with the senders' own traffic. Empty when replay_window_ms is 0.
+	delivered map[string]time.Time
 }
 
 // New checks the settings against the environment: every webhook's secret variable must be
@@ -114,7 +119,7 @@ func New(options Options) (*Manager, error) {
 	manager := &Manager{
 		settings: options.Settings, entries: map[string]sessionfs.TriggerEntry{}, secrets: map[string][]byte{},
 		runner: options.Runner, token: options.APIToken, logger: options.Logger, now: options.Now, after: options.After,
-		running: map[string]*Record{}, client: options.HTTPClient,
+		running: map[string]*Record{}, client: options.HTTPClient, delivered: map[string]time.Time{},
 	}
 	if manager.client == nil {
 		manager.client = &http.Client{}
@@ -301,9 +306,25 @@ func (m *Manager) serveWebhook(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, http.StatusBadRequest, "the body could not be read")
 		return
 	}
-	if !validSignature(secret, body, r.Header.Get(m.settings.SignatureHeader)) {
+	signed, refusal := m.signedContent(r, body)
+	if refusal != "" {
+		m.logger.Warn("trigger webhook with a bad timestamp", slog.String("trigger", name))
+		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	}
+	signature, valid := validSignature(secret, signed, r.Header.Get(m.settings.SignatureHeader))
+	if !valid {
 		m.logger.Warn("trigger webhook with a bad signature", slog.String("trigger", name))
-		writeError(w, http.StatusUnauthorized, "missing or wrong "+m.settings.SignatureHeader+" (HMAC-SHA256 of the body)")
+		what := "the body"
+		if m.settings.TimestampHeader != "" {
+			what = `"<` + m.settings.TimestampHeader + `>.<body>"`
+		}
+		writeError(w, http.StatusUnauthorized, "missing or wrong "+m.settings.SignatureHeader+" (HMAC-SHA256 of "+what+")")
+		return
+	}
+	if !m.firstDelivery(name, signature) {
+		m.logger.Warn("trigger webhook repeated a delivery", slog.String("trigger", name))
+		writeError(w, http.StatusConflict, "this signed request was already accepted (setting: server.triggers.replay_window_ms)")
 		return
 	}
 	record, err := m.Fire(name, SourceWebhook, body)
@@ -365,15 +386,63 @@ func (m *Manager) serveList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"triggers": list, "runs": runs})
 }
 
-// validSignature checks header, the hex HMAC-SHA256 of body with or without "sha256=".
-func validSignature(secret, body []byte, header string) bool {
-	given, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(header), "sha256="))
-	if err != nil || len(given) != sha256.Size {
+// signedContent returns what the signature covers: the body, or with timestamp_header set
+// "<timestamp>.<body>". A missing, malformed or out-of-window timestamp is refused with the
+// message to answer.
+func (m *Manager) signedContent(r *http.Request, body []byte) ([]byte, string) {
+	header := m.settings.TimestampHeader
+	if header == "" {
+		return body, ""
+	}
+	raw := strings.TrimSpace(r.Header.Get(header))
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, "missing or malformed " + header + " (the request time in Unix seconds)"
+	}
+	window := time.Duration(m.settings.ReplayWindowMS) * time.Millisecond
+	// Compared in seconds, so a far-off value cannot overflow a time.Duration.
+	if age := m.now().Unix() - seconds; age > int64(window/time.Second) || -age > int64(window/time.Second) {
+		return nil, header + " is further than replay_window_ms from the server's time"
+	}
+	signed := make([]byte, 0, len(raw)+1+len(body))
+	signed = append(append(append(signed, raw...), '.'), body...)
+	return signed, ""
+}
+
+// firstDelivery records an accepted signature and reports whether it was new: false when
+// the same trigger accepted it within replay_window_ms. Expired records are dropped on the
+// way. With replay_window_ms 0 every delivery is new and nothing is kept.
+func (m *Manager) firstDelivery(name string, signature []byte) bool {
+	if m.settings.ReplayWindowMS <= 0 {
+		return true
+	}
+	now := m.now()
+	window := time.Duration(m.settings.ReplayWindowMS) * time.Millisecond
+	key := name + "\x00" + string(signature)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for seen, at := range m.delivered {
+		if now.Sub(at) > window {
+			delete(m.delivered, seen)
+		}
+	}
+	if _, repeated := m.delivered[key]; repeated {
 		return false
 	}
+	m.delivered[key] = now
+	return true
+}
+
+// validSignature checks header, the hex HMAC-SHA256 of signed with or without "sha256=",
+// and returns the signature it checked.
+func validSignature(secret, signed []byte, header string) ([]byte, bool) {
+	given, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(header), "sha256="))
+	if err != nil || len(given) != sha256.Size {
+		return nil, false
+	}
 	mac := hmac.New(sha256.New, secret)
-	mac.Write(body)
-	return hmac.Equal(given, mac.Sum(nil))
+	mac.Write(signed)
+	return given, hmac.Equal(given, mac.Sum(nil))
 }
 
 func newRunID() string {

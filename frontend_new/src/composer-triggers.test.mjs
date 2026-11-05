@@ -122,7 +122,7 @@ test('every built-in path is relative, unique, and exists in this repository', (
     [],
   );
   // The list is checked in for this repository, so a stale entry is a bug the
-  // test can catch: the paths are resolved two levels up from frontend/src.
+  // test can catch: the paths are resolved two levels up from frontend_new/src.
   const repoRoot = new URL('../../', import.meta.url);
   assert.deepEqual(
     BUILTIN_MENTION_FILES.filter(path => !existsSync(new URL(path, repoRoot))),

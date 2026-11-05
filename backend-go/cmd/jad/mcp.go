@@ -25,6 +25,9 @@ browser to come back to transport.oauth.redirect_url; when the browser cannot re
 machine, paste the address it was sent to. The tokens are kept in
 <state>/.mcp-oauth/<category>/<name>.json and refreshed by the runs that use the server.
 
+--timeout bounds the wait for the sign-in (default: cli.mcp_login_timeout_ms of the root
+setting, 10m unless set).
+
 logout removes those tokens. --root picks the session root when more than one has the file.
 `
 
@@ -49,7 +52,7 @@ func runMCPCommand(args []string, streams commandStreams) error {
 	root := flags.String("root", "", "session root ID")
 	timeout := time.Duration(0)
 	if action == "login" {
-		flags.DurationVar(&timeout, "timeout", 10*time.Minute, "how long to wait for the sign-in")
+		flags.DurationVar(&timeout, "timeout", 0, "how long to wait for the sign-in (default: cli.mcp_login_timeout_ms)")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -61,12 +64,16 @@ func runMCPCommand(args []string, streams commandStreams) error {
 	if flags.NArg() != 1 {
 		return usageError("name one MCP server file as <category>/<name>\n\n%s", mcpUsage)
 	}
-	if action == "login" && timeout <= 0 {
+	given := flagGiven(flags, "timeout")
+	if action == "login" && given && timeout <= 0 {
 		return usageError("--timeout must be positive")
 	}
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
 		return fmt.Errorf("load server configuration: %w", err)
+	}
+	if !given {
+		timeout = loaded.CLI.MCPLoginTimeout
 	}
 	server, err := findMCPServerFile(loaded.Roots, flags.Arg(0), *root)
 	if err != nil {

@@ -44,7 +44,7 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 		return httpapi.ForkResult{}, &httpapi.StatusError{Code: http.StatusConflict, Message: "cannot fork a profile while a run is active"}
 	}
 
-	lines, turns, err := r.forkLines(ctx, config, request)
+	point, err := r.forkPoint(ctx, config, request)
 	if err != nil {
 		return httpapi.ForkResult{}, err
 	}
@@ -75,7 +75,7 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 	if restoreScope != nil {
 		undo = append(undo, restoreScope)
 	}
-	result, err := r.writeFork(source, newProfile, config, lines, turns)
+	result, err := r.writeFork(ctx, source, newProfile, config, point)
 	if err != nil {
 		return fail(err)
 	}

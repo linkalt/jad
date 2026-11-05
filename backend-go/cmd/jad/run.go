@@ -95,7 +95,9 @@ A prompt that starts with a slash command runs it, as the web client's "/" menu 
                            matter may set model, profile, plan: true and allowed-tools;
                            --model, --profile and --tools win over them
 Any other prompt is sent as it is. --no-commands sends a prompt that starts with a
-command word as it is too.
+command word as it is too, and so does a prompt read from a pipe or a file on standard
+input: only a prompt given as arguments or typed at a terminal runs a command, so piping
+a document that happens to start with /reset never resets the session.
 
 --plan runs the turn in plan mode: the model sees only the tools that never change
 anything (plus the session's plan_mode.allow_tools) and the plan_mode instructions, and
@@ -209,14 +211,15 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	}
 	// With --execute-plan the prompt is optional: standard input is read only for "-".
 	var prompt string
+	piped := false
 	if !options.request.ExecutePlan || len(flags.Args()) > 0 {
 		var err error
-		if prompt, err = readPrompt(flags.Args(), streams.stdin); err != nil {
+		if prompt, piped, err = readPrompt(flags.Args(), streams.stdin); err != nil {
 			return runOptions{}, err
 		}
 	}
 	options.request.Input = prompt
-	options.request.Commands = !*noCommands
+	options.request.Commands = !*noCommands && !piped
 	if options.request.Commands && !options.request.ExecutePlan {
 		if command, ok := headless.ParseCommand(prompt); ok {
 			if err := command.Check(options.request.Model, options.request.Output != nil, options.request.Plan); err != nil {
@@ -228,22 +231,33 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 }
 
 // readPrompt joins the prompt arguments, or reads standard input when there are none or
-// the only one is "-".
-func readPrompt(args []string, stdin io.Reader) (string, error) {
+// the only one is "-". piped reports a prompt read from standard input that is not a
+// terminal (a pipe or a file): such text is data, so it never runs a slash command.
+func readPrompt(args []string, stdin io.Reader) (prompt string, piped bool, err error) {
 	if len(args) > 0 && !(len(args) == 1 && args[0] == "-") {
-		return strings.Join(args, " "), nil
+		return strings.Join(args, " "), false, nil
 	}
 	if stdin == nil {
-		return "", usageError("no prompt given")
+		return "", false, usageError("no prompt given")
 	}
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
-		return "", fmt.Errorf("read the prompt from standard input: %w", err)
+		return "", false, fmt.Errorf("read the prompt from standard input: %w", err)
 	}
 	if strings.TrimSpace(string(raw)) == "" {
-		return "", usageError("the prompt is empty")
+		return "", false, usageError("the prompt is empty")
 	}
-	return string(raw), nil
+	return string(raw), !isTerminal(stdin), nil
+}
+
+// isTerminal reports whether reader is a terminal (a character device file).
+func isTerminal(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // headlessService loads the configuration and starts a headless service. logLevel, when

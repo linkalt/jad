@@ -107,6 +107,17 @@ func TestRunSlashCommands(t *testing.T) {
 		t.Fatalf("unknown word: %q %v", stdout, err)
 	}
 
+	// A prompt piped on standard input is data: a document that starts with /reset is sent
+	// as text, and the session keeps its history.
+	stdout, _, err = runJad(t, "/reset everything above\n", "run", "--session", session)
+	if err != nil || stdout != "ok\n" || !strings.Contains(transcript(), quoted("/reset everything above\n")) || !strings.Contains(transcript(), "Say hello") {
+		t.Fatalf("piped /reset: %q %v\n%s", stdout, err, transcript())
+	}
+	stdout, _, err = runJad(t, "/compact", "run", "--session", session, "-")
+	if err != nil || stdout != "ok\n" || !strings.Contains(transcript(), `"/compact"`) {
+		t.Fatalf("piped /compact with -: %q %v", stdout, err)
+	}
+
 	stdout, _, err = runJad(t, "", "run", "--session", session, "--no-commands", "/reset")
 	if err != nil || stdout != "ok\n" || !strings.Contains(transcript(), `"/reset"`) {
 		t.Fatalf("--no-commands: %q %v", stdout, err)
@@ -248,5 +259,25 @@ func TestRunResourceCommandAttachesAnImage(t *testing.T) {
 	if user.Role != "user" || len(user.Content) != 2 || user.Content[0].Text != "describe it" ||
 		user.Content[1].Type != "input_image" || !strings.HasPrefix(user.Content[1].ImageURL, "data:image/png;base64,") {
 		t.Fatalf("the message is not the text and the image: %+v", user)
+	}
+}
+
+// Only a terminal counts as typed input; a pipe, a file and any other reader are data.
+func TestIsTerminalRefusesPipesFilesAndReaders(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	file, err := os.CreateTemp(t.TempDir(), "prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	for name, input := range map[string]io.Reader{"pipe": reader, "file": file, "reader": strings.NewReader("/reset")} {
+		if isTerminal(input) {
+			t.Errorf("%s counts as a terminal", name)
+		}
 	}
 }

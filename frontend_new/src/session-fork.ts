@@ -5,7 +5,12 @@
  * @position Shared by the transcript's fork button and its tests
  */
 
-/** The longest session id the server accepts (remote.SessionPattern: 1 + 127 characters). */
+import appConfig from './config.json' with {type: 'json'};
+
+/**
+ * The longest session id the server accepts (remote.SessionPattern: 1 + 127 characters). It
+ * is the identifier format, not a limit the server lets one configure, so it stays here.
+ */
 const MAX_SESSION_ID = 128;
 
 /**
@@ -67,8 +72,11 @@ export function isForkableProfile(profile: string | undefined): boolean {
   return slash > 0 && slash < profile.length - 1;
 }
 
-/** The longest profile name the server accepts for a fork. */
-const MAX_PROFILE_NAME = 200;
+/**
+ * The longest profile name the server accepts for a fork: config.json's
+ * fork_profile_name_max, which must equal the server's server.fork_name_max_bytes.
+ */
+const MAX_PROFILE_NAME: number = appConfig.fork_profile_name_max;
 
 /** A catalog identifier: letters, digits, '-', '_' and '.', starting with a letter or digit. */
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

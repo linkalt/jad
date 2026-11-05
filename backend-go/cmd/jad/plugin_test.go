@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -113,5 +114,57 @@ func TestPluginCommandInstallsFromAGitURL(t *testing.T) {
 	out.Reset()
 	if err := dispatchCommand([]string{"plugin", "list"}, commandStreams{stdout: &out, stderr: &out}); err != nil || !strings.Contains(out.String(), "(from "+url+"#v1.2.0 acme @ ") {
 		t.Fatalf("list = %q, %v", out.String(), err)
+	}
+}
+
+// Without --timeout the clone is bounded by cli.plugin_install_timeout_ms of the root
+// setting; --timeout still overrides it.
+func TestPluginInstallTimeoutComesFromTheRootSetting(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	fixture := useFixture(t, layouttest.Spec{})
+	setting, err := os.ReadFile(fixture.RootSetting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(setting, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["cli"] = map[string]any{"plugin_install_timeout_ms": 1}
+	if setting, err = json.Marshal(fields); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.RootSetting, setting, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	for path, contents := range map[string]string{
+		"plugin.json":       `{"schema_version":1,"name":"acme","version":"1.0.0"}`,
+		"tools/review.json": `{"schema_version":1,"native":{"glob":{}}}`,
+	} {
+		full := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "one"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	url := "file://" + filepath.ToSlash(repo)
+	var out bytes.Buffer
+	err = dispatchCommand([]string{"plugin", "install", url}, commandStreams{stdout: &out, stderr: &out})
+	if err == nil || !strings.Contains(err.Error(), "did not finish within 1ms") {
+		t.Fatalf("install with the 1ms setting = %q, %v", out.String(), err)
+	}
+	out.Reset()
+	if err := dispatchCommand([]string{"plugin", "install", "--timeout", "1m", url}, commandStreams{stdout: &out, stderr: &out}); err != nil || !strings.HasPrefix(out.String(), "Installed acme 1.0.0") {
+		t.Fatalf("install with --timeout = %q, %v", out.String(), err)
 	}
 }

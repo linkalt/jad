@@ -52,17 +52,15 @@ const (
 	ForkStateNone = "none"
 )
 
-// maxForkTitleBytes bounds the display name of a forked profile.
-const maxForkTitleBytes = 200
-
-// invalidProfileNameMessage checks the name of a new profile file: the catalog's identifier
-// rule (letters, digits, '-', '_' and '.', starting with a letter or digit).
-func invalidProfileNameMessage(name string) string {
+// invalidProfileNameMessage checks the name of a new profile file: at most maxBytes
+// (server.fork_name_max_bytes) and the catalog's identifier rule (letters, digits, '-', '_'
+// and '.', starting with a letter or digit).
+func invalidProfileNameMessage(name string, maxBytes int) string {
 	if name == "" {
 		return "must name the new profile"
 	}
-	if len(name) > maxForkTitleBytes {
-		return fmt.Sprintf("must be at most %d bytes", maxForkTitleBytes)
+	if len(name) > maxBytes {
+		return fmt.Sprintf("must be at most %d bytes (server.fork_name_max_bytes)", maxBytes)
 	}
 	for index, character := range name {
 		switch {
@@ -96,7 +94,7 @@ func (h *Handler) handleSessionFork(w http.ResponseWriter, r *http.Request, refe
 		writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "request body could not be read"})
 		return
 	}
-	request, err := parseForkRequest(body)
+	request, err := parseForkRequest(body, h.forkNameMaxBytes)
 	if err != nil {
 		writeJSONError(w, err)
 		return
@@ -110,8 +108,9 @@ func (h *Handler) handleSessionFork(w http.ResponseWriter, r *http.Request, refe
 }
 
 // parseForkRequest reads {"session" or "profile", "title"?, "state"?, "message_id"? or
-// "cursor"?, "keep_turn"?}; keep_turn defaults to true and state to copy.
-func parseForkRequest(body []byte) (ForkRequest, error) {
+// "cursor"?, "keep_turn"?}; keep_turn defaults to true and state to copy. A new profile's
+// name and title are at most maxNameBytes.
+func parseForkRequest(body []byte, maxNameBytes int) (ForkRequest, error) {
 	refuse := func(message string) error { return &StatusError{Code: http.StatusBadRequest, Message: message} }
 	var raw struct {
 		Session   *string `json:"session"`
@@ -133,7 +132,7 @@ func parseForkRequest(body []byte) (ForkRequest, error) {
 		return ForkRequest{}, refuse("give session or profile, not both")
 	case raw.Profile != nil:
 		name := *raw.Profile
-		if message := invalidProfileNameMessage(name); message != "" {
+		if message := invalidProfileNameMessage(name, maxNameBytes); message != "" {
 			return ForkRequest{}, refuse("profile: " + message)
 		}
 		request.Profile = name
@@ -150,8 +149,8 @@ func parseForkRequest(body []byte) (ForkRequest, error) {
 			return ForkRequest{}, refuse("title names a new profile; it needs profile")
 		}
 		title := strings.TrimSpace(*raw.Title)
-		if title == "" || len(title) > maxForkTitleBytes || strings.ContainsAny(title, "\r\n") {
-			return ForkRequest{}, refuse(fmt.Sprintf("title must be one line of 1 to %d bytes", maxForkTitleBytes))
+		if title == "" || len(title) > maxNameBytes || strings.ContainsAny(title, "\r\n") {
+			return ForkRequest{}, refuse(fmt.Sprintf("title must be one line of 1 to %d bytes (server.fork_name_max_bytes)", maxNameBytes))
 		}
 		request.Title = title
 	}

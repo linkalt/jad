@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"jad/backend-go/internal/contentlibrary"
+	"jad/backend-go/internal/logging"
 )
 
 func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segments []string) {
@@ -29,6 +31,9 @@ func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segm
 		if err != nil {
 			writeRootLibraryError(w, err)
 			return
+		}
+		if catalog.CommandsError != "" {
+			logging.Or(h.logger).Warn("library commands could not be listed", slog.String("error", catalog.CommandsError))
 		}
 		writeJSON(w, http.StatusOK, catalog)
 	case 4:

@@ -108,15 +108,50 @@ func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 	}
 }
 
-func TestCommandFolderThatIsAFileIsAConfigError(t *testing.T) {
+// A command folder that is a file is reported in commands_error and costs only the
+// commands: the prompts beside it are still listed.
+func TestCommandFolderThatIsAFileIsReportedWithoutFailingTheList(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["file"]}}`)
+	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["file"],"prompt_dirs":["prompts"]}}`)
+	writeLibraryTestFile(t, filepath.Join(root, "prompts", "hello.md"), "Say hello.")
 	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "for command is not a directory") {
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	if err != nil {
 		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(catalog.CommandsError, "for command is not a directory") || catalog.Commands == nil || len(catalog.Commands) != 0 {
+		t.Fatalf("commands = %+v, error %q", catalog.Commands, catalog.CommandsError)
+	}
+	if len(catalog.Prompts) != 1 || catalog.Prompts[0].Name != "hello" {
+		t.Fatalf("prompts = %+v", catalog.Prompts)
+	}
+}
+
+// The default command folder, .agent/commands, being a file is the same case.
+func TestDefaultCommandFolderThatIsAFileKeepsTheOtherKinds(t *testing.T) {
+	root := t.TempDir()
+	writeLibraryTestFile(t, filepath.Join(root, ".agent", "prompts", "hello.md"), "Say hello.")
+	writeLibraryTestFile(t, filepath.Join(root, ".agent", "commands"), "not a folder")
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	if err != nil || len(catalog.Prompts) != 1 || catalog.CommandsError == "" {
+		t.Fatalf("catalog = %+v, err %v", catalog, err)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if !strings.Contains(string(encoded), `"commands":[],"commands_error":`) {
+		t.Fatalf("json = %s", encoded)
+	}
+}
+
+// Without a problem there is no commands_error in the JSON.
+func TestCatalogWithoutCommandProblemHasNoCommandsError(t *testing.T) {
+	catalog, err := New(Options{WorkingDir: t.TempDir(), Environment: map[string]string{}}).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, _ := json.Marshal(catalog); strings.Contains(string(encoded), "commands_error") {
+		t.Fatalf("json = %s", encoded)
 	}
 }
 

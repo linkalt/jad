@@ -99,6 +99,13 @@ func TestTriggerSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"signature_header":"a b"}`, false},
 		{`{"other":1}`, false},
 		{`{"entries":{"ci":{"session":"s","prompt":"p","webhook":{"secret_env":"A"},"timezone":"UTC"}}}`, false},
+		{`{"replay_window_ms":0}`, true},
+		{`{"replay_window_ms":86400000,"timestamp_header":"X-Time"}`, true},
+		{`{"replay_window_ms":-1}`, false},
+		{`{"replay_window_ms":86400001}`, false},
+		{`{"timestamp_header":"X-Time"}`, false},
+		{`{"replay_window_ms":1,"timestamp_header":"X Time"}`, false},
+		{`{"replay_window_ms":1,"timestamp_header":""}`, false},
 	} {
 		if got := schemaAccepts(t, schema, test.raw); got != test.accept {
 			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
@@ -212,6 +219,29 @@ func TestTriggerNotifySchemaAgreesWithTheLoader(t *testing.T) {
 		}
 		if _, err := normalizeTriggers(json.RawMessage(test.raw), "s"); (err == nil) != test.accept {
 			t.Errorf("loader accepts %s = %v (err %v), want %v", test.raw, err == nil, err, test.accept)
+		}
+	}
+}
+
+func TestTriggerReplaySettings(t *testing.T) {
+	got, err := normalizeTriggers(json.RawMessage(`{}`), "s")
+	if err != nil || got.ReplayWindowMS != 0 || got.TimestampHeader != "" {
+		t.Fatalf("defaults = %+v, %v", got, err)
+	}
+	got, err = normalizeTriggers(json.RawMessage(`{"replay_window_ms":300000,"timestamp_header":"x-jad-timestamp"}`), "s")
+	if err != nil || got.ReplayWindowMS != 300000 || got.TimestampHeader != "X-Jad-Timestamp" {
+		t.Fatalf("values = %+v, %v", got, err)
+	}
+	for raw, want := range map[string]string{
+		`{"replay_window_ms":-1}`:                                            "replay_window_ms must be a safe integer between 0 and 86400000",
+		`{"replay_window_ms":86400001}`:                                      "replay_window_ms must be a safe integer between 0 and 86400000",
+		`{"timestamp_header":"X-Time"}`:                                      "timestamp_header needs replay_window_ms",
+		`{"replay_window_ms":1000,"timestamp_header":"X Time"}`:              "timestamp_header must be an HTTP header name",
+		`{"replay_window_ms":1000,"timestamp_header":""}`:                    "timestamp_header must be a non-empty string",
+		`{"replay_window_ms":1000,"timestamp_header":"x-hub-signature-256"}`: "timestamp_header must differ from signature_header",
+	} {
+		if _, err := normalizeTriggers(json.RawMessage(raw), "s"); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v, want %q", raw, err, want)
 		}
 	}
 }

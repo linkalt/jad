@@ -71,6 +71,9 @@ type Config struct {
 	// SteerMaxPending is the most steering messages one run holds (server.steer_max_pending);
 	// zero turns POST /run/steer off.
 	SteerMaxPending int
+	// ForkNameMaxBytes is the longest name and display name a fork into a new profile may
+	// give it (server.fork_name_max_bytes); zero uses serverconfig.DefaultForkNameMaxBytes.
+	ForkNameMaxBytes int
 	// MaxRequestImages and MaxRequestImageBytes bound the images a run request may
 	// carry (server.max_request_images, server.max_request_image_bytes). Zero images
 	// turns image input off.
@@ -142,6 +145,7 @@ type Handler struct {
 	runContentFlushInterval   time.Duration
 	runs                      *runRegistry
 	gate                      *sessiongate.Gate
+	forkNameMaxBytes          int
 	startTurns                turnQueue
 }
 
@@ -189,6 +193,12 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	}
 	if config.SteerMaxPending < 0 || config.SteerMaxPending > serverconfig.MaxSteerMaxPending {
 		return nil, fmt.Errorf("steer max pending must be between 0 and %d", serverconfig.MaxSteerMaxPending)
+	}
+	if config.ForkNameMaxBytes < 0 || config.ForkNameMaxBytes > serverconfig.MaxForkNameMaxBytes {
+		return nil, fmt.Errorf("fork name max bytes must be between 1 and %d", serverconfig.MaxForkNameMaxBytes)
+	}
+	if config.ForkNameMaxBytes == 0 {
+		config.ForkNameMaxBytes = serverconfig.DefaultForkNameMaxBytes
 	}
 	if config.MaxPageTurns < 1 {
 		return nil, errors.New("maximum page turns must be positive")
@@ -289,6 +299,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		runContentFlushInterval:   config.RunContentFlushInterval,
 		runs:                      newRunRegistry(config.RunStateRetention, config.SSEMaxBufferedBytes, config.MaxConcurrentRuns).withSteerLimit(config.SteerMaxPending),
 		gate:                      gate,
+		forkNameMaxBytes:          config.ForkNameMaxBytes,
 	}, nil
 }
 

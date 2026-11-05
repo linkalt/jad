@@ -25,6 +25,8 @@ const (
 	maxTriggerPromptBytes               = 65536
 	defaultTriggerSignatureHeader       = "X-Hub-Signature-256"
 	defaultTriggerTimezone              = "Local"
+	// maxTriggerReplayWindowMS bounds server.triggers.replay_window_ms: one day.
+	maxTriggerReplayWindowMS int64 = 24 * 60 * 60 * 1000
 
 	defaultTriggerNotifyTimeoutMS    int64 = 10_000
 	maxTriggerNotifyTimeoutMS        int64 = 120_000
@@ -59,7 +61,7 @@ var triggerNotifyKeys = []string{"url", "url_env", "format", "template", "header
 // triggerHeaderPattern is an HTTP header name (an RFC 9110 token).
 var triggerHeaderPattern = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
-var triggerKeys = []string{"enabled", "max_payload_bytes", "history_limit", "signature_header", "notify", "entries"}
+var triggerKeys = []string{"enabled", "max_payload_bytes", "history_limit", "signature_header", "replay_window_ms", "timestamp_header", "notify", "entries"}
 
 var triggerEntryKeys = []string{"enabled", "session", "profile", "model", "prompt", "schedule", "timezone", "webhook", "timeout_ms", "notify"}
 
@@ -77,6 +79,14 @@ type TriggerSettings struct {
 	HistoryLimit int64
 	// SignatureHeader carries the HMAC-SHA256 of the body, hex, with or without "sha256=".
 	SignatureHeader string
+	// ReplayWindowMS, when above zero, refuses a webhook whose signature was already
+	// accepted in that many milliseconds (409). Zero, the default, keeps no record.
+	ReplayWindowMS int64
+	// TimestampHeader, when set, is the header that carries the request's time in Unix
+	// seconds. The signature then covers "<timestamp>.<body>", and a request whose time is
+	// more than ReplayWindowMS from the server's is refused (401). It needs
+	// ReplayWindowMS. Empty, the default, signs the body alone.
+	TimestampHeader string
 	// Notifiers are server.triggers.notify, sorted by name.
 	Notifiers []TriggerNotifier
 	// Entries are sorted by name.
@@ -175,6 +185,24 @@ func normalizeTriggers(raw json.RawMessage, path string) (TriggerSettings, error
 		return TriggerSettings{}, fmt.Errorf("%s: %s.signature_header must be an HTTP header name", path, section)
 	}
 	settings.SignatureHeader = textproto.CanonicalMIMEHeaderKey(settings.SignatureHeader)
+	if settings.ReplayWindowMS, err = configuredInteger(fields, "replay_window_ms", 0, 0, maxTriggerReplayWindowMS, path, section); err != nil {
+		return TriggerSettings{}, err
+	}
+	if settings.TimestampHeader, err = bashString(fields, "timestamp_header", "", path+": "+section, false); err != nil {
+		return TriggerSettings{}, err
+	}
+	if settings.TimestampHeader != "" {
+		if !triggerHeaderPattern.MatchString(settings.TimestampHeader) {
+			return TriggerSettings{}, fmt.Errorf("%s: %s.timestamp_header must be an HTTP header name", path, section)
+		}
+		settings.TimestampHeader = textproto.CanonicalMIMEHeaderKey(settings.TimestampHeader)
+		if settings.TimestampHeader == settings.SignatureHeader {
+			return TriggerSettings{}, fmt.Errorf("%s: %s.timestamp_header must differ from signature_header", path, section)
+		}
+		if settings.ReplayWindowMS == 0 {
+			return TriggerSettings{}, fmt.Errorf("%s: %s.timestamp_header needs replay_window_ms, the age a timestamp may have", path, section)
+		}
+	}
 	if settings.Notifiers, err = normalizeTriggerNotifiers(fields["notify"], path); err != nil {
 		return TriggerSettings{}, err
 	}

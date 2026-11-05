@@ -84,6 +84,9 @@ type Catalog struct {
 	// Commands are the custom slash commands, which the "/" menu lists; the library panel
 	// does not.
 	Commands []Summary `json:"commands"`
+	// CommandsError says why the commands could not be listed (a command folder that is a
+	// file, a read error); Commands is then empty and the other kinds are still listed.
+	CommandsError string `json:"commands_error,omitempty"`
 }
 
 // Library reads the configured root-library directories. Configuration and
@@ -115,11 +118,17 @@ func (l *Library) List(ctx context.Context) (Catalog, error) {
 		Templates: []Summary{},
 		Skills:    []Summary{},
 	}
+	// The command folders were added later, with a default other tools may also use, so a
+	// broken one costs only the commands, not the prompts, templates and skills beside them.
 	commands, err := listCommands(ctx, directories.commands, directories.maxAssetBytes)
-	if err != nil {
-		return Catalog{}, err
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return Catalog{}, ctx.Err()
+	case err != nil:
+		catalog.Commands, catalog.CommandsError = []Summary{}, err.Error()
+	default:
+		catalog.Commands = commands
 	}
-	catalog.Commands = commands
 	for _, entry := range []struct {
 		kind Kind
 		dirs []string

@@ -37,6 +37,14 @@ const (
 	MaxRunContentIndexSegments        = 65_536
 )
 
+// server.fork_name_max_bytes: the longest name (and display name) a fork into a new profile
+// may give it. The name becomes a file name with ".json", so the bound stays under the 255
+// bytes most file systems allow.
+const (
+	DefaultForkNameMaxBytes = 200
+	MaxForkNameMaxBytes     = 250
+)
+
 // server.steer_max_pending: the most steering messages one run holds before it stores
 // them; zero turns POST /run/steer off.
 const (

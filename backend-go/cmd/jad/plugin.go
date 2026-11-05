@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/plugins"
@@ -40,7 +39,8 @@ A git URL (https://, http://, ssh://, git://, file:// or user@host:path) is clon
 temporary folder with git, which never asks for a password here: use an SSH key or a
 credential helper for a private repository. --ref picks a branch, tag or commit (the default
 branch otherwise), --subdir the plugin's folder in the repository, and --timeout bounds the
-clone (default 5m). The plugin list shows the URL without credentials, the ref, the folder
+clone (default: cli.plugin_install_timeout_ms of the root setting, 5m unless set; 0 for no
+limit). The plugin list shows the URL without credentials, the ref, the folder
 and the commit installed.
 `
 
@@ -67,7 +67,7 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	if action == "install" {
 		flags.StringVar(&git.Ref, "ref", "", "branch, tag or commit of a git URL")
 		flags.StringVar(&git.Subdir, "subdir", "", "the plugin's folder in a git repository")
-		flags.DurationVar(&git.Timeout, "timeout", 5*time.Minute, "how long the git clone may take")
+		flags.DurationVar(&git.Timeout, "timeout", 0, "how long the git clone may take (default: cli.plugin_install_timeout_ms)")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -96,9 +96,12 @@ func runPluginCommand(args []string, streams commandStreams) error {
 			return usageError("--timeout cannot be negative\n\n%s", pluginUsage)
 		}
 	}
-	target, err := pluginTarget()
+	target, cli, err := pluginTarget()
 	if err != nil {
 		return &exitError{code: exitFailed, err: err}
+	}
+	if !flagGiven(flags, "timeout") {
+		git.Timeout = cli.PluginInstallTimeout
 	}
 	ctx, stop := interruptContext()
 	defer stop()
@@ -157,11 +160,11 @@ func versionText(version string) string {
 }
 
 // pluginTarget is the catalog layout of the roots and the first skill and command folders
-// of its root setting. The catalogs are global to the root setting, so every root shares them.
-func pluginTarget() (plugins.Target, error) {
+// of its root setting, with the setting's cli section. The catalogs are global to the root setting, so every root shares them.
+func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
-		return plugins.Target{}, fmt.Errorf("load server configuration: %w", err)
+		return plugins.Target{}, sessionfs.CLISettings{}, fmt.Errorf("load server configuration: %w", err)
 	}
 	var root *sessionfs.Root
 	for index := range loaded.Roots {
@@ -171,7 +174,7 @@ func pluginTarget() (plugins.Target, error) {
 		}
 	}
 	if root == nil {
-		return plugins.Target{}, errors.New("no session root uses the catalog layout")
+		return plugins.Target{}, sessionfs.CLISettings{}, errors.New("no session root uses the catalog layout")
 	}
 	target := plugins.Target{
 		Layout:         *root.Layout,
@@ -190,21 +193,29 @@ func pluginTarget() (plugins.Target, error) {
 	}
 	directories, err := contentlibrary.SkillDirectories(root.GlobalJadRoot)
 	if err != nil {
-		return plugins.Target{}, err
+		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}
 	if len(directories) > 0 {
 		target.SkillDir = directories[0]
 	}
 	commandDirectories, err := contentlibrary.CommandDirectories(root.GlobalJadRoot)
 	if err != nil {
-		return plugins.Target{}, err
+		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}
 	if len(commandDirectories) > 0 {
 		target.CommandDir = commandDirectories[0]
 	}
 	target.ReadCommands = contentlibrary.CheckCommands
 	if target.SkillMaxBytes, err = contentlibrary.AssetByteLimit(root.GlobalJadRoot); err != nil {
-		return plugins.Target{}, err
+		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}
-	return target, nil
+	return target, loaded.CLI, nil
+}
+
+// flagGiven reports whether the command line set the flag, so an unset one can take its
+// default from the root setting instead of from the flag declaration.
+func flagGiven(flags *flag.FlagSet, name string) bool {
+	given := false
+	flags.Visit(func(set *flag.Flag) { given = given || set.Name == name })
+	return given
 }

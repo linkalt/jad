@@ -57,6 +57,7 @@
   "mcp_resource_events_poll_ms": 5000,
   "mcp_resource_events_shown_max": 50,
   "fork_session_suffix": "-fork-",
+  "fork_profile_name_max": 200,
   "plan_mode_execute_message": "Carry out the plan.",
   "mention_source": "cwd",
   "defer_offscreen_transcript_rows": true,
