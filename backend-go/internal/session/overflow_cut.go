@@ -114,7 +114,9 @@ func cutToolOutputItem(item []byte, maxBytes int) ([]byte, bool) {
 }
 
 // cutOverflowText keeps the start and the end of text, at most maxBytes of them together,
-// on UTF-8 boundaries, with a note between them of how much was left out and why.
+// on UTF-8 boundaries, with a note between them of how much was left out and why. The note
+// is for the model, which cannot read the transcript, so it says how to get the text again
+// (run the tool narrower) and does not name the setting (the server log does).
 func cutOverflowText(text string, maxBytes int) string {
 	head := maxBytes / 2
 	tail := maxBytes - head
@@ -125,5 +127,5 @@ func cutOverflowText(text string, maxBytes int) string {
 	for start < len(text) && !utf8.RuneStart(text[start]) {
 		start++
 	}
-	return text[:head] + fmt.Sprintf("\n[%d bytes of this tool output were left out of the request: it was over the model's context window (setting: compaction.overflow.tool_output_max_bytes); the transcript keeps them]\n", start-head) + text[start:]
+	return text[:head] + fmt.Sprintf("\n[%d bytes of this tool output were left out of the request: the conversation was over the model's context window. They cannot be read back; if you need them, run the tool again with a narrower request (a filter, a smaller range, fewer lines)]\n", start-head) + text[start:]
 }

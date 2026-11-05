@@ -19,7 +19,15 @@ strip-steer prepares transcripts for a jad build from before the steering marker
 the "__agent_session_input_steer" field of every record that carries it, in place (the file
 keeps its size and every record its offset). A folder is searched for files named
 messages.jsonl. A transcript in use by a run is left alone and reported. Stop the server
-before you run it; a run started afterwards marks new records again.`
+before you run it; a run started afterwards marks new records again.
+
+It cannot be undone. The marker tells the current build that a steering or stop hook message
+continues the run's turn; once stripped, each such message starts a turn of its own for this
+build too, so compaction (keep_turns, the overflow compaction) and the counted turns may cut
+those runs differently. Run it only right before the rollback.
+
+Backups (messages.backup.jsonl) and compaction archives (messages-<time>.jsonl) keep the
+marker: no build sends them to the provider.`
 
 // runTranscriptCommand runs "jad transcript".
 func runTranscriptCommand(args []string, streams commandStreams) error {

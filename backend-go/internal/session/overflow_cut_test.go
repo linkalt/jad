@@ -72,7 +72,7 @@ func TestOverflowInsideTheRunsTurnCutsItsToolOutputs(t *testing.T) {
 		t.Fatal("the first request was already cut")
 	}
 	for index, request := range streamer.requests[2:] {
-		if strings.Contains(request, full) || !strings.Contains(request, "START") || !strings.Contains(request, "END") || !strings.Contains(request, "compaction.overflow.tool_output_max_bytes") {
+		if strings.Contains(request, full) || !strings.Contains(request, "START") || !strings.Contains(request, "END") || !strings.Contains(request, "run the tool again with a narrower request") || strings.Contains(request, "transcript keeps") {
 			t.Fatalf("request %d was not cut: %.400s", index+2, request)
 		}
 	}
@@ -167,7 +167,7 @@ func TestCutToolOutputsLeavesTheHistoryItemsAlone(t *testing.T) {
 		}
 	}
 	var first struct{ Output string }
-	if err := json.Unmarshal(sent[0], &first); err != nil || !utf8.ValidString(first.Output) || len(first.Output) > 300+200 || !strings.HasPrefix(first.Output, "éé") || !strings.HasSuffix(first.Output, "éé") {
+	if err := json.Unmarshal(sent[0], &first); err != nil || !utf8.ValidString(first.Output) || len(first.Output) > 300+300 || !strings.HasPrefix(first.Output, "éé") || !strings.HasSuffix(first.Output, "éé") {
 		t.Fatalf("string output = %q, %v", first.Output, err)
 	}
 	var second struct {
