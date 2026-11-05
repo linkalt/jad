@@ -664,6 +664,9 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	// A server whose file enables sampling is answered with this run's model.
+	mcpManager.SetSampler(r.mcpSampler(config))
+	mcpManager.SetCommandWrapper(mcpSandboxWrapper(config))
 	mcpTools, err := mcpManager.LoadTools(ctx, config.MCPServers, config.WorkingDir)
 	if err != nil {
 		return nil, nil, nil, nil, mapSessionError(err)
@@ -982,6 +985,7 @@ func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
 		return manager, nil
 	}
 	manager := mcpclient.NewManager(r.environment)
+	manager.SetLogger(r.logger)
 	r.mcpManagers[key] = manager
 	return manager, nil
 }

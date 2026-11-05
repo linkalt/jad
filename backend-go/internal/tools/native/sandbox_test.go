@@ -187,7 +187,7 @@ func TestBwrapArgumentsOrderAndPlaceholders(t *testing.T) {
 	}
 	t.Setenv("HOME", "/home/someone")
 	place := sandboxPlace{workspace: root, cwd: root + "/sub"}
-	got := bwrapArguments(sandbox, place, sandboxExpander(place), "bash", "/usr/bin/bash", []string{"-c", "true"})
+	got := bwrapArguments(sandbox, place, sandboxExpander(place), nil, "bash", "/usr/bin/bash", []string{"-c", "true"})
 	want := []string{
 		"--die-with-parent", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
 		"--bind-try", root, root, "--bind-try", root + "/sub/out", root + "/sub/out", "--bind-try", "/home/someone/.cache", "/home/someone/.cache",
@@ -197,7 +197,7 @@ func TestBwrapArgumentsOrderAndPlaceholders(t *testing.T) {
 		t.Fatalf("arguments\n got %q\nwant %q", got, want)
 	}
 	sandbox.Network = true
-	if got := bwrapArguments(sandbox, place, sandboxExpander(place), "bash", "/usr/bin/bash", nil); got[2] != "--share-net" {
+	if got := bwrapArguments(sandbox, place, sandboxExpander(place), nil, "bash", "/usr/bin/bash", nil); got[2] != "--share-net" {
 		t.Fatalf("network true must keep the network: %q", got)
 	}
 }

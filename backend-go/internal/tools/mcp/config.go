@@ -99,6 +99,7 @@ type loadedConfig struct {
 	maxSchemaBytes      int
 	maxDescriptionBytes int
 	resourceEventsMax   int
+	features            clientFeatures
 	fingerprint         string
 }
 
@@ -182,15 +183,20 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 	if err != nil {
 		return loadedConfig{}, err
 	}
+	features, err := normalizeClientFeatures(fields, path)
+	if err != nil {
+		return loadedConfig{}, err
+	}
 	fingerprintBytes, err := json.Marshal(struct {
-		Transport           any   `json:"transport"`
-		TimeoutMS           int64 `json:"timeout_ms"`
-		MaxResultBytes      int   `json:"max_result_bytes"`
-		MaxTools            int   `json:"max_tools"`
-		MaxSchemaBytes      int   `json:"max_schema_bytes"`
-		MaxDescriptionBytes int   `json:"max_description_bytes"`
-		ResourceEventsMax   int   `json:"resource_events_max"`
-	}{Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes), MaxTools: int(maxTools), MaxSchemaBytes: int(maxSchemaBytes), MaxDescriptionBytes: int(maxDescriptionBytes), ResourceEventsMax: int(resourceEventsMax)})
+		Features            clientFeatures `json:"features"`
+		Transport           any            `json:"transport"`
+		TimeoutMS           int64          `json:"timeout_ms"`
+		MaxResultBytes      int            `json:"max_result_bytes"`
+		MaxTools            int            `json:"max_tools"`
+		MaxSchemaBytes      int            `json:"max_schema_bytes"`
+		MaxDescriptionBytes int            `json:"max_description_bytes"`
+		ResourceEventsMax   int            `json:"resource_events_max"`
+	}{Features: features, Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes), MaxTools: int(maxTools), MaxSchemaBytes: int(maxSchemaBytes), MaxDescriptionBytes: int(maxDescriptionBytes), ResourceEventsMax: int(resourceEventsMax)})
 	if err != nil {
 		return loadedConfig{}, configError(path, "could not fingerprint MCP server configuration")
 	}
@@ -203,6 +209,7 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 		maxSchemaBytes:      int(maxSchemaBytes),
 		maxDescriptionBytes: int(maxDescriptionBytes),
 		resourceEventsMax:   int(resourceEventsMax),
+		features:            features,
 		fingerprint:         hex.EncodeToString(digest[:]),
 	}, nil
 }

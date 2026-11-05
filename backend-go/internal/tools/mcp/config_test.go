@@ -181,7 +181,7 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 			Type    string  `json:"type"`
 			Minimum float64 `json:"minimum"`
 			Maximum float64 `json:"maximum"`
-			Default float64 `json:"default"`
+			Default any     `json:"default"`
 		} `json:"properties"`
 	}
 	if err := json.Unmarshal(data, &schema); err != nil {
@@ -198,6 +198,7 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 		{key: "max_schema_bytes", minimum: minMaxSchemaBytes, maximum: maxMaxSchemaBytes, defaultValue: defaultMaxSchemaBytes},
 		{key: "max_description_bytes", minimum: minMaxDescriptionBytes, maximum: maxMaxDescriptionBytes, defaultValue: defaultMaxDescriptionBytes},
 		{key: "resource_events_max", minimum: minResourceEventsMax, maximum: maxResourceEventsMax, defaultValue: defaultResourceEventsMax},
+		{key: "server_log_max_bytes", minimum: 64, maximum: maxServerLogMaxBytes, defaultValue: defaultServerLogMaxBytes},
 	}
 	for _, limit := range limits {
 		property, exists := schema.Properties[limit.key]
@@ -205,12 +206,16 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 			t.Errorf("mcp-server.schema.json does not document %s", limit.key)
 			continue
 		}
-		if property.Type != "integer" || property.Minimum != float64(limit.minimum) || property.Maximum != float64(limit.maximum) || property.Default != float64(limit.defaultValue) {
+		if property.Type != "integer" || property.Minimum != float64(limit.minimum) || property.Maximum != float64(limit.maximum) || property.Default != any(float64(limit.defaultValue)) {
 			t.Errorf("%s = type %q min %v max %v default %v; the loader uses min %d max %d default %d",
 				limit.key, property.Type, property.Minimum, property.Maximum, property.Default, limit.minimum, limit.maximum, limit.defaultValue)
 		}
 	}
-	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes", "resource_events_max"}
+	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes", "resource_events_max",
+		"roots", "server_log", "server_log_max_bytes", "sampling", "elicitation"}
+	if schema.Properties["roots"].Default != RootsWorkspace || schema.Properties["server_log"].Default != ServerLogOff {
+		t.Errorf("roots default %v, server_log default %v", schema.Properties["roots"].Default, schema.Properties["server_log"].Default)
+	}
 	keys := make([]string, 0, len(schema.Properties))
 	for key := range schema.Properties {
 		keys = append(keys, key)

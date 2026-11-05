@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,13 @@ type connection struct {
 	// stop the rest of its process group after the SDK stopped the direct child.
 	stdioCommand *exec.Cmd
 	closed       bool
+	// state is shared with the client's handlers: the call running now and the sampling count.
+	state *clientState
+	// wrapKey is the command wrapper the stdio server was started through.
+	wrapKey string
+	// logLevel is server_log when on: sent with each call, which is how protocol
+	// 2026-07-28 asks for log messages (older ones take logging/setLevel once).
+	logLevel string
 }
 
 // listTools follows the tools/list cursors until the server reports the end of the list,
@@ -134,6 +142,19 @@ func (c *connection) callTool(ctx context.Context, params *mcpSDK.CallToolParams
 	defer cancel()
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
+	// callMu makes this the connection's only call, so its user is the one to ask.
+	if c.state != nil {
+		c.state.setCall(activeCallFrom(ctx))
+		defer c.state.setCall(nil)
+	}
+	if c.logLevel != "" {
+		meta := params.GetMeta()
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta[mcpSDK.MetaKeyLogLevel] = c.logLevel
+		params.SetMeta(meta)
+	}
 	pending := c.structuredContentCapture.begin()
 	result, err := c.session.CallTool(callCtx, params)
 	structuredContent := c.structuredContentCapture.finish(pending)
@@ -178,6 +199,26 @@ type Manager struct {
 	connects       sync.WaitGroup
 	// events keeps the servers' resource change notifications and subscriptions.
 	events resourceEvents
+	// sampler answers the servers' sampling requests and logger takes their server_log
+	// messages; both are set by the owner and guarded by mu.
+	sampler Sampler
+	logger  *slog.Logger
+	// wrapCommand, when set, starts each stdio server through it (a sandbox); wrapKey
+	// names the wrapper, so a changed one reconnects the servers. Guarded by mu.
+	wrapCommand CommandWrapper
+	wrapKey     string
+}
+
+// CommandWrapper returns how to start a stdio server's program with args from cwd: the
+// file to run, its argv[0] and its arguments.
+type CommandWrapper func(program string, args []string, cwd string) (string, string, []string, error)
+
+// SetCommandWrapper starts the stdio servers through wrap (nil: directly). key names the
+// wrapper; a server connected under another key is connected again.
+func (m *Manager) SetCommandWrapper(key string, wrap CommandWrapper) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wrapCommand, m.wrapKey = wrap, key
 }
 
 // NewManager creates a session-scoped MCP manager using the provided process
@@ -370,7 +411,9 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 				InputSchema: append(json.RawMessage(nil), schema...),
 			},
 			Validator: validator,
-			ExecuteOutput: func(ctx context.Context, arguments map[string]any, _ tools.ExecutionContext) (json.RawMessage, error) {
+			ExecuteOutput: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
+				// A server's elicitation request during the call asks this call's user.
+				ctx = withActiveCall(ctx, &activeCall{request: execution.RequestInteraction, identity: tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}})
 				return executeTool(ctx, current, serverID, remoteName, arguments)
 			},
 		})
@@ -398,8 +441,9 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	}
 	m.connects.Add(1)
 	defer m.connects.Done()
+	wrap, wrapKey := m.wrapCommand, m.wrapKey
 	existing := m.connections[server.ID]
-	if existing != nil && existing.fingerprint == config.fingerprint {
+	if existing != nil && existing.fingerprint == config.fingerprint && (config.transport.stdio == nil || existing.wrapKey == wrapKey) {
 		m.mu.Unlock()
 		return existing, nil
 	}
@@ -421,6 +465,14 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 			return nil, configError(server.ConfigPath, "failed to start MCP server %s (%s)", server.ID, safeErrorType(err))
 		}
 		cmd := exec.Command(command, stdio.args...)
+		if wrap != nil {
+			file, argv0, arguments, err := wrap(command, stdio.args, stdio.cwd)
+			if err != nil {
+				return nil, configError(server.ConfigPath, "failed to start MCP server %s in the sandbox (%s)", server.ID, safeErrorType(err))
+			}
+			cmd = exec.Command(file, arguments...)
+			cmd.Args[0] = argv0
+		}
 		cmd.Dir = stdio.cwd
 		cmd.Env = environmentSlice(stdio.env)
 		configureStdioProcessGroup(cmd)
@@ -447,7 +499,15 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 
 	structuredCapture := newStructuredContentCapture()
 	transport = &structuredContentTransport{inner: transport, capture: structuredCapture}
-	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, m.clientOptions(server.ID, config.resourceEventsMax))
+	state := &clientState{}
+	options := m.clientOptions(server.ID, config.resourceEventsMax)
+	m.featureClientOptions(options, server.ID, config.features, state, config.resourceEventsMax)
+	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, options)
+	if config.features.Roots == RootsWorkspace {
+		if root := workspaceRoot(cwd); root != nil {
+			client.AddRoots(root)
+		}
+	}
 	connectCtx, cancel := context.WithTimeout(ctx, config.timeout)
 	stopConnect := context.AfterFunc(m.connectCtx, cancel)
 	clientSession, err := client.Connect(connectCtx, transport, nil)
@@ -477,6 +537,11 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 		maxDescriptionBytes:      config.maxDescriptionBytes,
 		structuredContentCapture: structuredCapture,
 		stdioCommand:             stdioCommand,
+		state:                    state,
+		wrapKey:                  wrapKey,
+	}
+	if _, logging := serverLogLevels[config.features.ServerLog]; logging {
+		current.logLevel = config.features.ServerLog
 	}
 	m.mu.Lock()
 	if m.closed {
@@ -487,6 +552,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	m.connections[server.ID] = current
 	m.mu.Unlock()
 	m.resubscribe(ctx, current)
+	m.setServerLogLevel(ctx, current, config.features)
 	return current, nil
 }
 

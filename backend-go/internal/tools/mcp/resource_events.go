@@ -180,8 +180,15 @@ func ResourceChangesNote(events []ResourceEvent) string {
 	lines := []string{"MCP resources changed since your last turn (read them again if they matter):"}
 	for _, event := range events {
 		at := event.At.Format(time.RFC3339)
-		if event.Kind == ResourceEventListChanged {
+		switch event.Kind {
+		case ResourceEventListChanged:
 			lines = append(lines, fmt.Sprintf("- server %s: its resource list changed (%s)", event.Server, at))
+			continue
+		case ResourceEventToolsChanged:
+			lines = append(lines, fmt.Sprintf("- server %s: its tool list changed; the tools of this turn are listed anew (%s)", event.Server, at))
+			continue
+		case ResourceEventPromptsChanged:
+			lines = append(lines, fmt.Sprintf("- server %s: its prompt list changed (%s)", event.Server, at))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("- server %s: %s changed (%s)", event.Server, event.URI, at))

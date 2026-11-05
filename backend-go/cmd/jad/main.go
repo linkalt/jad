@@ -21,6 +21,11 @@ import (
 )
 
 func main() {
+	// Inside a sandbox with network_allow, jad's binary is the network forwarder that
+	// starts the child; it reads no configuration.
+	if len(os.Args) > 1 && os.Args[1] == native.SandboxNetForwardCommand {
+		os.Exit(native.RunSandboxNetForward(os.Args[2:], os.Stderr))
+	}
 	if err := run(); err != nil {
 		if errors.Is(err, errCheckFailed) {
 			os.Exit(1)

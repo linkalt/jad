@@ -1,0 +1,429 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	mcpSDK "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"jad/backend-go/internal/tools"
+)
+
+// What the client offers a server beyond tools and resources, set in the server file:
+//
+//	"roots": "workspace" (default) or "none"
+//	"server_log": "off" (default), "error", "warning", "info" or "debug"
+//	"sampling": {"enabled": false, "max_output_tokens": 1024, "max_requests": 20}
+//	"elicitation": {"enabled": false, "timeout_ms": 300000, "max_draft_bytes": 65536, "max_draft_depth": 8}
+const (
+	RootsWorkspace = "workspace"
+	RootsNone      = "none"
+
+	ServerLogOff = "off"
+
+	defaultSamplingMaxOutputTokens = 1024
+	maxSamplingMaxOutputTokens     = 128_000
+	defaultSamplingMaxRequests     = 20
+	maxSamplingMaxRequests         = 10_000
+	defaultElicitationTimeoutMS    = 300_000
+	maxElicitationTimeoutMS        = 3_600_000
+	defaultElicitationDraftBytes   = 65_536
+	maxElicitationDraftBytes       = 1_048_576
+	defaultElicitationDraftDepth   = 8
+	maxElicitationDraftDepth       = 64
+	// maxElicitationTitleBytes cuts the first line of the server's message shown as the
+	// question's title.
+	maxElicitationTitleBytes = 120
+	// maxServerLogBytes cuts one log message a server sends before it reaches the log.
+	defaultServerLogMaxBytes = 2048
+	maxServerLogMaxBytes     = 65_536
+
+	// ResourceEventToolsChanged and ResourceEventPromptsChanged are a server whose tool or
+	// prompt list changed; the next run lists the tools again.
+	ResourceEventToolsChanged   = "tools_changed"
+	ResourceEventPromptsChanged = "prompts_changed"
+)
+
+var serverLogLevels = map[string]slog.Level{"error": slog.LevelError, "warning": slog.LevelWarn, "info": slog.LevelInfo, "debug": slog.LevelDebug}
+
+// clientFeatures are the client capabilities of one server.
+type clientFeatures struct {
+	Roots             string `json:"roots"`
+	ServerLog         string `json:"server_log"`
+	ServerLogMaxBytes int    `json:"server_log_max_bytes"`
+	Sampling          bool   `json:"sampling"`
+	SamplingMaxTokens int    `json:"sampling_max_output_tokens"`
+	SamplingMaxCalls  int    `json:"sampling_max_requests"`
+	Elicitation       bool   `json:"elicitation"`
+	ElicitTimeoutMS   int64  `json:"elicitation_timeout_ms"`
+	ElicitDraftBytes  int64  `json:"elicitation_max_draft_bytes"`
+	ElicitDraftDepth  int64  `json:"elicitation_max_draft_depth"`
+}
+
+func normalizeClientFeatures(fields map[string]json.RawMessage, path string) (clientFeatures, error) {
+	features := clientFeatures{Roots: RootsWorkspace, ServerLog: ServerLogOff, ServerLogMaxBytes: defaultServerLogMaxBytes, SamplingMaxTokens: defaultSamplingMaxOutputTokens, SamplingMaxCalls: defaultSamplingMaxRequests,
+		ElicitTimeoutMS: defaultElicitationTimeoutMS, ElicitDraftBytes: defaultElicitationDraftBytes, ElicitDraftDepth: defaultElicitationDraftDepth}
+	if raw, exists := fields["roots"]; exists {
+		if json.Unmarshal(raw, &features.Roots) != nil || (features.Roots != RootsWorkspace && features.Roots != RootsNone) {
+			return clientFeatures{}, configError(path, "roots must be \"workspace\" or \"none\"")
+		}
+	}
+	if raw, exists := fields["server_log"]; exists {
+		known := json.Unmarshal(raw, &features.ServerLog) == nil
+		if known {
+			_, known = serverLogLevels[features.ServerLog]
+			known = known || features.ServerLog == ServerLogOff
+		}
+		if !known {
+			return clientFeatures{}, configError(path, "server_log must be \"off\", \"error\", \"warning\", \"info\" or \"debug\"")
+		}
+	}
+	maxBytes, err := configuredInteger(fields["server_log_max_bytes"], defaultServerLogMaxBytes, 64, maxServerLogMaxBytes, path, "server_log_max_bytes")
+	if err != nil {
+		return clientFeatures{}, err
+	}
+	features.ServerLogMaxBytes = int(maxBytes)
+	if raw, exists := fields["sampling"]; exists {
+		sampling, err := objectFields(raw, path, "sampling must be an object")
+		if err != nil {
+			return clientFeatures{}, err
+		}
+		for key := range sampling {
+			if key != "enabled" && key != "max_output_tokens" && key != "max_requests" {
+				return clientFeatures{}, configError(path, "sampling.%s is not supported", key)
+			}
+		}
+		if raw, exists := sampling["enabled"]; exists && json.Unmarshal(raw, &features.Sampling) != nil {
+			return clientFeatures{}, configError(path, "sampling.enabled must be a boolean")
+		}
+		tokens, err := configuredInteger(sampling["max_output_tokens"], defaultSamplingMaxOutputTokens, 1, maxSamplingMaxOutputTokens, path, "sampling.max_output_tokens")
+		if err != nil {
+			return clientFeatures{}, err
+		}
+		calls, err := configuredInteger(sampling["max_requests"], defaultSamplingMaxRequests, 1, maxSamplingMaxRequests, path, "sampling.max_requests")
+		if err != nil {
+			return clientFeatures{}, err
+		}
+		features.SamplingMaxTokens, features.SamplingMaxCalls = int(tokens), int(calls)
+	}
+	if raw, exists := fields["elicitation"]; exists {
+		elicitation, err := objectFields(raw, path, "elicitation must be an object")
+		if err != nil {
+			return clientFeatures{}, err
+		}
+		for key := range elicitation {
+			if key != "enabled" && key != "timeout_ms" && key != "max_draft_bytes" && key != "max_draft_depth" {
+				return clientFeatures{}, configError(path, "elicitation.%s is not supported", key)
+			}
+		}
+		if raw, exists := elicitation["enabled"]; exists && json.Unmarshal(raw, &features.Elicitation) != nil {
+			return clientFeatures{}, configError(path, "elicitation.enabled must be a boolean")
+		}
+		if features.ElicitTimeoutMS, err = configuredInteger(elicitation["timeout_ms"], defaultElicitationTimeoutMS, 1000, maxElicitationTimeoutMS, path, "elicitation.timeout_ms"); err != nil {
+			return clientFeatures{}, err
+		}
+		if features.ElicitDraftBytes, err = configuredInteger(elicitation["max_draft_bytes"], defaultElicitationDraftBytes, 64, maxElicitationDraftBytes, path, "elicitation.max_draft_bytes"); err != nil {
+			return clientFeatures{}, err
+		}
+		if features.ElicitDraftDepth, err = configuredInteger(elicitation["max_draft_depth"], defaultElicitationDraftDepth, 2, maxElicitationDraftDepth, path, "elicitation.max_draft_depth"); err != nil {
+			return clientFeatures{}, err
+		}
+	}
+	return features, nil
+}
+
+// SamplingMessage is one message of a server's sampling request, as text.
+type SamplingMessage struct {
+	Role string
+	Text string
+}
+
+// SamplingRequest is what a server asked the session's model (sampling/createMessage).
+type SamplingRequest struct {
+	Server          string
+	SystemPrompt    string
+	Messages        []SamplingMessage
+	MaxOutputTokens int
+}
+
+// Sampler answers a sampling request with the session's model: the text and the model
+// that wrote it.
+type Sampler func(ctx context.Context, request SamplingRequest) (text, model string, err error)
+
+// SetSampler sets the function that answers the sampling requests of servers whose file
+// enables sampling; without one, such a request is refused.
+func (m *Manager) SetSampler(sampler Sampler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sampler = sampler
+}
+
+// SetLogger sets the log that server_log messages go to.
+func (m *Manager) SetLogger(logger *slog.Logger) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logger = logger
+}
+
+func (m *Manager) currentSampler() Sampler {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sampler
+}
+
+func (m *Manager) currentLogger() *slog.Logger {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.logger
+}
+
+// activeCall is the tool call a connection is running; a server's elicitation request
+// during it asks that call's user.
+type activeCall struct {
+	request  tools.InteractionHandler
+	identity tools.InteractionIdentity
+}
+
+// clientState is shared by a connection and the handlers of its client, which exist
+// before the connection does.
+type clientState struct {
+	mu        sync.Mutex
+	call      *activeCall
+	samplings int
+}
+
+func (s *clientState) setCall(call *activeCall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.call = call
+}
+
+func (s *clientState) currentCall() *activeCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.call
+}
+
+// workspaceRoot is the file URI of the session's working directory.
+func workspaceRoot(cwd string) *mcpSDK.Root {
+	absolute, err := filepath.Abs(cwd)
+	if err != nil || cwd == "" {
+		return nil
+	}
+	location := url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	return &mcpSDK.Root{URI: location.String(), Name: filepath.Base(absolute)}
+}
+
+// featureClientOptions adds the handlers of features to options.
+func (m *Manager) featureClientOptions(options *mcpSDK.ClientOptions, serverID string, features clientFeatures, state *clientState, eventsMax int) {
+	options.ToolListChangedHandler = func(context.Context, *mcpSDK.ToolListChangedRequest) {
+		m.events.record(serverID, ResourceEventToolsChanged, "", eventsMax)
+	}
+	options.PromptListChangedHandler = func(context.Context, *mcpSDK.PromptListChangedRequest) {
+		m.events.record(serverID, ResourceEventPromptsChanged, "", eventsMax)
+	}
+	if features.Roots == RootsNone {
+		// No roots capability at all, rather than an empty list.
+		options.Capabilities = &mcpSDK.ClientCapabilities{}
+	}
+	if level, logging := serverLogLevels[features.ServerLog]; logging {
+		options.LoggingMessageHandler = func(_ context.Context, request *mcpSDK.LoggingMessageRequest) {
+			if request == nil || request.Params == nil {
+				return
+			}
+			messageLevel := mcpLogLevel(string(request.Params.Level))
+			logger := m.currentLogger()
+			if logger == nil || messageLevel < level {
+				return
+			}
+			data, _ := json.Marshal(request.Params.Data)
+			text := cutText(string(data), features.ServerLogMaxBytes)
+			logger.Log(context.Background(), messageLevel, "mcp server log", slog.String("server", serverID), slog.String("logger", request.Params.Logger), slog.String("data", text))
+		}
+		options.ProgressNotificationHandler = func(_ context.Context, request *mcpSDK.ProgressNotificationClientRequest) {
+			logger := m.currentLogger()
+			if logger == nil || request == nil || request.Params == nil || level > slog.LevelDebug {
+				return
+			}
+			message := cutText(request.Params.Message, features.ServerLogMaxBytes)
+			logger.Debug("mcp server progress", slog.String("server", serverID), slog.Float64("progress", request.Params.Progress), slog.Float64("total", request.Params.Total), slog.String("message", message))
+		}
+	}
+	if features.Sampling {
+		options.CreateMessageHandler = func(ctx context.Context, request *mcpSDK.CreateMessageRequest) (*mcpSDK.CreateMessageResult, error) {
+			return m.sample(ctx, serverID, features, state, request)
+		}
+	}
+	if features.Elicitation {
+		options.ElicitationHandler = func(ctx context.Context, request *mcpSDK.ElicitRequest) (*mcpSDK.ElicitResult, error) {
+			return elicit(ctx, serverID, features, state, request)
+		}
+	}
+}
+
+// sample answers one sampling request with the session's model, within the server's
+// request budget per connection and its output token cap. Only text is passed on.
+func (m *Manager) sample(ctx context.Context, serverID string, features clientFeatures, state *clientState, request *mcpSDK.CreateMessageRequest) (*mcpSDK.CreateMessageResult, error) {
+	sampler := m.currentSampler()
+	if sampler == nil {
+		return nil, errors.New("this client cannot sample right now")
+	}
+	if request == nil || request.Params == nil || len(request.Params.Messages) == 0 {
+		return nil, errors.New("sampling/createMessage needs messages")
+	}
+	state.mu.Lock()
+	if state.samplings >= features.SamplingMaxCalls {
+		state.mu.Unlock()
+		return nil, fmt.Errorf("the client allows at most %d sampling requests per connection (sampling.max_requests)", features.SamplingMaxCalls)
+	}
+	state.samplings++
+	state.mu.Unlock()
+	sampling := SamplingRequest{Server: serverID, SystemPrompt: request.Params.SystemPrompt, MaxOutputTokens: features.SamplingMaxTokens}
+	if requested := int(request.Params.MaxTokens); requested > 0 && requested < sampling.MaxOutputTokens {
+		sampling.MaxOutputTokens = requested
+	}
+	for _, message := range request.Params.Messages {
+		if message == nil {
+			continue
+		}
+		text, ok := message.Content.(*mcpSDK.TextContent)
+		if !ok {
+			return nil, errors.New("this client samples text messages only")
+		}
+		sampling.Messages = append(sampling.Messages, SamplingMessage{Role: string(message.Role), Text: text.Text})
+	}
+	answer, model, err := sampler(ctx, sampling)
+	if err != nil {
+		return nil, fmt.Errorf("the client's model could not answer: %w", err)
+	}
+	return &mcpSDK.CreateMessageResult{Content: &mcpSDK.TextContent{Text: answer}, Model: model, Role: "assistant", StopReason: "endTurn"}, nil
+}
+
+// elicitationDraft is what the user sees and edits for a server's elicitation request.
+type elicitationDraft struct {
+	Server  string         `json:"server"`
+	Message string         `json:"message"`
+	Content map[string]any `json:"content"`
+}
+
+// elicit asks the user of the tool call the connection is running. Approving the draft
+// accepts with its content, declining declines, and anything else (no call, no way to
+// ask, a timeout) cancels.
+func elicit(ctx context.Context, serverID string, features clientFeatures, state *clientState, request *mcpSDK.ElicitRequest) (*mcpSDK.ElicitResult, error) {
+	call := state.currentCall()
+	if call == nil || call.request == nil || request == nil || request.Params == nil {
+		return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+	}
+	if request.Params.Mode == "url" {
+		// A URL to open is not something a draft can show safely.
+		return &mcpSDK.ElicitResult{Action: "decline"}, nil
+	}
+	draft := elicitationDraft{Server: serverID, Message: request.Params.Message, Content: schemaDefaults(request.Params.RequestedSchema)}
+	encoded, err := json.Marshal(draft)
+	if err != nil {
+		return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+	}
+	answer, err := call.request(ctx, call.identity, tools.InteractionQuestion{
+		Draft: encoded, Title: "MCP server " + serverID + " asks: " + firstLine(request.Params.Message),
+		TimeoutMS: features.ElicitTimeoutMS, MaxTimeoutMS: features.ElicitTimeoutMS,
+		Limits: tools.InteractionLimits{MaxDraftBytes: features.ElicitDraftBytes, MaxDraftDepth: features.ElicitDraftDepth},
+	})
+	if err != nil {
+		return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+	}
+	if answer.Outcome != tools.InteractionAnswered {
+		return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+	}
+	switch answer.Decision {
+	case tools.InteractionAccept, tools.InteractionUpdate:
+		edited := draft
+		if len(answer.Draft) > 0 {
+			if json.Unmarshal(answer.Draft, &edited) != nil {
+				return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+			}
+		}
+		return &mcpSDK.ElicitResult{Action: "accept", Content: edited.Content}, nil
+	case tools.InteractionDecline:
+		return &mcpSDK.ElicitResult{Action: "decline"}, nil
+	}
+	return &mcpSDK.ElicitResult{Action: "cancel"}, nil
+}
+
+// schemaDefaults is an object with each property of a requested schema set to its
+// default, or to the zero value of its type.
+func schemaDefaults(schema any) map[string]any {
+	content := map[string]any{}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return content
+	}
+	var decoded struct {
+		Properties map[string]struct {
+			Type    string `json:"type"`
+			Default any    `json:"default"`
+		} `json:"properties"`
+	}
+	if json.Unmarshal(encoded, &decoded) != nil {
+		return content
+	}
+	for name, property := range decoded.Properties {
+		switch {
+		case property.Default != nil:
+			content[name] = property.Default
+		case property.Type == "boolean":
+			content[name] = false
+		case property.Type == "number" || property.Type == "integer":
+			content[name] = 0
+		default:
+			content[name] = ""
+		}
+	}
+	return content
+}
+
+func mcpLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info", "notice":
+		return slog.LevelInfo
+	case "warning":
+		return slog.LevelWarn
+	default:
+		return slog.LevelError
+	}
+}
+
+func firstLine(text string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	return cutText(line, maxElicitationTitleBytes)
+}
+
+type activeCallKey struct{}
+
+func withActiveCall(ctx context.Context, call *activeCall) context.Context {
+	return context.WithValue(ctx, activeCallKey{}, call)
+}
+
+func activeCallFrom(ctx context.Context) *activeCall {
+	call, _ := ctx.Value(activeCallKey{}).(*activeCall)
+	return call
+}
+
+// setServerLogLevel asks a server with server_log set to send its log messages from that
+// level up. A server without the logging capability refuses, which changes nothing.
+func (m *Manager) setServerLogLevel(ctx context.Context, current *connection, features clientFeatures) {
+	if _, logging := serverLogLevels[features.ServerLog]; !logging {
+		return
+	}
+	_ = current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
+		return session.SetLoggingLevel(ctx, &mcpSDK.SetLoggingLevelParams{Level: mcpSDK.LoggingLevel(features.ServerLog)})
+	})
+}

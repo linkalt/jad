@@ -12,10 +12,20 @@ import (
 const (
 	SandboxBackendBwrap   = "bwrap"
 	SandboxBackendCommand = "command"
+	// SandboxBackendSeatbelt is macOS's sandbox-exec with a profile jad writes from the same
+	// settings as bwrap's: writes only to the writable paths, the hidden paths unreadable,
+	// and no network unless network is true.
+	SandboxBackendSeatbelt    = "seatbelt"
+	defaultSeatbeltExecutable = "sandbox-exec"
 
 	defaultSandboxBackend    = SandboxBackendBwrap
 	defaultSandboxExecutable = "bwrap"
 	maxSandboxPaths          = 64
+
+	// defaultSandboxProxyPort is the loopback port inside the sandbox where network_allow's
+	// proxy answers; the child's HTTP_PROXY and HTTPS_PROXY name it.
+	defaultSandboxProxyPort int64 = 3128
+	maxSandboxNetworkAllow        = 256
 
 	defaultSandboxCheckTimeoutMs int64 = 10000
 	minSandboxCheckTimeoutMs     int64 = 100
@@ -23,8 +33,9 @@ const (
 )
 
 // SandboxTools are the tools whose child processes a sandbox can wrap. hooks (the commands of
-// the hooks setting) is a choice: the default covers only the tools the model drives.
-var SandboxTools = []string{"bash", "exec", "process", "tool_smith", "hooks"}
+// the hooks setting) and mcp (the session's stdio MCP servers) are choices: the default
+// covers only the tools the model drives.
+var SandboxTools = []string{"bash", "exec", "process", "tool_smith", "hooks", "mcp"}
 
 var defaultSandboxTools = []string{"bash", "exec", "process", "tool_smith"}
 
@@ -37,7 +48,7 @@ var defaultSandboxWritablePaths = []string{"{workspace}", "{git_common_dir}", "{
 // exec and tool_smith still need their files: the project and its git directory are read-only.
 var defaultSandboxPlanWritablePaths = []string{"{tmp}"}
 
-var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "writable_paths", "plan_writable_paths", "hide_paths", "command", "check_timeout_ms"}
+var sandboxKeys = []string{"enabled", "tools", "backend", "executable", "network", "network_allow", "proxy_port", "writable_paths", "plan_writable_paths", "hide_paths", "command", "check_timeout_ms"}
 
 var sandboxPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
@@ -54,10 +65,15 @@ const sandboxPlaceholderList = "{workspace}, {cwd}, {git_common_dir}, {tmp}, {ho
 // HidePaths are empty, every namespace is new and the network is cut unless Network is set.
 // With backend command, Command is put in front of the program and its arguments.
 type SandboxSettings struct {
-	Tools         []string
-	Backend       string
-	Executable    string
-	Network       bool
+	Tools      []string
+	Backend    string
+	Executable string
+	Network    bool
+	// NetworkAllow, when not empty (backend bwrap, network false), lets the children reach
+	// these hosts and their subdomains, and nothing else: the sandbox has no network of its
+	// own, and a forwarder inside it hands loopback ProxyPort to jad's filtering proxy.
+	NetworkAllow  []string
+	ProxyPort     int64
 	WritablePaths []string
 	// PlanWritablePaths replace WritablePaths for the calls of a plan-mode run (backend
 	// bwrap), so a tool kept in plan mode cannot change the project even if it was wrongly
@@ -113,8 +129,11 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 		}
 	}
 	if raw, exists := fields["backend"]; exists && strings.TrimSpace(string(raw)) != "null" {
-		if err := json.Unmarshal(raw, &settings.Backend); err != nil || (settings.Backend != SandboxBackendBwrap && settings.Backend != SandboxBackendCommand) {
-			return nil, configError("%s: %s.backend must be %q or %q", path, section, SandboxBackendBwrap, SandboxBackendCommand)
+		if err := json.Unmarshal(raw, &settings.Backend); err != nil || (settings.Backend != SandboxBackendBwrap && settings.Backend != SandboxBackendCommand && settings.Backend != SandboxBackendSeatbelt) {
+			return nil, configError("%s: %s.backend must be %q, %q or %q", path, section, SandboxBackendBwrap, SandboxBackendSeatbelt, SandboxBackendCommand)
+		}
+		if settings.Backend == SandboxBackendSeatbelt {
+			settings.Executable = defaultSeatbeltExecutable
 		}
 	}
 	if raw, exists := fields["executable"]; exists && strings.TrimSpace(string(raw)) != "null" {
@@ -125,6 +144,23 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 	}
 	if settings.Network, err = bashBool(fields, "network", false, path+": "+section); err != nil {
 		return nil, err
+	}
+	if raw, exists := fields["network_allow"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		var hosts []string
+		if err := json.Unmarshal(raw, &hosts); err != nil || hosts == nil || len(hosts) > maxSandboxNetworkAllow {
+			return nil, configError("%s: %s.network_allow must be a list of at most %d host names", path, section, maxSandboxNetworkAllow)
+		}
+		normalized, ok := NormalizeWebSearchDomains(hosts)
+		if !ok {
+			return nil, configError("%s: %s.network_allow must be a list of at most %d host names", path, section, maxSandboxNetworkAllow)
+		}
+		settings.NetworkAllow = normalized
+	}
+	if settings.ProxyPort, err = configuredInteger(fields, "proxy_port", defaultSandboxProxyPort, 1, 65535, path, section); err != nil {
+		return nil, err
+	}
+	if len(settings.NetworkAllow) > 0 && settings.Network {
+		return nil, configError("%s: %s.network_allow narrows a sandbox without network; with network true every host is reachable, so set one or the other", path, section)
 	}
 	if settings.WritablePaths, err = sandboxPaths(fields, "writable_paths", defaultSandboxWritablePaths, path, section); err != nil {
 		return nil, err
@@ -150,6 +186,9 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 	}
 	switch settings.Backend {
 	case SandboxBackendCommand:
+		if len(settings.NetworkAllow) > 0 {
+			return nil, configError("%s: %s.network_allow needs backend %q, which can cut the network", path, section, SandboxBackendBwrap)
+		}
 		if len(settings.Command) == 0 {
 			return nil, configError("%s: %s.command is required with backend %q", path, section, SandboxBackendCommand)
 		}
@@ -161,12 +200,22 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 		if len(settings.Command) > 0 {
 			return nil, configError("%s: %s.command is for backend %q", path, section, SandboxBackendCommand)
 		}
+	case SandboxBackendSeatbelt:
+		if len(settings.Command) > 0 {
+			return nil, configError("%s: %s.command is for backend %q", path, section, SandboxBackendCommand)
+		}
+		if len(settings.NetworkAllow) > 0 {
+			return nil, configError("%s: %s.network_allow needs backend %q; with %q the network is all or nothing", path, section, SandboxBackendBwrap, SandboxBackendSeatbelt)
+		}
 	}
 	if !enabled {
 		return nil, nil
 	}
 	if settings.Backend == SandboxBackendBwrap && runtime.GOOS != "linux" {
 		return nil, configError("%s: %s.backend %q runs on Linux only; use backend %q with a sandbox program of this system", path, section, SandboxBackendBwrap, SandboxBackendCommand)
+	}
+	if settings.Backend == SandboxBackendSeatbelt && runtime.GOOS != "darwin" {
+		return nil, configError("%s: %s.backend %q runs on macOS only", path, section, SandboxBackendSeatbelt)
 	}
 	if !sandboxPlaceholderPattern.MatchString(settings.Executable) {
 		if _, err := exec.LookPath(settings.Executable); err != nil {
@@ -212,7 +261,7 @@ func checkSandboxPlaceholders(value string) error {
 // same sandbox with PlanWritablePaths as its writable paths. A command backend is the
 // person's own program and is returned unchanged, as is no sandbox.
 func (s *SandboxSettings) ForPlanMode() *SandboxSettings {
-	if s == nil || s.Backend != SandboxBackendBwrap {
+	if s == nil || (s.Backend != SandboxBackendBwrap && s.Backend != SandboxBackendSeatbelt) {
 		return s
 	}
 	plan := *s

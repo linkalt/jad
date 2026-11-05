@@ -89,6 +89,46 @@
       "description": "How many resource change notifications (resources/updated of a subscribed resource, resources/list_changed) are kept for this server, the newest first. They are listed by GET /api/sessions/<ref>/mcp-resources/events and told to the model at the start of its next turn. Defaults to 100.",
       "default": 100
     },
+    "roots": {
+      "type": "string",
+      "enum": ["workspace", "none"],
+      "default": "workspace",
+      "description": "Go backend only. workspace: the client's roots (roots/list) are the session's working directory as a file:// URI, so the server knows the project. none: an empty list."
+    },
+    "server_log": {
+      "type": "string",
+      "enum": ["off", "error", "warning", "info", "debug"],
+      "default": "off",
+      "description": "Go backend only. With a level, the server is asked for its log messages from that level up (per call on protocol 2026-07-28, logging/setLevel before) and they go to the jad server log as \"mcp server log\", each cut to server_log_max_bytes; at debug its progress notifications are logged too. Nothing reaches the model or messages.jsonl. off sets no handler."
+    },
+    "server_log_max_bytes": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 65536,
+      "default": 2048,
+      "description": "Go backend only. Longest server log message or progress text written to the jad log."
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Go backend only. Off by default. When enabled, the server may ask the client's model to write a message (sampling/createMessage): the session's model answers with the server's system prompt and text messages (no tools, other content refused), its output capped by max_output_tokens and the server's own maxTokens, through the run's model client (credential, fallback, pricing). At most max_requests per connection; a request over it, or one the model cannot answer, fails the server's call. Logged as \"mcp sampling\"; nothing is stored in messages.jsonl.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 128000, "default": 1024},
+        "max_requests": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 20}
+      }
+    },
+    "elicitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Go backend only. Off by default. When enabled, the server may ask the user a question during one of its tool calls (elicitation/create, form mode): the run shows it like a request_draft, with a draft {server, message, content} whose content holds the requested schema's defaults. Approving (edited or not) accepts with the draft's content, declining declines, a timeout or a stop cancels. A URL-mode request is declined. With no user to ask (a headless run, a sub-agent) it cancels.",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 300000},
+        "max_draft_bytes": {"type": "integer", "minimum": 64, "maximum": 1048576, "default": 65536},
+        "max_draft_depth": {"type": "integer", "minimum": 2, "maximum": 64, "default": 8}
+      }
+    },
     "max_tools": {
       "type": "integer",
       "minimum": 1,

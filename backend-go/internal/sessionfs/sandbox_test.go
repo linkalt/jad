@@ -28,7 +28,7 @@ func TestSandboxDefaultsAndValues(t *testing.T) {
 	want := &SandboxSettings{
 		Tools: []string{"bash", "exec", "process", "tool_smith"}, Backend: "command", Executable: "sh",
 		WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
-		CheckTimeoutMs: 10000,
+		CheckTimeoutMs: 10000, ProxyPort: 3128,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v", got)
@@ -56,7 +56,7 @@ func TestSandboxRefusals(t *testing.T) {
 		"unknown tool":        {`{"tools":["grep"]}`, "tools[0] must be one of"},
 		"empty tools":         {`{"tools":[]}`, "tools must list one or more"},
 		"tool twice":          {`{"tools":["bash","bash"]}`, "lists bash twice"},
-		"backend":             {`{"backend":"docker"}`, `backend must be "bwrap" or "command"`},
+		"backend":             {`{"backend":"docker"}`, `backend must be "bwrap", "seatbelt" or "command"`},
 		"relative path":       {`{"writable_paths":["build"]}`, "writable_paths[0] must be an absolute path"},
 		"relative plan path":  {`{"plan_writable_paths":["/x","build"]}`, "plan_writable_paths[1] must be an absolute path"},
 		"plan paths not list": {`{"plan_writable_paths":"{tmp}"}`, "plan_writable_paths must be an array"},
@@ -235,5 +235,42 @@ func TestSandboxForPlanMode(t *testing.T) {
 	var none *SandboxSettings
 	if none.ForPlanMode() != nil {
 		t.Fatal("no sandbox became one")
+	}
+}
+
+func TestSandboxNetworkAllowSeatbeltAndMCP(t *testing.T) {
+	// enabled false skips the program and platform checks, so every backend loads here.
+	got, err := normalizeSandbox(json.RawMessage(`{"enabled":false,"network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["bash","mcp"]}`), "s")
+	if err != nil || got != nil {
+		t.Fatalf("disabled sandbox = %+v, %v", got, err)
+	}
+	enabled, err := normalizeSandbox(json.RawMessage(`{"enabled":true,"executable":"sh","network_allow":["PyPI.org","www.github.com","pypi.org"],"proxy_port":8080,"tools":["bash","mcp"]}`), "s")
+	if runtime.GOOS == "linux" {
+		if err != nil || !reflect.DeepEqual(enabled.NetworkAllow, []string{"pypi.org", "github.com"}) || enabled.ProxyPort != 8080 || !enabled.Covers("mcp") {
+			t.Fatalf("network_allow sandbox = %+v, %v", enabled, err)
+		}
+	}
+	for name, test := range map[string]struct{ raw, want string }{
+		"allow with network":    {`{"network":true,"network_allow":["a.com"]}`, "set one or the other"},
+		"allow with command":    {`{"backend":"command","command":["env"],"network_allow":["a.com"]}`, "needs backend \"bwrap\""},
+		"allow with seatbelt":   {`{"backend":"seatbelt","network_allow":["a.com"]}`, "needs backend \"bwrap\""},
+		"bad host":              {`{"network_allow":["a b"]}`, "network_allow must be"},
+		"allow not a list":      {`{"network_allow":"a.com"}`, "network_allow must be"},
+		"proxy port":            {`{"proxy_port":0}`, "proxy_port"},
+		"seatbelt with command": {`{"backend":"seatbelt","command":["env"]}`, "command is for backend"},
+		"unknown tool":          {`{"tools":["glob"]}`, "tools[0] must be one of"},
+	} {
+		if _, err := normalizeSandbox(json.RawMessage(test.raw), "s"); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: error = %v, want %q", name, err, test.want)
+		}
+	}
+	if runtime.GOOS != "darwin" {
+		if _, err := normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"seatbelt"}`), "s"); err == nil || !strings.Contains(err.Error(), "macOS only") {
+			t.Errorf("seatbelt off macOS: %v", err)
+		}
+	}
+	plan := (&SandboxSettings{Backend: SandboxBackendSeatbelt, WritablePaths: []string{"{workspace}"}, PlanWritablePaths: []string{"{tmp}"}}).ForPlanMode()
+	if !reflect.DeepEqual(plan.WritablePaths, []string{"{tmp}"}) {
+		t.Fatalf("seatbelt plan mode = %+v", plan)
 	}
 }

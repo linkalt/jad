@@ -2,10 +2,12 @@ package native
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
@@ -57,12 +59,31 @@ func sandboxed(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configure
 		}
 		arguments := append(append(prefix[1:len(prefix):len(prefix)], resolved), args...)
 		return sandboxLaunch{configured: prefix[0], resolved: program, args: arguments}, nil
+	case sessionfs.SandboxBackendSeatbelt:
+		program, err := exec.LookPath(sandbox.Executable)
+		if err != nil {
+			return sandboxLaunch{}, err
+		}
+		arguments := append([]string{"-p", seatbeltProfile(sandbox, expand), "--", resolved}, args...)
+		return sandboxLaunch{configured: sandbox.Executable, resolved: program, args: arguments}, nil
 	default:
 		program, err := exec.LookPath(sandbox.Executable)
 		if err != nil {
 			return sandboxLaunch{}, err
 		}
-		return sandboxLaunch{configured: sandbox.Executable, resolved: program, args: bwrapArguments(sandbox, place, expand, configured, resolved, args)}, nil
+		var network *sandboxNetwork
+		if len(sandbox.NetworkAllow) > 0 {
+			socket, err := sandboxNetworkProxy(sandbox.NetworkAllow)
+			if err != nil {
+				return sandboxLaunch{}, err
+			}
+			forwarder, err := os.Executable()
+			if err != nil {
+				return sandboxLaunch{}, fmt.Errorf("find jad for the sandbox network forwarder: %w", err)
+			}
+			network = &sandboxNetwork{socket: socket, forwarder: forwarder}
+		}
+		return sandboxLaunch{configured: sandbox.Executable, resolved: program, args: bwrapArguments(sandbox, place, expand, network, configured, resolved, args)}, nil
 	}
 }
 
@@ -70,7 +91,13 @@ func sandboxed(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configure
 // /proc, the writable paths bound read-write, the hidden paths covered, every namespace new
 // (the network kept only with network true), and the child killed if bwrap dies. A writable
 // or hidden path that does not exist is left out.
-func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expand func(string) string, configured, resolved string, args []string) []string {
+// sandboxNetwork is network_allow's proxy socket and the jad binary that forwards to it.
+type sandboxNetwork struct {
+	socket    string
+	forwarder string
+}
+
+func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expand func(string) string, network *sandboxNetwork, configured, resolved string, args []string) []string {
 	arguments := []string{"--die-with-parent", "--unshare-all"}
 	if sandbox.Network {
 		arguments = append(arguments, "--share-net")
@@ -94,6 +121,15 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	}
 	if place.cwd != "" {
 		arguments = append(arguments, "--chdir", place.cwd)
+	}
+	if network != nil {
+		// No network of its own: the forwarder hands loopback proxy_port to jad's proxy,
+		// whose socket is bound in, and starts the child with the proxy variables.
+		arguments = append(arguments, "--bind", network.socket, network.socket)
+		arguments = append(arguments, sandboxProxyEnvironment(sandbox.ProxyPort)...)
+		arguments = append(arguments, "--", network.forwarder, SandboxNetForwardCommand,
+			"--socket", network.socket, "--port", strconv.FormatInt(sandbox.ProxyPort, 10), "--argv0", configured, "--", resolved)
+		return append(arguments, args...)
 	}
 	arguments = append(arguments, "--argv0", configured, "--", resolved)
 	return append(arguments, args...)
@@ -185,7 +221,11 @@ func sandboxDescription(sandbox *sessionfs.SandboxSettings) string {
 	if sandbox.Backend == sessionfs.SandboxBackendCommand {
 		return " Sandbox: every call runs under " + sandbox.Command[0] + ", which limits what it may read, write and reach; a refused file or network access is the sandbox, not a bug to work around."
 	}
-	text := " Sandbox: every call runs in a bubblewrap sandbox. Writable: " + sandboxPathList(sandbox.WritablePaths) +
+	kind := "a bubblewrap"
+	if sandbox.Backend == sessionfs.SandboxBackendSeatbelt {
+		kind = "a macOS sandbox-exec"
+	}
+	text := " Sandbox: every call runs in " + kind + " sandbox. Writable: " + sandboxPathList(sandbox.WritablePaths) +
 		"; everything else is read-only, so a write elsewhere fails with \"Read-only file system\"."
 	if !slices.Equal(sandbox.PlanWritablePaths, sandbox.WritablePaths) {
 		text += " In plan mode, writable: " + sandboxPathList(sandbox.PlanWritablePaths) + "."
@@ -193,9 +233,12 @@ func sandboxDescription(sandbox *sessionfs.SandboxSettings) string {
 	if len(sandbox.HidePaths) > 0 {
 		text += " Hidden (empty): " + sandboxPathList(sandbox.HidePaths) + "."
 	}
-	if sandbox.Network {
+	switch {
+	case sandbox.Network:
 		text += " Network: on."
-	} else {
+	case len(sandbox.NetworkAllow) > 0:
+		text += " Network: only " + strings.Join(sandbox.NetworkAllow, ", ") + " (and their subdomains), through the HTTP(S) proxy in HTTP_PROXY and HTTPS_PROXY; other hosts get 403 and programs that ignore the proxy reach nothing."
+	default:
 		text += " Network: off, so downloads, package installs and git fetch or push fail."
 	}
 	return text + " Do not try to get around the sandbox; say what access a task needs instead."
@@ -213,4 +256,20 @@ func sandboxPathList(paths []string) string {
 		named[index] = names.Replace(path)
 	}
 	return strings.Join(named, ", ")
+}
+
+// SandboxCommand returns how to start program (as found on the PATH) with args inside
+// sandbox from cwd, for a caller outside this package (an MCP stdio server): the file to
+// run, the name it runs as (argv[0]) and its arguments. Without a sandbox they are the
+// program's own.
+func SandboxCommand(sandbox *sessionfs.SandboxSettings, workspace, cwd, program string, args []string) (string, string, []string, error) {
+	resolved, err := exec.LookPath(program)
+	if err != nil {
+		return "", "", nil, err
+	}
+	launch, err := sandboxed(sandbox, sandboxPlace{workspace: workspace, cwd: cwd}, program, resolved, args)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return launch.resolved, launch.configured, launch.args, nil
 }
