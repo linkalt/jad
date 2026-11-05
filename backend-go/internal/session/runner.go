@@ -200,11 +200,16 @@ type RunOptions struct {
 	// OnSteerDropped, when not nil, is told about the steering messages that were accepted
 	// but never stored because the run ended first (it failed or was stopped).
 	OnSteerDropped func(inputs []json.RawMessage)
-	// OnStop, when set, is asked each time the run would end without an error and with no
-	// steering message waiting. A non-empty message makes the run store it as one message
-	// of StopMessageRole and go another round, at most StopMaxContinues times per run.
+	// OnStop, when set, is asked each time the run would end without an error, with no
+	// steering message waiting and no cap reached (max_run_tokens, max_run_cost_usd, the
+	// budget). A non-empty message makes the run store it as one message of
+	// StopMessageRole and go another round, at most StopMaxContinues times per run.
 	// continues is how many times it already did in this run.
-	OnStop           func(ctx context.Context, turnID, answer string, continues int) (string, error)
+	OnStop func(ctx context.Context, turnID, answer string, continues int) (string, error)
+	// OnStopSkipped, when set, is told each time OnStop would have been asked but was not
+	// because a cap was reached; limit is the cap's error. The run then ends as it would
+	// without OnStop.
+	OnStopSkipped    func(ctx context.Context, turnID string, limit error)
 	StopMaxContinues int
 	StopMessageRole  string
 	// Notes are sent after the history (and before PlanPrompt) in every request of the run,
@@ -611,21 +616,31 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if !done {
 			continue
 		}
-		// The round a stop hook may add is a provider round like a tool round: with a cap
-		// reached it could not start, so the hook (a command, which may have side effects)
-		// is not run, and the run ends as it would without a hook.
-		_, capped := runLimit(run.usedTokens, run.meter, run.options)
-		if capped == nil && !run.declined && !options.Steer.hasPending() && run.stopContinues < options.StopMaxContinues && options.OnStop != nil {
-			message, err := options.OnStop(run.ctx, run.result.TurnID, finalAnswerText(run.result.Event), run.stopContinues)
-			if err != nil {
-				return run.result, err
+		if !run.declined && !options.Steer.hasPending() && run.stopContinues < options.StopMaxContinues && options.OnStop != nil {
+			// The round a stop hook may add is a provider round like a tool round: with a
+			// cap reached it could not start, so the hook (a command, which may have side
+			// effects) is not run, OnStopSkipped says so, and the run ends as it would
+			// without a hook. A budget that cannot be read fails the run.
+			code, limit := runLimit(run.usedTokens, run.meter, run.options)
+			if limit != nil && code == "" {
+				return run.result, limit
 			}
-			if message != "" {
-				if err := r.storeStopMessage(message, options); err != nil {
+			if limit != nil {
+				if options.OnStopSkipped != nil {
+					options.OnStopSkipped(run.ctx, run.result.TurnID, limit)
+				}
+			} else {
+				message, err := options.OnStop(run.ctx, run.result.TurnID, finalAnswerText(run.result.Event), run.stopContinues)
+				if err != nil {
 					return run.result, err
 				}
-				run.stopContinues++
-				continue
+				if message != "" {
+					if err := r.storeStopMessage(message, options); err != nil {
+						return run.result, err
+					}
+					run.stopContinues++
+					continue
+				}
 			}
 		}
 		// A steering message that is still waiting gets one more round, unless a cap is

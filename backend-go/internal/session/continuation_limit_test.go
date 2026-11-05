@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,16 +25,22 @@ func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	hookRuns := 0
+	var skipped []error
 	_, err = runner.Run(context.Background(), json.RawMessage(`"go"`), RunOptions{
 		MaxRunTokens:     50,
 		StopMaxContinues: 3,
 		OnStop:           func(context.Context, string, string, int) (string, error) { hookRuns++; return "keep going", nil },
+		OnStopSkipped:    func(_ context.Context, _ string, limit error) { skipped = append(skipped, limit) },
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v, want the run to end as without a stop hook", err)
 	}
 	if hookRuns != 0 {
 		t.Fatalf("the stop hook ran %d times with the cap reached, want 0", hookRuns)
+	}
+	var limit *RunTokenLimitError
+	if len(skipped) != 1 || !errors.As(skipped[0], &limit) {
+		t.Fatalf("OnStopSkipped got %v, want the run token cap once", skipped)
 	}
 	if len(streamer.requests) != 1 {
 		t.Fatalf("provider requests = %d, want 1", len(streamer.requests))
@@ -42,6 +49,37 @@ func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 	_ = journal.ReadLines(func(line []byte) error { all += string(line); return nil })
 	if strings.Contains(all, "keep going") {
 		t.Fatalf("the stop hook's message was stored: %s", all)
+	}
+}
+
+// A budget ledger that cannot be read when the stop hook would be asked fails the run, as
+// it does before any round; only a reached cap skips the hook. The round reports no usage,
+// so the budget is not written (and read) between the start and the end of the run.
+func TestStopHookWithAnUnreadableBudgetFailsTheRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "budget.json")
+	streamer := &pushingStreamer{scriptedStreamer: scriptedStreamer{rounds: [][]responses.Event{tokenRound(0, 0, `{"input_tokens":0,"output_tokens":0}`)}}}
+	streamer.before = func(int) {
+		if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	store, _, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookRuns, skips := 0, 0
+	_, err = runner.Run(context.Background(), json.RawMessage(`"go"`), RunOptions{
+		Budget:           &Budget{Ledger: NewBudgetLedger(path), Limits: BudgetLimits{MaxSessionTokens: 1000}},
+		StopMaxContinues: 1,
+		OnStop:           func(context.Context, string, string, int) (string, error) { hookRuns++; return "", nil },
+		OnStopSkipped:    func(context.Context, string, error) { skips++ },
+	})
+	if err == nil || !strings.Contains(err.Error(), "budget ledger") {
+		t.Fatalf("Run() error = %v, want the budget ledger's read error", err)
+	}
+	if hookRuns != 0 || skips != 0 {
+		t.Fatalf("hook runs = %d, skips = %d, want neither", hookRuns, skips)
 	}
 }
 

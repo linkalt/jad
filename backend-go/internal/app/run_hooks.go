@@ -142,7 +142,23 @@ func (r boundRunner) applyStopHooks(options *session.RunOptions) {
 		}
 		return "[stop hook " + result.ContinuedBy + "]\n" + result.Continue, nil
 	}
+	// A stop command skipped because a cap was reached is reported like a command's
+	// report, so a stop hook used as a check does not pass unseen.
+	options.OnStopSkipped = func(_ context.Context, turnID string, limit error) {
+		report := "[stop] not run: " + limit.Error()
+		r.resolver.logger.Warn("hook "+native.HookEventStop,
+			slog.String("session", r.reference), slog.String("profile", r.config.Profile),
+			slog.String("turn_id", turnID), slog.String("trigger", stopSkippedTrigger),
+			slog.String("report", report))
+		if onReport != nil {
+			onReport(session.HookReport{Event: native.HookEventStop, Trigger: stopSkippedTrigger, Report: report})
+		}
+	}
 }
+
+// stopSkippedTrigger is the trigger of the hook report that says the stop commands were not
+// run because the run reached a cap.
+const stopSkippedTrigger = "cap_reached"
 
 // applyNotificationHooks fires the notification commands each time a tool of the run asks
 // the user a question. They run beside the question, on a context the run's end does not

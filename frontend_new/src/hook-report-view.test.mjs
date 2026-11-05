@@ -27,3 +27,13 @@ test('a failing, timed out, unstartable or stopped command is an error', () => {
   const passedWithFailureText = hookReportNotification('s', 'S', {event: 'run_end', trigger: '', report: '[a] passed (1 ms, in .)\n[b] failed in the command output'});
   assert.equal(passedWithFailureText.kind, 'info', 'only the status line decides');
 });
+
+test('a stop report is read; stop commands skipped at a cap are an error notice', () => {
+  const ran = {turn_id: 't1', event: 'stop', trigger: '', report: '[verify] passed (2 ms, in .)'};
+  assert.deepEqual(parseHookReport(ran)?.report, {event: 'stop', trigger: '', report: '[verify] passed (2 ms, in .)'});
+  assert.equal(hookReportNotification('s', 'S', parseHookReport(ran).report).title, 'Hook ran: stop');
+  const skipped = {turn_id: 't1', event: 'stop', trigger: 'cap_reached', report: '[stop] not run: it used 70 tokens, which reached the max_run_tokens limit of 50.'};
+  assert.deepEqual(hookReportNotification('s', 'S', parseHookReport(skipped).report), {
+    sessionId: 's', sessionTitle: 'S', kind: 'error', title: 'Hook skipped: stop (cap reached)', message: skipped.report,
+  });
+});

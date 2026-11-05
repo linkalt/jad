@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
 )
 
@@ -208,5 +209,35 @@ func TestRunHookReportsReachTheRunStreamLiveAndAreNotStored(t *testing.T) {
 	}
 	if strings.Contains(string(messages), "STREAM-") || strings.Contains(string(messages), "hook_report") {
 		t.Errorf("a hook report reached messages.jsonl:\n%s", messages)
+	}
+}
+
+// A stop command the run skipped because it reached a cap is reported on the run stream
+// (event stop, trigger cap_reached) and in the log, so a stop hook used as a check does not
+// pass unseen; the command itself is not run.
+func TestSkippedStopHooksAreReported(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "ran")
+	var logs strings.Builder
+	config := sessionfs.SessionConfig{WorkingDir: root, Profile: "dev", Hooks: sessionfs.HooksSettings{
+		Enabled: true, TimeoutMS: 5000, MaxOutputBytes: 2048, MaxPayloadBytes: 4096, KillGraceMs: 100, KillDeadlineMs: 1000, DrainAfterExitMs: 100, KillProcessGroup: "always", MaxLineChars: 2000,
+		StopMaxContinues: 3, Stop: []sessionfs.RunEventHook{{Name: "verify", Argv: []string{"sh", "-c", "touch " + marker}}},
+	}}
+	runner := boundRunner{resolver: &Resolver{logger: slog.New(slog.NewTextHandler(&logs, nil))}, config: config, reference: "local:one"}
+	var reports []session.HookReport
+	options := session.RunOptions{TurnID: "turn-1", OnHookReport: func(report session.HookReport) { reports = append(reports, report) }}
+	runner.applyStopHooks(&options)
+	if options.OnStopSkipped == nil {
+		t.Fatal("applyStopHooks set no OnStopSkipped")
+	}
+	options.OnStopSkipped(context.Background(), "turn-1", &session.RunTokenLimitError{Used: 70, Limit: 50})
+	if len(reports) != 1 || reports[0].Event != "stop" || reports[0].Trigger != "cap_reached" || !strings.HasPrefix(reports[0].Report, "[stop] not run: ") || !strings.Contains(reports[0].Report, "max_run_tokens") {
+		t.Fatalf("reports = %+v", reports)
+	}
+	if !strings.Contains(logs.String(), "cap_reached") || !strings.Contains(logs.String(), "turn-1") {
+		t.Fatalf("log = %s", logs.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the skipped stop command ran")
 	}
 }
