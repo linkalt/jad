@@ -135,7 +135,7 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 		"allow null":       {map[string]any{"allow": nil}, "tools.allow must be an array of tool names"},
 		"entry not string": {map[string]any{"allow": []any{3}}, "tools.allow[0] must be a non-empty string"},
 		"entry blank":      {map[string]any{"allow": []any{"  "}}, "tools.allow[0] must be a non-empty string"},
-		"unknown native":   {map[string]any{"allow": []any{"raed"}}, `tools.allow[0] "raed" is not a native tool; use one of async, bash, decide_systemone`},
+		"unknown native":   {map[string]any{"allow": []any{"raed"}}, `tools.allow[0] "raed" is not a native tool; use one of apply_patch, async, bash, decide_systemone`},
 		"mcp without tool": {map[string]any{"allow": []any{"mcp:docs"}}, `"mcp:docs" must be mcp:<server>:<tool> or mcp:<server>:*`},
 		"mcp empty tool":   {map[string]any{"allow": []any{"mcp:docs:"}}, `"mcp:docs:" must be mcp:<server>:<tool>`},
 		"mcp bad server":   {map[string]any{"allow": []any{"mcp:do.cs:x"}}, `must be mcp:<server>:<tool>`},

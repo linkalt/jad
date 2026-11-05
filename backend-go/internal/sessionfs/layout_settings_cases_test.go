@@ -20,7 +20,7 @@ type layoutSettingsCase struct {
 }
 
 // goOnlyNativeTools are native tools older error texts in the case file do not list.
-var goOnlyNativeTools = []string{"notebook", "lsp", "web_search", "subagent", "read_image", "profile_message", "tool_smith", "transcript", "transcripts", "load_tool"}
+var goOnlyNativeTools = []string{"notebook", "lsp", "web_search", "apply_patch", "subagent", "read_image", "profile_message", "tool_smith", "transcript", "transcripts", "load_tool"}
 
 // layoutErrorPrefix strips the file path (and the "settings" label) a layout error starts with.
 var layoutErrorPrefix = regexp.MustCompile(`^\S+\.json(: settings)?: `)
@@ -77,7 +77,11 @@ func TestLayoutSettingsCases(t *testing.T) {
 			}
 			message = layoutErrorPrefix.ReplaceAllString(message, "")
 			for _, name := range goOnlyNativeTools {
-				message = strings.Replace(message, ", "+name, "", 1)
+				if strings.Contains(message, ", "+name) {
+					message = strings.Replace(message, ", "+name, "", 1)
+				} else {
+					message = strings.Replace(message, " "+name+", ", " ", 1)
+				}
 			}
 			if message != tc.Error {
 				t.Fatalf("error mismatch\n got:  %s\n want: %s", message, tc.Error)

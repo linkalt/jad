@@ -20,6 +20,18 @@ const (
 	HookEventPromptSubmit = "prompt_submit"
 	// HookEventSubagentStop fires in the parent session when a sub-agent run ends.
 	HookEventSubagentStop = "subagent_stop"
+	// HookEventSessionStart fires before the first run of a conversation; a context command
+	// adds its output for the model, like prompt_submit's.
+	HookEventSessionStart = "session_start"
+	// HookEventStop fires when a run is about to end without an error; a command may ask
+	// the run to go on.
+	HookEventStop = "stop"
+	// HookEventNotification fires when a run waits for the user.
+	HookEventNotification = "notification"
+
+	// NotificationInteraction is the Trigger of a notification fired because a tool asks
+	// the user a question.
+	NotificationInteraction = "interaction"
 
 	CompactTriggerAutomatic = "automatic"
 	CompactTriggerManual    = "manual"
@@ -51,6 +63,11 @@ type RunEvent struct {
 	Outcome       string `json:"outcome,omitempty"`
 	Error         string `json:"error,omitempty"`
 	ErrorCut      bool   `json:"error_cut,omitempty"`
+	// Tool and Title are set for a notification about a tool's question.
+	Tool  string `json:"tool,omitempty"`
+	Title string `json:"title,omitempty"`
+	// Continues is how many times stop commands already made this run go on.
+	Continues int `json:"continues,omitempty"`
 }
 
 // RunEventResult is what the commands of one event had to say.
@@ -62,6 +79,14 @@ type RunEventResult struct {
 	// Context holds the standard output of each context command that exited 0 and printed
 	// something, in order, each under its command's name.
 	Context []HookContext
+	// Prompt is the prompt a prompt_submit rewrite command gave, when one did; the last
+	// one wins. RewrittenBy names that command.
+	Prompt      *string
+	RewrittenBy string
+	// Continue is the message a stop command asked the run to go on with; the first
+	// command that asks wins and the later ones do not start. ContinuedBy names it.
+	Continue    string
+	ContinuedBy string
 }
 
 // HookContext is the standard output of one prompt_submit context command.
@@ -123,6 +148,12 @@ func FireRunEventResult(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		list = hooks.PromptSubmit
 	case HookEventSubagentStop:
 		list = hooks.SubagentStop
+	case HookEventSessionStart:
+		list = hooks.SessionStart
+	case HookEventStop:
+		list = hooks.Stop
+	case HookEventNotification:
+		list = hooks.Notification
 	}
 	if len(list) == 0 {
 		return RunEventResult{}
@@ -137,6 +168,8 @@ func FireRunEventResult(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 			cwd:           event.WorkspaceRoot,
 			stdin:         payload,
 			onFailureOnly: hook.OnFailureOnly,
+			// An answer read as JSON keeps its long lines whole.
+			rawStdout: hook.Rewrite || event.Event == HookEventStop,
 		})
 		if section != "" {
 			result.Reports = append(result.Reports, section)
@@ -150,8 +183,65 @@ func FireRunEventResult(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 				result.Context = append(result.Context, HookContext{Hook: hook.Name, Text: text, Cut: stdout.truncated})
 			}
 		}
+		if hook.Rewrite && passed && event.Event == HookEventPromptSubmit {
+			prompt, rewritten, err := decodePromptRewrite(stdout)
+			if err != nil {
+				// A rewrite the run cannot honour refuses it, as a blocking command would.
+				result.Reports = append(result.Reports, "[hook "+hook.Name+"] rewrite refused: "+err.Error())
+				result.BlockedBy = hook.Name
+				break
+			}
+			if rewritten {
+				result.Prompt, result.RewrittenBy = &prompt, hook.Name
+			}
+		}
+		if event.Event == HookEventStop && passed {
+			if message := decodeStopContinue(stdout); message != "" {
+				result.Continue, result.ContinuedBy = message, hook.Name
+				break
+			}
+		}
 	}
 	return result
+}
+
+// decodePromptRewrite reads {"prompt":"..."} from a rewrite command's standard output.
+// Empty output changes nothing; anything else that is not such an object, a cut output
+// or an empty prompt is an error.
+func decodePromptRewrite(stdout bashStreamOutput) (string, bool, error) {
+	text := strings.TrimSpace(stdout.text)
+	if text == "" {
+		return "", false, nil
+	}
+	if stdout.truncated {
+		return "", false, fmt.Errorf("the output was cut at hooks.max_output_bytes, so the new prompt is incomplete")
+	}
+	var decoded struct {
+		Prompt *string `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil || decoded.Prompt == nil {
+		return "", false, fmt.Errorf(`the output must be empty or a JSON object {"prompt":"..."}`)
+	}
+	if strings.TrimSpace(*decoded.Prompt) == "" {
+		return "", false, fmt.Errorf("the new prompt is empty")
+	}
+	return *decoded.Prompt, true, nil
+}
+
+// decodeStopContinue reads {"continue":"<message>"} from a stop command's standard
+// output; anything else (empty output, other text, an empty message) lets the run end.
+func decodeStopContinue(stdout bashStreamOutput) string {
+	text := strings.TrimSpace(stdout.text)
+	if text == "" || stdout.truncated {
+		return ""
+	}
+	var decoded struct {
+		Continue string `json:"continue"`
+	}
+	if json.Unmarshal([]byte(text), &decoded) != nil {
+		return ""
+	}
+	return strings.TrimSpace(decoded.Continue)
 }
 
 // encodeRunEvent writes the event within maximum bytes: the error, the prompt and the answer
@@ -192,12 +282,17 @@ func encodeRunEvent(event RunEvent, maximum int) string {
 // PromptContextText joins the context of the prompt_submit commands into the text of the
 // message the model reads after the input.
 func PromptContextText(context []HookContext, maxOutputBytes int64) string {
+	return HookContextText(HookEventPromptSubmit, context, maxOutputBytes)
+}
+
+// HookContextText joins the context commands of event into the text of one message.
+func HookContextText(event string, context []HookContext, maxOutputBytes int64) string {
 	var builder strings.Builder
 	for index, item := range context {
 		if index > 0 {
 			builder.WriteString("\n\n")
 		}
-		builder.WriteString("[prompt_submit hook " + item.Hook + "]\n")
+		builder.WriteString("[" + event + " hook " + item.Hook + "]\n")
 		builder.WriteString(item.Text)
 		if item.Cut {
 			fmt.Fprintf(&builder, "\n[output cut to about %d bytes (hooks.max_output_bytes)]", maxOutputBytes)

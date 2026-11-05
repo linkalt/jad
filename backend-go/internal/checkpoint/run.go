@@ -22,7 +22,7 @@ func CallChangesWorkspace(call json.RawMessage, source string, includeMCPTools b
 		return false
 	}
 	switch fields.Name {
-	case "write", "edit", "bash", "exec":
+	case "write", "edit", "apply_patch", "bash", "exec":
 		return true
 	case "notebook":
 		// Every action but read changes the notebook file.

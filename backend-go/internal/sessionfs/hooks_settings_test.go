@@ -18,6 +18,8 @@ func defaultHooksWant() HooksSettings {
 		KillGraceMs: 2000, KillDeadlineMs: 2000, DrainAfterExitMs: 500, KillProcessGroup: "always", MaxLineChars: 2000, StripANSI: true,
 		Env: map[string]string{"NO_COLOR": "1", "GIT_TERMINAL_PROMPT": "0"}, EnvDeny: []string{},
 		PromptContextRole: "developer",
+		StopMaxContinues:  3, StopMessageRole: "user",
+		ShellChanges: "off", ShellScanMaxFiles: 20_000, ShellMaxChangedFiles: 64, ShellScanSkipDirs: []string{".git", "node_modules", ".jad"},
 	}
 }
 
@@ -284,6 +286,9 @@ func TestHooksSampleFileLoadsAndMatchesTheSchema(t *testing.T) {
 		"pre_compact":   preCompactHookKeys,
 		"prompt_submit": promptHookKeys,
 		"subagent_stop": runEventHookKeys,
+		"session_start": sessionStartKeys,
+		"stop":          runEventHookKeys,
+		"notification":  runEventHookKeys,
 	} {
 		got := sortedItemKeys(schema.Properties.Hooks.Properties[list].Items.Properties)
 		want := append([]string(nil), loader...)

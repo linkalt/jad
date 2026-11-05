@@ -56,18 +56,7 @@ func normalizeNativeWriteEditSettings(
 		return nil, nil, err
 	}
 
-	backupBase := cwd
-	defaultBackupDir := filepath.Join(sessionDir, nativeMutationBackupDirectoryName)
-	if toolStorageDir != "" {
-		backupBase = toolStorageDir
-		defaultBackupDir = filepath.Join(toolStorageDir, nativeMutationBackupDirectoryName)
-	}
-	defaultMutation := NativeMutationSettings{
-		BackupDir:           stringPointer(defaultBackupDir),
-		BackupMaxCount:      defaultNativeMutationBackupMaxCount,
-		BackupMaxTotalBytes: defaultNativeMutationBackupMaxBytes,
-		Fsync:               true,
-	}
+	backupBase, defaultMutation := defaultNativeMutationSettings(cwd, sessionDir, toolStorageDir)
 	defaultPolicy := NativePathPolicy{Paths: []NativePathRule{}}
 
 	var write *NativeWriteSettings

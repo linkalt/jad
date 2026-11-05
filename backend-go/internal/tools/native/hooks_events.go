@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
@@ -50,11 +51,25 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 		if len(list) == 0 {
 			return "", ""
 		}
-		return fireToolEvent(ctx, hooks, apiKeyEnv, event, list, tool.Definition, arguments, execution, result)
+		report, blockedBy, _ := fireToolEvent(ctx, hooks, apiKeyEnv, event, list, tool, arguments, execution, result)
+		return report, blockedBy
+	}
+	// firePre runs the pre_tool commands and returns the arguments and execution the call
+	// runs with: those a rewrite command gave, or the call's own.
+	firePre := func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, string, map[string]any, tools.ExecutionContext) {
+		if len(pre) == 0 {
+			return "", "", arguments, execution
+		}
+		report, blockedBy, rewritten := fireToolEvent(ctx, hooks, apiKeyEnv, hookEventPreTool, pre, tool, arguments, execution, "")
+		if rewritten != nil {
+			arguments = rewritten.arguments
+			execution.RawArguments = rewritten.raw
+		}
+		return report, blockedBy, arguments, execution
 	}
 	if inner := tool.Execute; inner != nil {
 		tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-			preReport, blockedBy := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			preReport, blockedBy, arguments, execution := firePre(ctx, arguments, execution)
 			if blockedBy != "" {
 				return blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport), nil
 			}
@@ -72,7 +87,7 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 	}
 	if inner := tool.ExecuteOutput; inner != nil {
 		tool.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
-			preReport, blockedBy := fire(ctx, hookEventPreTool, pre, arguments, execution, "")
+			preReport, blockedBy, arguments, execution := firePre(ctx, arguments, execution)
 			if blockedBy != "" {
 				return json.Marshal(blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport))
 			}
@@ -144,20 +159,31 @@ func blockedResult(callID, toolName, hookName, report string) string {
 	return result
 }
 
+// rewrittenArguments are the arguments a pre_tool rewrite command gave, decoded and as JSON.
+type rewrittenArguments struct {
+	arguments map[string]any
+	raw       json.RawMessage
+}
+
 // fireToolEvent runs the commands of list for one call, in order, and returns their report
 // ("" when none had anything to say). blockedBy names the blocking pre_tool command that did
-// not pass; the commands after it are not started.
-func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, event string, list []sessionfs.ToolEventHook, definition tools.Definition, arguments map[string]any, execution tools.ExecutionContext, result string) (report, blockedBy string) {
+// not pass, or the rewrite command whose output could not be used; the commands after it
+// are not started. rewritten holds the last arguments a pre_tool rewrite command gave; the
+// commands after it read them in their event.
+func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv, event string, list []sessionfs.ToolEventHook, tool tools.Tool, arguments map[string]any, execution tools.ExecutionContext, result string) (report, blockedBy string, rewritten *rewrittenArguments) {
+	definition := tool.Definition
 	payload := buildToolEventPayload(hooks, event, definition, arguments, execution, result)
 	var sections []string
 	for _, hook := range list {
-		section, passed := runHookChildPassed(ctx, hooks, apiKeyEnv, execution.WorkspaceRoot, hookChild{
+		rewrite := event == hookEventPreTool && hook.Rewrite
+		section, passed, stdout := runHookChildOutput(ctx, hooks, apiKeyEnv, execution.WorkspaceRoot, hookChild{
 			name:          hook.Name,
 			setting:       "hooks." + event + "[" + hook.Name + "].argv",
 			argv:          hook.Argv,
 			cwd:           execution.WorkspaceRoot,
 			stdin:         payload,
 			onFailureOnly: hook.OnFailureOnly,
+			rawStdout:     rewrite,
 		})
 		if section != "" {
 			sections = append(sections, section)
@@ -166,15 +192,63 @@ func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv
 			blockedBy = hook.Name
 			break
 		}
+		if rewrite && passed {
+			next, err := decodeArgumentsRewrite(tool, stdout)
+			if err != nil {
+				sections = append(sections, "["+hook.Name+"] rewrite refused: "+err.Error())
+				blockedBy = hook.Name
+				break
+			}
+			if next != nil {
+				rewritten = next
+				sections = append(sections, "["+hook.Name+"] rewrote the arguments")
+				arguments = next.arguments
+				payload = buildToolEventPayload(hooks, event, definition, arguments, execution, result)
+			}
+		}
 	}
 	if len(sections) == 0 {
-		return "", blockedBy
+		return "", blockedBy, rewritten
 	}
 	label := "pre-tool hooks for "
 	if event == hookEventPostTool {
 		label = "post-tool hooks for "
 	}
-	return label + definition.Name + "\n" + strings.Join(sections, "\n"), blockedBy
+	return label + definition.Name + "\n" + strings.Join(sections, "\n"), blockedBy, rewritten
+}
+
+// decodeArgumentsRewrite reads {"arguments":{...}} from a rewrite command's standard
+// output and checks the arguments against the tool's schema. Empty output keeps the
+// call's arguments; anything else that is not such an object, a cut output or arguments
+// the schema refuses is an error.
+func decodeArgumentsRewrite(tool tools.Tool, stdout bashStreamOutput) (*rewrittenArguments, error) {
+	text := strings.TrimSpace(stdout.text)
+	if text == "" {
+		return nil, nil
+	}
+	if stdout.truncated {
+		return nil, fmt.Errorf("the output was cut at hooks.max_output_bytes, so the new arguments are incomplete")
+	}
+	var envelope struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil || len(envelope.Arguments) == 0 {
+		return nil, fmt.Errorf(`the output must be empty or a JSON object {"arguments":{...}}`)
+	}
+	arguments, err := tools.DecodeArguments(envelope.Arguments)
+	if err != nil {
+		return nil, fmt.Errorf("the new arguments are not a JSON object")
+	}
+	if tool.Validator != nil {
+		issues, err := tool.Validator.Validate(envelope.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("the new arguments could not be checked: %v", err)
+		}
+		if len(issues) > 0 {
+			return nil, fmt.Errorf("the new arguments do not match the tool's schema: %s", issues[0].Message)
+		}
+	}
+	return &rewrittenArguments{arguments: arguments, raw: append(json.RawMessage(nil), envelope.Arguments...)}, nil
 }
 
 // buildToolEventPayload encodes the event within hooks.MaxPayloadBytes: arguments over half

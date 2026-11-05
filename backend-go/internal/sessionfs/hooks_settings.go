@@ -31,16 +31,34 @@ const (
 	maxHooksRunEvent                  = 32
 	maxHookArgv                       = 32
 	maxHookExtensions                 = 32
+
+	defaultHooksStopMaxContinues     int64 = 3
+	maxHooksStopMaxContinues         int64 = 100
+	defaultHooksStopMessageRole            = "user"
+	defaultHooksShellScanMaxFiles    int64 = 20_000
+	maxHooksShellScanMaxFiles        int64 = 1_000_000
+	maxHooksShellScanSkipDirs              = 64
+	defaultHooksShellMaxChangedFiles int64 = 64
+	maxHooksShellMaxChangedFiles     int64 = 10_000
+
+	// HookShellChangesOff runs post_edit checks only for files write, edit and
+	// apply_patch changed; HookShellChangesScan also compares the workspace's files before
+	// and after each bash and exec call and checks the files the call changed.
+	HookShellChangesOff  = "off"
+	HookShellChangesScan = "scan"
 )
 
+var defaultHooksShellScanSkipDirs = []string{".git", "node_modules", ".jad"}
+
 var (
-	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_deadline_ms", "drain_after_exit_ms", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "post_edit", "post_tool", "pre_compact", "pre_tool", "prompt_context_role", "prompt_submit", "run_end", "run_start", "strip_ansi", "subagent_stop", "timeout_ms"}
+	hooksKeys          = []string{"enabled", "env", "env_deny", "env_file", "kill_deadline_ms", "drain_after_exit_ms", "kill_grace_ms", "kill_process_group", "max_line_chars", "max_output_bytes", "max_payload_bytes", "notification", "post_edit", "post_tool", "pre_compact", "pre_tool", "prompt_context_role", "prompt_submit", "run_end", "run_start", "session_start", "shell_changes", "shell_max_changed_files", "shell_scan_max_files", "shell_scan_skip_dirs", "stop", "stop_max_continues", "stop_message_role", "strip_ansi", "subagent_stop", "timeout_ms"}
 	postEditHookKeys   = []string{"argv", "cwd", "ext", "name", "on_failure_only"}
 	toolEventHookKeys  = []string{"argv", "match", "name", "on_failure_only"}
-	preToolHookKeys    = []string{"argv", "blocking", "match", "name", "on_failure_only"}
+	preToolHookKeys    = []string{"argv", "blocking", "match", "name", "on_failure_only", "rewrite"}
 	runEventHookKeys   = []string{"argv", "name", "on_failure_only"}
 	preCompactHookKeys = []string{"argv", "blocking", "name", "on_failure_only"}
-	promptHookKeys     = []string{"argv", "blocking", "context", "name", "on_failure_only"}
+	promptHookKeys     = []string{"argv", "blocking", "context", "name", "on_failure_only", "rewrite"}
+	sessionStartKeys   = []string{"argv", "context", "name", "on_failure_only"}
 	hookMatchPattern   = regexp.MustCompile(`^(\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\*|[A-Za-z0-9_.-]{1,128}))$`)
 	hookNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_+.-]{0,31}$`)
 	hookExtPattern     = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
@@ -78,6 +96,27 @@ type HooksSettings struct {
 	PromptContextRole string
 	// SubagentStop runs in the parent session each time a sub-agent run of the subagent tool ends.
 	SubagentStop []RunEventHook
+	// SessionStart runs before the first run of a conversation (an empty transcript); the
+	// output of a context entry that exits 0 is stored after the input, like prompt_submit's.
+	SessionStart []RunEventHook
+	// Stop runs when a run is about to end without an error. An entry that exits 0 and
+	// prints {"continue":"<message>"} makes the run store the message (role
+	// StopMessageRole) and go on, at most StopMaxContinues times per run.
+	Stop             []RunEventHook
+	StopMaxContinues int64
+	StopMessageRole  string
+	// Notification runs when a run waits for the user (a tool asks a question); its report
+	// goes to the server log.
+	Notification []RunEventHook
+	// ShellChanges is HookShellChangesOff or HookShellChangesScan. With scan, bash and exec
+	// calls report the workspace files they changed (to post_edit checks and the sub-agent
+	// change list); ShellScanMaxFiles bounds the files looked at and ShellScanSkipDirs names
+	// the directory names not entered.
+	ShellChanges      string
+	ShellScanMaxFiles int64
+	ShellScanSkipDirs []string
+	// ShellMaxChangedFiles bounds the changed files one call reports.
+	ShellMaxChangedFiles int64
 	// MaxPayloadBytes cuts the event JSON a command reads on stdin.
 	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
@@ -125,6 +164,9 @@ type ToolEventHook struct {
 	Blocking bool
 	// Context is read for prompt_submit entries only (see RunEventHook).
 	Context bool
+	// Rewrite (pre_tool and prompt_submit) lets a command that exits 0 replace the call's
+	// arguments ({"arguments":{...}} on stdout) or the prompt ({"prompt":"..."}).
+	Rewrite bool
 }
 
 // RunEventHook is one command run at the start or the end of a run, or before a compaction. It reads the event as
@@ -138,8 +180,11 @@ type RunEventHook struct {
 	// Blocking (prompt_submit and pre_compact only) stops the run or the compaction when the
 	// command does not exit 0; the commands after it are not started.
 	Blocking bool
-	// Context (prompt_submit only) hands the standard output of a command that exits 0 to the model.
+	// Context (prompt_submit and session_start) hands the standard output of a command that
+	// exits 0 to the model.
 	Context bool
+	// Rewrite (prompt_submit only) lets a command that exits 0 replace the prompt.
+	Rewrite bool
 }
 
 // Active reports whether any check can run.
@@ -151,7 +196,13 @@ func (settings HooksSettings) Active() bool {
 // subagent_stop command can run.
 func (settings HooksSettings) RunEventsActive() bool {
 	return settings.Enabled && (len(settings.RunStart) > 0 || len(settings.RunEnd) > 0 || len(settings.PreCompact) > 0 ||
-		len(settings.PromptSubmit) > 0 || len(settings.SubagentStop) > 0)
+		len(settings.PromptSubmit) > 0 || len(settings.SubagentStop) > 0 || len(settings.SessionStart) > 0 ||
+		len(settings.Stop) > 0 || len(settings.Notification) > 0)
+}
+
+// ShellScanActive reports whether bash and exec calls report the files they changed.
+func (settings HooksSettings) ShellScanActive() bool {
+	return settings.Enabled && settings.ShellChanges == HookShellChangesScan
 }
 
 // PostEditActive reports whether a post_edit check can run.
@@ -167,7 +218,11 @@ func (settings HooksSettings) ToolEventsActive() bool {
 // normalizeHooksSettings reads the `hooks` node. Only an absent key takes a default; a
 // null or misspelt value is an error so a typo cannot quietly turn a check off.
 func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string) (HooksSettings, error) {
-	settings := HooksSettings{TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes, MaxPayloadBytes: defaultHooksMaxPayloadBytes, PromptContextRole: defaultHooksPromptContextRole}
+	settings := HooksSettings{
+		TimeoutMS: defaultHooksTimeoutMS, MaxOutputBytes: defaultHooksMaxOutputBytes, MaxPayloadBytes: defaultHooksMaxPayloadBytes, PromptContextRole: defaultHooksPromptContextRole,
+		StopMaxContinues: defaultHooksStopMaxContinues, StopMessageRole: defaultHooksStopMessageRole,
+		ShellChanges: HookShellChangesOff, ShellScanMaxFiles: defaultHooksShellScanMaxFiles, ShellMaxChangedFiles: defaultHooksShellMaxChangedFiles, ShellScanSkipDirs: append([]string(nil), defaultHooksShellScanSkipDirs...),
+	}
 	fields := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		var err error
@@ -250,6 +305,50 @@ func normalizeHooksSettings(raw json.RawMessage, settingPath, envFileBase string
 	}
 	if settings.SubagentStop, err = normalizeRunEventHooks(fields, "subagent_stop", settingPath); err != nil {
 		return HooksSettings{}, err
+	}
+	if settings.SessionStart, err = normalizeRunEventHooks(fields, "session_start", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.Stop, err = normalizeRunEventHooks(fields, "stop", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.Notification, err = normalizeRunEventHooks(fields, "notification", settingPath); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.StopMaxContinues, err = configuredInteger(fields, "stop_max_continues", defaultHooksStopMaxContinues, 0, maxHooksStopMaxContinues, settingPath, "hooks"); err != nil {
+		return HooksSettings{}, err
+	}
+	if value, exists := fields["stop_message_role"]; exists {
+		role := ""
+		if json.Unmarshal(value, &role) != nil || (role != "user" && role != "developer" && role != "system") {
+			return HooksSettings{}, configError("%s: hooks.stop_message_role must be \"user\", \"developer\" or \"system\"", settingPath)
+		}
+		settings.StopMessageRole = role
+	}
+	if value, exists := fields["shell_changes"]; exists {
+		mode := ""
+		if json.Unmarshal(value, &mode) != nil || (mode != HookShellChangesOff && mode != HookShellChangesScan) {
+			return HooksSettings{}, configError("%s: hooks.shell_changes must be \"off\" or \"scan\"", settingPath)
+		}
+		settings.ShellChanges = mode
+	}
+	if settings.ShellScanMaxFiles, err = configuredInteger(fields, "shell_scan_max_files", defaultHooksShellScanMaxFiles, 1, maxHooksShellScanMaxFiles, settingPath, "hooks"); err != nil {
+		return HooksSettings{}, err
+	}
+	if settings.ShellMaxChangedFiles, err = configuredInteger(fields, "shell_max_changed_files", defaultHooksShellMaxChangedFiles, 1, maxHooksShellMaxChangedFiles, settingPath, "hooks"); err != nil {
+		return HooksSettings{}, err
+	}
+	if value, exists := fields["shell_scan_skip_dirs"]; exists {
+		var names []string
+		if json.Unmarshal(value, &names) != nil || names == nil || len(names) > maxHooksShellScanSkipDirs {
+			return HooksSettings{}, configError("%s: hooks.shell_scan_skip_dirs must be a list of at most %d directory names", settingPath, maxHooksShellScanSkipDirs)
+		}
+		for _, name := range names {
+			if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+				return HooksSettings{}, configError("%s: hooks.shell_scan_skip_dirs entry %q must be one directory name", settingPath, name)
+			}
+		}
+		settings.ShellScanSkipDirs = names
 	}
 	if value, exists := fields["prompt_context_role"]; exists {
 		role := ""
@@ -370,7 +469,7 @@ func normalizeRunEventHooks(fields map[string]json.RawMessage, event, settingPat
 	entries, err := normalizeEventHookList(fields, event, settingPath, maxHooksRunEvent)
 	var hooks []RunEventHook
 	for _, entry := range entries {
-		hooks = append(hooks, RunEventHook{Name: entry.Name, Argv: entry.Argv, OnFailureOnly: entry.OnFailureOnly, Blocking: entry.Blocking, Context: entry.Context})
+		hooks = append(hooks, RunEventHook{Name: entry.Name, Argv: entry.Argv, OnFailureOnly: entry.OnFailureOnly, Blocking: entry.Blocking, Context: entry.Context, Rewrite: entry.Rewrite})
 	}
 	return hooks, err
 }
@@ -410,8 +509,10 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	switch event {
 	case "pre_tool":
 		allowed = preToolHookKeys
-	case "run_start", "run_end", "subagent_stop":
+	case "run_start", "run_end", "subagent_stop", "stop", "notification":
 		allowed = runEventHookKeys
+	case "session_start":
+		allowed = sessionStartKeys
 	case "pre_compact":
 		allowed = preCompactHookKeys
 	case "prompt_submit":
@@ -461,6 +562,11 @@ func normalizeToolEventHook(raw json.RawMessage, settingPath, event string, inde
 	if value, exists := fields["context"]; exists {
 		if json.Unmarshal(value, &hook.Context) != nil || strings.TrimSpace(string(value)) == "null" {
 			return ToolEventHook{}, configError("%s.context must be a boolean", path)
+		}
+	}
+	if value, exists := fields["rewrite"]; exists {
+		if json.Unmarshal(value, &hook.Rewrite) != nil || strings.TrimSpace(string(value)) == "null" {
+			return ToolEventHook{}, configError("%s.rewrite must be a boolean", path)
 		}
 	}
 	return hook, nil

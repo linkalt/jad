@@ -72,6 +72,16 @@ func (q *SteerQueue) drain() []json.RawMessage {
 	return pending
 }
 
+// hasPending reports whether a message waits.
+func (q *SteerQueue) hasPending() bool {
+	if q == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.pending) > 0
+}
+
 // closeIfEmpty closes the queue and reports true when nothing waits; with a message
 // waiting it stays open and reports false, so the run goes on to take it.
 func (q *SteerQueue) closeIfEmpty() bool {

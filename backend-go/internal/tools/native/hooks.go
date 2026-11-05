@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,23 +25,32 @@ func WithPostEditHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEnv
 	}
 	inner := tool.Execute
 	tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-		var changed string
+		// apply_patch changes several files in one call; each changed (not deleted) file is
+		// checked once, in the order it was changed.
+		var changed []string
 		outer := execution.OnFileChange
 		execution.OnFileChange = func(path, action string) {
-			changed = path
+			if action != "deleted" && !slices.Contains(changed, path) {
+				changed = append(changed, path)
+			}
 			if outer != nil {
 				outer(path, action)
 			}
 		}
 		result, err := inner(ctx, arguments, execution)
-		if err != nil || changed == "" {
+		if err != nil || len(changed) == 0 {
 			return result, err
 		}
-		report := runPostEditHooks(ctx, hooks, apiKeyEnv, execution, changed)
-		if report == "" {
+		var reports []string
+		for _, path := range changed {
+			if report := runPostEditHooks(ctx, hooks, apiKeyEnv, execution, path); report != "" {
+				reports = append(reports, report)
+			}
+		}
+		if len(reports) == 0 {
 			return result, nil
 		}
-		return tools.AppendContent(result, tools.Content{Text: report})
+		return tools.AppendContent(result, tools.Content{Text: strings.Join(reports, "\n")})
 	}
 	return tool
 }
@@ -106,6 +116,9 @@ type hookChild struct {
 	// watched is a file whose change by the command is reported; empty watches nothing.
 	watched       string
 	onFailureOnly bool
+	// rawStdout keeps the long lines of the standard output whole, for a command whose
+	// output is read as JSON; the output is still cut to hooks.max_output_bytes.
+	rawStdout bool
 }
 
 // runHookChild runs one hook command under the hooks' own child-process settings and
@@ -132,10 +145,14 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 	cwd := hook.cwd
 	maximum := int(hooks.MaxOutputBytes)
 	head, tail := maximum*3/4, maximum-maximum*3/4
+	maxLineChars := int(hooks.MaxLineChars)
+	if hook.rawStdout {
+		maxLineChars = maximum
+	}
 	collector := newBashOutputCollector(
 		bashStreamLimits{headBytes: head, tailBytes: tail},
 		bashStreamLimits{headBytes: head, tailBytes: tail},
-		int(hooks.MaxLineChars),
+		maxLineChars,
 		hooks.StripANSI,
 	)
 	child := runBashCommand(ctx, bashChildRequest{

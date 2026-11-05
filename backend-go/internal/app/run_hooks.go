@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -78,26 +80,166 @@ func (r boundRunner) promptSubmitInput(ctx context.Context, input json.RawMessag
 	if err := blockedByHook(native.HookEventPromptSubmit, result); err != nil {
 		return nil, err
 	}
+	if result.Prompt != nil {
+		if items, err = rewritePromptText(items, *result.Prompt); err != nil {
+			return nil, fmt.Errorf("apply the prompt_submit hook %s's new prompt: %w", result.RewrittenBy, err)
+		}
+		if len(result.Context) == 0 {
+			return encodeInputItems(items)
+		}
+	}
 	if len(result.Context) == 0 {
 		return input, nil
 	}
-	type textPart struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	return appendHookContext(items, hooks.PromptContextRole, native.HookContextText(native.HookEventPromptSubmit, result.Context, hooks.MaxOutputBytes))
+}
+
+// sessionStartInput runs the session_start commands before the first run of a
+// conversation, when the transcript holds no turn yet. What their context commands print
+// is stored after the input in one message of role hooks.prompt_context_role.
+func (r boundRunner) sessionStartInput(ctx context.Context, input json.RawMessage, turnID string, nextSessionTurn func() (int64, error), onReport func(session.HookReport)) (json.RawMessage, error) {
+	hooks := r.config.Hooks
+	if !hooks.Enabled || len(hooks.SessionStart) == 0 {
+		return input, nil
 	}
-	contextItem, err := json.Marshal(struct {
-		Type    string     `json:"type"`
-		Role    string     `json:"role"`
-		Content []textPart `json:"content"`
-	}{"message", hooks.PromptContextRole, []textPart{{"input_text", native.PromptContextText(result.Context, hooks.MaxOutputBytes)}}})
+	turn, err := nextSessionTurn()
+	if err != nil || turn != 1 {
+		return input, nil
+	}
+	items, err := session.NormalizeInput(input)
 	if err != nil {
-		return nil, fmt.Errorf("encode prompt_submit context: %w", err)
+		return input, nil
 	}
-	list := make([]json.RawMessage, 0, len(items)+1)
+	result := fireSessionHookWithKey(ctx, r.resolver.logger, r.reference, r.config, r.hookAPIKeyEnv(), native.RunEvent{Event: native.HookEventSessionStart, TurnID: turnID, Prompt: inputPromptText(items)}, onReport)
+	if len(result.Context) == 0 {
+		return input, nil
+	}
+	return appendHookContext(items, hooks.PromptContextRole, native.HookContextText(native.HookEventSessionStart, result.Context, hooks.MaxOutputBytes))
+}
+
+// hookAPIKeyEnv is the model's key variable, kept out of the commands' environment; the
+// model is loaded later in the run, so it is read here only for that.
+func (r boundRunner) hookAPIKeyEnv() string {
+	if withModel, err := r.config.WithModel(); err == nil {
+		return withModel.Model.APIKeyEnv
+	}
+	return r.config.Model.APIKeyEnv
+}
+
+// applyStopHooks makes the run ask the stop commands before it ends.
+func (r boundRunner) applyStopHooks(options *session.RunOptions) {
+	hooks := r.config.Hooks
+	if !hooks.Enabled || len(hooks.Stop) == 0 || hooks.StopMaxContinues == 0 {
+		return
+	}
+	options.StopMaxContinues = int(hooks.StopMaxContinues)
+	options.StopMessageRole = hooks.StopMessageRole
+	onReport := options.OnHookReport
+	options.OnStop = func(ctx context.Context, turnID, answer string, continues int) (string, error) {
+		result := fireSessionHook(ctx, r.resolver.logger, r.reference, r.config, native.RunEvent{Event: native.HookEventStop, TurnID: turnID, Answer: answer, Continues: continues}, onReport)
+		if result.Continue == "" {
+			return "", nil
+		}
+		return "[stop hook " + result.ContinuedBy + "]\n" + result.Continue, nil
+	}
+}
+
+// applyNotificationHooks fires the notification commands each time a tool of the run asks
+// the user a question. They run beside the question, on a context the run's end does not
+// cancel, so a slow command never holds the question back.
+func (r boundRunner) applyNotificationHooks(ctx context.Context, options *session.RunOptions) {
+	hooks := r.config.Hooks
+	inner := options.ToolExecution.RequestInteraction
+	if !hooks.Enabled || len(hooks.Notification) == 0 || inner == nil {
+		return
+	}
+	detached := context.WithoutCancel(ctx)
+	turnID, onReport := options.TurnID, options.OnHookReport
+	options.ToolExecution.RequestInteraction = func(ctx context.Context, identity tools.InteractionIdentity, question tools.InteractionQuestion) (tools.InteractionAnswer, error) {
+		go fireSessionHook(detached, r.resolver.logger, r.reference, r.config, native.RunEvent{
+			Event: native.HookEventNotification, Trigger: native.NotificationInteraction, TurnID: turnID,
+			Tool: identity.Tool, CallID: identity.ToolCallID, Title: question.Title,
+		}, onReport)
+		return inner(ctx, identity, question)
+	}
+}
+
+// appendHookContext returns items followed by one message of role that holds text.
+func appendHookContext(items [][]byte, role, text string) (json.RawMessage, error) {
+	contextItem, err := json.Marshal(struct {
+		Type    string         `json:"type"`
+		Role    string         `json:"role"`
+		Content []hookTextPart `json:"content"`
+	}{"message", role, []hookTextPart{{"input_text", text}}})
+	if err != nil {
+		return nil, fmt.Errorf("encode hook context: %w", err)
+	}
+	return encodeInputItems(append(items, contextItem))
+}
+
+type hookTextPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func encodeInputItems(items [][]byte) (json.RawMessage, error) {
+	list := make([]json.RawMessage, 0, len(items))
 	for _, item := range items {
 		list = append(list, item)
 	}
-	return json.Marshal(append(list, contextItem))
+	return json.Marshal(list)
+}
+
+// rewritePromptText replaces the prompt text of the input: the input_text parts of its
+// first user message become one part holding prompt, and the input_text parts of later
+// user messages are dropped. Other parts (images, files) and other items are kept.
+func rewritePromptText(items [][]byte, prompt string) ([][]byte, error) {
+	rewritten := make([][]byte, 0, len(items))
+	placed := false
+	for _, item := range items {
+		var message map[string]json.RawMessage
+		var kind, role string
+		if json.Unmarshal(item, &message) != nil || json.Unmarshal(message["type"], &kind) != nil || json.Unmarshal(message["role"], &role) != nil || kind != "message" || role != "user" {
+			rewritten = append(rewritten, item)
+			continue
+		}
+		var parts []json.RawMessage
+		if json.Unmarshal(message["content"], &parts) != nil {
+			rewritten = append(rewritten, item)
+			continue
+		}
+		kept := make([]json.RawMessage, 0, len(parts)+1)
+		if !placed {
+			text, err := json.Marshal(hookTextPart{"input_text", prompt})
+			if err != nil {
+				return nil, err
+			}
+			kept = append(kept, text)
+			placed = true
+		}
+		for _, part := range parts {
+			var header struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(part, &header) == nil && header.Type == "input_text" {
+				continue
+			}
+			kept = append(kept, part)
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		content, err := json.Marshal(kept)
+		if err != nil {
+			return nil, err
+		}
+		message["content"] = content
+		rewritten = append(rewritten, encodeMessageOrdered(message))
+	}
+	if !placed {
+		return nil, errors.New("the input has no user message to hold the new prompt")
+	}
+	return rewritten, nil
 }
 
 // inputPromptText is the text a prompt_submit command reads as the prompt: the input_text
@@ -142,4 +284,39 @@ func (r boundRunner) runEndHook(ctx context.Context, onReport func(session.HookR
 		}
 		r.fireRunHook(detached, event, onReport)
 	}
+}
+
+// encodeMessageOrdered writes a message item with type, role and content first, as input
+// items are written, then its other fields in name order.
+func encodeMessageOrdered(message map[string]json.RawMessage) []byte {
+	var builder strings.Builder
+	builder.WriteByte('{')
+	first := true
+	write := func(name string, value json.RawMessage) {
+		if !first {
+			builder.WriteByte(',')
+		}
+		first = false
+		encodedName, _ := json.Marshal(name)
+		builder.Write(encodedName)
+		builder.WriteByte(':')
+		builder.Write(value)
+	}
+	for _, name := range []string{"type", "role", "content"} {
+		if value, exists := message[name]; exists {
+			write(name, value)
+		}
+	}
+	rest := make([]string, 0, len(message))
+	for name := range message {
+		if name != "type" && name != "role" && name != "content" {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		write(name, message[name])
+	}
+	builder.WriteByte('}')
+	return []byte(builder.String())
 }

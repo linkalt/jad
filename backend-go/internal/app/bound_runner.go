@@ -104,6 +104,15 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 			return session.RunResult{}, err
 		}
 	}
+	// A spent budget refuses the run before prompt_submit runs and before the input is
+	// stored, so nothing is left to repair.
+	budget := r.resolver.sessionBudget(r.config)
+	if err := budget.Check(time.Now()); err != nil {
+		return session.RunResult{}, err
+	}
+	if input, err = r.sessionStartInput(ctx, input, options.TurnID, nextSessionTurn, options.OnHookReport); err != nil {
+		return session.RunResult{}, err
+	}
 	if input, err = r.promptSubmitInput(ctx, input, options.TurnID, options.OnHookReport); err != nil {
 		return session.RunResult{}, err
 	}
@@ -142,6 +151,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	options.MaxToolRounds = int(r.config.MaxToolRounds)
 	options.MaxRunTokens = r.config.MaxRunTokens
 	options.MaxRunCostUSD = r.config.MaxRunCostUSD
+	options.Budget = budget
 	options.MaxParallelToolCalls = int(r.config.MaxParallelToolCalls)
 	options.ToolCallScheduling = r.config.ToolCallScheduling
 	options.LeafBudget = r.resolver.leafBudget
@@ -195,6 +205,8 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	}
 	options.StateContext = stateContext
 	r.fireRunHook(ctx, native.RunEvent{Event: native.HookEventRunStart, TurnID: options.TurnID}, options.OnHookReport)
+	r.applyStopHooks(&options)
+	r.applyNotificationHooks(ctx, &options)
 	finish := r.runEndHook(ctx, options.OnHookReport)
 	callerRun := r.resolver.callerRunSeq.Add(1)
 	defer r.resolver.callerRuns.forget(callerRun)

@@ -87,6 +87,9 @@ type Resolver struct {
 	// tools.native.process.storage_dir may be shared by several sessions.
 	processSessions  map[string]map[string]struct{}
 	subagentManagers map[string]*native.SubagentManager
+	// budgetLedgers holds one session budget ledger per ledger path, so every profile of
+	// a session counts into one; guarded by mu.
+	budgetLedgers map[string]*session.BudgetLedger
 	// leafBudget is the process-wide budget of leaf tool calls, shared by every run this
 	// resolver starts, so the bound holds across sessions and sub-agents.
 	leafBudget *tools.LeafBudget
@@ -488,6 +491,12 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 		return preparedRun{}, &httpapi.StatusError{
 			Code:    http.StatusUnprocessableEntity,
 			Message: fmt.Sprintf("max_run_cost_usd is set, but the model file %s has no pricing, so the run's cost cannot be counted", config.ModelPath),
+		}
+	}
+	if config.Budget.CostCapped() && config.Model.Pricing == nil {
+		return preparedRun{}, &httpapi.StatusError{
+			Code:    http.StatusUnprocessableEntity,
+			Message: fmt.Sprintf("budget caps a cost in US dollars, but the model file %s has no pricing, so the run's cost cannot be counted", config.ModelPath),
 		}
 	}
 	streamer, fallbackIdentity := r.runStreamer(config, apiKey)

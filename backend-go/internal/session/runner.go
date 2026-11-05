@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/imageresize"
@@ -153,6 +154,9 @@ type RunOptions struct {
 	// MaxRunCostUSD is the most one run may cost, by the CostMeter of its context, before
 	// it starts another round; zero means no cap. Run gives every run a meter of its own.
 	MaxRunCostUSD float64
+	// Budget, when set, counts what every response of the run used and refuses the run,
+	// or its next round, once a session or daily cap is reached.
+	Budget *Budget
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap. Counted from the usage the provider reported.
 	MaxRunTokens int64
@@ -193,6 +197,13 @@ type RunOptions struct {
 	Steer *SteerQueue
 	// OnSteer, when not nil, is told about the items of each steering message once stored.
 	OnSteer func(items [][]byte)
+	// OnStop, when set, is asked each time the run would end without an error and with no
+	// steering message waiting. A non-empty message makes the run store it as one message
+	// of StopMessageRole and go another round, at most StopMaxContinues times per run.
+	// continues is how many times it already did in this run.
+	OnStop           func(ctx context.Context, turnID, answer string, continues int) (string, error)
+	StopMaxContinues int
+	StopMessageRole  string
 	// Notes are sent after the history (and before PlanPrompt) in every request of the run,
 	// each with its Role; their After is ignored. They never reach the transcript. The
 	// MCP resource changes since the profile's last run are one.
@@ -532,6 +543,10 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 
 	// A message sent once the run returned is refused to its sender instead of being lost.
 	defer options.Steer.Close()
+	// A spent budget refuses the run before its input is stored.
+	if err := options.Budget.Check(time.Now()); err != nil {
+		return RunResult{}, err
+	}
 	persisted, err := r.persistRunInput(input, options)
 	if err != nil {
 		return RunResult{}, err
@@ -581,8 +596,24 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if err != nil {
 			return run.result, err
 		}
+		if !done {
+			continue
+		}
+		if !run.declined && !options.Steer.hasPending() && run.stopContinues < options.StopMaxContinues && options.OnStop != nil {
+			message, err := options.OnStop(run.ctx, run.result.TurnID, finalAnswerText(run.result.Event), run.stopContinues)
+			if err != nil {
+				return run.result, err
+			}
+			if message != "" {
+				if err := r.storeStopMessage(message, options); err != nil {
+					return run.result, err
+				}
+				run.stopContinues++
+				continue
+			}
+		}
 		// A steering message that is still waiting gets one more round.
-		if done && options.Steer.closeIfEmpty() {
+		if options.Steer.closeIfEmpty() {
 			return run.result, nil
 		}
 	}
@@ -614,9 +645,16 @@ type runRounds struct {
 	// usedTokens is what the provider reported for the rounds of this run so far. Every
 	// round re-sends the history, so this is what the run is billed, not the transcript size.
 	usedTokens int64
+	// budgetCost is the part of the meter's total already recorded in the budget.
+	budgetCost float64
 	result     RunResult
 	// overflowAttempts counts the overflow compactions of this run.
 	overflowAttempts int
+	// stopContinues counts the rounds stop hooks added to this run.
+	stopContinues int
+	// declined is set when the user declined a draft, which ends the run whatever a stop
+	// hook says.
+	declined bool
 }
 
 // runRound sends one provider round and runs the function calls it returned. It reports
@@ -673,6 +711,9 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	if err := r.recordBudget(run, tokens); err != nil {
+		return false, err
+	}
 	refreshStateContext, err := r.compactAfterResponse(ctx, run.result.Event, calls, *options)
 	if err != nil {
 		return false, err
@@ -698,6 +739,7 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	run.declined = declined
 	return declined, nil
 }
 
@@ -916,6 +958,35 @@ func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedToken
 			return err
 		}
 		return limit
+	}
+	if err := options.Budget.Check(time.Now()); err != nil {
+		var limit *BudgetLimitError
+		if !errors.As(err, &limit) {
+			return err
+		}
+		if _, err := appendToolOutputs(r.store, calls, nil, "budget_limit", "Tool execution was not started. "+limit.Error()); err != nil {
+			return err
+		}
+		if err := refreshAfterCompaction(); err != nil {
+			return err
+		}
+		return limit
+	}
+	return nil
+}
+
+// recordBudget adds the tokens of the round's response and what the run's meter counted
+// since the last record (the response, and a compaction summary written for the run) to
+// the session's budget.
+func (r *Runner) recordBudget(run *runRounds, tokens int64) error {
+	if run.options.Budget == nil {
+		return nil
+	}
+	cost, _ := run.meter.Total()
+	delta := cost - run.budgetCost
+	run.budgetCost = cost
+	if err := run.options.Budget.Record(tokens, delta, time.Now()); err != nil {
+		return fmt.Errorf("count the round in the session budget: %w", err)
 	}
 	return nil
 }

@@ -393,7 +393,8 @@
           "env_file",
           "tool_storage_dir",
           "session_files",
-          "sandbox"
+          "sandbox",
+          "budget"
         ]
       },
       "properties": {
@@ -465,6 +466,9 @@
         },
         "sandbox": {
           "$ref": "#/properties/sandbox"
+        },
+        "budget": {
+          "$ref": "#/properties/budget"
         },
         "cwd": {
           "type": "string",
@@ -632,6 +636,19 @@
         }
       }
     },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Go backend only. Caps on what all the runs of the session use, in total and per calendar day, on top of the per-run max_run_tokens and max_run_cost_usd. Every cap is absent by default, which turns the budget off: nothing is counted or stored. With a cap set, each response's reported tokens and priced cost (the max_run_cost_usd count, which includes a compaction summary written for the run) are added to the ledger <state dir>/budget.json. A run is refused before its input is stored when a cap is already reached, and checked between rounds like max_run_tokens: the asked-for tool calls get a budget_limit result and the run fails with a message naming the count and the limit. A cost cap needs the model file's pricing, like max_run_cost_usd. Sub-agent runs are not counted. Delete budget.json to reset the counts.",
+      "properties": {
+        "max_session_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens all the session's runs may use in total."},
+        "max_session_cost_usd": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000000, "description": "Most US dollars all the session's runs may cost in total."},
+        "max_daily_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens the session's runs may use in one day of time_zone."},
+        "max_daily_cost_usd": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000000, "description": "Most US dollars the session's runs may cost in one day of time_zone."},
+        "time_zone": {"type": "string", "default": "UTC", "description": "IANA time zone whose midnight starts a new day for the daily caps, for example Europe/Berlin. Local is refused, so the day does not change with the server."},
+        "keep_days": {"type": "integer", "minimum": 1, "maximum": 3660, "default": 35, "description": "How many days the ledger keeps; older days are dropped when it is written. The session totals are kept."}
+      }
+    },
     "sandbox": {
       "type": "object",
       "additionalProperties": false,
@@ -734,7 +751,13 @@
         "env_deny": {"$ref": "#/$defs/child_process_style/properties/env_deny"},
         "max_output_bytes": {"type": "integer", "minimum": 256, "maximum": 1048576, "default": 8192, "description": "Cut of the output one check adds to the tool result, applied to stdout and stderr each (a check that writes to both can add up to twice this). The start and the end are kept and the middle is dropped."},
         "max_payload_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576, "default": 65536, "description": "Size budget of the event JSON a hook command reads on stdin. For pre_tool and post_tool, arguments larger than half of it are left out (arguments_omitted) and the result is cut to the other half (result_cut); the error of run_end and subagent_stop, the prompt of prompt_submit and the answer of subagent_stop are cut to fit (error_cut, prompt_cut, answer_cut)."},
-        "prompt_context_role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the message that carries the output of the prompt_submit context commands."},
+        "prompt_context_role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the message that carries the output of the prompt_submit and session_start context commands."},
+        "stop_max_continues": {"type": "integer", "minimum": 0, "maximum": 100, "default": 3, "description": "Go backend only. How many times stop commands may make one run go on; 0 turns the stop commands off."},
+        "stop_message_role": {"type": "string", "enum": ["user", "developer", "system"], "default": "user", "description": "Go backend only. Role of the message a stop command makes the run go on with."},
+        "shell_changes": {"type": "string", "enum": ["off", "scan"], "default": "off", "description": "Go backend only. scan: around each bash and exec call the workspace's regular files are listed (size and modification time; symlinks are not followed and shell_scan_skip_dirs are not entered) and every file the call created, changed or deleted is reported like a write or edit change: post_edit checks run on the created and changed files, and a sub-agent's change list names them. A file changed within the file system's time resolution with an unchanged size is missed, and an exec program still running in the background when the call returns is not followed. off: only write, edit, apply_patch and notebook report changes."},
+        "shell_scan_max_files": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 20000, "description": "Go backend only. Most files one scan lists; a workspace with more reports no change and the call's result says so."},
+        "shell_max_changed_files": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 64, "description": "Go backend only. Most changed files one call reports, in path order; the result names how many more there were."},
+        "shell_scan_skip_dirs": {"type": "array", "maxItems": 64, "items": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"}, "default": [".git", "node_modules", ".jad"], "description": "Go backend only. Directory names the scan does not enter, at any depth."},
         "pre_tool": {
           "type": "array",
           "maxItems": 32,
@@ -748,7 +771,8 @@
               "match": {"type": "string", "default": "*", "pattern": "^(\\*|[A-Za-z0-9_-]{1,64}|mcp:[A-Za-z0-9_.-]{1,64}:(\\*|[A-Za-z0-9_.-]{1,128}))$", "description": "Which tools the command covers, the same entries a profile's tools.allow takes: * (every tool), a native tool name, mcp:<server>:<tool> or mcp:<server>:*."},
               "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
               "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the tool result."},
-              "blocking": {"type": "boolean", "default": false, "description": "Stop the call when the command does not exit 0. pre_tool, pre_compact and prompt_submit take it."}
+              "blocking": {"type": "boolean", "default": false, "description": "Stop the call when the command does not exit 0. pre_tool, pre_compact and prompt_submit take it."},
+              "rewrite": {"type": "boolean", "default": false, "description": "Go backend only. When the command exits 0 and prints {\"arguments\":{...}}, the call runs with those arguments instead. They are checked against the tool's schema first; an output that is not such an object, is cut at max_output_bytes or fails the schema blocks the call (blocked_by_hook) with the reason in the report. Empty output keeps the arguments. The later pre_tool commands and the post_tool commands read the new arguments."}
             },
             "additionalProperties": false
           }
@@ -832,7 +856,8 @@
               "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."},
               "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the log."},
               "blocking": {"type": "boolean", "default": false, "description": "Refuse the run when the command does not exit 0."},
-              "context": {"type": "boolean", "default": false, "description": "Hand the standard output of the command, when it exits 0, to the model."}
+              "context": {"type": "boolean", "default": false, "description": "Hand the standard output of the command, when it exits 0, to the model."},
+              "rewrite": {"type": "boolean", "default": false, "description": "Go backend only. When the command exits 0 and prints {\"prompt\":\"...\"}, the input's text is replaced before it is stored: the input_text parts of the first user message become one part with the new prompt, the input_text parts of later user messages are dropped, and images and other parts are kept. The last rewrite command wins; each command reads the original prompt. An output that is not such an object, is cut or holds an empty prompt refuses the run like a blocking command. Empty output keeps the prompt."}
             },
             "additionalProperties": false
           }
@@ -853,6 +878,9 @@
             "additionalProperties": false
           }
         },
+        "session_start": {"type": "array", "maxItems": 32, "default": [], "description": "Go backend only. Commands run before the first run of a conversation (the transcript holds no turn yet, so also after a reset), before the prompt_submit commands, in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root, prompt, prompt_cut). A context entry that exits 0 hands its standard output to the model: it is stored after the input as one message of role prompt_context_role. A command never blocks the run; each report goes to the server log and the run's event stream. It does not run for sub-agent runs.", "items": {"type": "object", "required": ["name", "argv"], "properties": {"name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the log."}, "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."}, "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the log."}, "context": {"type": "boolean", "default": false, "description": "Hand the standard output of the command, when it exits 0, to the model, stored after the input like a prompt_submit context."}}, "additionalProperties": false}},
+        "stop": {"type": "array", "maxItems": 32, "default": [], "description": "Go backend only. Commands run each time a run is about to end without an error (the model called no tool and no steering message waits; not after the user declined a draft), in the order listed. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root, answer: the final answer's text, answer_cut, continues: how many times stop commands already made this run go on). A command that exits 0 and prints {\"continue\":\"<message>\"} makes the run store the message (role stop_message_role, under the hook's name) and ask the model again; the later commands do not start. At most stop_max_continues times per run; any other output lets the run end. It does not run for sub-agent runs.", "items": {"type": "object", "required": ["name", "argv"], "properties": {"name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the log."}, "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."}, "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the log."}}, "additionalProperties": false}},
+        "notification": {"type": "array", "maxItems": 32, "default": [], "description": "Go backend only. Commands run when a run waits for the user: a tool (request_draft and the like) asks a question. Each one reads the event as JSON on stdin (event, session, profile, turn_id, workspace_root, trigger: interaction, tool, call_id, title). They run beside the question, so a slow command never holds it back; the report goes to the server log.", "items": {"type": "object", "required": ["name", "argv"], "properties": {"name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_+.-]{0,31}$", "description": "Unique label within this list, shown in the log."}, "argv": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1}, "description": "The program and its arguments, run directly with no shell. There are no placeholders: the command reads the event from stdin."}, "on_failure_only": {"type": "boolean", "default": false, "description": "Leave a passing command out of the log."}}, "additionalProperties": false}},
         "post_edit": {
           "type": "array",
           "maxItems": 32,
@@ -1239,6 +1267,39 @@
                   "maximum": 10485760,
                   "default": 1048576,
                   "description": "Largest file the edit tool will read and write."
+                }
+              },
+              "unevaluatedProperties": false
+            },
+            "apply_patch": {
+              "type": "object",
+              "description": "Go backend only. Native multi-file patches in the *** Begin Patch format: one call adds, updates, moves and deletes files. Every operation is parsed and checked against the files before any file is written, so a patch that does not apply changes nothing. Needs tool_definition_paths to list tools/native/apply_patch.json. Backups (also of deleted files), durability and path rules are apply_patch's own settings (edit_style).",
+              "allOf": [
+                {
+                  "$ref": "#/$defs/edit_style"
+                }
+              ],
+              "properties": {
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 1048576,
+                  "description": "Largest file the patch reads or writes, before and after the change."
+                },
+                "max_files": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "default": 50,
+                  "description": "Most file operations (Add, Update, Delete) in one patch."
+                },
+                "max_patch_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "default": 1048576,
+                  "description": "Largest patch text one call accepts."
                 }
               },
               "unevaluatedProperties": false

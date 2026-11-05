@@ -182,6 +182,7 @@ type SessionConfig struct {
 	NativeGrep               *NativeGrepSettings
 	NativeWrite              *NativeWriteSettings
 	NativeEdit               *NativeEditSettings
+	NativeApplyPatch         *NativeApplyPatchSettings
 	NativeBash               *NativeBashSettings
 	NativeExec               *NativeExecSettings
 	NativeGlob               *NativeGlobSettings
@@ -245,6 +246,8 @@ type SessionConfig struct {
 	// Sandbox is the sandbox setting when enabled: the tools it covers carry it in their
 	// own settings too. Nil runs every child without one, which is the default.
 	Sandbox *SandboxSettings
+	// Budget caps what all the runs of the session use, in total and per day.
+	Budget BudgetSettings
 	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
 	// before it starts another provider round; zero means no cap.
 	MaxRunCostUSD float64
@@ -409,6 +412,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	budget, err := normalizeBudget(setting["budget"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	if err := rejectRemovedApproval(setting, "setting", settingPath); err != nil {
 		return SessionConfig{}, err
 	}
@@ -475,6 +482,17 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	nativeWrite, nativeEdit, err := normalizeNativeWriteEditSettings(
+		setting,
+		location.Root.GlobalJadRoot,
+		settingPath,
+		cwd,
+		location.StateDir(),
+		storagePaths.ToolStorage,
+	)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	nativeApplyPatch, err := normalizeNativeApplyPatchSettings(
 		setting,
 		location.Root.GlobalJadRoot,
 		settingPath,
@@ -699,6 +717,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeGrep:               nativeGrep,
 		NativeWrite:              nativeWrite,
 		NativeEdit:               nativeEdit,
+		NativeApplyPatch:         nativeApplyPatch,
 		NativeBash:               nativeBash,
 		NativeExec:               nativeExec,
 		NativeGlob:               nativeGlob,
@@ -736,6 +755,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		MaxRunTokens:             maxRunTokens,
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
+		Budget:                   budget,
 		MaxRunCostUSD:            maxRunCost,
 		MaxRunDurationMS:         maxRunDuration,
 		Checkpoint:               checkpoint,

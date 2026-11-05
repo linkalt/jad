@@ -602,3 +602,17 @@ func refusedCallArguments(raw json.RawMessage) map[string]any {
 	}
 	return object
 }
+
+// DecodeArguments decodes a call's JSON arguments the way the catalog does before a tool
+// runs (numbers as json.Number), and fails unless they are one JSON object.
+func DecodeArguments(raw []byte) (map[string]any, error) {
+	decoded, err := jsonschemaDecode(raw)
+	if err != nil {
+		return nil, err
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, errors.New("arguments must be a JSON object")
+	}
+	return object, nil
+}

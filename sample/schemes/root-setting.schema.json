@@ -230,7 +230,7 @@
           "minimum": 1,
           "maximum": 1024,
           "default": 256,
-          "description": "Go backend only. The most leaf tool calls (bash, edit, notebook, lsp, write, read, grep, glob, fetch, web_search, read_image) that may run at once in the whole process, across every session and sub-agent. A leaf call waits for a free slot; nothing is refused. Wrapper, MCP and other tools are not counted."},
+          "description": "Go backend only. The most leaf tool calls (bash, edit, apply_patch, notebook, lsp, write, read, grep, glob, fetch, web_search, read_image) that may run at once in the whole process, across every session and sub-agent. A leaf call waits for a free slot; nothing is refused. Wrapper, MCP and other tools are not counted."},
         "max_request_file_bytes": {
           "type": "integer",
           "minimum": 1,
