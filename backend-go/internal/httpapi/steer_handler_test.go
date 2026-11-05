@@ -148,6 +148,12 @@ func TestRunSteerChecksInputLikeRunAndReportsDroppedMessages(t *testing.T) {
 	if !strings.Contains(body, "event: steer_dropped") || !strings.Contains(body, "look at this") {
 		t.Fatalf("the dropped message was not reported: %s", body)
 	}
+	// The image's data is left out of the event; its header and size stay.
+	for _, frame := range strings.Split(body, "\n\n") {
+		if strings.Contains(frame, "event: steer_dropped") && (strings.Contains(frame, "iVBORw0KGgo") || !strings.Contains(frame, `data:image/png;base64,"`) || !strings.Contains(frame, `"omitted_bytes":`)) {
+			t.Fatalf("the dropped image's data is in the event: %s", frame)
+		}
+	}
 	if response := postSteer(t, handler, `{"input":"too late"}`); response.Code != http.StatusNotFound {
 		t.Fatalf("steer after the run = %d %s, want 404", response.Code, response.Body.String())
 	}

@@ -336,10 +336,11 @@ func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *m
 
 // publishSteerDropped reports steering messages that were accepted (202) but never stored
 // because the run ended first, as a "steer_dropped" event ({turn_id, inputs}) and a warning,
-// so the sender can send them again.
+// so the sender can send them again. Inline image and file data is left out of the event
+// (withoutInlineData).
 func publishSteerDropped(run *activeRun, inputs []json.RawMessage, logger *slog.Logger) {
 	logger.Warn("steering messages dropped: the run ended before storing them", slog.Int("count", len(inputs)))
-	if err := run.publish("steer_dropped", map[string]any{"turn_id": run.turnID, "inputs": inputs}); err != nil {
+	if err := run.publish("steer_dropped", map[string]any{"turn_id": run.turnID, "inputs": withoutInlineData(inputs)}); err != nil {
 		logger.Warn("failed to publish dropped steering messages", slog.Any("error", err))
 	}
 }

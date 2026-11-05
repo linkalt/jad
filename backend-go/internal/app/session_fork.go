@@ -17,6 +17,7 @@ import (
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/imagestore"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/transcript"
 	"jad/backend-go/internal/webui"
 )
 
@@ -299,7 +300,10 @@ func copyStoredImages(from, to string, names []string) (int, error) {
 }
 
 // copyForkLines passes each transcript line of source before point.end to visit, read as a
-// stream from the shared store.
+// stream from the shared store. It reads a snapshot, so the journal lock is not held while
+// visit writes the line out; the fork's gate keeps a compaction or reset of the source out,
+// and a transcript rewritten meanwhile all the same fails the fork (409) instead of copying
+// stale lines.
 func (r *Resolver) copyForkLines(ctx context.Context, source sessionfs.SessionConfig, point forkPoint, visit func(line []byte) error) error {
 	if point.end <= 0 {
 		return nil
@@ -309,12 +313,15 @@ func (r *Resolver) copyForkLines(ctx context.Context, source sessionfs.SessionCo
 		return err
 	}
 	defer release()
-	err = shared.store.ReadRecordsRange(0, point.end, func(_ int64, line []byte) error {
+	err = shared.store.ReadRecordsSnapshot(0, point.end, func(_ int64, line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return visit(line)
 	})
+	if errors.Is(err, transcript.ErrTranscriptChanged) {
+		return &httpapi.StatusError{Code: http.StatusConflict, Message: "the session transcript changed while it was copied; fork again"}
+	}
 	if err != nil {
 		return fmt.Errorf("read the session transcript: %w", err)
 	}

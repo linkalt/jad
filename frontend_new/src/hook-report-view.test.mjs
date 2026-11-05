@@ -37,3 +37,19 @@ test('a stop report is read; stop commands skipped at a cap are an error notice'
     sessionId: 's', sessionTitle: 'S', kind: 'error', title: 'Hook skipped: stop (cap reached)', message: skipped.report,
   });
 });
+
+test('a failing stop command is an error: a stop command asks to go on only by passing', () => {
+  const notice = hookReportNotification('s', 'S', {event: 'stop', trigger: '', report: '[verify] failed, exit 1 (9 ms, in .)'});
+  assert.equal(notice.kind, 'error');
+  assert.equal(notice.title, 'Hook failed: stop');
+});
+
+test('a subagent_stop report is read and worded like the others', () => {
+  const ran = {turn_id: 't1', event: 'subagent_stop', trigger: '', report: '[done] passed (3 ms, in .)'};
+  const parsed = parseHookReport(ran);
+  assert.deepEqual(parsed, {turnId: 't1', report: {event: 'subagent_stop', trigger: '', report: '[done] passed (3 ms, in .)'}});
+  assert.deepEqual(hookReportNotification('s', 'S', parsed.report), {sessionId: 's', sessionTitle: 'S', kind: 'info', title: 'Hook ran: subagent_stop', message: ran.report});
+  const failed = hookReportNotification('s', 'S', {event: 'subagent_stop', trigger: '', report: '[done] timed out after 1000 ms (setting: hooks.timeout_ms)'});
+  assert.equal(failed.kind, 'error');
+  assert.equal(failed.title, 'Hook failed: subagent_stop');
+});

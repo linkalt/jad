@@ -12,13 +12,19 @@ import (
 // the run started in: the HTTP executor puts one there to report the run's cost. Sub-agent
 // runs start on their manager's context, not the calling run's; the sub-agent launcher puts
 // the calling run's meter on the child's context, so the child's spend counts toward the
-// caller's cost, max_run_cost_usd and budget. Spend a background child makes after the
-// caller's last round is in the caller's meter but in no budget record.
+// caller's cost, max_run_cost_usd and budget. A run with a budget records its meter's spend
+// after each round; a child that ends records what the caller's meter holds beyond that
+// (RecordUnrecordedSpend), so a background child's spend after the caller's last round
+// reaches the budget too.
 type CostMeter struct {
 	parent *CostMeter
 	mu     sync.Mutex
 	total  float64
 	priced int64
+	// budget is the budget of the run that owns the meter, nil when it has none; recorded is
+	// the part of total already recorded in it.
+	budget   *Budget
+	recorded float64
 }
 
 // NewCostMeter returns a meter that also adds into parent; parent may be nil.
@@ -32,6 +38,32 @@ func (m *CostMeter) Add(usd float64) {
 		meter.priced++
 		meter.mu.Unlock()
 	}
+}
+
+// takeUnrecorded returns the part of the total not recorded in the budget yet and marks it
+// recorded.
+func (m *CostMeter) takeUnrecorded() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delta := m.total - m.recorded
+	m.recorded = m.total
+	return delta
+}
+
+// RecordUnrecordedSpend records, in the budget of the nearest meter of the chain that has
+// one, what that meter counted since its run last recorded (with no tokens: the budget counts
+// a child's cost only). A sub-agent launcher calls it when a child ends. Nothing is recorded
+// twice: the run's next round records only what is still left.
+func (m *CostMeter) RecordUnrecordedSpend(now time.Time) error {
+	for meter := m; meter != nil; meter = meter.parent {
+		meter.mu.Lock()
+		budget := meter.budget
+		meter.mu.Unlock()
+		if budget != nil {
+			return budget.Record(0, meter.takeUnrecorded(), now)
+		}
+	}
+	return nil
 }
 
 // Total is what the priced responses cost so far, and how many there were.

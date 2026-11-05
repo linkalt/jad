@@ -281,8 +281,19 @@ func TestSubagentStopHookReportsTheChildRun(t *testing.T) {
 		"__child_model": map[string]any{"prompt_cache_key": "session"},
 		"__session":     map[string]any{"hooks": map[string]any{"enabled": true, "subagent_stop": []any{runHookEntry("done", "cat >> "+events+"; echo >> "+events)}}},
 	})
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
+	body := f.run(t)
+	if !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
+	}
+	// The command's report reaches the parent run's stream.
+	reported := false
+	for _, frame := range strings.Split(body, "\n\n") {
+		if strings.Contains(frame, "event: hook_report") && strings.Contains(frame, `"event":"subagent_stop"`) && strings.Contains(frame, `[done]`) {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("no subagent_stop hook_report in the parent stream:\n%s", body)
 	}
 	lines := readHookLines(t, events)
 	var stops []string

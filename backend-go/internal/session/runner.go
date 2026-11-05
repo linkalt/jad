@@ -98,6 +98,14 @@ type OverflowSettings struct {
 	MaxAttempts int
 	// Patterns are matched, case-insensitively, against the provider error's text.
 	Patterns []string
+	// ToolOutputMaxBytes, when not 0, is what an overflow the compaction cannot shrink (only
+	// the run's own turn is left) does instead: the round is sent again with each tool output
+	// of the request cut to about that many bytes, and each further overflow halves it. The
+	// cut lasts for the rest of the run and never reaches the transcript.
+	ToolOutputMaxBytes int
+	// OnToolOutputsCut, when not nil, is told about each such attempt: its number, the cap
+	// and how many tool outputs it cut.
+	OnToolOutputsCut func(attempt, maxBytes, cut int)
 	// OnCompacted, when not nil, is told about each overflow compaction: the attempt
 	// number (from 1), whether it rewrote the transcript, and the provider's error.
 	OnCompacted func(attempt int, compacted bool, providerErr error)
@@ -602,8 +610,10 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	defer inputHistory.Release()
 	// The run's own meter; it adds into the meter of the run that started this one.
 	meter := NewCostMeter(CostMeterFrom(ctx))
+	meter.budget = options.Budget
 	run := &runRounds{
-		ctx:          WithCostMeter(ctx, meter),
+		// The run's tools see its meter and its hook reporter (WithHookReporter).
+		ctx:          WithHookReporter(WithCostMeter(ctx, meter), options.OnHookReport),
 		trace:        trace,
 		checkpoint:   checkpointRun,
 		inputHistory: inputHistory,
@@ -684,11 +694,13 @@ type runRounds struct {
 	// usedTokens is what the provider reported for the rounds of this run so far. Every
 	// round re-sends the history, so this is what the run is billed, not the transcript size.
 	usedTokens int64
-	// budgetCost is the part of the meter's total already recorded in the budget.
-	budgetCost float64
 	result     RunResult
 	// overflowAttempts counts the overflow compactions of this run.
 	overflowAttempts int
+	// toolOutputCap, when not 0, cuts each tool output of the requests of the rest of the run
+	// to about that many bytes (cutToolOutputs): set by an overflow the compaction could not
+	// shrink, when compaction.overflow.tool_output_max_bytes allows it.
+	toolOutputCap int
 	// stopContinues counts the rounds stop hooks added to this run.
 	stopContinues int
 	// declined is set when the user declined a draft, which ends the run whatever a stop
@@ -725,19 +737,40 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	responseResult, err := r.sendRound(run, round, responseTurnID, responseTools)
 	// A round the provider refused for being over the context window is sent again after
 	// a compaction, while compaction.overflow allows and the compaction drops something.
+	// When only the run's own turn is left to compact, the round is sent again with its tool
+	// outputs cut, if compaction.overflow.tool_output_max_bytes allows, and the cut cut some.
 	for err != nil && r.overflowRetryAllowed(ctx, err, *options, run.overflowAttempts) {
 		run.overflowAttempts++
+		overflow := options.AutomaticCompaction.Overflow
 		compacted, compactErr := r.compactForOverflow(ctx, run)
-		if overflow := options.AutomaticCompaction.Overflow; overflow.OnCompacted != nil {
+		if overflow.OnCompacted != nil {
 			overflow.OnCompacted(run.overflowAttempts, compacted, err)
 		}
 		if compactErr != nil {
 			return false, errors.Join(err, compactErr)
 		}
-		if !compacted {
+		retryID := responseTurnID + "-overflow-" + strconv.Itoa(run.overflowAttempts)
+		if compacted {
+			responseResult, err = r.sendRound(run, round, retryID, responseTools)
+			continue
+		}
+		previousCap := run.toolOutputCap
+		if !run.lowerToolOutputCap(overflow.ToolOutputMaxBytes) {
 			break
 		}
-		responseResult, err = r.sendRound(run, round, responseTurnID+"-overflow-"+strconv.Itoa(run.overflowAttempts), responseTools)
+		request, cut, buildErr := r.buildRoundRequest(run.ctx, run.trace, run.inputHistory, run.options, responseTools, run.toolOutputCap)
+		if overflow.OnToolOutputsCut != nil {
+			overflow.OnToolOutputsCut(run.overflowAttempts, run.toolOutputCap, cut)
+		}
+		if buildErr != nil {
+			return false, errors.Join(err, buildErr)
+		}
+		if cut == 0 {
+			// The same request would be refused again.
+			run.toolOutputCap = previousCap
+			break
+		}
+		responseResult, err = r.sendRequest(run, round, retryID, request)
 	}
 	if err != nil {
 		return false, err
@@ -787,10 +820,15 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 
 // sendRound builds the request of one provider round from the current history and sends it.
 func (r *Runner) sendRound(run *runRounds, round int, responseTurnID string, responseTools []json.RawMessage) (RunResult, error) {
-	request, err := r.buildRoundRequest(run.ctx, run.trace, run.inputHistory, run.options, responseTools)
+	request, _, err := r.buildRoundRequest(run.ctx, run.trace, run.inputHistory, run.options, responseTools, run.toolOutputCap)
 	if err != nil {
 		return RunResult{}, err
 	}
+	return r.sendRequest(run, round, responseTurnID, request)
+}
+
+// sendRequest sends one built round request.
+func (r *Runner) sendRequest(run *runRounds, round int, responseTurnID string, request json.RawMessage) (RunResult, error) {
 	roundCtx, roundSpan := tracing.StartModelRequest(run.ctx, r.settings.Model, round)
 	responseResult, err := r.runResponse(roundCtx, request, run.sessionTurn, int64(round+1), responseTurnID, run.options)
 	tracing.EndModelRequest(roundSpan, responseResult.Event, err)
@@ -871,11 +909,12 @@ func (r *Runner) persistRunInput(input json.RawMessage, options RunOptions) (*Pe
 }
 
 // buildRoundRequest reads the history for one provider round and builds the request
-// with the images sent as their resized copies.
-func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle, inputHistory *transcript.InputHistory, options RunOptions, responseTools []json.RawMessage) (json.RawMessage, error) {
+// with the images sent as their resized copies and, when toolOutputCap is not 0, each tool
+// output cut to about that many bytes. It also returns how many tool outputs it cut.
+func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle, inputHistory *transcript.InputHistory, options RunOptions, responseTools []json.RawMessage, toolOutputCap int) (json.RawMessage, int, error) {
 	history, err := inputHistory.Read()
 	if err != nil {
-		return nil, fmt.Errorf("read session history: %w", err)
+		return nil, 0, fmt.Errorf("read session history: %w", err)
 	}
 	historyDetails := map[string]any{"history_items": len(history)}
 	if trace.Enabled() {
@@ -887,6 +926,7 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 	// References come back as data URLs first, so the resize step sees real bytes.
 	sentHistory, restoreStats := options.ImageStore.Rehydrate(history)
 	sentHistory, resizeStats := options.ImageResizer.Apply(sentHistory, options.ToolCatalog.SourceOf)
+	sentHistory, outputsCut := cutToolOutputs(sentHistory, toolOutputCap)
 	settings := r.settings
 	if len(options.OutputFormat) > 0 {
 		settings.TextFormat = options.OutputFormat
@@ -909,7 +949,7 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 	}
 	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, stateContext)
 	if err != nil {
-		return nil, fmt.Errorf("build Responses request: %w", err)
+		return nil, 0, fmt.Errorf("build Responses request: %w", err)
 	}
 	trace.Mark("request-built", map[string]any{
 		"history_items":     len(history),
@@ -921,11 +961,12 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 		"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,
 		"images_restored":   restoreStats.Restored,
 		"images_missing":    restoreStats.Missing,
+		"tool_outputs_cut":  outputsCut,
 	})
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return request, nil
+	return request, outputsCut, nil
 }
 
 // compactAfterResponse compacts the transcript when the automatic compaction trigger
@@ -1035,10 +1076,7 @@ func (r *Runner) recordBudget(run *runRounds, tokens int64) error {
 	if run.options.Budget == nil {
 		return nil
 	}
-	cost, _ := run.meter.Total()
-	delta := cost - run.budgetCost
-	run.budgetCost = cost
-	if err := run.options.Budget.Record(tokens, delta, time.Now()); err != nil {
+	if err := run.options.Budget.Record(tokens, run.meter.takeUnrecorded(), time.Now()); err != nil {
 		return fmt.Errorf("count the round in the session budget: %w", err)
 	}
 	return nil
@@ -1396,7 +1434,8 @@ func marshalStagedOutput(staged map[int64]json.RawMessage) (json.RawMessage, err
 type ResponseFailedError struct {
 	message string
 	// Detail is the provider's own error: the code and message of response.error, of a
-	// top-level error, or of the error event itself. It is empty when the event has none.
+	// top-level error, or of the error event itself; for an event that is not a JSON object,
+	// its whole text (it cannot be an echoed response). It is empty when the event has none.
 	Detail string
 }
 
@@ -1406,7 +1445,7 @@ func terminalFailureError(raw []byte, eventType string) error {
 	const prefix = "Responses stream terminated without response.completed: "
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
-		return &ResponseFailedError{message: prefix + string(raw)}
+		return &ResponseFailedError{message: prefix + string(raw), Detail: string(raw)}
 	}
 	details, exists := rawField(fields, "response")
 	if !exists {

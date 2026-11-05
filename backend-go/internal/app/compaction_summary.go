@@ -84,13 +84,20 @@ func overflowSettings(config sessionfs.SessionConfig, logger *slog.Logger, refer
 		return nil
 	}
 	return &session.OverflowSettings{
-		MaxAttempts: int(overflow.MaxAttempts),
-		Patterns:    append([]string(nil), overflow.Patterns...),
+		MaxAttempts:        int(overflow.MaxAttempts),
+		Patterns:           append([]string(nil), overflow.Patterns...),
+		ToolOutputMaxBytes: int(overflow.ToolOutputMaxBytes),
 		OnCompacted: func(attempt int, compacted bool, providerErr error) {
 			if logger == nil {
 				return
 			}
 			logger.Info("context overflow compaction", "session", reference, "profile", config.Profile, "attempt", attempt, "compacted", compacted, "provider_error", providerErr)
+		},
+		OnToolOutputsCut: func(attempt, maxBytes, cut int) {
+			if logger == nil {
+				return
+			}
+			logger.Info("context overflow tool outputs cut", "session", reference, "profile", config.Profile, "attempt", attempt, "max_bytes", maxBytes, "cut", cut)
 		},
 	}
 }

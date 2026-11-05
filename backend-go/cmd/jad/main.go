@@ -53,7 +53,8 @@ func runCommand(args []string, stdout io.Writer) error {
 	return dispatchCommand(args, commandStreams{stdin: os.Stdin, stdout: stdout, stderr: os.Stderr})
 }
 
-// dispatchCommand runs "jad check", "jad run", "jad eval", "jad mcp" or "jad plugin".
+// dispatchCommand runs "jad check", "jad run", "jad eval", "jad mcp", "jad plugin" or
+// "jad transcript".
 func dispatchCommand(args []string, streams commandStreams) error {
 	switch args[0] {
 	case "run":
@@ -64,12 +65,14 @@ func dispatchCommand(args []string, streams commandStreams) error {
 		return runMCPCommand(args[1:], streams)
 	case "plugin":
 		return runPluginCommand(args[1:], streams)
+	case "transcript":
+		return runTranscriptCommand(args[1:], streams)
 	case "check":
 		if len(args) == 1 {
 			return runCheckCommand(streams.stdout)
 		}
 	}
-	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\" and \"plugin\"", args)
+	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\", \"plugin\" and \"transcript\"", args)
 }
 
 // runCheckCommand runs "jad check": it reads the root setting and every catalog and session

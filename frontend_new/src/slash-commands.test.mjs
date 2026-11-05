@@ -84,7 +84,7 @@ test('a name start beats a middle match, and a command alias or description is f
 });
 
 const source = (options = {}) =>
-  createSlashSource({commands: SLASH_COMMANDS, maxResults: 50, refreshMs: 1000, ...options});
+  createSlashSource({commands: SLASH_COMMANDS, maxResults: 50, refreshMs: 1000, retryMs: 0, ...options});
 
 test('the first search loads the library, and a bare search lists everything in order', async () => {
   let loads = 0;
@@ -287,7 +287,7 @@ test('a source that stays down is tried again alone: the others keep their own r
   await menu.search('');
   await menu.search('r');
   await menu.search('re');
-  assert.equal(libraryLoads, 3, 'the failing library is retried each search');
+  assert.equal(libraryLoads, 3, 'with retryMs 0 the failing library is retried each search');
   assert.equal(promptLoads, 1, 'the MCP prompts are not fetched again before refreshMs');
   assert.equal(resourceLoads, 1, 'the MCP resources are not fetched again before refreshMs');
   assert.ok(ids(await menu.search('mcp:')).includes('mcp:docs:standup'), 'what loaded stays listed');
@@ -299,4 +299,38 @@ test('a library that could not list its commands shows why where the commands wo
   const notice = entries.find(item => item.id === 'commands-unavailable');
   assert.deepEqual(notice.auxiliaryData, {type: 'notice', message: 'Custom commands are unavailable: folder is a file'});
   assert.equal(ids(slashEntries(SLASH_COMMANDS, {...CATALOG, commands: []}).map(entry => entry.item)).includes('commands-unavailable'), false);
+});
+
+test('a failed source is tried again retryMs after it failed, not on every keystroke', async () => {
+  let clock = 0;
+  let offline = true;
+  let libraryLoads = 0;
+  let promptLoads = 0;
+  const menu = source({
+    now: () => clock,
+    retryMs: 500,
+    loadCatalog: async () => {
+      libraryLoads += 1;
+      if (offline) throw new Error('offline');
+      return CATALOG;
+    },
+    loadMCPPrompts: async () => {
+      promptLoads += 1;
+      return MCP_PROMPTS;
+    },
+  });
+  await menu.search('');
+  clock = 100;
+  await menu.search('r');
+  clock = 499;
+  await menu.search('re');
+  assert.equal(libraryLoads, 1, 'no keystroke before retryMs fetches the failed library again');
+  clock = 500;
+  offline = false;
+  assert.equal(ids(await menu.search('')).length, 11, 'the library is tried again after retryMs and listed');
+  assert.equal(libraryLoads, 2);
+  clock = 1499;
+  await menu.search('a');
+  assert.equal(libraryLoads, 2, 'a library that loaded answers until refreshMs');
+  assert.equal(promptLoads, 2, 'the MCP prompts keep their own refreshMs clock');
 });

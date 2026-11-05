@@ -252,6 +252,8 @@ func TestIsContextOverflowReadsOnlyTheProvidersErrorOfAFailedStream(t *testing.T
 		{"top-level error string", `{"type":"error","error":"context_length_exceeded"}`, true},
 		{"error event of another kind", `{"type":"error","code":"rate_limit_exceeded","message":"Slow down."}`, false},
 		{"no error at all", `{"type":"response.failed","response":{"instructions":"context window"}}`, false},
+		{"not JSON", `context window exceeded: 210000 > 200000`, true},
+		{"not JSON, another error", `upstream connect error`, false},
 	}
 	for _, test := range tests {
 		eventType := "response.failed"

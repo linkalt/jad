@@ -236,6 +236,8 @@ export type SlashSourceOptions = {
   maxResults: number;
   /** How long a loaded catalog answers before the next search asks the server again. */
   refreshMs: number;
+  /** How long after a failed load of a source the next search tries it again. */
+  retryMs: number;
   now?: () => number;
 };
 
@@ -246,6 +248,8 @@ export type SlashSourceOptions = {
  * every search, so the library is fetched lazily from `search` and a load is
  * never aborted. A catalog stays usable for `refreshMs`; after that the next
  * keystroke refetches it, so a prompt saved since the menu last opened appears.
+ * A source whose load failed is tried again `retryMs` after that load, not on
+ * every keystroke.
  */
 export function createSlashSource({
   commands,
@@ -254,23 +258,31 @@ export function createSlashSource({
   loadMCPResources,
   maxResults,
   refreshMs,
+  retryMs,
   now = Date.now,
 }: SlashSourceOptions): SearchSource {
   let catalog: RootLibraryCatalog | null = null;
   let mcpPrompts: readonly MCPPrompt[] = [];
   let mcpResources: readonly MCPResource[] = [];
   let entries: SlashEntry[] = slashEntries(commands, null);
-  // When each source last loaded; null until it has, and again after it failed.
+  // When each source last loaded; null until it has, and again after it failed. failedAt is
+  // when its last load failed, null once one succeeds.
   const loadedAt: {library: number | null; prompts: number | null; resources: number | null} = {library: null, prompts: null, resources: null};
+  const failedAt: {library: number | null; prompts: number | null; resources: number | null} = {library: null, prompts: null, resources: null};
   let inFlight: Promise<void> | null = null;
 
   // The library, the MCP prompts and the MCP resources load side by side, each on its own
   // clock. One failing keeps what the menu had of it and shows the others; only it is
-  // tried again next search, so a source that stays down does not make every keystroke
-  // fetch the other two as well.
+  // tried again, retryMs after it failed, so a source that stays down neither makes every
+  // keystroke fetch it nor the other two.
   const ensureFresh = (): Promise<void> => {
-    const stale = (at: number | null) => at === null || now() - at >= refreshMs;
-    const want = {library: stale(loadedAt.library), prompts: stale(loadedAt.prompts), resources: stale(loadedAt.resources)};
+    const stale = (source: 'library' | 'prompts' | 'resources') => {
+      const failed = failedAt[source];
+      if (failed !== null) return now() - failed >= retryMs;
+      const at = loadedAt[source];
+      return at === null || now() - at >= refreshMs;
+    };
+    const want = {library: stale('library'), prompts: stale('prompts'), resources: stale('resources')};
     if (!want.library && !want.prompts && !want.resources) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = (async () => {
@@ -285,14 +297,17 @@ export function createSlashSource({
         if (want.library) {
           if (library.status === 'fulfilled' && library.value !== undefined) catalog = library.value;
           loadedAt.library = library.status === 'fulfilled' ? at : null;
+          failedAt.library = library.status === 'fulfilled' ? null : at;
         }
         if (want.prompts) {
           if (mcp.status === 'fulfilled' && mcp.value !== undefined) mcpPrompts = mcp.value;
           loadedAt.prompts = mcp.status === 'fulfilled' ? at : null;
+          failedAt.prompts = mcp.status === 'fulfilled' ? null : at;
         }
         if (want.resources) {
           if (resources.status === 'fulfilled' && resources.value !== undefined) mcpResources = resources.value;
           loadedAt.resources = resources.status === 'fulfilled' ? at : null;
+          failedAt.resources = resources.status === 'fulfilled' ? null : at;
         }
         entries = slashEntries(commands, catalog, mcpPrompts, mcpResources);
       } finally {

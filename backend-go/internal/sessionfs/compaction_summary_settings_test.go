@@ -17,14 +17,14 @@ func TestCompactionSummaryAndOverflowAreOffByDefault(t *testing.T) {
 		if settings.Summary.Enabled || !reflect.DeepEqual(settings.Summary, DefaultCompactionSummary()) {
 			t.Fatalf("%q: summary = %+v, want the defaults with enabled false", raw, settings.Summary)
 		}
-		if settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 1 || !reflect.DeepEqual(settings.Overflow.Patterns, defaultCompactionOverflowPatterns) {
+		if settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 1 || !reflect.DeepEqual(settings.Overflow.Patterns, defaultCompactionOverflowPatterns) || settings.Overflow.ToolOutputMaxBytes != 8192 {
 			t.Fatalf("%q: overflow = %+v", raw, settings.Overflow)
 		}
 	}
 }
 
 func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
-	settings, err := normalizeCompaction(json.RawMessage(`{"summary":{"enabled":true,"prompt":"P","header":"H","role":"user","max_input_bytes":5000,"max_item_bytes":200,"max_output_tokens":0,"timeout_ms":3000,"on_failure":"skip"},"overflow":{"enabled":true,"max_attempts":3,"patterns":["too big"]}}`), "setting.json")
+	settings, err := normalizeCompaction(json.RawMessage(`{"summary":{"enabled":true,"prompt":"P","header":"H","role":"user","max_input_bytes":5000,"max_item_bytes":200,"max_output_tokens":0,"timeout_ms":3000,"on_failure":"skip"},"overflow":{"enabled":true,"max_attempts":3,"patterns":["too big"],"tool_output_max_bytes":0}}`), "setting.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +32,13 @@ func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
 	if settings.Summary != want {
 		t.Fatalf("summary = %+v, want %+v", settings.Summary, want)
 	}
-	if !settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 3 || !reflect.DeepEqual(settings.Overflow.Patterns, []string{"too big"}) {
+	if !settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 3 || !reflect.DeepEqual(settings.Overflow.Patterns, []string{"too big"}) || settings.Overflow.ToolOutputMaxBytes != 0 {
 		t.Fatalf("overflow = %+v", settings.Overflow)
+	}
+	for raw, want := range map[string]int64{`{"overflow":{"tool_output_max_bytes":256}}`: 256, `{"overflow":{"tool_output_max_bytes":1000000}}`: 1_000_000} {
+		if settings, err := normalizeCompaction(json.RawMessage(raw), "setting.json"); err != nil || settings.Overflow.ToolOutputMaxBytes != want {
+			t.Fatalf("%s: %+v, %v", raw, settings.Overflow, err)
+		}
 	}
 }
 
@@ -58,6 +63,10 @@ func TestCompactionSummaryAndOverflowRefuseBadValues(t *testing.T) {
 		`{"overflow":{"patterns":[""]}}`,
 		`{"overflow":{"patterns":"context"}}`,
 		`{"overflow":{"retries":1}}`,
+		`{"overflow":{"tool_output_max_bytes":255}}`,
+		`{"overflow":{"tool_output_max_bytes":1000001}}`,
+		`{"overflow":{"tool_output_max_bytes":-1}}`,
+		`{"overflow":{"tool_output_max_bytes":"8k"}}`,
 	} {
 		if _, err := normalizeCompaction(json.RawMessage(raw), "setting.json"); err == nil {
 			t.Errorf("normalizeCompaction(%s) succeeded, want a config error", raw)
@@ -101,7 +110,7 @@ func TestCompactionSummaryAndOverflowSchemaMatchTheLoader(t *testing.T) {
 			"max_input_bytes": summary.MaxInputBytes, "max_item_bytes": summary.MaxItemBytes,
 			"max_output_tokens": summary.MaxOutputTokens, "timeout_ms": summary.TimeoutMS, "on_failure": summary.OnFailure,
 		},
-		"overflow": {"enabled": overflow.Enabled, "max_attempts": overflow.MaxAttempts, "patterns": overflow.Patterns},
+		"overflow": {"enabled": overflow.Enabled, "max_attempts": overflow.MaxAttempts, "patterns": overflow.Patterns, "tool_output_max_bytes": overflow.ToolOutputMaxBytes},
 	}
 	keys := map[string][]string{"summary": compactionSummaryKeys, "overflow": compactionOverflowKeys}
 	for section, defaults := range checks {
@@ -143,5 +152,9 @@ func TestCompactionSummaryAndOverflowSchemaMatchTheLoader(t *testing.T) {
 	attempts := schema.Properties.Compaction.Properties["overflow"].Properties["max_attempts"]
 	if attempts.Minimum == nil || *attempts.Minimum != 1 || attempts.Maximum == nil || *attempts.Maximum != maxCompactionOverflowMaxAttempts {
 		t.Errorf("compaction.overflow.max_attempts schema bounds = %v..%v", attempts.Minimum, attempts.Maximum)
+	}
+	cut := schema.Properties.Compaction.Properties["overflow"].Properties["tool_output_max_bytes"]
+	if cut.Minimum == nil || *cut.Minimum != 0 || cut.Maximum == nil || *cut.Maximum != maxCompactionOverflowToolOutputMaxBytes {
+		t.Errorf("compaction.overflow.tool_output_max_bytes schema bounds = %v..%v", cut.Minimum, cut.Maximum)
 	}
 }

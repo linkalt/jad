@@ -600,6 +600,7 @@ export function ComposerPane({
               : undefined,
             maxResults: appConfig.slash_menu_max_results,
             refreshMs: appConfig.slash_menu_refresh_ms,
+            retryMs: appConfig.slash_menu_retry_ms,
           }),
           onPick: (selection: SlashSelection) => slashPickRef.current(selection),
         }

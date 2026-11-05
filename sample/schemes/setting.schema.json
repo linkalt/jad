@@ -1179,7 +1179,7 @@
         },
         "overflow": {
           "type": "object",
-          "description": "Off by default. When the provider refuses a round because the history is over the model's context window (its error contains one of patterns, case-insensitive: the code and message of a failed stream, or the text of an HTTP error), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. The run's own turn is kept whole, so only earlier turns are dropped. Needs auto_enabled; a compaction that finds nothing to drop returns the provider's error.",
+          "description": "Off by default. When the provider refuses a round because the history is over the model's context window (its error contains one of patterns, case-insensitive: the code and message of a failed stream, or the text of an HTTP error), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. The run's own turn is kept whole, so only earlier turns are dropped. Needs auto_enabled. When only the run's own turn is left (nothing to drop), the round is sent again with each tool output cut to about tool_output_max_bytes; with it 0, or when no output is longer, the provider's error stands.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -1209,6 +1209,14 @@
                 "exceeds the context",
                 "context length"
               ]
+            },
+            "tool_output_max_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000,
+              "not": {"minimum": 1, "maximum": 255},
+              "default": 8192,
+              "description": "For an overflow the compaction cannot shrink (only the run's own turn is left): the round is sent again with the text of each tool output longer than this cut to about this many bytes, its start and end kept with a note between them. Each further attempt (max_attempts counts them with the compactions) halves it, down to 256. The cut lasts for the rest of the run and changes only the request: the transcript keeps the outputs whole. 0 turns it off; otherwise at least 256."
             }
           },
           "additionalProperties": false,

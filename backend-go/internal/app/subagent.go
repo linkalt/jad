@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
@@ -84,9 +85,15 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	}
 	// The child's spend adds into the calling run's meter, so the caller's max_run_cost_usd
 	// and budget count it (the child's own context hangs off the sub-agent manager).
+	// Its subagent_stop reports, and those of its own children, go to the calling run's
+	// stream.
+	var onReport func(session.HookReport)
 	if request.CallerValues != nil {
 		if callerMeter := session.CostMeterFrom(request.CallerValues); callerMeter != nil && session.CostMeterFrom(ctx) == nil {
 			ctx = session.WithCostMeter(ctx, callerMeter)
+		}
+		if onReport = session.HookReporterFrom(request.CallerValues); onReport != nil && session.HookReporterFrom(ctx) == nil {
+			ctx = session.WithHookReporter(ctx, onReport)
 		}
 	}
 	ctx, sweepChildren := native.WithChildGroups(ctx)
@@ -122,14 +129,23 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	} else {
 		outcome.Text = native.SubagentAnswerText(result.Event)
 	}
-	l.subagentStopHook(ctx, request, outcome, runErr)
+	// A background child may end after the caller's last round, which would have recorded
+	// its spend in the caller's budget.
+	if callerMeter := session.CostMeterFrom(ctx); callerMeter != nil {
+		if err := callerMeter.RecordUnrecordedSpend(time.Now()); err != nil && l.resolver.logger != nil {
+			l.resolver.logger.Warn("record a sub-agent's spend in the budget", "agent", request.Agent.Name, "error", err)
+		}
+	}
+	l.subagentStopHook(ctx, request, outcome, runErr, onReport)
 	return outcome, runErr
 }
 
 // subagentStopHook reports the end of one child run to the parent session's subagent_stop
 // commands. Like run_end, it runs on a context the stop cannot cancel, so a child that was
-// stopped or timed out still reports; its reports go to the server log only.
-func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.SubagentRequest, outcome native.SubagentResult, runErr error) {
+// stopped or timed out still reports. Its reports go to the server log and to onReport, the
+// calling run's reporter; a background child that ends after that run reaches its log only,
+// since the ended run's stream has no reader left.
+func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.SubagentRequest, outcome native.SubagentResult, runErr error, onReport func(session.HookReport)) {
 	hooks := l.parent.Hooks
 	if !hooks.Enabled || len(hooks.SubagentStop) == 0 {
 		return
@@ -151,7 +167,7 @@ func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.S
 		event.Outcome, event.Error = native.RunOutcomeError, runErr.Error()
 	}
 	reference, _, _ := strings.Cut(request.Execution.SessionKey, "\x00")
-	fireSessionHook(context.WithoutCancel(ctx), l.resolver.logger, reference, l.parent, event, nil)
+	fireSessionHook(context.WithoutCancel(ctx), l.resolver.logger, reference, l.parent, event, onReport)
 }
 
 // compactionFor is the automatic compaction of one child. The agent's own trigger and

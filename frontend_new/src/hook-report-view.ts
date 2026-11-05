@@ -1,7 +1,7 @@
 /**
  * @file hook-report-view.ts
- * @input The `hook_report` run-stream event: one run_start, run_end, pre_compact or stop command's report,
- *   or the notice that the stop commands were skipped because the run reached a cap
+ * @input The `hook_report` run-stream event: one run_start, run_end, pre_compact, stop or subagent_stop
+ *   command's report, or the notice that the stop commands were skipped because the run reached a cap
  * @output A validated report and the activity notification that words it
  * @position Pure model behind the "Hook ..." entries in the Notifications panel
  *
@@ -17,7 +17,7 @@ export interface HookReport {
   report: string;
 }
 
-const HOOK_EVENTS = ['run_start', 'run_end', 'pre_compact', 'stop'];
+const HOOK_EVENTS = ['run_start', 'run_end', 'pre_compact', 'stop', 'subagent_stop'];
 
 /** The trigger of the report that says the stop commands were not run: the run reached a cap. */
 export const STOP_SKIPPED_TRIGGER = 'cap_reached';

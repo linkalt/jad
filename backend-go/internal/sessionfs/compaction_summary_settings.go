@@ -29,6 +29,11 @@ type CompactionOverflow struct {
 	// Patterns are matched, case-insensitively, against the provider's error: the code and
 	// message of a failed stream, or the text of any other error.
 	Patterns []string
+	// ToolOutputMaxBytes is what an overflow does when only the run's own turn is left to
+	// compact: the round is sent again with each tool output cut to about this many bytes
+	// (each further attempt halves it, down to MinCompactionOverflowToolOutputMaxBytes). 0
+	// turns it off; the transcript keeps the outputs whole either way.
+	ToolOutputMaxBytes int64
 }
 
 const (
@@ -53,11 +58,18 @@ const (
 	defaultCompactionOverflowMaxAttempts = 1
 	maxCompactionOverflowMaxAttempts     = 5
 	maxCompactionOverflowPatterns        = 64
+	// defaultCompactionOverflowToolOutputMaxBytes is below the usual output caps of the
+	// native tools, so the first cut shrinks their outputs.
+	defaultCompactionOverflowToolOutputMaxBytes = 8192
+	maxCompactionOverflowToolOutputMaxBytes     = 1_000_000
+	// MinCompactionOverflowToolOutputMaxBytes is the smallest tool_output_max_bytes other than
+	// 0, and the floor later attempts halve the cut to.
+	MinCompactionOverflowToolOutputMaxBytes = 256
 )
 
 var (
 	compactionSummaryKeys  = []string{"enabled", "prompt", "header", "role", "max_input_bytes", "max_item_bytes", "max_output_tokens", "timeout_ms", "on_failure"}
-	compactionOverflowKeys = []string{"enabled", "max_attempts", "patterns"}
+	compactionOverflowKeys = []string{"enabled", "max_attempts", "patterns", "tool_output_max_bytes"}
 	// defaultCompactionOverflowPatterns are the context-window errors of the providers jad
 	// speaks to: OpenAI (code context_length_exceeded), Anthropic ("prompt is too long"),
 	// and the wordings of common OpenAI-compatible servers.
@@ -90,9 +102,10 @@ func DefaultCompactionSummary() CompactionSummary {
 // DefaultCompactionOverflow returns compaction.overflow with every default.
 func DefaultCompactionOverflow() CompactionOverflow {
 	return CompactionOverflow{
-		Enabled:     defaultCompactionOverflowEnabled,
-		MaxAttempts: defaultCompactionOverflowMaxAttempts,
-		Patterns:    append([]string(nil), defaultCompactionOverflowPatterns...),
+		Enabled:            defaultCompactionOverflowEnabled,
+		MaxAttempts:        defaultCompactionOverflowMaxAttempts,
+		Patterns:           append([]string(nil), defaultCompactionOverflowPatterns...),
+		ToolOutputMaxBytes: defaultCompactionOverflowToolOutputMaxBytes,
 	}
 }
 
@@ -177,6 +190,12 @@ func normalizeCompactionOverflow(raw json.RawMessage, path string) (CompactionOv
 			}
 		}
 		settings.Patterns = patterns
+	}
+	if settings.ToolOutputMaxBytes, err = configuredInteger(fields, "tool_output_max_bytes", defaultCompactionOverflowToolOutputMaxBytes, 0, maxCompactionOverflowToolOutputMaxBytes, path, "compaction.overflow"); err != nil {
+		return CompactionOverflow{}, err
+	}
+	if settings.ToolOutputMaxBytes > 0 && settings.ToolOutputMaxBytes < MinCompactionOverflowToolOutputMaxBytes {
+		return CompactionOverflow{}, configError("%s.tool_output_max_bytes must be 0 (off) or between %d and %d", prefix, MinCompactionOverflowToolOutputMaxBytes, maxCompactionOverflowToolOutputMaxBytes)
 	}
 	return settings, nil
 }
