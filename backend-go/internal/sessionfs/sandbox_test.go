@@ -27,18 +27,19 @@ func TestSandboxDefaultsAndValues(t *testing.T) {
 	}
 	want := &SandboxSettings{
 		Tools: []string{"bash", "exec", "process", "tool_smith"}, Backend: "command", Executable: "sh",
-		WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
+		WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
 		CheckTimeoutMs: 10000,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v", got)
 	}
-	got, err = normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"command","command":["env"],"tools":["process","bash","hooks"],"network":true,"check_timeout_ms":250,"writable_paths":["{cwd}","/var/cache/x"],"hide_paths":["{home}/.ssh"]}`), "s")
+	got, err = normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"command","command":["env"],"tools":["process","bash","hooks"],"network":true,"check_timeout_ms":250,"writable_paths":["{cwd}","/var/cache/x"],"plan_writable_paths":["{tmp}","/var/cache/x"],"hide_paths":["{home}/.ssh"]}`), "s")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got.Tools, []string{"process", "bash", "hooks"}) || !got.Network || got.CheckTimeoutMs != 250 || !got.Covers("hooks") || !reflect.DeepEqual(got.WritablePaths, []string{"{cwd}", "/var/cache/x"}) ||
-		!reflect.DeepEqual(got.HidePaths, []string{"{home}/.ssh"}) || !got.Covers("bash") || got.Covers("exec") {
+		!reflect.DeepEqual(got.HidePaths, []string{"{home}/.ssh"}) || !got.Covers("bash") || got.Covers("exec") ||
+		!reflect.DeepEqual(got.PlanWritablePaths, []string{"{tmp}", "/var/cache/x"}) {
 		t.Fatalf("values = %+v", got)
 	}
 	var none *SandboxSettings
@@ -57,6 +58,8 @@ func TestSandboxRefusals(t *testing.T) {
 		"tool twice":          {`{"tools":["bash","bash"]}`, "lists bash twice"},
 		"backend":             {`{"backend":"docker"}`, `backend must be "bwrap" or "command"`},
 		"relative path":       {`{"writable_paths":["build"]}`, "writable_paths[0] must be an absolute path"},
+		"relative plan path":  {`{"plan_writable_paths":["/x","build"]}`, "plan_writable_paths[1] must be an absolute path"},
+		"plan paths not list": {`{"plan_writable_paths":"{tmp}"}`, "plan_writable_paths must be an array"},
 		"unknown placeholder": {`{"hide_paths":["{project}/x"]}`, "unknown placeholder {project}"},
 		"command missing":     {`{"backend":"command"}`, "command is required"},
 		"command for bwrap":   {`{"command":["env"]}`, `command is for backend "command"`},
@@ -213,5 +216,24 @@ func TestCheckLayoutCollectsTheEnabledSandbox(t *testing.T) {
 	}
 	if len(report.Problems) != 0 || len(report.Sandboxes) != 1 || report.Sandboxes[0].SessionID != fixture.SessionID || report.Sandboxes[0].Settings.Command[0] != "env" {
 		t.Fatalf("problems %+v sandboxes %+v", report.Problems, report.Sandboxes)
+	}
+}
+
+// A plan-mode run's sandbox is the bwrap one with the plan paths writable; a command
+// backend, the person's own program, and no sandbox are left as they are.
+func TestSandboxForPlanMode(t *testing.T) {
+	sandbox := &SandboxSettings{Backend: SandboxBackendBwrap, WritablePaths: []string{"{workspace}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, HidePaths: []string{"{home}/.ssh"}}
+	plan := sandbox.ForPlanMode()
+	if plan == sandbox || !reflect.DeepEqual(plan.WritablePaths, []string{"{tmp}"}) || !reflect.DeepEqual(plan.HidePaths, sandbox.HidePaths) ||
+		!reflect.DeepEqual(sandbox.WritablePaths, []string{"{workspace}", "{tmp}"}) {
+		t.Fatalf("plan = %+v, configured = %+v", plan, sandbox)
+	}
+	command := &SandboxSettings{Backend: SandboxBackendCommand, Command: []string{"firejail"}}
+	if command.ForPlanMode() != command {
+		t.Fatal("a command backend changed")
+	}
+	var none *SandboxSettings
+	if none.ForPlanMode() != nil {
+		t.Fatal("no sandbox became one")
 	}
 }

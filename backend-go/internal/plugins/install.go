@@ -247,9 +247,18 @@ type InstallResult struct {
 // catalog file is checked with the loader's rules as it is written, and a skill is read the
 // way the skill tool reads it; any failure undoes the whole install.
 func (t Target) Install(ctx context.Context, source string, force bool) (result InstallResult, err error) {
+	return t.install(ctx, source, "", force)
+}
+
+// install installs the plugin in the folder source; label, when set, is the source the
+// record keeps in place of the folder (a git URL and commit for a clone).
+func (t Target) install(ctx context.Context, source, label string, force bool) (result InstallResult, err error) {
 	found, err := readBundle(source)
 	if err != nil {
 		return InstallResult{}, err
+	}
+	if label != "" {
+		found.source = label
 	}
 	name := found.manifest.Name
 	lock, err := t.lock(ctx, name)
@@ -286,14 +295,13 @@ func (t Target) Install(ctx context.Context, source string, force bool) (result 
 		planned = append(planned, Entry{Kind: string(file.kind), ID: file.id, Path: t.catalogPath(file.kind, file.id), SHA256: hashBytes(file.data)})
 	}
 	for _, item := range found.trees {
-		path := filesPath
-		if item.kind == kindSkill {
-			if t.SkillDir == "" {
-				return InstallResult{}, fmt.Errorf("plugin %s has skills, but no skill folder is configured (libraries.skill_dirs)", name)
-			}
-			path = filepath.Join(t.SkillDir, item.id)
+		if item.kind == kindSkill && t.SkillDir == "" {
+			return InstallResult{}, fmt.Errorf("plugin %s has skills, but no skill folder is configured (libraries.skill_dirs)", name)
 		}
-		planned = append(planned, Entry{Kind: item.kind, ID: item.id, Path: path, SHA256: item.hash})
+		if item.kind == kindCommands && t.CommandDir == "" {
+			return InstallResult{}, fmt.Errorf("plugin %s has commands, but no command folder is configured (libraries.command_dirs)", name)
+		}
+		planned = append(planned, Entry{Kind: item.kind, ID: item.id, Path: t.treePath(name, item), SHA256: item.hash})
 	}
 
 	// What is on disk where the plugin writes must be the plugin's own, unchanged.
@@ -338,10 +346,7 @@ func (t Target) Install(ctx context.Context, source string, force bool) (result 
 
 	j := &journal{}
 	for _, item := range found.trees {
-		path := filesPath
-		if item.kind == kindSkill {
-			path = filepath.Join(t.SkillDir, item.id)
-		}
+		path := t.treePath(name, item)
 		if err := moveAside(j, path); err != nil {
 			return InstallResult{}, j.fail(err)
 		}
@@ -351,6 +356,11 @@ func (t Target) Install(ctx context.Context, source string, force bool) (result 
 		if item.kind == kindSkill && t.ReadSkill != nil {
 			if err := t.ReadSkill(ctx, t.SkillDir, item.id, t.SkillMaxBytes); err != nil {
 				return InstallResult{}, j.fail(fmt.Errorf("plugin %s: skill %s: %w", name, item.id, err))
+			}
+		}
+		if item.kind == kindCommands && t.ReadCommands != nil {
+			if _, err := t.ReadCommands(ctx, t.CommandDir, name, t.SkillMaxBytes); err != nil {
+				return InstallResult{}, j.fail(fmt.Errorf("plugin %s: %w", name, err))
 			}
 		}
 	}
@@ -380,7 +390,8 @@ func (t Target) Install(ctx context.Context, source string, force bool) (result 
 }
 
 // removeEntries takes back catalog files, profiles first, then toolsets, MCP servers and
-// models, so nothing the plugin still holds names what goes; then skill and files folders.
+// models, so nothing the plugin still holds names what goes; then the skill, commands and
+// files folders.
 func (t Target) removeEntries(j *journal, entries []Entry) error {
 	for index := len(catalogFolders) - 1; index >= 0; index-- {
 		kind := catalogFolders[index].kind
@@ -394,7 +405,7 @@ func (t Target) removeEntries(j *journal, entries []Entry) error {
 		}
 	}
 	for _, entry := range entries {
-		if entry.Kind == kindSkill || entry.Kind == kindFiles {
+		if isTreeKind(entry.Kind) {
 			if err := moveAside(j, entry.Path); err != nil {
 				return err
 			}

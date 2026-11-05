@@ -18,6 +18,8 @@ import (
 const (
 	listResourcesName = "resources/list"
 	readResourceName  = "resources/read"
+	subscribeName     = "resources/subscribe"
+	unsubscribeName   = "resources/unsubscribe"
 	listPromptsName   = "prompts/list"
 	getPromptName     = "prompts/get"
 )
@@ -25,6 +27,10 @@ const (
 const listResourcesSchema = `{"type":"object","properties":{"kind":{"type":"string","enum":["resources","templates"],"description":"resources (the default) lists the resources; templates lists the URI templates a resource URI can be built from."},"cursor":{"type":"string","minLength":1,"description":"next_cursor of the previous page, to continue the list."}},"additionalProperties":false}`
 
 const readResourceSchema = `{"type":"object","properties":{"uri":{"type":"string","minLength":1,"description":"URI of the resource, from the list or built from a template."}},"required":["uri"],"additionalProperties":false}`
+
+const subscribeSchema = `{"type":"object","properties":{"uri":{"type":"string","minLength":1,"description":"URI of the resource to watch, from the list."}},"required":["uri"],"additionalProperties":false}`
+
+const unsubscribeSchema = `{"type":"object","properties":{"uri":{"type":"string","minLength":1,"description":"URI of a resource watched with the subscribe tool."}},"required":["uri"],"additionalProperties":false}`
 
 const listPromptsSchema = `{"type":"object","properties":{"cursor":{"type":"string","minLength":1,"description":"next_cursor of the previous page, to continue the list."}},"additionalProperties":false}`
 
@@ -54,6 +60,9 @@ func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *con
 				InputSchema: json.RawMessage(schema),
 			},
 			Validator: validator,
+			// Listing and reading resources and prompts change nothing, by the protocol: a
+			// plan-mode run keeps these tools, and their calls may run beside others.
+			ReadOnly: true,
 			ExecuteOutput: func(ctx context.Context, arguments map[string]any, _ tools.ExecutionContext) (json.RawMessage, error) {
 				return execute(ctx, current, arguments)
 			},
@@ -69,6 +78,20 @@ func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *con
 		}
 		if err := add(readResourceName, readResourceSchema, fmt.Sprintf("Read one resource of the MCP server %s by its URI.", server.ID), readResource); err != nil {
 			return nil, err
+		}
+		if capabilities.Resources.Subscribe && current.receivesNotifications() {
+			// Watching changes nothing the person sees: the server only reports changes.
+			watch := func(on bool) func(context.Context, *connection, map[string]any) (json.RawMessage, error) {
+				return func(ctx context.Context, current *connection, arguments map[string]any) (json.RawMessage, error) {
+					return m.subscribeTool(ctx, current, arguments, on)
+				}
+			}
+			if err := add(subscribeName, subscribeSchema, fmt.Sprintf("Watch one resource of the MCP server %s: when it changes, the start of your next turn says so.", server.ID), watch(true)); err != nil {
+				return nil, err
+			}
+			if err := add(unsubscribeName, unsubscribeSchema, fmt.Sprintf("Stop watching a resource of the MCP server %s.", server.ID), watch(false)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if server.Prompts {
@@ -316,4 +339,20 @@ func getPrompt(ctx context.Context, current *connection, arguments map[string]an
 		result.Content = append(result.Content, &mcpSDK.TextContent{Text: "The MCP prompt " + params.Name + " has no messages."})
 	}
 	return marshalParts(boundedContent(result, current.maxResultBytes))
+}
+
+// subscribeTool watches (on) or stops watching one resource for the model.
+func (m *Manager) subscribeTool(ctx context.Context, current *connection, arguments map[string]any, on bool) (json.RawMessage, error) {
+	uri := stringArgument(arguments, "uri")
+	operation := "subscribe"
+	if !on {
+		operation = "unsubscribe"
+	}
+	if err := subscribe(ctx, m, current, uri, on); err != nil {
+		return featureError(current.serverID, "resources/"+operation, err)
+	}
+	return jsonResult(struct {
+		URI        string `json:"uri"`
+		Subscribed bool   `json:"subscribed"`
+	}{uri, on}, current.maxResultBytes)
 }

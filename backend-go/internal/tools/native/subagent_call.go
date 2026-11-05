@@ -36,6 +36,9 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 	}
 	agent, _ := arguments["agent"].(string)
 	if strings.HasPrefix(agent, remote.Prefix) {
+		if _, named := arguments["model"].(string); named {
+			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "model_unavailable", "A remote agent runs on its remote's own model; leave model out"), nil
+		}
 		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
 	}
 	if resume != "" {
@@ -77,6 +80,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	if problem != "" {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_agent", problem,
 			tools.Information{Key: "available", Value: s.agentNames()}), nil
+	}
+	if agent.config, problem = withCallModel(agent.config, arguments, s.settings.ProfileModels); problem != "" {
+		return modelUnavailable(callID, problem, s.settings.ProfileModels), nil
 	}
 	if s.launcher == nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session"), nil

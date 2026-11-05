@@ -14,29 +14,47 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"jad/backend-go/internal/contentlibrary"
 )
 
 // Slash commands of a headless prompt. They are the web client's "/" menu, reached through
 // the same routes the web client calls:
 //
 //   - /compact, /reset and /state [text] run the session action and end without a turn.
+//   - /plan <prompt> runs the prompt in plan mode; the prompt may start with a command
+//     of the kinds below.
 //   - /prompt:<name>, /template:<name> and /skill:<name> put the library item's text in
 //     place of the command word; the text after it follows on a new paragraph.
 //   - /mcp:<server>:<prompt> [arg=value ...] [text] puts the MCP prompt's text there.
+//   - /resource:<server>:<resource> [variable=value ...] [text] puts the MCP resource's
+//     text there; <resource> is its name, the slug of its name, or its URI, and a
+//     template's variables are given as name=value.
+//   - /<command> [arguments], a custom command of the library (libraries.command_dirs),
+//     puts its text there, filled with the arguments ($ARGUMENTS, $1 to $9).
 //
 // A prompt whose first word is none of these is sent as it is, so "/etc/hosts is wrong"
-// is a prompt, not an unknown command.
+// is a prompt, not an unknown command; so is a /word that has the shape of a custom
+// command when the library has no such command.
 
 // Command kinds.
 const (
 	CommandCompact  = "compact"
 	CommandReset    = "reset"
 	CommandState    = "state"
+	CommandPlan     = "plan"
 	CommandPrompt   = "prompt"
 	CommandTemplate = "template"
 	CommandSkill    = "skill"
 	CommandMCP      = "mcp"
+	CommandResource = "resource"
+	// CommandCustom is a /word that may name a custom command; Item is the word.
+	CommandCustom = "custom"
 )
+
+// errNotACommand is a custom-command word the library does not have: the input is a
+// prompt after all.
+var errNotACommand = errors.New("not a command")
 
 // Command is the slash command a prompt starts with.
 type Command struct {
@@ -67,19 +85,19 @@ func ParseCommand(input string) (Command, bool) {
 	}
 	command := Command{Word: word[1:], Text: strings.TrimSpace(rest)}
 	switch command.Word {
-	case CommandCompact, CommandReset, CommandState:
+	case CommandCompact, CommandReset, CommandState, CommandPlan:
 		command.Kind = command.Word
 		return command, true
 	}
 	kind, item, found := strings.Cut(command.Word, ":")
 	if !found || item == "" {
-		return Command{}, false
+		return customCommand(command)
 	}
 	switch kind {
 	case CommandPrompt, CommandTemplate, CommandSkill:
 		command.Kind, command.Item = kind, item
 		return command, true
-	case CommandMCP:
+	case CommandMCP, CommandResource:
 		server, name, found := strings.Cut(item, ":")
 		if !found || name == "" || !mcpServerPattern.MatchString(server) {
 			return Command{}, false
@@ -87,7 +105,22 @@ func ParseCommand(input string) (Command, bool) {
 		command.Kind, command.Server, command.Item = kind, server, name
 		return command, true
 	}
-	return Command{}, false
+	return customCommand(command)
+}
+
+// customCommand reads a word that has the shape of a custom command's: slugs joined by
+// ":", none of them a word another kind owns.
+func customCommand(command Command) (Command, bool) {
+	if command.Word == "" || contentlibrary.IsReservedCommandWord(command.Word) {
+		return Command{}, false
+	}
+	for _, part := range strings.Split(command.Word, ":") {
+		if part == "" || contentlibrary.Slug(part) != part {
+			return Command{}, false
+		}
+	}
+	command.Kind, command.Item = CommandCustom, command.Word
+	return command, true
 }
 
 // IsAction reports whether the command is a session action, which ends without a turn.
@@ -95,9 +128,25 @@ func (c Command) IsAction() bool {
 	return c.Kind == CommandCompact || c.Kind == CommandReset || c.Kind == CommandState
 }
 
-// Check refuses what the command cannot take: text after /compact or /reset, and a model
-// or an output schema for an action, which starts no turn.
-func (c Command) Check(model string, output bool) error {
+// Check refuses what the command cannot take: text after /compact or /reset, a model, an
+// output schema or plan mode for an action, which starts no turn, and a /plan with no
+// prompt or followed by an action.
+func (c Command) Check(model string, output, plan bool) error {
+	if c.Kind == CommandPlan {
+		if c.Text == "" {
+			return errors.New("/plan needs a prompt after it")
+		}
+		if inner, ok := ParseCommand(c.Text); ok {
+			if inner.IsAction() || inner.Kind == CommandPlan {
+				return fmt.Errorf("/plan cannot be followed by /%s", inner.Word)
+			}
+			return inner.Check(model, output, true)
+		}
+		return nil
+	}
+	if c.IsAction() && plan {
+		return fmt.Errorf("/%s starts no turn, so it cannot run in plan mode", c.Kind)
+	}
 	if (c.Kind == CommandCompact || c.Kind == CommandReset) && c.Text != "" {
 		return fmt.Errorf("/%s takes no text", c.Kind)
 	}
@@ -172,22 +221,97 @@ func (r *Runner) runAction(ctx context.Context, request Request, command Command
 
 // expand returns the text a library or MCP command stands for, followed by the command's
 // text on a new paragraph.
-func (r *Runner) expand(ctx context.Context, request Request, command Command) (string, error) {
+func (r *Runner) expand(ctx context.Context, request Request, command Command) (string, commandOptions, error) {
 	var text, rest string
+	var options commandOptions
 	var err error
-	if command.Kind == CommandMCP {
+	switch command.Kind {
+	case CommandMCP:
 		text, rest, err = r.mcpPrompt(ctx, request, command)
-	} else {
+	case CommandResource:
+		text, rest, err = r.mcpResource(ctx, request, command, &options.attachments)
+	case CommandCustom:
+		// The arguments are part of the command's text, not a paragraph after it.
+		text, options, err = r.customCommandText(ctx, command)
+	default:
 		text, err = r.libraryItem(ctx, command)
 		rest = command.Text
 	}
 	if err != nil {
-		return "", err
+		return "", commandOptions{}, err
 	}
 	if rest == "" {
-		return text, nil
+		return text, options, nil
 	}
-	return strings.TrimRight(text, "\n") + "\n\n" + rest, nil
+	if strings.TrimSpace(text) == "" {
+		return rest, options, nil
+	}
+	return strings.TrimRight(text, "\n") + "\n\n" + rest, options, nil
+}
+
+// commandOptions are the run options of a custom command's front matter, as the expand
+// route gives them.
+type commandOptions struct {
+	Model        string   `json:"model"`
+	Profile      string   `json:"profile"`
+	Plan         bool     `json:"plan"`
+	AllowedTools []string `json:"allowed_tools"`
+	// attachments are the images and PDFs of a /resource command's resource.
+	attachments []Attachment
+}
+
+// apply sets what the request does not set itself: a --model, --profile or tool list the
+// caller gave wins over the command's. plan: true turns plan mode on.
+func (o commandOptions) apply(request *Request) {
+	if request.Model == "" {
+		request.Model = o.Model
+	}
+	if request.Profile == "" {
+		request.Profile = o.Profile
+	}
+	if o.Plan {
+		request.Plan = true
+	}
+	if request.Tools == nil && o.AllowedTools != nil {
+		request.Tools = o.AllowedTools
+	}
+}
+
+// customCommandText finds the custom command named by the word and returns its text
+// filled with the command's text as arguments, as the expand route gives it. A word the
+// library has no command for is errNotACommand.
+func (r *Runner) customCommandText(ctx context.Context, command Command) (string, commandOptions, error) {
+	raw, err := r.call(ctx, http.MethodGet, "/api/library", nil)
+	if err != nil {
+		return "", commandOptions{}, err
+	}
+	var catalog struct {
+		Commands []struct {
+			ID      string `json:"id"`
+			Command string `json:"command"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		return "", commandOptions{}, fmt.Errorf("read the library: %w", err)
+	}
+	for _, entry := range catalog.Commands {
+		if entry.Command != command.Item {
+			continue
+		}
+		raw, err := r.call(ctx, http.MethodPost, "/api/library/command/"+url.PathEscape(entry.ID)+"/expand", map[string]string{"arguments": command.Text})
+		if err != nil {
+			return "", commandOptions{}, err
+		}
+		var expanded struct {
+			Text string `json:"text"`
+			commandOptions
+		}
+		if err := json.Unmarshal(raw, &expanded); err != nil {
+			return "", commandOptions{}, fmt.Errorf("read the command's text: %w", err)
+		}
+		return expanded.Text, expanded.commandOptions, nil
+	}
+	return "", commandOptions{}, errNotACommand
 }
 
 // libraryItem reads the library item a /prompt:, /template: or /skill: command names. The
@@ -250,7 +374,7 @@ type libraryKey struct {
 
 // libraryKeys gives each item its menu key, kind:slug, in the order the web client does.
 func libraryKeys(groups [][]librarySummary) []libraryKey {
-	taken := map[string]bool{CommandCompact: true, CommandState: true, CommandReset: true}
+	taken := map[string]bool{CommandCompact: true, CommandState: true, CommandReset: true, CommandPlan: true}
 	var keys []libraryKey
 	for _, group := range groups {
 		for _, summary := range group {
@@ -270,23 +394,7 @@ func libraryKeys(groups [][]librarySummary) []libraryKey {
 // run of characters that are not letters or digits made one dash and the dashes at either
 // end dropped; "untitled" when nothing is left. It is the web client's librarySlug.
 func LibrarySlug(name string) string {
-	var builder strings.Builder
-	dash := false
-	for _, character := range strings.ToLower(name) {
-		if unicode.IsLetter(character) || unicode.IsNumber(character) {
-			if dash && builder.Len() > 0 {
-				builder.WriteByte('-')
-			}
-			dash = false
-			builder.WriteRune(character)
-			continue
-		}
-		dash = true
-	}
-	if builder.Len() == 0 {
-		return "untitled"
-	}
-	return builder.String()
+	return contentlibrary.Slug(name)
 }
 
 type mcpPromptArgument struct {
@@ -373,6 +481,116 @@ func (r *Runner) mcpPrompt(ctx context.Context, request Request, command Command
 		return "", "", fmt.Errorf("read the MCP prompt: %w", err)
 	}
 	return filled.Prompt.Text, rest, nil
+}
+
+type mcpResourceEntry struct {
+	Server      string   `json:"server"`
+	URI         string   `json:"uri"`
+	URITemplate string   `json:"uri_template"`
+	Variables   []string `json:"variables"`
+	Name        string   `json:"name"`
+}
+
+// mcpResource reads the MCP resource a /resource:<server>:<resource> command names: by
+// its name, the slug of its name, or its URI, among the server's resources and templates.
+// A template's variables are name=value words at the start of the text, as a prompt's
+// arguments are; the rest of the text follows the resource. A URI the server does not
+// list (a resource it can read but does not list) is read as given.
+func (r *Runner) mcpResource(ctx context.Context, request Request, command Command, attachments *[]Attachment) (string, string, error) {
+	raw, err := r.call(ctx, http.MethodGet, r.sessionPath(request.Session, "mcp-resources", request.Profile), nil)
+	if err != nil {
+		return "", "", err
+	}
+	var listed struct {
+		Resources []mcpResourceEntry `json:"resources"`
+		Failures  []struct {
+			Server string `json:"server"`
+			Error  string `json:"error"`
+		} `json:"failures"`
+	}
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		return "", "", fmt.Errorf("read the MCP resources: %w", err)
+	}
+	for _, failure := range listed.Failures {
+		if failure.Server == command.Server {
+			return "", "", fmt.Errorf("list the resources of MCP server %s: %s", failure.Server, failure.Error)
+		}
+	}
+	var found *mcpResourceEntry
+	var names []string
+	var bySlug []int
+	listedServer := false
+	for index := range listed.Resources {
+		entry := &listed.Resources[index]
+		if entry.Server != command.Server {
+			continue
+		}
+		listedServer = true
+		names = append(names, entry.Name)
+		switch {
+		case entry.Name == command.Item || (entry.URI != "" && entry.URI == command.Item):
+			if found == nil {
+				found = entry
+			}
+		case LibrarySlug(entry.Name) == command.Item:
+			bySlug = append(bySlug, index)
+		}
+	}
+	if found == nil && len(bySlug) == 1 {
+		found = &listed.Resources[bySlug[0]]
+	}
+	body := map[string]any{"server": command.Server}
+	rest := command.Text
+	switch {
+	case found != nil && found.URITemplate != "":
+		declared := map[string]bool{}
+		for _, variable := range found.Variables {
+			declared[variable] = true
+		}
+		variables := map[string]string{}
+		for {
+			rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+			name, value, remaining, ok := namedArgument(rest, declared)
+			if !ok {
+				break
+			}
+			if _, repeated := variables[name]; repeated {
+				return "", "", fmt.Errorf("variable %s of MCP resource %s is given twice", name, found.Name)
+			}
+			variables[name] = value
+			rest = remaining
+		}
+		if len(variables) == 0 && len(found.Variables) > 0 {
+			return "", "", fmt.Errorf("MCP resource template %s needs its variables as name=value after the command (it takes %s)", found.Name, strings.Join(found.Variables, ", "))
+		}
+		body["uri_template"], body["variables"] = found.URITemplate, variables
+	case found != nil:
+		body["uri"] = found.URI
+	case len(bySlug) > 1:
+		return "", "", fmt.Errorf("MCP server %s has more than one resource named like %q; use the exact name or the URI", command.Server, command.Item)
+	case strings.Contains(command.Item, "://"):
+		body["uri"] = command.Item
+	case !listedServer:
+		return "", "", fmt.Errorf("MCP server %s lists no resources: the profile's toolsets must list it with resources: true", command.Server)
+	default:
+		sort.Strings(names)
+		return "", "", fmt.Errorf("MCP server %s has no resource %q; its resources are %s", command.Server, command.Item, strings.Join(names, ", "))
+	}
+	raw, err = r.call(ctx, http.MethodPost, r.sessionPath(request.Session, "mcp-resources/read", request.Profile), body)
+	if err != nil {
+		return "", "", err
+	}
+	var read struct {
+		Resource struct {
+			Text        string       `json:"text"`
+			Attachments []Attachment `json:"attachments"`
+		} `json:"resource"`
+	}
+	if err := json.Unmarshal(raw, &read); err != nil {
+		return "", "", fmt.Errorf("read the MCP resource: %w", err)
+	}
+	*attachments = append(*attachments, read.Resource.Attachments...)
+	return read.Resource.Text, strings.TrimSpace(rest), nil
 }
 
 // promptArguments splits a command's text into the prompt's arguments and the rest.
@@ -533,14 +751,16 @@ func (r *Runner) runCommand(ctx context.Context, request *Request, command Comma
 		result.DurationMS = time.Since(started).Milliseconds()
 		return result, true, nil
 	}
-	input, err := r.expand(commandCtx, *request, command)
+	input, options, err := r.expand(commandCtx, *request, command)
 	if err != nil {
 		return stopped(err)
 	}
-	if strings.TrimSpace(input) == "" {
+	if strings.TrimSpace(input) == "" && len(options.attachments) == 0 {
 		return Result{}, false, fmt.Errorf("/%s stands for an empty text", command.Word)
 	}
 	request.Input = input
+	request.Attachments = append(request.Attachments, options.attachments...)
+	options.apply(request)
 	if request.Timeout > 0 {
 		// The run has what the command left of the timeout.
 		request.Timeout -= time.Since(started)

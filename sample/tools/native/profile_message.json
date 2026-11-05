@@ -19,6 +19,10 @@
             "minLength": 1,
             "description": "The message to send. The profile sees nothing of this conversation."
           },
+          "model": {
+            "type": "string",
+            "description": "Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."
+          },
           "block_ms": {
             "type": "integer",
             "minimum": 0,

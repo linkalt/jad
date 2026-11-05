@@ -86,6 +86,26 @@ export function PlusIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function ForkIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="5" r="2" />
+      <circle cx="12" cy="19" r="2" />
+      <path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7" />
+      <path d="M12 12v5" />
+    </svg>
+  );
+}
+
 export function PencilIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -117,6 +137,27 @@ export function TrashIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M4 7h16" />
       <path d="M10 11v6M14 11v6" />
       <path d="M5.5 7l1 13h11l1-13M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+/** A broadcast mark: the MCP resources a conversation watches for changes. */
+export function WatchIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="1.75" />
+      <path d="M8.25 8.25a5.3 5.3 0 0 0 0 7.5" />
+      <path d="M15.75 8.25a5.3 5.3 0 0 1 0 7.5" />
+      <path d="M5.25 5.25a9.55 9.55 0 0 0 0 13.5" />
+      <path d="M18.75 5.25a9.55 9.55 0 0 1 0 13.5" />
     </svg>
   );
 }

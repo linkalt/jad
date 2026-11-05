@@ -283,11 +283,14 @@ func runAttempt(ctx context.Context, suite *Suite, runner Runner, root Root, sta
 	}
 	result.Session = root.ID + ":" + sessionID
 	run, err := runner.Run(ctx, headless.Request{
-		Session: result.Session,
-		Profile: suite.profileOf(c),
-		Model:   suite.modelOf(c),
-		Input:   c.Prompt,
-		Timeout: time.Duration(suite.timeoutOf(c)) * time.Millisecond,
+		Session:  result.Session,
+		Profile:  suite.profileOf(c),
+		Model:    suite.modelOf(c),
+		Input:    c.Prompt,
+		Timeout:  time.Duration(suite.timeoutOf(c)) * time.Millisecond,
+		Commands: suite.commandsOf(c),
+		Plan:     suite.planOf(c),
+		Output:   c.output,
 	})
 	if err != nil {
 		result.Outcome, result.Reason = OutcomeError, err.Error()
@@ -297,7 +300,11 @@ func runAttempt(ctx context.Context, suite *Suite, runner Runner, root Root, sta
 	_ = os.WriteFile(answerFile, []byte(run.Text), 0o600)
 
 	reasons := []string{}
-	if run.Status != headless.StatusCompleted {
+	switch run.Status {
+	case headless.StatusCompleted:
+	case headless.StatusInvalidOutput:
+		reasons = append(reasons, run.Error)
+	default:
 		reasons = append(reasons, "run "+run.Status)
 	}
 	for _, line := range c.Checks {

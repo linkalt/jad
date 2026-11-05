@@ -135,3 +135,9 @@ test('sorting reads digits as numbers, ignores case, skips unknown keys and leav
   assert.deepEqual(sortCatalogRows(rows, [{sortKey: 'nope', direction: 'descending'}]).map(row => row.id), ['a/m1', 'a/M2', 'a/m10']);
   assert.deepEqual(rows.map(row => row.id), before);
 });
+
+test('catalogRows lists a model\'s efforts and sorts by them', () => {
+  const rows = catalogRows('models', [{id: 'openai/b', efforts: ['low', 'high']}, {id: 'openai/a'}]);
+  assert.deepEqual(rows.map(row => row.efforts), ['low, high', '']);
+  assert.deepEqual(sortCatalogRows(rows, [{sortKey: 'efforts', direction: 'descending'}]).map(row => row.id), ['openai/b', 'openai/a']);
+});

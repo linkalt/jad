@@ -115,6 +115,8 @@ func TestNormalizeConfigRejectsMissingSecretsAndInvalidLimits(t *testing.T) {
 		{name: "schema limit not an integer", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":512.5}`, want: "max_schema_bytes must be an integer"},
 		{name: "schema limit above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"max_schema_bytes":1048577}`, want: "max_schema_bytes must be an integer"},
 		{name: "description limit zero", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":0}`, want: "max_description_bytes must be an integer"},
+		{name: "resource events zero", raw: `{"transport":{"type":"stdio","command":"x"},"resource_events_max":0}`, want: "resource_events_max must be an integer"},
+		{name: "resource events too many", raw: `{"transport":{"type":"stdio","command":"x"},"resource_events_max":10001}`, want: "resource_events_max must be an integer"},
 		{name: "description limit negative", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":-4}`, want: "max_description_bytes must be an integer"},
 		{name: "description limit not an integer", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":64.25}`, want: "max_description_bytes must be an integer"},
 		{name: "description limit above maximum", raw: `{"transport":{"type":"stdio","command":"x"},"max_description_bytes":65537}`, want: "max_description_bytes must be an integer"},
@@ -195,6 +197,7 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 		{key: "max_tools", minimum: minMaxTools, maximum: maxMaxTools, defaultValue: defaultMaxTools},
 		{key: "max_schema_bytes", minimum: minMaxSchemaBytes, maximum: maxMaxSchemaBytes, defaultValue: defaultMaxSchemaBytes},
 		{key: "max_description_bytes", minimum: minMaxDescriptionBytes, maximum: maxMaxDescriptionBytes, defaultValue: defaultMaxDescriptionBytes},
+		{key: "resource_events_max", minimum: minResourceEventsMax, maximum: maxResourceEventsMax, defaultValue: defaultResourceEventsMax},
 	}
 	for _, limit := range limits {
 		property, exists := schema.Properties[limit.key]
@@ -207,7 +210,7 @@ func TestMCPConfigSchemaMatchesTheLoader(t *testing.T) {
 				limit.key, property.Type, property.Minimum, property.Maximum, property.Default, limit.minimum, limit.maximum, limit.defaultValue)
 		}
 	}
-	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes"}
+	documented := []string{"name", "schema_version", "transport", "timeout_ms", "max_result_bytes", "max_tools", "max_schema_bytes", "max_description_bytes", "resource_events_max"}
 	keys := make([]string, 0, len(schema.Properties))
 	for key := range schema.Properties {
 		keys = append(keys, key)

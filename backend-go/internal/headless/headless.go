@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jad/backend-go/internal/outputcheck"
 )
 
 // Run outcomes. They are the "status" of a Result and decide the exit code of "jad run".
@@ -53,6 +55,27 @@ type Request struct {
 	// Commands makes an input that starts with a slash command run it (see ParseCommand):
 	// an action ends without a turn, and a library or MCP command is replaced by its text.
 	Commands bool
+	// Plan starts the turn in plan mode: the model sees only the tools that never change
+	// anything, and the session's plan_mode instructions. /plan sets it too.
+	Plan bool
+	// Tools, when not nil, narrows the turn's tools to the ones these tools.allow entries
+	// cover. A custom command's allowed-tools sets it when it is nil.
+	Tools []string
+	// ExecutePlan carries out the plan the session's transcript ends with: the turn sends
+	// the session's plan_mode.execute_prompt, followed by Input when it has text. Input may
+	// be empty, and is not read for commands.
+	ExecutePlan bool
+	// Attachments are images and PDFs sent with Input as parts of one message. A
+	// /resource command adds those of the resource it reads.
+	Attachments []Attachment
+}
+
+// Attachment is an image or a PDF sent with the input: Type "image", or "file" with a Name;
+// Data is base64 (or a data URL). It is a run input part as the run route reads it.
+type Attachment struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+	Data string `json:"data"`
 }
 
 // Event is one run-stream event: its SSE name and its JSON data.
@@ -85,6 +108,12 @@ type Result struct {
 	// Request.Commands was set; CommandResult is the answer of an action's route.
 	Command       string          `json:"command,omitempty"`
 	CommandResult json.RawMessage `json:"command_result,omitempty"`
+	// Plan is set when the turn ran in plan mode, ExecutePlan when it carried out a plan.
+	Plan        bool `json:"plan,omitempty"`
+	ExecutePlan bool `json:"execute_plan,omitempty"`
+	// Model is the model the turn asked for (--model, or a custom command's front matter);
+	// empty for the profile's default.
+	Model string `json:"model,omitempty"`
 }
 
 // Runner sends headless turns to an API handler.
@@ -114,24 +143,44 @@ func (e *RequestError) Error() string {
 // run and returns an aborted result once the run has ended; the request's timeout does
 // the same with a timed_out result. The error is set only when no run was started.
 func (r *Runner) Run(ctx context.Context, request Request) (Result, error) {
-	if strings.TrimSpace(request.Input) == "" {
+	if strings.TrimSpace(request.Input) == "" && !request.ExecutePlan {
 		return Result{}, errors.New("the prompt is empty")
+	}
+	if request.ExecutePlan && request.Plan {
+		return Result{}, errors.New("carrying out a plan cannot run in plan mode")
 	}
 	if strings.TrimSpace(request.Session) == "" {
 		return Result{}, errors.New("a session is required")
 	}
-	if request.Commands {
+	if request.Commands && !request.ExecutePlan {
 		if command, ok := ParseCommand(request.Input); ok {
-			if err := command.Check(request.Model, request.Output != nil); err != nil {
+			if err := command.Check(request.Model, request.Output != nil, request.Plan); err != nil {
 				return Result{}, err
 			}
-			result, done, err := r.runCommand(ctx, &request, command)
-			if err != nil || done {
-				return result, err
+			word := command.Word
+			if command.Kind == CommandPlan {
+				// /plan [command] text: the rest is the prompt, and may start with a
+				// library, MCP or custom command of its own (Check refused an action).
+				request.Plan, request.Input = true, command.Text
+				command, ok = ParseCommand(request.Input)
 			}
-			result, err = r.run(ctx, request)
+			if ok {
+				result, done, err := r.runCommand(ctx, &request, command)
+				switch {
+				case errors.Is(err, errNotACommand):
+					// A /word the library has no command for is a prompt, sent as written.
+					if word != CommandPlan {
+						word = ""
+					}
+				case err != nil || done:
+					return result, err
+				case word != CommandPlan:
+					word = command.Word
+				}
+			}
+			result, err := r.run(ctx, request)
 			if err == nil {
-				result.Command = command.Word
+				result.Command = word
 			}
 			return result, err
 		}
@@ -149,11 +198,25 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		}
 		outputFormat = format
 	}
+	var input any = request.Input
+	if len(request.Attachments) > 0 {
+		parts := make([]any, 0, len(request.Attachments)+1)
+		if strings.TrimSpace(request.Input) != "" {
+			parts = append(parts, map[string]string{"type": "text", "text": request.Input})
+		}
+		for _, attachment := range request.Attachments {
+			parts = append(parts, attachment)
+		}
+		input = parts
+	}
 	body, err := json.Marshal(struct {
-		Input        string          `json:"input"`
+		Input        any             `json:"input"`
 		Model        string          `json:"model,omitempty"`
 		OutputFormat json.RawMessage `json:"output_format,omitempty"`
-	}{Input: request.Input, Model: request.Model, OutputFormat: outputFormat})
+		Plan         bool            `json:"plan,omitempty"`
+		Tools        []string        `json:"tools,omitempty"`
+		ExecutePlan  bool            `json:"execute_plan,omitempty"`
+	}{Input: input, Model: request.Model, OutputFormat: outputFormat, Plan: request.Plan, Tools: request.Tools, ExecutePlan: request.ExecutePlan})
 	if err != nil {
 		return Result{}, err
 	}
@@ -191,7 +254,7 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 		return Result{}, &RequestError{Status: status, Message: errorMessage(raw)}
 	}
 
-	result := Result{Session: request.Session, Profile: request.Profile}
+	result := Result{Session: request.Session, Profile: request.Profile, Model: request.Model, Plan: request.Plan, ExecutePlan: request.ExecutePlan}
 	var timeout <-chan time.Time
 	if request.Timeout > 0 {
 		timer := time.NewTimer(request.Timeout)
@@ -207,6 +270,8 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 
 	var stopReason string
 	var streamed string
+	// serverVerdict is the server's check of the answer against the output schema.
+	var serverVerdict *outputcheck.Verdict
 	stop := func(reason string) {
 		if stopReason != "" {
 			return
@@ -264,6 +329,12 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 				}
 			case "completed":
 				result.Status = StatusCompleted
+				var checked struct {
+					Output *outputcheck.Verdict `json:"output"`
+				}
+				if json.Unmarshal(event.Data, &checked) == nil {
+					serverVerdict = checked.Output
+				}
 				if text, ok := messageText(event.Data); ok {
 					result.Text = text
 				} else {
@@ -287,7 +358,13 @@ func (r *Runner) run(ctx context.Context, request Request) (Result, error) {
 					result.Status = StatusFailed
 				}
 				if result.Status == StatusCompleted && request.Output != nil {
-					request.Output.check(&result)
+					// The server checks the answer against the schema it was sent; a server
+					// that gave no verdict is checked here the same way.
+					if serverVerdict != nil {
+						request.Output.apply(&result, *serverVerdict)
+					} else {
+						request.Output.check(&result)
+					}
 				}
 				result.DurationMS = time.Since(started).Milliseconds()
 				return result, nil

@@ -17,7 +17,7 @@ import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {Fragment, useState, type ReactNode} from 'react';
+import {Fragment, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type WebUiMessage} from '../api';
 import {type MessageRecord, type RunRetryState, type Session} from '../app-types';
 import appConfig from '../config.json';
@@ -28,15 +28,17 @@ import {PANE_HEADER_Z_INDEX} from '../panel-layers';
 import {conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
+import {forkPointMessage} from '../session-fork';
 import {profileMessageBusyNote, profileMessageRunLabel} from '../session-views';
 import {useActiveTranscript} from '../use-active-transcript';
 import {useRowWidth} from '../use-row-width';
 import {AssistantIdentity} from './AssistantMessage';
-import {type ComposerInsertActions, ComposerPane} from './ComposerPane';
+import {type ComposerInsertActions, type ComposerSubmitOptions, ComposerPane} from './ComposerPane';
 import {ComposerErrorBoundary} from './ComposerErrorBoundary';
 import {JadReadme} from './JadReadme';
 import {MarkdownText} from './MarkdownText';
 import {PromptLibraryPanel} from './PromptLibraryPanel';
+import {ResourceWatchPanel} from './ResourceWatchPanel';
 import {ProviderRetryNotice} from './ProviderRetryNotice';
 import {RunFailureRow} from './RunFailureRow';
 import {RunInspector} from './RunInspector';
@@ -185,7 +187,12 @@ export type ViewPaneProps = {
   composer?: ReactNode;
   /** The session reference the composer's session-scoped features use. */
   composerSessionId: string;
-  onSubmitComposer: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
+  onSubmitComposer: (
+    value: string,
+    images: AttachedImage[],
+    files: AttachedFile[],
+    options: ComposerSubmitOptions,
+  ) => boolean;
   onStopComposer: () => void;
   isComposerDisabled: boolean;
   placeholder: string;
@@ -232,6 +239,8 @@ export type ViewPaneProps = {
   isFrontCompactionConfirmationOpen: boolean;
   frontCompactionTargetMessageId: string | undefined;
   onSelectFrontCompaction: ((message: MessageRecord) => void) | undefined;
+  /** Forks the conversation before a user message; absent while forking is not possible. */
+  onForkMessage?: ((message: MessageRecord, keepTurn: boolean) => void) | undefined;
   onLoadFull: (message: MessageRecord) => void;
   /** Fetches the turns before the oldest one this client holds, from the server. */
   onLoadOlderTurns: () => void;
@@ -295,6 +304,7 @@ export function ViewPane({
   isFrontCompactionConfirmationOpen,
   frontCompactionTargetMessageId,
   onSelectFrontCompaction,
+  onForkMessage,
   onLoadFull,
   onLoadOlderTurns,
   onFocus,
@@ -319,6 +329,14 @@ export function ViewPane({
     isRunning,
     streamingMessage,
   });
+  // The rows keep one fork handler while messages come and go; it reads the list when used.
+  const forkMessagesRef = useRef(visibleMessages);
+  forkMessagesRef.current = visibleMessages;
+  const forkMessage = useMemo(() => onForkMessage === undefined
+    ? undefined
+    : (message: MessageRecord, keepTurn: boolean) =>
+      onForkMessage(forkPointMessage(forkMessagesRef.current, message, keepTurn), keepTurn),
+  [onForkMessage]);
   /**
    * This pane's own right-edge panel.
    *
@@ -357,6 +375,8 @@ export function ViewPane({
         onToggleInspector={() => togglePanel('inspector')}
         isPromptLibraryOpen={panel === 'prompts'}
         onTogglePromptLibrary={() => togglePanel('prompts')}
+        isResourcePanelOpen={panel === 'resources'}
+        onToggleResourcePanel={() => togglePanel('resources')}
         onRegisterInsert={insert => onRegisterComposerInsert(viewKey, insert)}
         slashCommands={slashCommands}
         onSlashCommand={onSlashCommand}
@@ -575,6 +595,7 @@ export function ViewPane({
                       onSelectFrontCompaction={isFrontCompactionSelectionMode
                         ? onSelectFrontCompaction
                         : undefined}
+                      onFork={isFrontCompactionSelectionMode ? undefined : forkMessage}
                     />
                     {placedFailures.byMessageId.get(message.id)?.map(failure => (
                       <RunFailureRow key={failure.turn_id} failure={failure} />
@@ -662,6 +683,15 @@ export function ViewPane({
           onUsePrompt={onUsePrompt}
           onUseTemplate={onUseTemplate}
           onUseSkill={onUseSkill}
+        />
+      )}
+      {panel === 'resources' && (
+        <ResourceWatchPanel
+          sessionId={composerSessionId === '' ? undefined : composerSessionId}
+          profile={profile}
+          region={panelRegion}
+          isEdgeFixed={isPanelAtWindowEdge}
+          onClose={() => setPanel(null)}
         />
       )}
       </VStack>

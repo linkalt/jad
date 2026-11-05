@@ -172,3 +172,13 @@ test('toolsets and MCP servers are addressed as category/name under their own pa
   assert.equal(requests[2].init.method, 'DELETE');
   await assert.rejects(fetchCatalogFile('toolsets', 'one'), /<category>\/<name>/);
 });
+
+test('fetchCatalogFiles keeps the efforts of a model and rejects a non-string one', async () => {
+  reply = () => json({files: [{id: 'openai/deep', etag: '"1"', efforts: ['low', 'high']}, {id: 'openai/small', etag: '"2"', efforts: []}]});
+  assert.deepEqual(await fetchCatalogFiles('models'), [
+    {id: 'openai/deep', etag: '"1"', efforts: ['low', 'high']},
+    {id: 'openai/small', etag: '"2"'},
+  ]);
+  reply = () => json({files: [{id: 'openai/deep', etag: '"1"', efforts: [1]}]});
+  await assert.rejects(fetchCatalogFiles('models'), /invalid catalog list/);
+});

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"text/template"
 	"time"
 	"unicode/utf8"
 
@@ -42,6 +43,8 @@ type notifier struct {
 	settings sessionfs.TriggerNotifier
 	url      string
 	headers  http.Header
+	// template is settings.Template parsed; nil without one.
+	template *template.Template
 }
 
 // notifyBody is the json format: the run's record, a one-line text and, when answer_bytes
@@ -53,6 +56,29 @@ type notifyBody struct {
 	AnswerTruncated bool   `json:"answer_truncated,omitempty"`
 }
 
+// notifyTemplateData is what a notifier's template reads: the json format's fields by their
+// Go names, with the cost a plain number (0 when unknown) so printf and if take it.
+type notifyTemplateData struct {
+	ID, Trigger, Source, Session, Profile, Status, TurnID, Error string
+	StartedAt, EndedAt                                           time.Time
+	CostUSD                                                      float64
+	DurationMS                                                   int64
+	Text, Answer                                                 string
+	AnswerTruncated                                              bool
+}
+
+func templateData(body notifyBody) notifyTemplateData {
+	data := notifyTemplateData{
+		ID: body.ID, Trigger: body.Trigger, Source: body.Source, Session: body.Session, Profile: body.Profile,
+		Status: body.Status, TurnID: body.TurnID, Error: body.Error, StartedAt: body.StartedAt, EndedAt: body.EndedAt,
+		DurationMS: body.DurationMS, Text: body.Text, Answer: body.Answer, AnswerTruncated: body.AnswerTruncated,
+	}
+	if body.CostUSD != nil {
+		data.CostUSD = *body.CostUSD
+	}
+	return data
+}
+
 // newNotifiers resolves every notifier's url_env and headers_env. A variable that is unset
 // or empty stops the server, as a webhook secret does, instead of failing each delivery.
 func newNotifiers(settings []sessionfs.TriggerNotifier, environment map[string]string) (map[string]*notifier, error) {
@@ -60,6 +86,13 @@ func newNotifiers(settings []sessionfs.TriggerNotifier, environment map[string]s
 	for _, setting := range settings {
 		resolved := &notifier{settings: setting, url: setting.URL, headers: http.Header{}}
 		section := "server.triggers.notify." + setting.Name
+		if setting.Template != "" {
+			parsed, err := sessionfs.ParseTriggerNotifyTemplate(setting.Name, setting.Template)
+			if err != nil {
+				return nil, fmt.Errorf("%s.template: %v", section, err)
+			}
+			resolved.template = parsed
+		}
 		if setting.URLEnv != "" {
 			resolved.url = environment[setting.URLEnv]
 			if resolved.url == "" {
@@ -136,8 +169,13 @@ func (m *Manager) setNotification(runID string, delivered Notification) {
 // deliver posts the notification, retrying a failed attempt. Once the manager closes, the
 // attempt in progress finishes but no retry starts.
 func (m *Manager) deliver(target *notifier, record Record, answer string) Notification {
-	body, contentType := notificationBody(target.settings, record, answer)
 	result := Notification{Notifier: target.settings.Name}
+	body, contentType, err := notificationBody(target, record, answer)
+	if err != nil {
+		// The same record renders the same way every time: no retry.
+		result.Status, result.Error = NotifyFailed, err.Error()
+		return result
+	}
 	for {
 		result.Attempts++
 		err := m.post(target, body, contentType)
@@ -185,28 +223,56 @@ func (m *Manager) post(target *notifier, body []byte, contentType string) error 
 	return nil
 }
 
-// notificationBody renders the notification in the notifier's format.
-func notificationBody(settings sessionfs.TriggerNotifier, record Record, answer string) ([]byte, string) {
+// notificationBody renders the notification: the notifier's template when it has one,
+// else its format's own body. A template whose output a json or slack notifier cannot
+// send (not JSON) is an error.
+func notificationBody(target *notifier, record Record, answer string) ([]byte, string, error) {
+	settings := target.settings
 	record.Notifications = nil
 	text := notificationText(record)
 	answer, truncated := cutAnswer(strings.TrimSpace(answer), settings.AnswerBytes)
+	contentType := "application/json"
 	if settings.Format == sessionfs.TriggerNotifyFormatText {
-		var out strings.Builder
-		out.WriteString(text)
-		if record.Error != "" {
-			out.WriteString("\n" + record.Error)
+		contentType = "text/plain; charset=utf-8"
+	}
+	data := notifyBody{Record: record, Text: text, Answer: answer, AnswerTruncated: truncated}
+	if target.template != nil {
+		var out bytes.Buffer
+		if err := target.template.Execute(&out, templateData(data)); err != nil {
+			return nil, "", fmt.Errorf("the template failed: %v", err)
 		}
-		if answer != "" {
-			out.WriteString("\n\n" + answer)
-			if truncated {
-				out.WriteString("…")
-			}
+		if contentType == "application/json" && !json.Valid(out.Bytes()) {
+			return nil, "", fmt.Errorf("the template did not produce JSON, which format %s sends; use the json function for strings", settings.Format)
 		}
-		return []byte(out.String() + "\n"), "text/plain; charset=utf-8"
+		return out.Bytes(), contentType, nil
+	}
+	switch settings.Format {
+	case sessionfs.TriggerNotifyFormatText:
+		return []byte(plainNotification(text, record.Error, answer, truncated) + "\n"), contentType, nil
+	case sessionfs.TriggerNotifyFormatSlack:
+		// A Slack incoming webhook takes {"text": ...}; &, < and > must be escaped in it.
+		encoded, _ := json.Marshal(map[string]string{"text": sessionfs.SlackEscape(plainNotification(text, record.Error, answer, truncated))})
+		return encoded, contentType, nil
 	}
 	// Every field is a string, a number or a time, so encoding cannot fail.
-	encoded, _ := json.Marshal(notifyBody{Record: record, Text: text, Answer: answer, AnswerTruncated: truncated})
-	return encoded, "application/json"
+	encoded, _ := json.Marshal(data)
+	return encoded, contentType, nil
+}
+
+// plainNotification is the text and slack body: the line, the error and the answer.
+func plainNotification(text, runError, answer string, truncated bool) string {
+	var out strings.Builder
+	out.WriteString(text)
+	if runError != "" {
+		out.WriteString("\n" + runError)
+	}
+	if answer != "" {
+		out.WriteString("\n\n" + answer)
+		if truncated {
+			out.WriteString("…")
+		}
+	}
+	return out.String()
 }
 
 // notificationText is one line: the trigger, how the run ended, and where and how long.

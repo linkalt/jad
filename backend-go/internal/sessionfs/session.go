@@ -155,6 +155,8 @@ type SessionConfig struct {
 	ModelPath    string
 	// ModelPaths maps each model ID the profile may use to its file.
 	ModelPaths map[string]string
+	// ProfilePath is the selected profile's own file in a catalog-layout session; empty otherwise.
+	ProfilePath string
 	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
 	// applies it to the model's request.
 	ReasoningEffort string
@@ -241,8 +243,13 @@ type SessionConfig struct {
 	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
 	// before it starts another provider round; zero means no cap.
 	MaxRunCostUSD float64
+	// MaxRunDurationMS is the most milliseconds one run may take, counted from when it
+	// holds the session's run lock; zero means no limit (the key is absent).
+	MaxRunDurationMS int64
 	// Checkpoint controls run checkpoints and undo; it is off by default.
 	Checkpoint CheckpointSettings
+	// PlanMode shapes a run started in plan mode.
+	PlanMode PlanModeSettings
 	// ProfileTools is the selected profile's optional tool allow-list; without it the
 	// model sees every registered tool (Go only).
 	ProfileTools ProfileToolSettings
@@ -389,6 +396,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	maxRunDuration, err := normalizeMaxRunDuration(setting["max_run_duration_ms"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	sandbox, err := normalizeSandbox(setting["sandbox"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
@@ -401,6 +412,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	hooks, err := normalizeHooksSettings(setting["hooks"], settingPath, envFileBase)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	planMode, err := normalizePlanModeSettings(setting["plan_mode"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -712,7 +727,9 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
 		MaxRunCostUSD:            maxRunCost,
+		MaxRunDurationMS:         maxRunDuration,
 		Checkpoint:               checkpoint,
+		PlanMode:                 planMode,
 		Hooks:                    hooks,
 		ProfileTools:             profileTools,
 		ImageResize:              imageResize,

@@ -2,12 +2,14 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {KeyboardEvent, ReactNode, SVGProps} from 'react';
 import {
   Badge,
+  Button,
   ChatComposer,
   ChatComposerInput,
   ChatSendButton,
   HStack,
   Icon,
   IconButton,
+  Token,
   useChatPasteAsToken,
 } from '@astryxdesign/core';
 import type {ChatComposerInputHandle} from '@astryxdesign/core/Chat';
@@ -21,24 +23,35 @@ import {
   useAttachments,
   useImageAttachments,
 } from './ImageAttachments';
+import {WatchIcon} from './AppIcons';
 import {FileAttachmentPicker, FileIcon} from './FileAttachments';
 import {readCaretEdges} from './composerCaret';
 import {IDLE_HISTORY, stepHistory, type HistoryCursor} from '../input-history';
 import {
+  expandRootLibraryCommand,
   fetchRootLibrary,
   fetchRootLibraryAsset,
   fetchSessionFiles,
   fetchSessionMCPPrompt,
   fetchSessionMCPPrompts,
+  fetchSessionMCPResource,
+  fetchSessionMCPResources,
   type MCPPrompt,
+  type MCPResource,
+  type CommandRunOptions,
+  type RootLibraryCommand,
 } from '../api';
 import {
   createSlashSource,
   mcpPromptArgumentValues,
+  mcpResourceVariableValues,
   type SlashCommand,
   type SlashSelection,
 } from '../slash-commands';
+import {resourceAttachmentFiles} from '../resource-attachments';
 import {MCPPromptDialog} from './MCPPromptDialog';
+import {CommandArgumentsDialog} from './CommandArgumentsDialog';
+import {ResourceVariablesDialog} from './ResourceVariablesDialog';
 import {useFileDrop} from './FileDrop';
 import {createComposerTriggers, resolveMentionFiles, slashTrigger} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
@@ -68,6 +81,30 @@ import {
   LINK_KEY,
 } from './composerMarkdown';
 
+/**
+ * How a message is sent: `plan` runs it in plan mode; `model` and `tools` come from a
+ * custom command's front matter; `executePlan` carries out the plan the view ends with,
+ * and the text may then be empty.
+ */
+export type ComposerSubmitOptions = {
+  plan: boolean;
+  model?: string;
+  tools?: string[];
+  executePlan?: boolean;
+};
+
+/** The run options a picked custom command left for the view's next message. */
+type PendingCommandOptions = {command: string; model?: string; tools?: string[]};
+
+/** The token text of pending command options: the command, then what it sets. */
+export function commandOptionsLabel(pending: PendingCommandOptions): string {
+  const parts = [
+    ...(pending.model === undefined ? [] : [`model ${pending.model}`]),
+    ...(pending.tools === undefined ? [] : [`tools ${pending.tools.join(', ')}`]),
+  ];
+  return `/${pending.command}: ${parts.join(' · ')}`;
+}
+
 export type ComposerInsertActions = {
   text: (value: string) => void;
   prompt: (value: string, name: string) => void;
@@ -87,7 +124,12 @@ type ComposerPaneProps = {
    * Returns true when the message was accepted, so the draft is only cleared on a real send.
    * `images` are the draft's attached images; the text may be empty when there are some.
    */
-  onSubmit: (value: string, images: AttachedImage[], files: AttachedFile[]) => boolean;
+  onSubmit: (
+    value: string,
+    images: AttachedImage[],
+    files: AttachedFile[],
+    options: ComposerSubmitOptions,
+  ) => boolean;
   onStop: () => void;
   isRunning: boolean;
   /** Turns off typing, sending, attaching, dropping and inserting. */
@@ -99,6 +141,9 @@ type ComposerPaneProps = {
   /** Whether the left data panel is open, and which dataset the toggle would open. */
   isPromptLibraryOpen: boolean;
   onTogglePromptLibrary: () => void;
+  /** The watched MCP resources panel; without the toggle the button is not shown. */
+  isResourcePanelOpen?: boolean;
+  onToggleResourcePanel?: () => void;
   /**
    * Hands the pane's insert function to the app, so a view outside the composer
    * (the prompt library) can load text into the active draft. Drafts have to
@@ -138,6 +183,19 @@ function PreviewIcon(props: SVGProps<SVGSVGElement>) {
         strokeLinejoin="round"
       />
       <circle cx="12" cy="12" r="2.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/**
+ * The plan-mode switch: a list with check marks, drawn here because the semantic
+ * set has no checklist glyph.
+ */
+function PlanIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
+      <path d="M10 6.5h10M10 12h10M10 17.5h10" strokeLinecap="round" />
+      <path d="M3.5 6.5l1.5 1.5 2.5-3M3.5 12l1.5 1.5 2.5-3M3.5 17.5l1.5 1.5 2.5-3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -469,6 +527,8 @@ export function ComposerPane({
   onToggleInspector,
   isPromptLibraryOpen,
   onTogglePromptLibrary,
+  isResourcePanelOpen = false,
+  onToggleResourcePanel,
   onRegisterInsert,
   slashCommands,
   onSlashCommand,
@@ -482,6 +542,43 @@ export function ComposerPane({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const value = drafts[draftKey] ?? '';
   const isPreviewEnabled = appConfig.composer_preview_enabled;
+  // Plan mode is per view and stays on until it is switched off, so a plan can be
+  // refined over several messages before the work is asked for.
+  const [planViews, setPlanViews] = useState<Record<string, boolean>>({});
+  const isPlanModeEnabled = appConfig.plan_mode_enabled;
+  const isPlan = isPlanModeEnabled && planViews[draftKey] === true;
+  const togglePlan = useCallback(() => {
+    setPlanViews(current => ({...current, [draftKey]: current[draftKey] !== true}));
+  }, [draftKey]);
+  // A custom command's model and tools ride on the view's next message, shown as a token
+  // the person can remove; its plan: true turns plan mode on.
+  const [commandOptionViews, setCommandOptionViews] = useState<Record<string, PendingCommandOptions>>({});
+  const pendingCommand = commandOptionViews[draftKey];
+  const clearPendingCommand = useCallback(() => {
+    setCommandOptionViews(current => {
+      if (current[draftKey] === undefined) return current;
+      const next = {...current};
+      delete next[draftKey];
+      return next;
+    });
+  }, [draftKey]);
+  const applyCommandOptions = useCallback(
+    (command: string, options: CommandRunOptions) => {
+      if (options.plan === true && isPlanModeEnabled) {
+        setPlanViews(current => ({...current, [draftKey]: true}));
+      }
+      if (options.model === undefined && options.tools === undefined) return;
+      setCommandOptionViews(current => ({
+        ...current,
+        [draftKey]: {
+          command,
+          ...(options.model === undefined ? {} : {model: options.model}),
+          ...(options.tools === undefined ? {} : {tools: options.tools}),
+        },
+      }));
+    },
+    [draftKey, isPlanModeEnabled],
+  );
 
   /**
    * The trigger menus. Rebuilt only when the session changes: the `@` menu now
@@ -497,6 +594,9 @@ export function ComposerPane({
             loadCatalog: () => fetchRootLibrary(),
             loadMCPPrompts: appConfig.slash_menu_mcp_prompts_enabled
               ? () => fetchSessionMCPPrompts(activeSessionId, activeProfile).then(listed => listed.prompts)
+              : undefined,
+            loadMCPResources: appConfig.slash_menu_mcp_resources_enabled
+              ? () => fetchSessionMCPResources(activeSessionId, activeProfile).then(listed => listed.resources)
               : undefined,
             maxResults: appConfig.slash_menu_max_results,
             refreshMs: appConfig.slash_menu_refresh_ms,
@@ -619,15 +719,34 @@ export function ComposerPane({
       }
       const sentImages = attachments.images;
       const sentFiles = fileAttachments.images;
-      if (onSubmit(text, sentImages, sentFiles)) {
+      const options: ComposerSubmitOptions = {
+        plan: isPlan,
+        ...(pendingCommand?.model === undefined ? {} : {model: pendingCommand.model}),
+        ...(pendingCommand?.tools === undefined ? {} : {tools: pendingCommand.tools}),
+      };
+      if (onSubmit(text, sentImages, sentFiles, options)) {
         historyCursorRef.current = IDLE_HISTORY;
         setDraft(draftKey, '');
         attachments.clear(sentImages);
         fileAttachments.clear(sentFiles);
+        clearPendingCommand();
       }
     },
-    [attachments, draftKey, fileAttachments, isDisabled, onSubmit, setDraft],
+    [attachments, clearPendingCommand, draftKey, fileAttachments, isDisabled, isPlan, onSubmit, pendingCommand, setDraft],
   );
+
+  // Execute plan: the next message leaves plan mode and carries out the plan, with the
+  // draft's text, if any, after the server's execute prompt. Attachments stay in the draft.
+  const executePlan = useCallback(() => {
+    if (isDisabled) return;
+    const text = inputRef.current?.getValue() ?? value;
+    if (onSubmit(text, [], [], {plan: false, executePlan: true})) {
+      historyCursorRef.current = IDLE_HISTORY;
+      setDraft(draftKey, '');
+      setPlanViews(current => ({...current, [draftKey]: false}));
+      clearPendingCommand();
+    }
+  }, [clearPendingCommand, draftKey, isDisabled, onSubmit, setDraft, value]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (handleShiftEnter(event) || handleHistoryKey(event)) {
@@ -774,11 +893,56 @@ export function ComposerPane({
     );
   };
 
+  /** The MCP resource template whose variables the dialog is asking for. */
+  const [variableResource, setVariableResource] = useState<MCPResource | null>(null);
+  // An MCP resource is read by its server and inserted like a library prompt, as a badge
+  // named <server>:<resource> past the length rule; its images and PDFs join the draft's
+  // attachments as a dropped file would, under the same limits.
+  const insertResource = (resource: MCPResource, values: Record<string, string>) => {
+    fetchSessionMCPResource(activeSessionId, resource, mcpResourceVariableValues(resource, values), activeProfile).then(
+      read => {
+        if (read.text.trim() !== '') insertPrompt(read.text, `${resource.server}:${resource.name}`);
+        const {images, files} = resourceAttachmentFiles(read.attachments, resource.name);
+        if (images.length > 0) void attachments.add(images);
+        if (files.length > 0) void fileAttachments.add(files);
+      },
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
+
+  /** The custom command whose arguments the dialog is asking for. */
+  const [argumentCommand, setArgumentCommand] = useState<RootLibraryCommand | null>(null);
+  // The server fills a custom command, as jad run has it filled; the text is inserted
+  // like a library prompt, as a badge named /<command> past the length rule.
+  const insertCommand = (command: RootLibraryCommand, args: string) => {
+    expandRootLibraryCommand(command.id, args).then(
+      expanded => {
+        insertPrompt(expanded.text, `/${command.command}`);
+        applyCommandOptions(command.command, expanded.options);
+      },
+      reason => onSlashError?.(reason instanceof Error ? reason.message : String(reason)),
+    );
+  };
+
   // A library pick inserts the way the prompt library panel does: a prompt by its
   // length rule, a template as plain text, a skill as a badge.
   slashPickRef.current = selection => {
+    if (selection.type === 'resource') {
+      if (selection.resource.uriTemplate !== undefined && selection.resource.variables.length > 0) {
+        setVariableResource(selection.resource);
+      } else {
+        insertResource(selection.resource, {});
+      }
+      return;
+    }
+    if (selection.type === 'custom') {
+      if (selection.command.takesArguments) setArgumentCommand(selection.command);
+      else insertCommand(selection.command, '');
+      return;
+    }
     if (selection.type === 'command') {
-      onSlashCommand?.(selection.name);
+      if (selection.name === 'plan') togglePlan();
+      else onSlashCommand?.(selection.name);
       return;
     }
     if (selection.type === 'mcp') {
@@ -851,6 +1015,22 @@ export function ComposerPane({
 
   return (
     <>
+      <ResourceVariablesDialog
+        resource={variableResource}
+        onCancel={() => setVariableResource(null)}
+        onSubmit={(resource, values) => {
+          setVariableResource(null);
+          insertResource(resource, values);
+        }}
+      />
+      <CommandArgumentsDialog
+        command={argumentCommand}
+        onCancel={() => setArgumentCommand(null)}
+        onSubmit={(command, args) => {
+          setArgumentCommand(null);
+          insertCommand(command, args);
+        }}
+      />
       <MCPPromptDialog
         prompt={argumentPrompt}
         onCancel={() => setArgumentPrompt(null)}
@@ -879,7 +1059,10 @@ export function ComposerPane({
           <ChatComposerInput
             ref={inputRootRef}
             handleRef={inputRef}
-            placeholder={composerPlaceholderForDraft(value, placeholder)}
+            placeholder={composerPlaceholderForDraft(
+              value,
+              isPlan ? appConfig.plan_mode_placeholder : placeholder,
+            )}
             triggers={composerTriggers.length > 0 ? composerTriggers : undefined}
             onKeyDown={handleKeyDown}
             hasHistory={false}
@@ -923,6 +1106,16 @@ export function ComposerPane({
                 size="sm"
                 onClick={onTogglePromptLibrary}
               />
+              {onToggleResourcePanel !== undefined ? (
+                <IconButton
+                  data-panel-toggle=""
+                  label={`${isResourcePanelOpen ? 'Hide' : 'Show'} watched resources`}
+                  icon={<Icon icon={WatchIcon} size="sm" />}
+                  variant={isResourcePanelOpen ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={onToggleResourcePanel}
+                />
+              ) : null}
               {toolbarActions}
             </HStack>
             <HStack align="center" gap={1}>
@@ -976,6 +1169,32 @@ export function ComposerPane({
                   onClick={() => setIsPreviewOpen(current => !current)}
                 />
               ) : null}
+              {isPlanModeEnabled ? (
+                <IconButton
+                  label={isPlan ? 'Turn off plan mode' : 'Plan mode: read-only tools, the answer is a plan'}
+                  isDisabled={isDisabled}
+                  icon={<Icon icon={PlanIcon} size="sm" />}
+                  variant={isPlan ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={togglePlan}
+                />
+              ) : null}
+              {isPlan && !isRunning ? (
+                <Button
+                  label={appConfig.plan_mode_execute_label}
+                  isDisabled={isDisabled}
+                  variant="secondary"
+                  size="sm"
+                  onClick={executePlan}
+                />
+              ) : null}
+              {pendingCommand === undefined ? null : (
+                <Token
+                  size="sm"
+                  label={commandOptionsLabel(pendingCommand)}
+                  onRemove={clearPendingCommand}
+                />
+              )}
             </HStack>
           </HStack>
         }

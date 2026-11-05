@@ -156,6 +156,22 @@ type RunOptions struct {
 	// for example {"type":"json_schema","name":...,"schema":...}: the provider then
 	// constrains the final answer to it. It never reaches the transcript.
 	OutputFormat json.RawMessage
+	// Plan marks a run started in plan mode. The caller that prepares the tools narrows
+	// ToolCatalog for it and sets PlanPrompt; Run itself only sends PlanPrompt.
+	Plan bool
+	// Tools, when not nil, narrows ToolCatalog to the tools these tools.allow entries
+	// cover; the caller that prepares the tools applies it.
+	Tools []string
+	// ExecutePlan puts plan_mode.execute_prompt before the input; the caller that stores
+	// the input applies it.
+	ExecutePlan bool
+	// PlanPrompt, when its Text is set, is sent after the history in every request of the
+	// run, with its Role; its After is ignored. It never reaches the transcript.
+	PlanPrompt StateContextPrompt
+	// Notes are sent after the history (and before PlanPrompt) in every request of the run,
+	// each with its Role; their After is ignored. They never reach the transcript. The
+	// MCP resource changes since the profile's last run are one.
+	Notes []StateContextPrompt
 }
 
 // PersistedInput records a user input that PersistInput already stored.
@@ -499,22 +515,17 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		return RunResult{}, err
 	}
 
-	turnID := options.TurnID
-	if turnID == "" {
-		turnID, err = newTurnID()
-		if err != nil {
-			return RunResult{}, fmt.Errorf("create response turn ID: %w", err)
-		}
+	result.TurnID, err = runTurnID(options.TurnID)
+	if err != nil {
+		return RunResult{}, err
 	}
-	result.TurnID = turnID
-
 	if options.MaxToolRounds < 0 {
 		return result, errors.New("maximum tool rounds cannot be negative")
 	}
 	// Off by default; when on, the run records the workspace before it changes it
 	// and again when it ends, so the user can undo it. The end is recorded
 	// whatever the outcome, like the TypeScript try/finally.
-	checkpointRun := checkpoint.NewRun(options.Checkpoint, turnID, sessionTurn)
+	checkpointRun := checkpoint.NewRun(options.Checkpoint, result.TurnID, sessionTurn)
 	checkpointRun.Start(ctx)
 	defer checkpointRun.Finish()
 	// One handle per run: later rounds expand only the records appended since
@@ -526,82 +537,123 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		inputHistory = r.store.NewInputHistory()
 	}
 	defer inputHistory.Release()
-	// Tokens the provider reported for the rounds of this run so far. Every round
-	// re-sends the history, so this is what the run is billed, not the transcript size.
-	var usedTokens int64
 	// The run's own meter; it adds into the meter of the run that started this one.
 	meter := NewCostMeter(CostMeterFrom(ctx))
-	ctx = WithCostMeter(ctx, meter)
+	run := &runRounds{
+		ctx:          WithCostMeter(ctx, meter),
+		trace:        trace,
+		checkpoint:   checkpointRun,
+		inputHistory: inputHistory,
+		options:      options,
+		meter:        meter,
+		sessionTurn:  sessionTurn,
+		result:       result,
+	}
 	for round := 0; ; round++ {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
-		// previous round is listed in this one.
-		var responseTools []json.RawMessage
-		if options.ToolCatalog != nil {
-			responseTools, err = options.ToolCatalog.ResponseTools()
-			if err != nil {
-				return result, fmt.Errorf("build Responses tool definitions: %w", err)
-			}
-		}
-		request, err := r.buildRoundRequest(ctx, trace, inputHistory, options, responseTools)
-		if err != nil {
-			return result, err
-		}
-
-		// TypeScript suffixes every round, including the first, so the staging
-		// directory of a response is always <turn>-<round>.
-		responseTurnID := turnID + "-" + strconv.Itoa(round)
-		roundCtx, roundSpan := tracing.StartModelRequest(ctx, r.settings.Model, round)
-		responseResult, err := r.runResponse(roundCtx, request, sessionTurn, int64(round+1), responseTurnID, options)
-		tracing.EndModelRequest(roundSpan, responseResult.Event, err)
-		if err != nil {
-			return result, err
-		}
-		result.Event = responseResult.Event
-		result.Commit = responseResult.Commit
-		if trace.Enabled() {
-			// The details decode the whole event; a disabled trace would throw them away.
-			trace.Mark("provider-response-complete", responseTraceDetails(result.Event))
-		}
-		tokens, calls, err := responseTokensAndCalls(result.Event)
-		usedTokens += tokens
-		if err != nil {
-			return result, err
-		}
-		refreshStateContext, err := r.compactAfterResponse(result.Event, calls, options)
-		if err != nil {
-			return result, err
-		}
-		refreshAfterCompaction := func() error {
-			if !refreshStateContext || options.RefreshStateContext == nil {
-				return nil
-			}
-			stateContext, err := options.RefreshStateContext(ctx)
-			if err != nil {
-				return fmt.Errorf("refresh state context after automatic compaction: %w", err)
-			}
-			options.StateContext = stateContext
-			return nil
-		}
-		if len(calls) == 0 || options.ToolCatalog == nil {
-			if err := refreshAfterCompaction(); err != nil {
-				return result, err
-			}
-			return result, nil
-		}
-		if err := r.enforceToolLimits(calls, round, usedTokens, meter, options, refreshAfterCompaction); err != nil {
-			return result, err
-		}
-		declined, err := r.executeToolCalls(ctx, trace, checkpointRun, calls, round, options, refreshAfterCompaction)
-		if err != nil {
-			return result, err
-		}
-		if declined {
-			return result, nil
+		done, err := r.runRound(run, round)
+		if err != nil || done {
+			return run.result, err
 		}
 	}
+}
+
+// runTurnID returns the caller's turn ID, or a new one when the caller gave none.
+func runTurnID(turnID string) (string, error) {
+	if turnID != "" {
+		return turnID, nil
+	}
+	turnID, err := newTurnID()
+	if err != nil {
+		return "", fmt.Errorf("create response turn ID: %w", err)
+	}
+	return turnID, nil
+}
+
+// runRounds is the state one Run carries from one provider round to the next.
+type runRounds struct {
+	ctx          context.Context
+	trace        memorytrace.Handle
+	checkpoint   *checkpoint.Run
+	inputHistory *transcript.InputHistory
+	// options is the run's own copy: a refresh after automatic compaction replaces its
+	// state context for the rounds that follow.
+	options     RunOptions
+	meter       *CostMeter
+	sessionTurn int64
+	// usedTokens is what the provider reported for the rounds of this run so far. Every
+	// round re-sends the history, so this is what the run is billed, not the transcript size.
+	usedTokens int64
+	result     RunResult
+}
+
+// runRound sends one provider round and runs the function calls it returned. It reports
+// done when the run ends without an error: the model called no tool, or a call declined
+// to go on.
+func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
+	ctx, options := run.ctx, &run.options
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
+	// previous round is listed in this one.
+	var responseTools []json.RawMessage
+	if options.ToolCatalog != nil {
+		responseTools, err = options.ToolCatalog.ResponseTools()
+		if err != nil {
+			return false, fmt.Errorf("build Responses tool definitions: %w", err)
+		}
+	}
+	request, err := r.buildRoundRequest(ctx, run.trace, run.inputHistory, *options, responseTools)
+	if err != nil {
+		return false, err
+	}
+
+	// TypeScript suffixes every round, including the first, so the staging
+	// directory of a response is always <turn>-<round>.
+	responseTurnID := run.result.TurnID + "-" + strconv.Itoa(round)
+	roundCtx, roundSpan := tracing.StartModelRequest(ctx, r.settings.Model, round)
+	responseResult, err := r.runResponse(roundCtx, request, run.sessionTurn, int64(round+1), responseTurnID, *options)
+	tracing.EndModelRequest(roundSpan, responseResult.Event, err)
+	if err != nil {
+		return false, err
+	}
+	run.result.Event = responseResult.Event
+	run.result.Commit = responseResult.Commit
+	if run.trace.Enabled() {
+		// The details decode the whole event; a disabled trace would throw them away.
+		run.trace.Mark("provider-response-complete", responseTraceDetails(run.result.Event))
+	}
+	tokens, calls, err := responseTokensAndCalls(run.result.Event)
+	run.usedTokens += tokens
+	if err != nil {
+		return false, err
+	}
+	refreshStateContext, err := r.compactAfterResponse(run.result.Event, calls, *options)
+	if err != nil {
+		return false, err
+	}
+	refreshAfterCompaction := func() error {
+		if !refreshStateContext || options.RefreshStateContext == nil {
+			return nil
+		}
+		stateContext, err := options.RefreshStateContext(ctx)
+		if err != nil {
+			return fmt.Errorf("refresh state context after automatic compaction: %w", err)
+		}
+		options.StateContext = stateContext
+		return nil
+	}
+	if len(calls) == 0 || options.ToolCatalog == nil {
+		return true, refreshAfterCompaction()
+	}
+	if err := r.enforceToolLimits(calls, round, run.usedTokens, run.meter, *options, refreshAfterCompaction); err != nil {
+		return false, err
+	}
+	declined, err := r.executeToolCalls(ctx, run.trace, run.checkpoint, calls, round, *options, refreshAfterCompaction)
+	if err != nil {
+		return false, err
+	}
+	return declined, nil
 }
 
 // persistRunInput stores the user input unless the caller already persisted it,
@@ -641,13 +693,31 @@ func (r *Runner) buildRoundRequest(ctx context.Context, trace memorytrace.Handle
 	if len(options.OutputFormat) > 0 {
 		settings.TextFormat = options.OutputFormat
 	}
-	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, options.StateContext)
+	stateContext := options.StateContext
+	for _, note := range options.Notes {
+		if note.Text == "" {
+			continue
+		}
+		// The copy keeps the caller's slice as it is for the next round.
+		note.After = len(sentHistory)
+		stateContext = append(stateContext[:len(stateContext):len(stateContext)], note)
+	}
+	if options.PlanPrompt.Text != "" {
+		// Last, after the history and every state-context block: the copy keeps the
+		// caller's slice as it is for the next round.
+		plan := options.PlanPrompt
+		plan.After = len(sentHistory)
+		stateContext = append(stateContext[:len(stateContext):len(stateContext)], plan)
+	}
+	request, err := BuildRequestWithStateContext(settings, sentHistory, responseTools, stateContext)
 	if err != nil {
 		return nil, fmt.Errorf("build Responses request: %w", err)
 	}
 	trace.Mark("request-built", map[string]any{
 		"history_items":     len(history),
 		"has_state_context": len(options.StateContext) > 0,
+		"plan":              options.PlanPrompt.Text != "",
+		"notes":             len(options.Notes),
 		"tool_count":        len(responseTools),
 		"images_resized":    resizeStats.Resized,
 		"image_bytes_saved": resizeStats.BytesBefore - resizeStats.BytesAfter,

@@ -96,6 +96,7 @@ func executeNativeProcessAsync(
 	host *AsyncHost,
 ) (string, error) {
 	settings.Policy = workspacePolicy(settings.Policy, execution)
+	settings.Sandbox = callSandbox(settings.Sandbox, execution)
 	if manager == nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "process_manager_unavailable", "The process manager is not available"), nil
 	}

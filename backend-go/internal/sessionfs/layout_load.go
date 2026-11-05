@@ -87,6 +87,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.RemotesDir = layout.Remotes
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
+	config.ProfilePath = entry.Path
 	config.DefaultProfile = defaultProfile
 	config.Category = session.Category
 	config.Profiles = profiles.IDs()
@@ -100,6 +101,9 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	config.ModelPath = modelPaths[name]
 	config.ModelPaths = modelPaths
+	if config.NativeSubagent != nil {
+		config.NativeSubagent.ProfileModels = modelPaths
+	}
 	if config.ReasoningEffort != "" {
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		if _, err := config.WithModel(); err != nil {

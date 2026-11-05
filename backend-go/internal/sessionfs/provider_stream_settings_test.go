@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,5 +87,77 @@ func TestLayoutRefusesMaxConcurrentRunsInSettings(t *testing.T) {
 	_, err := LoadLayoutSessionSettings(location, layout, "review/reviewer", "")
 	if err == nil || !strings.Contains(err.Error(), "max_concurrent_runs") {
 		t.Fatalf("error = %v, want server.max_concurrent_runs refused as a session setting", err)
+	}
+}
+
+func TestNormalizeProviderStreamHeaderTimeout(t *testing.T) {
+	for raw, want := range map[string]int64{``: 0, `{}`: 0, `{"header_timeout_ms":0}`: 0, `{"header_timeout_ms":1000}`: 1000, `{"header_timeout_ms":3600000}`: 3600000, `{"header_timeout_ms":60000,"idle_timeout_ms":0}`: 60000} {
+		got, err := normalizeProviderStreamSettings(json.RawMessage(raw), "session.json")
+		if err != nil || got.HeaderTimeoutMS != want {
+			t.Errorf("%s: %+v %v, want %d", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{`{"header_timeout_ms":999}`, `{"header_timeout_ms":3600001}`, `{"header_timeout_ms":-1}`, `{"header_timeout_ms":null}`, `{"header_timeout_ms":"1000"}`} {
+		if _, err := normalizeProviderStreamSettings(json.RawMessage(raw), "session.json"); err == nil || !strings.Contains(err.Error(), "provider_stream.header_timeout_ms must be 0 (off) or a safe integer between 1000 and 3600000") {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+}
+
+func TestNormalizeMaxRunDuration(t *testing.T) {
+	for raw, want := range map[string]int64{``: 0, `1000`: 1000, `604800000`: 604800000, `90000`: 90000} {
+		got, err := normalizeMaxRunDuration(json.RawMessage(raw), "s")
+		if err != nil || got != want {
+			t.Errorf("%s: %d %v, want %d", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{`0`, `999`, `604800001`, `null`, `1.5`, `"1000"`} {
+		if _, err := normalizeMaxRunDuration(json.RawMessage(raw), "s"); err == nil || !strings.Contains(err.Error(), "max_run_duration_ms must be a safe integer between 1000 and 604800000") {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	config, err := loadSetting(t, map[string]any{"max_run_duration_ms": 120000})
+	if err != nil || config.MaxRunDurationMS != 120000 {
+		t.Fatalf("loaded: %d %v", config.MaxRunDurationMS, err)
+	}
+}
+
+// The schema's limits are the loader's.
+func TestRunLimitSchemasMatchTheLoader(t *testing.T) {
+	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			MaxRunDuration struct {
+				Minimum int64 `json:"minimum"`
+				Maximum int64 `json:"maximum"`
+			} `json:"max_run_duration_ms"`
+			ProviderStream struct {
+				Properties struct {
+					HeaderTimeout struct {
+						Default int64 `json:"default"`
+						AnyOf   []struct {
+							Minimum int64 `json:"minimum"`
+							Maximum int64 `json:"maximum"`
+						} `json:"anyOf"`
+					} `json:"header_timeout_ms"`
+				} `json:"properties"`
+			} `json:"provider_stream"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Properties.MaxRunDuration.Minimum != minConfiguredRunDurationMS || schema.Properties.MaxRunDuration.Maximum != maxConfiguredRunDurationMS {
+		t.Errorf("max_run_duration_ms schema = %+v", schema.Properties.MaxRunDuration)
+	}
+	header := schema.Properties.ProviderStream.Properties.HeaderTimeout
+	if header.Default != 0 || len(header.AnyOf) != 2 || header.AnyOf[1].Minimum != minProviderHeaderTimeoutMS || header.AnyOf[1].Maximum != maxProviderHeaderTimeoutMS {
+		t.Errorf("header_timeout_ms schema = %+v", header)
+	}
+	if _, listed := layoutSettingKeys["max_run_duration_ms"]; !listed {
+		t.Error("max_run_duration_ms is not a layout setting key")
 	}
 }

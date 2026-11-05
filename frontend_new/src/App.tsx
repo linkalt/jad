@@ -8,7 +8,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, frontCompactSessionFromMessage, resetSession, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
@@ -37,11 +37,12 @@ import {COMPOSER_DESYNC_EVENT, type ComposerDesync, describeDesync, installDesyn
 import {type DraftDecision} from './draft-answer';
 import {EMPTY_HISTORY_BLOCKS, type HistoryBlock, type HistoryBlocks, forgetHistoryBlock, forgetHistoryBlocks, historyBlockFor, historyEtagFromHeader, putHistoryBlock} from './history-blocks';
 import {type HookReport, hookReportNotification} from './hook-report-view';
-import {type AttachedFile, type AttachedImage, buildRunInput} from './image-attachments';
+import {type AttachedFile, type AttachedImage, buildRunInput, userMessageImages} from './image-attachments';
+import {forkSessionRef} from './session-fork';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
 import {type LeftPanelId, leftPanelAfterToggle} from './left-panel';
 import {applyPart, applyPartDelta} from './messagePatch';
-import {modelOptionsForSession, defaultEffortFor, formatRunModel, resolveRunModelChoice, type RunModelChoice} from './model-selection';
+import {modelOptionsForSession, defaultEffortFor, formatRunModel, modelDefaultIfMatch, resolveRunModelChoice, type RunModelChoice} from './model-selection';
 import {NO_PANE_DRAWERS, closePaneDrawer, hasPaneDrawer, openPaneDrawer, paneDrawerPressOpens, togglePaneDrawer, type PaneDrawerSet} from './pane-drawers';
 import {canOpenPane, closePane, ensurePane, focusPane, paneCapacity, parsePaneState, prunePanes, replaceFocusedPane, replacePaneView, type PaneState} from './pane-layout';
 import {allProfileRows, hasProfileToSwitchTo, type ProfileSourceRow} from './profile-rows';
@@ -56,7 +57,7 @@ import {selectionQuoteTarget} from './selection-target';
 import {sessionFromSnapshot} from './session-mapping';
 import {isSessionRunning, sessionUiStateForRun, snapshotEndsLocalRun, withSnapshotRun} from './session-run-status';
 import {type PinnedView, type SessionListRow, activeKeyAfterPrune, isPinnedViewKey, nextRecentViewKeys, profileLabel, profileOfViewKey, prunePinnedViews, restoreViews, retainedPinnedViewKeys, rowProfileMessageCaller, rowRunStatus, sessionListGroups, sessionRefOfViewKey, setGroupCollapsed, viewKey, viewLabel, withPaneViewKeys} from './session-views';
-import {SLASH_COMMANDS, type SlashCommandName} from './slash-commands';
+import {builtInSlashCommands, type SlashCommandName} from './slash-commands';
 import {forgetSnapshotEtags, rememberSnapshotEtag} from './snapshot-etags';
 import {stopRunAfterConfirmation} from './stop-run';
 import {readCollapsedGroups, readStoredPanes, readStoredViews, writeCollapsedGroups, writeStoredPanes, writeStoredViews} from './stored-views';
@@ -540,12 +541,20 @@ function App({
   const insertIntoComposerFor = useCallback((viewKey: string) => (
     insertIntoComposerByViewRef.current.get(viewKey) ?? null
   ), []);
+  // Text waiting for a composer that is not mounted yet: the question a fork leaves for the
+  // new session is put in its draft once that view's composer registers.
+  const pendingComposerTextRef = useRef(new Map<string, string>());
   const registerComposerInsert = useCallback((viewKey: string, insert: ComposerInsertActions | null) => {
     if (insert === null) {
       insertIntoComposerByViewRef.current.delete(viewKey);
       return;
     }
     insertIntoComposerByViewRef.current.set(viewKey, insert);
+    const pending = pendingComposerTextRef.current.get(viewKey);
+    if (pending !== undefined) {
+      pendingComposerTextRef.current.delete(viewKey);
+      insert.text(pending);
+    }
   }, []);
   const usePrompt = useCallback((viewKey: string, prompt: RootLibraryAsset) => {
     insertIntoComposerFor(viewKey)?.prompt(prompt.content, prompt.name);
@@ -1669,10 +1678,13 @@ function App({
       value: string,
       images: readonly AttachedImage[],
       files: readonly AttachedFile[],
+      options: {plan?: boolean; model?: string; tools?: string[]; executePlan?: boolean} = {},
     ) => {
       const trimmedValue = value.trim();
+      const executePlan = options.executePlan === true;
       if (
-        (!trimmedValue && images.length === 0 && files.length === 0) ||
+        // Carrying out a plan needs no text: the server sends its execute prompt.
+        (!trimmedValue && images.length === 0 && files.length === 0 && !executePlan) ||
         target.isRunning ||
         resettingViewKey === target.viewKey ||
         frontCompactingViewKey === target.viewKey ||
@@ -1690,7 +1702,10 @@ function App({
       const userMessage: MessageRecord = {
         id: `${sessionId}-user-${Date.now()}`,
         sender: 'user',
-        text: trimmedValue,
+        // The server stores the execute prompt itself; the echo names the action.
+        text: executePlan
+          ? [appConfig.plan_mode_execute_message, trimmedValue].filter(part => part !== '').join('\n\n')
+          : trimmedValue,
         timestamp: messageTime(),
         ...(images.length === 0 ? {} : {sentImages: images.map(image => image.dataUrl)}),
         ...(files.length === 0 ? {} : {sentFiles: files.map(file => file.name)}),
@@ -1713,8 +1728,12 @@ function App({
 
       const controller = new AbortController();
       runAbortRefs.current.set(sessionId, controller);
-      void streamSessionRun(sessionRef, buildRunInput(trimmedValue, images, files), {
+      void streamSessionRun(sessionRef, executePlan ? trimmedValue : buildRunInput(trimmedValue, images, files), {
         signal: controller.signal,
+        ...(options.plan === true ? {plan: true} : {}),
+        ...(options.model === undefined ? {} : {model: options.model}),
+        ...(options.tools === undefined ? {} : {tools: options.tools}),
+        ...(executePlan ? {executePlan: true} : {}),
         ...(target.profile === undefined ? {} : {profile: target.profile}),
         onRun: run => recordRunStarted(sessionId, run.turn_id),
         onInteraction: (turnId, interaction) =>
@@ -2000,6 +2019,64 @@ function App({
     }
     setActiveViewKey(nextViewKey);
   }, []);
+
+  /**
+   * Forks a pane's conversation before one of its user messages into a new session, opens it,
+   * and leaves that message's text in the new session's draft so it can be asked again. The
+   * handler of each view is kept, so the transcript rows (memoised on it) do not re-render.
+   */
+  // The view a fork opens once the session list holds it: activating it earlier would be
+  // undone, since a view the list does not know is pruned back to the one before.
+  const [pendingForkView, setPendingForkView] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingForkView === null || !listRows.some(row => row.key === pendingForkView)) return;
+    setPendingForkView(null);
+    activateView(pendingForkView);
+  }, [activateView, listRows, pendingForkView]);
+  const forkTargetsRef = useRef(new Map<string, {sessionRef: string; profile: string | undefined; title: string}>());
+  const forkHandlersRef = useRef(new Map<string, (message: MessageRecord, keepTurn: boolean) => void>());
+  // keepTurn false forks before a user message and puts its text in the new draft; true
+  // forks after the message's turn, with an empty draft.
+  const forkFromMessage = useCallback(async (paneKey: string, message: MessageRecord, keepTurn: boolean) => {
+    const target = forkTargetsRef.current.get(paneKey);
+    if (target === undefined) return;
+    const newRef = forkSessionRef(target.sessionRef, appConfig.fork_session_suffix, Date.now());
+    try {
+      const result = await forkSession(target.sessionRef, {session: newRef, messageId: message.id, keepTurn}, target.profile);
+      const nextKey = viewKey(result.session, target.profile === undefined ? undefined : result.profile);
+      const text = keepTurn ? '' : userMessageImages(message).text;
+      if (text !== '') pendingComposerTextRef.current.set(nextKey, text);
+      setPendingForkView(nextKey);
+      refreshSessionsRef.current?.();
+      recordNotification({
+        sessionId: nextKey,
+        sessionTitle: result.session,
+        kind: 'info',
+        title: 'Conversation forked',
+        message: keepTurn
+          ? `${result.session} holds the ${result.turns} turn(s) through the end of that turn.`
+          : `${result.session} holds the ${result.turns} turn(s) before the message; its text is in the draft.`,
+      });
+    } catch (error) {
+      recordNotification({
+        sessionId: paneKey,
+        sessionTitle: target.title,
+        kind: 'error',
+        title: 'Could not fork the conversation',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [recordNotification]);
+  const forkHandlerFor = useCallback((paneKey: string) => {
+    let handler = forkHandlersRef.current.get(paneKey);
+    if (handler === undefined) {
+      handler = (message: MessageRecord, keepTurn: boolean) => {
+        void forkFromMessage(paneKey, message, keepTurn);
+      };
+      forkHandlersRef.current.set(paneKey, handler);
+    }
+    return handler;
+  }, [forkFromMessage]);
 
   /** A list click: the session's own row, following its stored default profile. */
   const selectSession = useCallback(
@@ -2629,6 +2706,7 @@ function App({
       sessionRef: string | undefined;
       profile: string | undefined;
       title: string;
+      session: Session | undefined;
     },
   ) => {
     const sessionRef = target.sessionRef;
@@ -2641,9 +2719,23 @@ function App({
         sessionRef,
         formatRunModel(choice.modelId, choice.effort),
         target.profile ?? undefined,
+        modelDefaultIfMatch(target.session, target.profile),
       );
       refreshSessionsRef.current?.();
     } catch (error) {
+      if (error instanceof SettingsRequestError && error.isConflict) {
+        // Another tab or an editor changed the profile: show its current models and let the
+        // user choose again rather than writing over that change.
+        refreshSessionsRef.current?.();
+        recordNotification({
+          sessionId: sessionRefOfViewKey(target.viewKey),
+          sessionTitle: target.title,
+          kind: 'info',
+          title: 'Model not changed',
+          message: `The profile was changed elsewhere; its models were reloaded. Pick the model again. (${error.message})`,
+        });
+        return;
+      }
       recordNotification({
         sessionId: sessionRefOfViewKey(target.viewKey),
         sessionTitle: target.title,
@@ -2671,6 +2763,10 @@ function App({
         title: `/${name} is unavailable`,
         message: 'Wait for the run, compaction or settings change in progress to finish.',
       });
+      return;
+    }
+    if (name === 'plan') {
+      // The composer switches plan mode itself; it never reaches the app.
       return;
     }
     if (name === 'compact') {
@@ -3037,6 +3133,7 @@ function App({
               sessionRef: pane.sessionRef,
               profile: pane.profile,
               title: pane.label,
+              session: pane.session,
             })}
         />
       );
@@ -3539,7 +3636,7 @@ function App({
                         // run, whether one pane or four are on screen.
                         showHeader
                         composerSessionId={sessionRefOfViewKey(paneViewKey)}
-                        onSubmitComposer={(value, images, files) =>
+                        onSubmitComposer={(value, images, files, options) =>
                           submitMessage(
                             {
                               viewKey: paneViewKey,
@@ -3551,6 +3648,7 @@ function App({
                             value,
                             images,
                             files,
+                            options,
                           )}
                         onStopComposer={() =>
                           stopRun({
@@ -3575,7 +3673,7 @@ function App({
                         onUseSkill={asset => useSkill(paneViewKey, asset)}
                         onRegisterComposerInsert={registerComposerInsert}
                         slashCommands={pane.isLive && pane.session?.sessionRef !== undefined
-                          ? SLASH_COMMANDS
+                          ? builtInSlashCommands(appConfig.plan_mode_enabled)
                           : undefined}
                         onSlashCommand={name => runSlashCommand(paneViewKey, name)}
                         onSlashError={message => reportSlashError(paneViewKey, message)}
@@ -3609,6 +3707,11 @@ function App({
                             : undefined
                         }
                         onLoadFull={loadFullMessage}
+                        onForkMessage={(() => {
+                          if (!pane.isLive || pane.isRunning || pane.session === undefined || pane.sessionRef === undefined) return undefined;
+                          forkTargetsRef.current.set(paneViewKey, {sessionRef: pane.sessionRef, profile: pane.profile, title: pane.label});
+                          return forkHandlerFor(paneViewKey);
+                        })()}
                         onLoadOlderTurns={() => loadOlderMessages(pane.session, paneViewKey)}
                         onFocus={() => focusViewPane(paneViewKey)}
                         onClose={panes.keys.length > 1 ? () => closeViewPane(paneViewKey) : undefined}

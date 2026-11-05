@@ -78,12 +78,15 @@ const actionColumnWidth = proportional(appConfig.catalog_action_column_weight, {
   minWidth: appConfig.catalog_action_column_min_width_px,
 });
 
-function tableColumns(showSession: boolean, onDelete: (target: CatalogRowTarget) => void, isDisabled: boolean): TableColumn<CatalogRow>[] {
+function tableColumns(showSession: boolean, showEfforts: boolean, onDelete: (target: CatalogRowTarget) => void, isDisabled: boolean): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
     {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.category}</Text>},
     {key: 'id', header: 'ID', sortable: true, width: textColumnWidth, renderCell: row => <Link isStandalone>{row.id}</Link>},
     {key: 'name', header: 'Name', sortable: true, width: textColumnWidth, renderCell: row => <Text type="body" maxLines={1}>{row.name}</Text>},
   ];
+  if (showEfforts) {
+    columns.push({key: 'efforts', header: 'Efforts', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.efforts}</Text>});
+  }
   if (showSession) {
     columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.sessions}</Text>});
   }
@@ -143,7 +146,8 @@ export function CatalogListPane({
   const rows = useMemo(() => sortCatalogRows(catalogRows(kind, matched), sort), [kind, matched, sort]);
   const plural = view.plural.toLowerCase();
   const showSession = filtersBySession(kind);
-  const columns = useMemo(() => tableColumns(showSession, onDelete, isDisabled), [showSession, onDelete, isDisabled]);
+  const showEfforts = kind === 'models';
+  const columns = useMemo(() => tableColumns(showSession, showEfforts, onDelete, isDisabled), [showSession, showEfforts, onDelete, isDisabled]);
   const sortPlugin = useTableSortable<CatalogRow>({sort, onSortChange: next => onSortChange([...next])});
   const resizePlugin = useTableColumnResize({
     columnWidths,

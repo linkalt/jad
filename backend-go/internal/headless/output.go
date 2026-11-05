@@ -5,31 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"unicode/utf8"
 
+	"jad/backend-go/internal/outputcheck"
 	"jad/backend-go/internal/tools"
 )
 
-// maxReportedOutputIssues is how many schema mismatches the error of an invalid_output
-// result names (the rest are counted), and maxReportedIssueBytes how long each path and
-// message may be: both carry text from the answer.
-const (
-	maxReportedOutputIssues = 5
-	maxReportedIssueBytes   = 200
-)
-
-// cutText cuts text to about maximum bytes, at a rune boundary.
-func cutText(text string, maximum int) string {
-	if len(text) <= maximum {
-		return text
-	}
-	cut := maximum
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "..."
-}
+// maxReportedOutputIssues is how many schema mismatches an invalid_output error names.
+const maxReportedOutputIssues = outputcheck.MaxReportedIssues
 
 // OutputSchema asks a headless run for a final answer that is JSON matching Schema.
 type OutputSchema struct {
@@ -73,63 +55,19 @@ func (o *OutputSchema) format() (json.RawMessage, error) {
 // check reads the completed result's text as JSON and validates it. A match sets Output;
 // anything else turns the result into invalid_output, with the reason in Error.
 func (o *OutputSchema) check(result *Result) {
-	answer := outputJSONText(result.Text)
-	fail := func(reason string) {
+	o.apply(result, outputcheck.Check(o.validator, result.Text))
+}
+
+// apply sets the result from a verdict on its answer.
+func (o *OutputSchema) apply(result *Result, verdict outputcheck.Verdict) {
+	if !verdict.Valid {
 		result.Status = StatusInvalidOutput
-		result.Error = "the final answer " + reason
-	}
-	if !json.Valid([]byte(answer)) {
-		fail("is not JSON")
+		result.Error = verdict.Error
 		return
 	}
-	issues, err := o.validator.Validate([]byte(answer))
-	if err != nil {
-		fail("could not be checked against the output schema: " + err.Error())
-		return
-	}
-	if len(issues) > 0 {
-		fail("does not match the output schema: " + describeIssues(issues))
-		return
-	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(answer)); err != nil {
-		fail("is not JSON")
-		return
-	}
-	result.Output = compact.Bytes()
+	result.Output = verdict.Value
 }
 
-// outputJSONText is the answer with surrounding space removed and, when the whole answer is
-// one fenced code block (```json ... ```), the fence removed: a provider that does not
-// constrain its output often wraps JSON that way.
-func outputJSONText(text string) string {
-	trimmed := strings.TrimSpace(text)
-	if !strings.HasPrefix(trimmed, "```") || !strings.HasSuffix(trimmed, "```") || len(trimmed) < 6 {
-		return trimmed
-	}
-	inner := trimmed[3 : len(trimmed)-3]
-	newline := strings.IndexByte(inner, '\n')
-	if newline < 0 || strings.Contains(inner, "```") {
-		return trimmed
-	}
-	if language := strings.TrimSpace(inner[:newline]); language != "" && !strings.EqualFold(language, "json") {
-		return trimmed
-	}
-	return strings.TrimSpace(inner[newline+1:])
-}
+func outputJSONText(text string) string { return outputcheck.JSONText(text) }
 
-func describeIssues(issues []tools.ValidationIssue) string {
-	parts := make([]string, 0, maxReportedOutputIssues+1)
-	for index, issue := range issues {
-		if index == maxReportedOutputIssues {
-			parts = append(parts, fmt.Sprintf("and %d more", len(issues)-index))
-			break
-		}
-		path := issue.InstancePath
-		if path == "" {
-			path = "/"
-		}
-		parts = append(parts, cutText(path, maxReportedIssueBytes)+": "+cutText(issue.Message, maxReportedIssueBytes))
-	}
-	return strings.Join(parts, "; ")
-}
+func cutText(text string, maximum int) string { return outputcheck.CutText(text, maximum) }

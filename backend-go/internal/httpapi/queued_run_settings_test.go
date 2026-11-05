@@ -69,7 +69,7 @@ func (r *transcriptLockedResolver) LockSessionSettings(context.Context, string) 
 	return func() {}, nil
 }
 
-func (r *transcriptLockedResolver) UpdateModelDefault(context.Context, string, string, string) (SessionModelDefaultUpdate, error) {
+func (r *transcriptLockedResolver) UpdateModelDefault(context.Context, string, string, string, string) (SessionModelDefaultUpdate, error) {
 	return SessionModelDefaultUpdate{ModelDefault: "models/new.json", Changed: true}, nil
 }
 

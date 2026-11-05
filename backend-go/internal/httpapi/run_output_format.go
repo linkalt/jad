@@ -70,3 +70,20 @@ func parseRunOutputFormat(raw []byte) (json.RawMessage, error) {
 	}
 	return encoded, nil
 }
+
+// outputFormatValidator compiles the schema of a format parseRunOutputFormat accepted; nil for
+// none. The completed event of the run carries the answer's verdict against it.
+func outputFormatValidator(format json.RawMessage) *tools.SchemaValidator {
+	if len(format) == 0 {
+		return nil
+	}
+	var parsed runOutputFormat
+	if json.Unmarshal(format, &parsed) != nil {
+		return nil
+	}
+	validator, err := tools.CompileSchema(parsed.Schema)
+	if err != nil {
+		return nil
+	}
+	return validator
+}

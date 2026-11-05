@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -64,13 +65,16 @@ type commandStreams struct {
 
 const runUsage = `usage: jad run --session <ref> [--profile <category/name>] [--model <category/name>]
                [--format text|json|jsonl] [--timeout <duration>] [--log-level <level>]
-               [--output-schema <file> [--output-strict=false]] [--no-commands] [prompt | -]
+               [--output-schema <file> [--output-strict=false]] [--plan | --execute-plan]
+               [--tools <entry,...>] [--no-commands] [prompt | -]
 
 Runs one turn of a session without a server and exits. The prompt is the remaining
 arguments, or standard input when there are none or the only one is "-".
 
 A prompt that starts with a slash command runs it, as the web client's "/" menu does:
   /compact, /reset         compact or reset the session; no turn is run
+  /plan <prompt>           run the prompt in plan mode, as --plan does; the prompt may
+                           start with one of the commands below
   /state [text]            write a state-context block, with text as its prompt; no turn
   /prompt:<name> [text]    send the library prompt, template or skill named <name> (its
   /template:<name> [text]  name in lower case with dashes, as the "/" menu lists it),
@@ -79,8 +83,28 @@ A prompt that starts with a slash command runs it, as the web client's "/" menu 
                            send the MCP prompt, filled with its arguments, followed by
                            text; a prompt with one argument takes all of text as it. The
                            server's toolset entry needs "prompts": true.
+  /resource:<server>:<resource> [variable=value ...] [text]
+                           send the MCP resource's text (by name, the name in lower
+                           case with dashes, or URI; a template takes its variables as
+                           name=value), followed by text; the server's toolset entry
+                           needs "resources": true.
+  /<command> [arguments]   send the custom command's text (a Markdown file in
+                           libraries.command_dirs; git/commit.md is /git:commit), with
+                           $ARGUMENTS and $1 to $9 filled from the arguments; a word
+                           the library has no command for is sent as written. Its front
+                           matter may set model, profile, plan: true and allowed-tools;
+                           --model, --profile and --tools win over them
 Any other prompt is sent as it is. --no-commands sends a prompt that starts with a
 command word as it is too.
+
+--plan runs the turn in plan mode: the model sees only the tools that never change
+anything (plus the session's plan_mode.allow_tools) and the plan_mode instructions, and
+answers with a plan. Nothing asks for approval: the next turn without --plan does the work.
+--execute-plan is that turn: it sends the session's plan_mode.execute_prompt, followed by
+the prompt when one is given (the prompt is optional here, and is not read for commands).
+
+--tools narrows the turn's tools to the listed tools.allow entries (a native tool name,
+mcp:<server>:<tool> or mcp:<server>:*), separated by commas.
 
 Formats: text prints the final answer; json prints one result object; jsonl prints every
 run-stream event as {"event","data"} and ends with {"event":"result","data":<result>}.
@@ -129,6 +153,9 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	outputSchema := flags.String("output-schema", "", "JSON Schema file the final answer must match")
 	outputStrict := flags.Bool("output-strict", true, "ask the provider to enforce the output schema strictly")
 	noCommands := flags.Bool("no-commands", false, "send a prompt that starts with a slash command as it is")
+	flags.BoolVar(&options.request.Plan, "plan", false, "run the turn in plan mode, with read-only tools")
+	flags.BoolVar(&options.request.ExecutePlan, "execute-plan", false, "carry out the plan the session ends with")
+	toolList := flags.String("tools", "", "narrow the turn's tools to these tools.allow entries, separated by commas")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, _ = io.WriteString(streams.stdout, runUsage)
@@ -159,15 +186,40 @@ func parseRunOptions(args []string, streams commandStreams) (runOptions, error) 
 	case strictSet:
 		return runOptions{}, usageError("--output-strict needs --output-schema")
 	}
-	prompt, err := readPrompt(flags.Args(), streams.stdin)
-	if err != nil {
-		return runOptions{}, err
+	if options.request.Plan && options.request.ExecutePlan {
+		return runOptions{}, usageError("--plan and --execute-plan cannot be used together")
+	}
+	flags.Visit(func(set *flag.Flag) {
+		if set.Name == "tools" {
+			options.request.Tools = []string{}
+		}
+	})
+	if options.request.Tools != nil {
+		for _, entry := range strings.Split(*toolList, ",") {
+			if entry = strings.TrimSpace(entry); entry == "" {
+				continue
+			}
+			if err := sessionfs.CheckToolEntry(entry); err != nil {
+				return runOptions{}, usageError("--tools: %v", err)
+			}
+			if !slices.Contains(options.request.Tools, entry) {
+				options.request.Tools = append(options.request.Tools, entry)
+			}
+		}
+	}
+	// With --execute-plan the prompt is optional: standard input is read only for "-".
+	var prompt string
+	if !options.request.ExecutePlan || len(flags.Args()) > 0 {
+		var err error
+		if prompt, err = readPrompt(flags.Args(), streams.stdin); err != nil {
+			return runOptions{}, err
+		}
 	}
 	options.request.Input = prompt
 	options.request.Commands = !*noCommands
-	if options.request.Commands {
+	if options.request.Commands && !options.request.ExecutePlan {
 		if command, ok := headless.ParseCommand(prompt); ok {
-			if err := command.Check(options.request.Model, options.request.Output != nil); err != nil {
+			if err := command.Check(options.request.Model, options.request.Output != nil, options.request.Plan); err != nil {
 				return runOptions{}, usageError("%v", err)
 			}
 		}

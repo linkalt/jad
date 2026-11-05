@@ -41,6 +41,11 @@ const (
 	minMaxDescriptionBytes     = 1
 	maxMaxDescriptionBytes     = 65_536
 
+	// Resource change notifications kept per server (the newest ones).
+	defaultResourceEventsMax = 100
+	minResourceEventsMax     = 1
+	maxResourceEventsMax     = 10_000
+
 	// OAuth. The redirect address is where "jad mcp login" waits for the browser; a
 	// stored access token is refreshed this long before it expires.
 	defaultOAuthRedirectURL     = "http://127.0.0.1:47681/callback"
@@ -93,6 +98,7 @@ type loadedConfig struct {
 	maxTools            int
 	maxSchemaBytes      int
 	maxDescriptionBytes int
+	resourceEventsMax   int
 	fingerprint         string
 }
 
@@ -172,6 +178,10 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 	if err != nil {
 		return loadedConfig{}, err
 	}
+	resourceEventsMax, err := configuredInteger(fields["resource_events_max"], defaultResourceEventsMax, minResourceEventsMax, maxResourceEventsMax, path, "resource_events_max")
+	if err != nil {
+		return loadedConfig{}, err
+	}
 	fingerprintBytes, err := json.Marshal(struct {
 		Transport           any   `json:"transport"`
 		TimeoutMS           int64 `json:"timeout_ms"`
@@ -179,7 +189,8 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 		MaxTools            int   `json:"max_tools"`
 		MaxSchemaBytes      int   `json:"max_schema_bytes"`
 		MaxDescriptionBytes int   `json:"max_description_bytes"`
-	}{Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes), MaxTools: int(maxTools), MaxSchemaBytes: int(maxSchemaBytes), MaxDescriptionBytes: int(maxDescriptionBytes)})
+		ResourceEventsMax   int   `json:"resource_events_max"`
+	}{Transport: transport.fingerprint, TimeoutMS: timeoutMS, MaxResultBytes: int(maxResultBytes), MaxTools: int(maxTools), MaxSchemaBytes: int(maxSchemaBytes), MaxDescriptionBytes: int(maxDescriptionBytes), ResourceEventsMax: int(resourceEventsMax)})
 	if err != nil {
 		return loadedConfig{}, configError(path, "could not fingerprint MCP server configuration")
 	}
@@ -191,6 +202,7 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 		maxTools:            int(maxTools),
 		maxSchemaBytes:      int(maxSchemaBytes),
 		maxDescriptionBytes: int(maxDescriptionBytes),
+		resourceEventsMax:   int(resourceEventsMax),
 		fingerprint:         hex.EncodeToString(digest[:]),
 	}, nil
 }

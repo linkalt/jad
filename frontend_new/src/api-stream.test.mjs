@@ -982,3 +982,24 @@ test('a caller that does not listen is unaffected by async_state', async () => {
   const result = await streamSessionRun('session-1', 'hello', {});
   assert.equal(result.message?.text, 'fine');
 });
+
+test('a plan-mode run sends plan: true, and any other run sends no plan key', async () => {
+  requests.length = 0;
+  responses.push(completedStream(), completedStream());
+  await streamSessionRun('session-1', 'design a cache', {plan: true});
+  await streamSessionRun('session-1', 'build it');
+  assert.equal(JSON.parse(requests[0].body).plan, true);
+  assert.equal('plan' in JSON.parse(requests[1].body), false);
+});
+
+test('a command\'s tools and an execute-plan run reach the run body', async () => {
+  requests.length = 0;
+  responses.push(completedStream(), completedStream(), completedStream());
+  await streamSessionRun('session-1', 'review it', {tools: ['read', 'mcp:docs:*'], model: 'openai/fast'});
+  await streamSessionRun('session-1', '', {executePlan: true});
+  await streamSessionRun('session-1', 'plain');
+  assert.deepEqual(JSON.parse(requests[0].body).tools, ['read', 'mcp:docs:*']);
+  assert.equal(JSON.parse(requests[0].body).model, 'openai/fast');
+  assert.deepEqual(JSON.parse(requests[1].body), {input: '', supports_interaction: true, execute_plan: true});
+  for (const key of ['tools', 'execute_plan']) assert.equal(key in JSON.parse(requests[2].body), false);
+});

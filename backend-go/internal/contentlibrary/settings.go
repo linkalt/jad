@@ -45,6 +45,7 @@ type libraryDirectories struct {
 	prompts       []string
 	templates     []string
 	skills        []string
+	commands      []string
 	maxAssetBytes int64
 }
 
@@ -52,16 +53,17 @@ type libraryDefaults struct {
 	Prompts   []string `json:"prompt_dirs"`
 	Templates []string `json:"template_dirs"`
 	Skills    []string `json:"skill_dirs"`
+	Commands  []string `json:"command_dirs"`
 }
 
 // DefaultDirectories returns the folders the root setting falls back to, by libraries key
-// (prompt_dirs, template_dirs, skill_dirs). They are relative to the root folder.
+// (prompt_dirs, template_dirs, skill_dirs, command_dirs). They are relative to the root folder.
 func DefaultDirectories() (map[string][]string, error) {
 	var defaults libraryDefaults
 	if err := json.Unmarshal(embeddedDefaults, &defaults); err != nil {
 		return nil, fmt.Errorf("decode embedded root-library defaults: %w", err)
 	}
-	return map[string][]string{"prompt_dirs": defaults.Prompts, "template_dirs": defaults.Templates, "skill_dirs": defaults.Skills}, nil
+	return map[string][]string{"prompt_dirs": defaults.Prompts, "template_dirs": defaults.Templates, "skill_dirs": defaults.Skills, "command_dirs": defaults.Commands}, nil
 }
 
 func loadDirectories(options Options) (libraryDirectories, error) {
@@ -124,11 +126,15 @@ func loadDirectories(options Options) (libraryDirectories, error) {
 	if err != nil {
 		return libraryDirectories{}, err
 	}
+	commands, err := resolveLibraryDirectoryList(configured, "command_dirs", defaults.Commands, settingLabel, globalRoot)
+	if err != nil {
+		return libraryDirectories{}, err
+	}
 	maxAssetBytes, err := resolveMaxAssetBytes(configured, settingLabel)
 	if err != nil {
 		return libraryDirectories{}, err
 	}
-	return libraryDirectories{prompts: prompts, templates: templates, skills: skills, maxAssetBytes: maxAssetBytes}, nil
+	return libraryDirectories{prompts: prompts, templates: templates, skills: skills, commands: commands, maxAssetBytes: maxAssetBytes}, nil
 }
 
 func findLibrarySettingPath(workingDir string, options Options, environment map[string]string) (string, error) {

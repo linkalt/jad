@@ -32,10 +32,13 @@ func (h *Handler) handleSessionModelDefault(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer processUnlock()
-	updated, err := h.settings.UpdateModelDefault(r.Context(), reference, profile, modelDefault)
+	updated, err := h.settings.UpdateModelDefault(r.Context(), reference, profile, modelDefault, strings.TrimSpace(r.Header.Get("If-Match")))
 	if err != nil {
 		writeJSONError(w, err)
 		return
+	}
+	if updated.ProfileETag != "" {
+		w.Header().Set("ETag", updated.ProfileETag)
 	}
 	writeJSON(w, http.StatusOK, updated)
 }

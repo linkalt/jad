@@ -316,7 +316,7 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	build := func(workDir, token string) standbySpawn {
 		launch := toolSmithLaunch(settings, workDir, bridged, token)
 		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, apiKeyEnv)
-		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: settings.Child.Sandbox, workspace: execution.WorkspaceRoot}
+		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}
 	}
 	spawn := func(workDir string) (standbySpawn, error) {
 		token := ""

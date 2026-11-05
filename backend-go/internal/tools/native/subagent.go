@@ -22,6 +22,7 @@ var subagentInputSchema = json.RawMessage(`{
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
     "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},
+    "model":{"type":"string","description":"Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."},
     "resume":{"type":"string","description":"Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent marked [can change files; runs to its end] ignores it and runs to its end."}
   },
@@ -338,7 +339,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names),
+			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings.ProfileModels),
 			InputSchema: append(json.RawMessage(nil), subagentInputSchema...),
 		},
 		Validator:        validator,
@@ -789,7 +790,7 @@ func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.
 // that sends an empty string for "the default" is not rejected, and a blank task as a
 // request for the agent list. A negative block is no block.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
-	for _, key := range []string{"task", "agent", "resume"} {
+	for _, key := range []string{"task", "agent", "resume", "model"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue

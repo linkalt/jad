@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import {
   SLASH_COMMANDS,
+  builtInSlashCommands,
   createSlashSource,
   librarySlug,
   mcpPromptArgumentValues,
   mcpPromptArgumentsReady,
+  mcpResourceVariableValues,
   rankSlashEntries,
   slashEntries,
 } from './slash-commands.ts';
@@ -34,6 +36,7 @@ test('commands come first, then prompts, templates and skills, each prefixed by 
     'compact',
     'state',
     'reset',
+    'plan',
     'prompt:software-engineering',
     'prompt:bug-finding',
     'template:chatgpt-template',
@@ -47,13 +50,13 @@ test('two items with one name get distinct keys, and a prefix keeps them off the
     templates: [],
     skills: [],
   });
-  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(3), ['prompt:same', 'prompt:same-2']);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(SLASH_COMMANDS.length), ['prompt:same', 'prompt:same-2']);
 });
 
 test('the selection carries what the app needs to run or fetch the entry', () => {
   const entries = slashEntries(SLASH_COMMANDS, CATALOG);
   assert.deepEqual(entries[0].item.auxiliaryData, {type: 'command', name: 'compact'});
-  assert.deepEqual(entries[3].item.auxiliaryData, {
+  assert.deepEqual(entries[SLASH_COMMANDS.length].item.auxiliaryData, {
     type: 'library',
     kind: 'prompt',
     id: 'p1',
@@ -67,7 +70,7 @@ test('typing a kind prefix lists that kind, and a bare slash lists everything in
     'prompt:software-engineering',
     'prompt:bug-finding',
   ]);
-  assert.equal(rankSlashEntries(entries, '', 50).length, 7);
+  assert.equal(rankSlashEntries(entries, '', 50).length, SLASH_COMMANDS.length + 4);
   assert.deepEqual(ids(rankSlashEntries(entries, 'template:', 50)), ['template:chatgpt-template']);
 });
 
@@ -91,7 +94,7 @@ test('the first search loads the library, and a bare search lists everything in 
       return CATALOG;
     },
   });
-  assert.equal(ids(await menu.search('')).length, 7);
+  assert.equal(ids(await menu.search('')).length, 8);
   assert.deepEqual(ids(await menu.search('skill:')), ['skill:review']);
   assert.equal(loads, 1, 'typing filters the loaded catalog');
 });
@@ -119,16 +122,16 @@ test('a catalog older than refreshMs is fetched again, so a new prompt appears',
       return catalog;
     },
   });
-  assert.equal(ids(await menu.search('')).length, 7);
+  assert.equal(ids(await menu.search('')).length, 8);
   catalog = {...CATALOG, prompts: [...CATALOG.prompts, summary('prompt', 'p3', 'Fresh')]};
   clock = 999;
-  assert.equal(ids(await menu.search('')).length, 7);
+  assert.equal(ids(await menu.search('')).length, 8);
   clock = 1000;
   assert.ok(ids(await menu.search('')).includes('prompt:fresh'));
   assert.equal(loads, 2);
 });
 
-test('a failing library load leaves the three commands usable and is retried', async () => {
+test('a failing library load leaves the built-in commands usable and is retried', async () => {
   let offline = true;
   const menu = source({
     loadCatalog: async () => {
@@ -136,10 +139,10 @@ test('a failing library load leaves the three commands usable and is retried', a
       return CATALOG;
     },
   });
-  assert.deepEqual(ids(await menu.search('')), ['compact', 'state', 'reset']);
+  assert.deepEqual(ids(await menu.search('')), ['compact', 'state', 'reset', 'plan']);
   assert.deepEqual(ids(await menu.search('res')), ['reset']);
   offline = false;
-  assert.equal(ids(await menu.search('')).length, 7);
+  assert.equal(ids(await menu.search('')).length, 8);
 });
 
 test('the source answers a promise, so Astryx takes its async path and waits for the load', () => {
@@ -155,8 +158,8 @@ const MCP_PROMPTS = [
 
 test('MCP prompts follow the library as mcp:<server>:<slug>, a taken slug numbered', () => {
   const entries = slashEntries(SLASH_COMMANDS, CATALOG, MCP_PROMPTS);
-  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(7), ['mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
-  const picked = entries[7].item.auxiliaryData;
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(SLASH_COMMANDS.length + 4), ['mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
+  const picked = entries[SLASH_COMMANDS.length + 4].item.auxiliaryData;
   assert.equal(picked.type, 'mcp');
   assert.equal(picked.prompt.name, 'review_pr');
   assert.deepEqual(ids(rankSlashEntries(entries, 'mcp:', 50)), ['mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
@@ -178,11 +181,11 @@ test('the library and the MCP prompts load side by side, and either may fail alo
       return MCP_PROMPTS;
     },
   });
-  assert.equal(ids(await menu.search('')).length, 7, 'the library is listed while MCP fails');
+  assert.equal(ids(await menu.search('')).length, 8, 'the library is listed while MCP fails');
   mcpOffline = false;
-  assert.equal(ids(await menu.search('')).length, 10, 'a failed load is retried next search');
+  assert.equal(ids(await menu.search('')).length, 11, 'a failed load is retried next search');
   assert.equal(mcpLoads, 2);
-  assert.equal(ids(await menu.search('')).length, 10);
+  assert.equal(ids(await menu.search('')).length, 11);
   assert.equal(mcpLoads, 2, 'a full load answers until refreshMs');
 });
 
@@ -193,7 +196,7 @@ test('a failing library still shows the MCP prompts', async () => {
     },
     loadMCPPrompts: async () => MCP_PROMPTS,
   });
-  assert.deepEqual(ids(await menu.search('')), ['compact', 'state', 'reset', 'mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
+  assert.deepEqual(ids(await menu.search('')), ['compact', 'state', 'reset', 'plan', 'mcp:gh:review-pr', 'mcp:gh:review-pr-2', 'mcp:docs:standup']);
 });
 
 test('an MCP prompt is ready when its required arguments have text; empty optional ones are left out', () => {
@@ -203,4 +206,62 @@ test('an MCP prompt is ready when its required arguments have text; empty option
   assert.equal(mcpPromptArgumentsReady(review, {pr: '42'}), true);
   assert.deepEqual(mcpPromptArgumentValues(review, {pr: '42', focus: '', other: 'x'}), {pr: '42'});
   assert.deepEqual(mcpPromptArgumentValues(review, {pr: '42', focus: 'tests'}), {pr: '42', focus: 'tests'});
+});
+
+test('/plan is listed only while the composer has plan mode', () => {
+  assert.deepEqual(builtInSlashCommands(true).map(command => command.name), ['compact', 'state', 'reset', 'plan']);
+  assert.deepEqual(builtInSlashCommands(false).map(command => command.name), ['compact', 'state', 'reset']);
+  const entries = slashEntries(builtInSlashCommands(true), CATALOG);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'read-only', 50)), ['plan']);
+  // A library item named Plan does not take the command's word.
+  const planned = slashEntries(SLASH_COMMANDS, {...CATALOG, prompts: [summary('prompt', 'p9', 'Plan')]});
+  assert.ok(ids(planned.map(entry => entry.item)).includes('prompt:plan'));
+});
+
+test('custom commands follow the built-ins as /<command>, before the library', () => {
+  const command = (id, word, extra = {}) => ({id, kind: 'command', name: word, description: '', source: `${word}.md`, command: word, takesArguments: false, ...extra});
+  const catalog = {
+    ...CATALOG,
+    commands: [command('c1', 'git:commit', {description: 'Commit staged', argumentHint: '<message>', takesArguments: true}), command('c2', 'lint'), command('c3', 'lint')],
+  };
+  const entries = slashEntries(SLASH_COMMANDS, catalog);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(SLASH_COMMANDS.length, SLASH_COMMANDS.length + 3), ['git:commit', 'lint', 'prompt:software-engineering']);
+  const picked = entries[SLASH_COMMANDS.length].item;
+  assert.equal(picked.label, '/git:commit');
+  assert.deepEqual(picked.auxiliaryData, {type: 'custom', command: catalog.commands[0]});
+  assert.deepEqual(ids(rankSlashEntries(entries, 'git', 50)), ['git:commit']);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'staged', 50)), ['git:commit'], 'the description is a match term');
+  assert.deepEqual(ids(rankSlashEntries(entries, '<message>', 50)), ['git:commit'], 'the argument hint is a match term');
+});
+
+const RESOURCES = [
+  {server: 'docs', uri: 'docs://guide', name: 'Style guide', title: 'Guide', variables: []},
+  {server: 'docs', uriTemplate: 'docs://pages/{name}', name: 'page', variables: ['name']},
+];
+
+test('MCP resources follow the MCP prompts as /resource:<server>:<slug>', () => {
+  const entries = slashEntries(SLASH_COMMANDS, CATALOG, [], RESOURCES);
+  assert.deepEqual(ids(entries.map(entry => entry.item)).slice(-2), ['resource:docs:style-guide', 'resource:docs:page']);
+  assert.deepEqual(entries.at(-1).item.auxiliaryData, {type: 'resource', resource: RESOURCES[1]});
+  assert.deepEqual(ids(rankSlashEntries(entries, 'resource:', 50)), ['resource:docs:style-guide', 'resource:docs:page']);
+  assert.deepEqual(ids(rankSlashEntries(entries, 'docs://pages', 50)), ['resource:docs:page'], 'the URI template is a match term');
+  assert.deepEqual(mcpResourceVariableValues(RESOURCES[1], {name: 'intro', other: 'x'}), {name: 'intro'});
+  assert.deepEqual(mcpResourceVariableValues(RESOURCES[1], {name: '  '}), {});
+});
+
+test('a failing resource load leaves the rest of the menu and is retried', async () => {
+  let offline = true;
+  let loads = 0;
+  const menu = source({
+    loadCatalog: async () => CATALOG,
+    loadMCPResources: async () => {
+      loads += 1;
+      if (offline) throw new Error('offline');
+      return RESOURCES;
+    },
+  });
+  assert.equal(ids(await menu.search('')).length, SLASH_COMMANDS.length + 4);
+  offline = false;
+  assert.equal(ids(await menu.search('')).length, SLASH_COMMANDS.length + 6);
+  assert.equal(loads, 2);
 });

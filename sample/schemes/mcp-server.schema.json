@@ -82,6 +82,13 @@
       "description": "Maximum serialized MCP tool result content sent to the model. Defaults to 1048576.",
       "default": 1048576
     },
+    "resource_events_max": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "How many resource change notifications (resources/updated of a subscribed resource, resources/list_changed) are kept for this server, the newest first. They are listed by GET /api/sessions/<ref>/mcp-resources/events and told to the model at the start of its next turn. Defaults to 100.",
+      "default": 100
+    },
     "max_tools": {
       "type": "integer",
       "minimum": 1,

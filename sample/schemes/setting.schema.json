@@ -378,8 +378,10 @@
           "openai_oauth",
           "max_run_tokens",
           "max_run_cost_usd",
+          "max_run_duration_ms",
           "model_fallback",
           "checkpoint",
+          "plan_mode",
           "hooks",
           "image_resize",
           "image_store",
@@ -425,11 +427,17 @@
         "max_run_cost_usd": {
           "$ref": "#/properties/max_run_cost_usd"
         },
+        "max_run_duration_ms": {
+          "$ref": "#/properties/max_run_duration_ms"
+        },
         "model_fallback": {
           "$ref": "#/properties/model_fallback"
         },
         "checkpoint": {
           "$ref": "#/properties/checkpoint"
+        },
+        "plan_mode": {
+          "$ref": "#/properties/plan_mode"
         },
         "hooks": {
           "$ref": "#/properties/hooks"
@@ -539,6 +547,7 @@
       "type": "object",
       "description": "Go backend only: guard for a model response stream that stops sending. Other keys are rejected.",
       "properties": {
+        "header_timeout_ms": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 1000, "maximum": 3600000}], "default": 0, "description": "How long the provider may take to answer a request with its response headers. A request that hits it failed to open, so it is retried by the provider_retry rules like a reset connection. 0, the default, sets none, and idle_timeout_ms alone bounds the wait; otherwise at least 1000. Applies to the model's own requests, the anthropic_messages and chat_completions translators' requests, and model_fallback models."},
         "idle_timeout_ms": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 1000, "maximum": 3600000}], "default": 300000, "description": "How long one provider call may go without a stream event before the run fails with a generic provider error (the cause is in the server log). 0 turns the guard off; otherwise at least 1000. The failed call is not retried, because output may already have been shown. Raise it for a model that thinks silently for longer than five minutes."}
       },
       "additionalProperties": false,
@@ -569,6 +578,7 @@
       "description": "Most tokens one run may use before it stops. Absent means no cap, which is the default. After each provider response the harness adds the tokens the provider reported (total_tokens, or input plus output) to the run's count; when the count has reached this value and the model asked for tool calls, those calls get a run_token_limit result, no further round starts, and the run fails with a message naming the count and the limit. A response in flight is never cut, so a run can end above the cap by up to one response. A response with no usage counts as 0. A final answer with no tool calls always completes."
     },
     "max_run_cost_usd": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000, "description": "Most US dollars one run may cost before it stops. Absent means no cap, which is the default. Each response is priced with the pricing of the model file that answered it (a fallback model at its own prices). Sub-agent runs have their own cost and are not counted in it. Checked between rounds like max_run_tokens: when the cost has reached this value and the model asked for tool calls, those calls get a run_cost_limit result and the run fails with a message naming the cost and the limit. A run whose model file has no pricing is refused, and an unpriced model_fallback model is left out. Usage events report cost_usd, the run's priced cost so far."},
+    "max_run_duration_ms": {"type": "integer", "minimum": 1000, "maximum": 604800000, "description": "Most milliseconds one run may take, counted from when it holds the session's run lock (a run queued behind another has not started). Absent means no limit, which is the default. When it is reached the run is stopped where it is, like a stop from the client (the provider call or the tool calls in flight are cancelled, sub-agents it started included), and it fails with a message naming the limit. It applies to every run of the session: the web client, the API, jad run, jad eval and scheduled runs; jad run --timeout is the caller's own limit beside it."},
     "model_fallback": {
       "type": "object",
       "additionalProperties": false,
@@ -646,6 +656,13 @@
           "default": ["{workspace}", "{git_common_dir}", "{tmp}"],
           "description": "Backend bwrap: paths bound read-write; everything else is read-only. Absolute paths or paths starting with a placeholder. exec and tool_smith keep their code, result and socket files under {tmp}, so leave it in unless TMPDIR points elsewhere that is writable."
         },
+        "plan_writable_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "pattern": "^(/|\\{)"},
+          "default": ["{tmp}"],
+          "description": "Backend bwrap: the paths bound read-write for the calls of a plan-mode run, in place of writable_paths, so a tool plan mode keeps cannot change the project. Leave {tmp} in for exec and tool_smith."
+        },
         "hide_paths": {
           "type": "array",
           "maxItems": 64,
@@ -678,6 +695,24 @@
         "include_mcp_tools": {"type": "boolean", "default": true, "description": "Treat a call to any MCP tool as a change to the workspace, so it takes the checkpoint."},
         "snapshot_on": {"type": "string", "enum": ["first_mutation", "run_start"], "default": "first_mutation", "description": "first_mutation snapshots just before the first call to write, edit, bash, a process start or an MCP tool, so a read-only run costs nothing; run_start snapshots at the start of every run."},
         "safe_restore": {"type": "boolean", "default": true, "description": "Default restore mode. Safe restore reverts only the paths the run changed and leaves paths changed since the run ended alone, reporting them as conflicts; when false the default is a full restore. A request can still choose the mode."}
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "plan_mode": {
+      "type": "object",
+      "description": "How a run started in plan mode (a run request with plan: true, jad run --plan, /plan, an eval case with plan: true, the web client's Plan switch) differs from another run. It sees only the tools that never change anything (read, grep, glob, fetch, lsp, skill, read-only sub-agents and the like) plus allow_tools; a call that could change files, such as a sub-agent that may write, is refused. The instructions are sent after the history in every request of the run and are never stored in messages.jsonl. There is no approval step: the run ends with the plan, and the next run without plan mode does the work; execute_prompt is that run's message when it is started with execute_plan.",
+      "properties": {
+        "instructions": {"type": "string", "minLength": 1, "maxLength": 65536, "default": "Plan mode is on for this turn. Study the task with the tools you have, which only read, then answer with a plan: the goal, what you would change and where, the steps in order, the risks, and how you would check the result. Do not start the work: the tools that change files or run commands are not available in this turn. The person reads the plan and starts the work with their next message.", "description": "Text of the plan-mode message (at most 65536 bytes)."},
+        "role": {"type": "string", "enum": ["developer", "system"], "default": "developer", "description": "Role of the plan-mode message."},
+        "execute_prompt": {"type": "string", "minLength": 1, "maxLength": 65536, "default": "Carry out the plan above, step by step. Check the result as the plan says.", "description": "User message of a run that carries out the plan the transcript ends with (a run request with execute_plan: true, jad run --execute-plan, the web client's Execute plan button). Text the person adds follows it on a new paragraph. It is stored in messages.jsonl like any user message (at most 65536 bytes)."},
+        "allow_tools": {
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^(read|write|edit|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|memory|fetch|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+          "description": "Tools kept in plan mode although they can change something, as tools.allow entries: a native tool name, mcp:<server>:<tool> or mcp:<server>:*. tools.allow and tools.deny still apply to them."
+        }
       },
       "additionalProperties": false,
       "default": {}

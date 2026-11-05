@@ -149,6 +149,12 @@ func normalizeProfileToolList(raw json.RawMessage, name, profilePath string) ([]
 	return entries, nil
 }
 
+// CheckToolEntry checks one tools.allow entry: a native tool name, mcp:<server>:<tool> or
+// mcp:<server>:*. The error text continues "<entry> ...".
+func CheckToolEntry(entry string) error {
+	return checkProfileToolEntry(entry)
+}
+
 // checkProfileToolEntry accepts a native tool name, mcp:<server>:<tool> or
 // mcp:<server>:*. The error text continues the sentence "allow[i] ..." or "deny[i] ...".
 func checkProfileToolEntry(entry string) error {

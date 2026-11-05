@@ -49,6 +49,8 @@ export interface Session {
   profiles?: string[];
   profileNames?: Record<string, string>;
   modelDefault?: string;
+  /** The profile file's entity tag when the record was read; sent back with a model-default write. */
+  profileEtag?: string;
   models?: string[];
   modelOptions?: ModelOption[];
   frontCompaction?: SessionSnapshot['front_compaction'];

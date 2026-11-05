@@ -13,6 +13,8 @@ import {parseInteractionEnd, type InteractionEnd} from './interaction-end.ts';
 import {parseHookReport, type HookReport} from './hook-report-view.ts';
 import {parseProviderRetryWait, type ProviderRetryWait} from './provider-retry-view.ts';
 import type {RunInputPart} from './image-attachments.ts';
+import {parseResourceAttachments, type MCPResourceAttachment} from './resource-attachments.ts';
+import {parseResourceEvents, type MCPResourceEvents} from './resource-watch.ts';
 
 const authenticatedFetch = createAuthenticatedFetch(
   appConfig.api_token_storage_key,
@@ -228,6 +230,8 @@ export interface SessionSnapshot {
   /** Display name each profile file sets, by profile ID; a profile without one is absent. */
   profile_names?: Record<string, string>;
   model_default?: string;
+  /** The entity tag of the profile file the record was built for; the model-default route takes it as If-Match. */
+  profile_etag?: string;
   models?: string[];
   model_options?: unknown;
   front_compaction?: {enabled: boolean; delete_mode: 'permanent' | 'recoverable'};
@@ -397,21 +401,43 @@ export async function fetchSession(
   );
 }
 
+/** A refused settings write. `status` 409 or 412 means the profile changed since it was read. */
+export class SettingsRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SettingsRequestError';
+    this.status = status;
+  }
+
+  get isConflict(): boolean {
+    return this.status === 409 || this.status === 412;
+  }
+}
+
+/**
+ * `ifMatch` is the profile's `profile_etag` as last read; the server then refuses the write
+ * (412) when the profile file changed since, instead of writing over that change.
+ */
 export async function updateSessionProfileModelDefault(
   sessionRef: string,
   modelDefault: string,
   profile?: string,
+  ifMatch?: string,
 ): Promise<SessionPathModelDefaultUpdate> {
+  const headers: Record<string, string> = {'content-type': 'application/json'};
+  if (ifMatch !== undefined && ifMatch !== '') headers['If-Match'] = ifMatch;
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionRef)}/model-default${profileQuery(profile)}`),
     {
       method: 'POST',
-      headers: {'content-type': 'application/json'},
+      headers,
       body: JSON.stringify({model_default: modelDefault}),
     },
   );
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new SettingsRequestError(response.status, await readError(response));
   }
   const value: unknown = await response.json();
   if (
@@ -534,10 +560,100 @@ export interface RootLibraryAsset extends RootLibraryAssetSummary {
   content: string;
 }
 
+/**
+ * A custom slash command: a Markdown file in libraries.command_dirs. `command` is the
+ * word typed after the slash; the server fills `$ARGUMENTS` and `$1`–`$9`.
+ */
+/**
+ * How a custom command's front matter asks its turn to run. The composer applies plan,
+ * model and tools to the message it sends; profile is for jad run and jad eval, since a
+ * tab runs in its own profile.
+ */
+export interface CommandRunOptions {
+  model?: string;
+  profile?: string;
+  plan?: boolean;
+  /** tools.allow entries the turn's tools are narrowed to. */
+  tools?: string[];
+}
+
+export interface RootLibraryCommand {
+  id: string;
+  kind: 'command';
+  name: string;
+  description: string;
+  source: string;
+  command: string;
+  argumentHint?: string;
+  takesArguments: boolean;
+  /** The front matter's run options; empty when it sets none. */
+  options: CommandRunOptions;
+  /** What is wrong with the front matter; such a command cannot be expanded. */
+  invalid?: string;
+}
+
+/** A custom command filled with its arguments, as the server expands it. */
+export interface ExpandedCommand {
+  text: string;
+  options: CommandRunOptions;
+}
+
+/** The run options of a command or an expansion answer, or null when one is malformed. */
+function parseCommandRunOptions(value: Record<string, unknown>): CommandRunOptions | null {
+  const {model, profile, plan, allowed_tools: tools} = value;
+  if (
+    (model !== undefined && (typeof model !== 'string' || model === '')) ||
+    (profile !== undefined && (typeof profile !== 'string' || profile === '')) ||
+    (plan !== undefined && typeof plan !== 'boolean') ||
+    (tools !== undefined && (!Array.isArray(tools) || tools.length === 0 || !tools.every(entry => typeof entry === 'string' && entry !== '')))
+  ) {
+    return null;
+  }
+  return {
+    ...(typeof model === 'string' ? {model} : {}),
+    ...(typeof profile === 'string' ? {profile} : {}),
+    ...(plan === true ? {plan: true} : {}),
+    ...(Array.isArray(tools) ? {tools: tools as string[]} : {}),
+  };
+}
+
 export interface RootLibraryCatalog {
   prompts: RootLibraryAssetSummary[];
   templates: RootLibraryAssetSummary[];
   skills: RootLibraryAssetSummary[];
+  /** Listed by the `/` menu only; an older server sends none. */
+  commands: RootLibraryCommand[];
+}
+
+function parseRootLibraryCommand(value: unknown): RootLibraryCommand | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    value.kind !== 'command' ||
+    typeof value.name !== 'string' ||
+    typeof value.description !== 'string' ||
+    typeof value.source !== 'string' ||
+    typeof value.command !== 'string' || value.command === '' ||
+    (value.argument_hint !== undefined && typeof value.argument_hint !== 'string') ||
+    (value.takes_arguments !== undefined && typeof value.takes_arguments !== 'boolean') ||
+    (value.invalid !== undefined && typeof value.invalid !== 'string')
+  ) {
+    return null;
+  }
+  const options = parseCommandRunOptions(value);
+  if (options === null) return null;
+  return {
+    id: value.id,
+    kind: 'command',
+    name: value.name,
+    description: value.description,
+    source: value.source,
+    command: value.command,
+    ...(typeof value.argument_hint === 'string' && value.argument_hint !== '' ? {argumentHint: value.argument_hint} : {}),
+    takesArguments: value.takes_arguments === true,
+    options,
+    ...(typeof value.invalid === 'string' && value.invalid !== '' ? {invalid: value.invalid} : {}),
+  };
 }
 
 function isRootLibraryAssetSummary(
@@ -567,7 +683,35 @@ export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibrar
   ) {
     throw new Error('the server returned invalid library data');
   }
-  return {prompts, templates, skills};
+  const commands: RootLibraryCommand[] = [];
+  if (value.commands !== undefined) {
+    if (!Array.isArray(value.commands)) throw new Error('the server returned invalid library data');
+    for (const item of value.commands) {
+      const command = parseRootLibraryCommand(item);
+      if (command === null) throw new Error('the server returned invalid library data');
+      commands.push(command);
+    }
+  }
+  return {prompts, templates, skills, commands};
+}
+
+/** A custom command's text, filled with the arguments typed for it. */
+export async function expandRootLibraryCommand(id: string, args: string): Promise<ExpandedCommand> {
+  const response = await authenticatedFetch(
+    apiUrl(`/library/command/${encodeURIComponent(id)}/expand`),
+    {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({arguments: args}),
+    },
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  const options = isRecord(value) ? parseCommandRunOptions(value) : null;
+  if (!isRecord(value) || typeof value.text !== 'string' || options === null) {
+    throw new Error('the server returned invalid command data');
+  }
+  return {text: value.text, options};
 }
 
 export async function fetchRootLibraryAsset(
@@ -861,6 +1005,41 @@ export async function frontCompactSessionFromMessage(
   };
 }
 
+export interface SessionForkResult {
+  session: string;
+  profile: string;
+  turns: number;
+}
+
+/**
+ * Copies the profile's conversation into a new session. With `messageId` the copy ends at the
+ * turn that holds that message: before it when `keepTurn` is false, so the new session can ask
+ * that turn's question again. The new session must not exist yet (412 otherwise).
+ */
+export async function forkSession(
+  sessionId: string,
+  options: {session: string; messageId?: string; keepTurn?: boolean},
+  profile?: string,
+): Promise<SessionForkResult> {
+  const body: Record<string, unknown> = {session: options.session};
+  if (options.messageId !== undefined) {
+    body.message_id = options.messageId;
+    if (options.keepTurn !== undefined) body.keep_turn = options.keepTurn;
+  }
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/fork${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.session !== 'string' || typeof value.profile !== 'string' || typeof value.turns !== 'number') {
+    throw new Error('the server returned invalid fork data');
+  }
+  return {session: value.session, profile: value.profile, turns: value.turns};
+}
+
 export async function resetSession(sessionId: string, profile?: string): Promise<void> {
   const response = await authenticatedFetch(
     apiUrl(`/sessions/${encodeURIComponent(sessionId)}/reset${profileQuery(profile)}`),
@@ -912,6 +1091,159 @@ function isMCPPrompt(value: unknown): value is MCPPrompt {
         (argument.required === undefined || typeof argument.required === 'boolean'),
     )
   );
+}
+
+/**
+ * A resource, or resource template, of an MCP server the profile's toolsets list with
+ * `resources: true`. A resource has `uri`; a template has `uriTemplate` and the
+ * `variables` a person fills.
+ */
+export interface MCPResource {
+  server: string;
+  uri?: string;
+  uriTemplate?: string;
+  variables: string[];
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface MCPResourceList {
+  resources: MCPResource[];
+  /** Servers whose resources could not be listed; the others are still in `resources`. */
+  failures: {server: string; error: string}[];
+}
+
+function parseMCPResource(value: unknown): MCPResource | null {
+  const optional = (field: unknown) => field === undefined || typeof field === 'string';
+  if (
+    !isRecord(value) ||
+    typeof value.server !== 'string' ||
+    typeof value.name !== 'string' ||
+    !optional(value.uri) ||
+    !optional(value.uri_template) ||
+    !optional(value.title) ||
+    !optional(value.description) ||
+    !optional(value.mime_type) ||
+    (typeof value.uri === 'string') === (typeof value.uri_template === 'string') ||
+    (value.variables !== undefined &&
+      (!Array.isArray(value.variables) || !value.variables.every(name => typeof name === 'string')))
+  ) {
+    return null;
+  }
+  return {
+    server: value.server,
+    name: value.name,
+    variables: (value.variables ?? []) as string[],
+    ...(typeof value.uri === 'string' ? {uri: value.uri} : {}),
+    ...(typeof value.uri_template === 'string' ? {uriTemplate: value.uri_template} : {}),
+    ...(typeof value.title === 'string' ? {title: value.title} : {}),
+    ...(typeof value.description === 'string' ? {description: value.description} : {}),
+    ...(typeof value.mime_type === 'string' ? {mimeType: value.mime_type} : {}),
+  };
+}
+
+/** The MCP resources of a session profile, for the composer's `/` menu. */
+export async function fetchSessionMCPResources(
+  sessionId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<MCPResourceList> {
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources${profileQuery(profile)}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  const invalid = () => new Error('the server returned invalid MCP resource data');
+  if (!isRecord(value) || !Array.isArray(value.resources)) throw invalid();
+  const resources: MCPResource[] = [];
+  for (const item of value.resources) {
+    const resource = parseMCPResource(item);
+    if (resource === null) throw invalid();
+    resources.push(resource);
+  }
+  if (
+    value.failures !== undefined &&
+    (!Array.isArray(value.failures) ||
+      !value.failures.every(
+        failure => isRecord(failure) && typeof failure.server === 'string' && typeof failure.error === 'string',
+      ))
+  ) {
+    throw invalid();
+  }
+  return {resources, failures: (value.failures ?? []) as MCPResourceList['failures']};
+}
+
+/** One MCP resource read: by its URI, or its template filled with the variables. */
+export interface MCPResourceRead {
+  /** The text contents; empty for a resource that only holds images or PDFs. */
+  text: string;
+  /** Its images and PDFs, base64, for the composer's attachments. */
+  attachments: MCPResourceAttachment[];
+}
+
+export async function fetchSessionMCPResource(
+  sessionId: string,
+  resource: MCPResource,
+  variables: Readonly<Record<string, string>>,
+  profile?: string,
+): Promise<MCPResourceRead> {
+  const body =
+    resource.uriTemplate !== undefined
+      ? {server: resource.server, uri_template: resource.uriTemplate, variables}
+      : {server: resource.server, uri: resource.uri};
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/read${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  const attachments = isRecord(value) && isRecord(value.resource) ? parseResourceAttachments(value.resource.attachments) : null;
+  if (!isRecord(value) || !isRecord(value.resource) || typeof value.resource.text !== 'string' || attachments === null) {
+    throw new Error('the server returned invalid MCP resource data');
+  }
+  return {text: value.resource.text, attachments};
+}
+
+/**
+ * Subscribes to (on) or unsubscribes from one MCP resource of a session profile. A server
+ * that does not offer subscriptions, or that the profile reaches over HTTP, is refused
+ * with the server's reason.
+ */
+export async function setSessionMCPResourceWatch(
+  sessionId: string,
+  server: string,
+  uri: string,
+  on: boolean,
+  profile?: string,
+): Promise<void> {
+  const route = on ? 'subscribe' : 'unsubscribe';
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/${route}${profileQuery(profile)}`),
+    {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({server, uri})},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+/** The change notifications of a session profile's watched resources after `after`. */
+export async function fetchSessionMCPResourceEvents(
+  sessionId: string,
+  after: number,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<MCPResourceEvents> {
+  const query = new URLSearchParams({after: String(Math.max(0, Math.floor(after)))});
+  if (profile !== undefined && profile.length > 0) query.set('profile', profile);
+  const response = await authenticatedFetch(
+    apiUrl(`/sessions/${encodeURIComponent(sessionId)}/mcp-resources/events?${query.toString()}`),
+    {signal, cache: 'no-store'},
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  const events = parseResourceEvents(await response.json());
+  if (events === null) throw new Error('the server returned invalid MCP resource event data');
+  return events;
 }
 
 /** The MCP prompts of a session profile, for the composer's `/` menu. */
@@ -1308,6 +1640,18 @@ function isSessionUsageSummary(value: unknown): value is SessionUsageSummary {
 export interface StreamSessionRunOptions {
   /** Model identifier selected for the new run. */
   model?: string;
+  /**
+   * Runs the turn in plan mode: the model sees only the tools that never change
+   * anything and the session's plan_mode instructions, and answers with a plan.
+   */
+  plan?: boolean;
+  /** Narrows the run's tools to these tools.allow entries (a custom command's allowed-tools). */
+  tools?: string[];
+  /**
+   * Carries out the plan the transcript ends with: the server sends plan_mode.execute_prompt,
+   * followed by the input when it has text. The input may then be empty.
+   */
+  executePlan?: boolean;
   /**
    * The path profile to run in. A tab pinned to one profile must run there, so
    * its transcript, model default and run slot are that profile's.
@@ -1878,6 +2222,9 @@ export async function streamSessionRun(
           input,
           supports_interaction: true,
           ...(options.model === undefined ? {} : {model: options.model}),
+          ...(options.plan === true ? {plan: true} : {}),
+          ...(options.tools === undefined ? {} : {tools: options.tools}),
+          ...(options.executePlan === true ? {execute_plan: true} : {}),
         }),
       },
       runOptions,
@@ -2126,6 +2473,8 @@ export interface CatalogFileInfo {
   category?: string;
   /** The sessions whose scope selects this profile; set for profiles only. */
   sessions?: CatalogSessionRef[];
+  /** The reasoning efforts a model file lists; set for models only, absent when none. */
+  efforts?: string[];
 }
 
 export interface CatalogSessionRef {
@@ -2202,7 +2551,8 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
         (file.etag === undefined || typeof file.etag === 'string') &&
         (file.name === undefined || typeof file.name === 'string') &&
         (file.category === undefined || typeof file.category === 'string') &&
-        (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))),
+        (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))) &&
+        (file.efforts === undefined || (Array.isArray(file.efforts) && file.efforts.every(effort => typeof effort === 'string'))),
     )
   ) {
     throw new Error('the server returned an invalid catalog list');
@@ -2213,6 +2563,7 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
     ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
     ...(typeof file.category === 'string' && file.category.trim() !== '' ? {category: file.category.trim()} : {}),
     ...(Array.isArray(file.sessions) && file.sessions.length > 0 ? {sessions: (file.sessions as unknown[]).map(toSessionRef)} : {}),
+    ...(Array.isArray(file.efforts) && file.efforts.length > 0 ? {efforts: [...(file.efforts as string[])]} : {}),
   }));
 }
 

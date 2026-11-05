@@ -99,19 +99,22 @@ func listingModelOptions(config sessionfs.SessionConfig) []modelOption {
 }
 
 type sessionListRecord struct {
-	ID              string                             `json:"id"`
-	SessionID       string                             `json:"session_id"`
-	RootID          string                             `json:"root_id"`
-	RootLabel       string                             `json:"root_label"`
-	SessionName     string                             `json:"session_name"`
-	Category        string                             `json:"category,omitempty"`
-	Turns           int64                              `json:"turns"`
-	ProfileTurns    map[string]int64                   `json:"profile_turns,omitempty"`
-	ActiveProfile   string                             `json:"active_profile,omitempty"`
-	DefaultProfile  string                             `json:"default_profile,omitempty"`
-	Profiles        []string                           `json:"profiles,omitempty"`
-	ProfileNames    map[string]string                  `json:"profile_names,omitempty"`
-	ModelDefault    string                             `json:"model_default,omitempty"`
+	ID             string            `json:"id"`
+	SessionID      string            `json:"session_id"`
+	RootID         string            `json:"root_id"`
+	RootLabel      string            `json:"root_label"`
+	SessionName    string            `json:"session_name"`
+	Category       string            `json:"category,omitempty"`
+	Turns          int64             `json:"turns"`
+	ProfileTurns   map[string]int64  `json:"profile_turns,omitempty"`
+	ActiveProfile  string            `json:"active_profile,omitempty"`
+	DefaultProfile string            `json:"default_profile,omitempty"`
+	Profiles       []string          `json:"profiles,omitempty"`
+	ProfileNames   map[string]string `json:"profile_names,omitempty"`
+	ModelDefault   string            `json:"model_default,omitempty"`
+	// ProfileETag is the entity tag of the profile file (catalog layout only), which the
+	// model-default route takes back as If-Match.
+	ProfileETag     string                             `json:"profile_etag,omitempty"`
 	Models          *[]string                          `json:"models,omitempty"`
 	ModelOptions    []modelOption                      `json:"model_options,omitempty"`
 	FrontCompaction json.RawMessage                    `json:"front_compaction,omitempty"`
@@ -655,6 +658,7 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 		Profiles:        append([]string(nil), config.Profiles...),
 		ProfileNames:    maps.Clone(config.ProfileNames),
 		ModelDefault:    config.ModelDefault,
+		ProfileETag:     profileETag(config.ProfilePath),
 		FrontCompaction: append(json.RawMessage(nil), config.FrontCompaction...),
 		Model: modelSummary{
 			Provider: config.Model.Provider,
@@ -753,11 +757,25 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		fmt.Sprint(config.BackupTurns),
 		fileStamp(config.SettingPath),
 		fileStamp(config.ModelPath),
+		// The profile's entity tag is in the body, so an edit of the profile changes the version.
+		fileStamp(config.ProfilePath),
 	}
 	for _, id := range config.Models {
 		parts = append(parts, fileStamp(config.ModelPaths[id]))
 	}
 	return makeETag(strings.Join(parts, "|"))
+}
+
+// profileETag is the entity tag of the profile file, empty when there is none or it cannot be read.
+func profileETag(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return sessionfs.CatalogETag(data)
 }
 
 // profileNamesVersion is the names in profile ID order, so renaming a profile changes the version.

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"jad/backend-go/internal/logging"
 	"jad/backend-go/internal/memorytrace"
 	"jad/backend-go/internal/serverconfig"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessiongate"
 )
 
@@ -109,6 +111,7 @@ type Handler struct {
 	catalog                   SessionCatalog
 	toolLister                SessionToolLister
 	mcpPrompts                SessionMCPPrompts
+	mcpResources              SessionMCPResources
 	settings                  SessionSettings
 	catalogFiles              CatalogFiles
 	catalogSessions           CatalogSessions
@@ -234,6 +237,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalog, _ := resolver.(SessionCatalog)
 	toolLister, _ := resolver.(SessionToolLister)
 	mcpPrompts, _ := resolver.(SessionMCPPrompts)
+	mcpResources, _ := resolver.(SessionMCPResources)
 	settings, _ := resolver.(SessionSettings)
 	catalogFiles, _ := resolver.(CatalogFiles)
 	catalogSessions, _ := resolver.(CatalogSessions)
@@ -253,6 +257,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		mcpPrompts:                mcpPrompts,
+		mcpResources:              mcpResources,
 		settings:                  settings,
 		catalogFiles:              catalogFiles,
 		catalogSessions:           catalogSessions,
@@ -381,6 +386,14 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleMCPPromptList(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-prompts" && segments[4] == "get":
 		h.handleMCPPromptGet(w, r, reference, profile)
+	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "mcp-resources":
+		h.handleMCPResourceList(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-resources" && segments[4] == "read":
+		h.handleMCPResourceRead(w, r, reference, profile)
+	case r.Method == http.MethodPost && len(segments) == 5 && segments[3] == "mcp-resources" && (segments[4] == "subscribe" || segments[4] == "unsubscribe"):
+		h.handleMCPResourceSubscribe(w, r, reference, profile, segments[4] == "subscribe")
+	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "mcp-resources" && segments[4] == "events":
+		h.handleMCPResourceEvents(w, r, reference, profile)
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "files":
 		h.handleSessionFiles(w, r, reference, profile)
 	case r.Method == http.MethodPost && len(segments) == 4 && segments[3] == "model-default":
@@ -476,6 +489,8 @@ func (h *Handler) handleRunStart(w http.ResponseWriter, r *http.Request, referen
 	run.supportsInteraction = body.SupportsInteraction
 	run.mu.Unlock()
 	run.outputFormat = body.OutputFormat
+	run.outputValidator = outputFormatValidator(body.OutputFormat)
+	run.plan, run.tools, run.executePlan = body.Plan, body.Tools, body.ExecutePlan
 	h.attachContentCache(run)
 	queue := run.subscribe()
 	launched = true
@@ -861,6 +876,14 @@ type runRequest struct {
 	// OutputFormat is the checked output_format member: the text.format every request of
 	// the run sends. Nil when the request sent none.
 	OutputFormat json.RawMessage `json:"output_format,omitempty"`
+	// Plan starts the run in plan mode: read-only tools and the plan_mode instructions.
+	Plan bool `json:"plan,omitempty"`
+	// Tools, when set, narrows the run's tools to the ones these tools.allow entries
+	// cover. Nil leaves the profile's tools as they are.
+	Tools []string `json:"tools,omitempty"`
+	// ExecutePlan sends plan_mode.execute_prompt, followed by the input when there is one:
+	// the run carries out the plan the transcript ends with.
+	ExecutePlan bool `json:"execute_plan,omitempty"`
 }
 
 const (
@@ -923,12 +946,31 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 	// The members are located in raw itself; json.Valid has accepted it, so nothing is copied.
 	members := scanRunBodyObject(raw)
 	var body runRequest
+	if members.hasExecutePlan {
+		if json.Unmarshal(members.executePlan, &body.ExecutePlan) != nil || string(bytes.TrimSpace(members.executePlan)) == "null" {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "execute_plan must be a boolean"}
+		}
+	}
+	var input json.RawMessage
+	var imageChars int64
+	if body.ExecutePlan {
+		// The input is optional and is text only: it follows the configured prompt.
+		var text string
+		if members.hasInput && json.Unmarshal(members.input, &text) != nil {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "with execute_plan, input must be a string or left out"}
+		}
+		if strings.TrimSpace(text) == "" {
+			// No text of its own: the runner sends the configured prompt alone.
+			input, members.hasInput = json.RawMessage(`""`), true
+		}
+	}
 	if !members.hasInput {
 		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "input must be a non-empty string"}
 	}
-	input, imageChars, err := parseValidRunInput(members.input, limits)
-	if err != nil {
-		return runRequest{}, err
+	if input == nil {
+		if input, imageChars, err = parseValidRunInput(members.input, limits); err != nil {
+			return runRequest{}, err
+		}
 	}
 	// The reader allowed the image data on top of max_body_bytes; everything else in the
 	// body still has to fit in max_body_bytes itself.
@@ -949,8 +991,40 @@ func readRunBody(w http.ResponseWriter, r *http.Request, maxBytes, baseBytes int
 			return runRequest{}, err
 		}
 	}
+	if members.hasPlan {
+		if json.Unmarshal(members.plan, &body.Plan) != nil || string(bytes.TrimSpace(members.plan)) == "null" {
+			return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "plan must be a boolean"}
+		}
+	}
+	if body.Plan && body.ExecutePlan {
+		return runRequest{}, &StatusError{Code: http.StatusBadRequest, Message: "execute_plan carries out a plan, so it cannot run in plan mode"}
+	}
+	if members.hasTools {
+		if body.Tools, err = parseRunTools(members.tools); err != nil {
+			return runRequest{}, err
+		}
+	}
 	body.Model = strings.TrimSpace(body.Model)
 	return body, nil
+}
+
+// parseRunTools reads the run body's tools: an array of distinct tools.allow entries
+// (a native tool name, mcp:<server>:<tool> or mcp:<server>:*). An empty array runs with
+// no tools.
+func parseRunTools(raw []byte) ([]string, error) {
+	var entries []string
+	if json.Unmarshal(raw, &entries) != nil || entries == nil {
+		return nil, &StatusError{Code: http.StatusBadRequest, Message: "tools must be an array of tool names"}
+	}
+	for index, entry := range entries {
+		if err := sessionfs.CheckToolEntry(entry); err != nil {
+			return nil, &StatusError{Code: http.StatusBadRequest, Message: fmt.Sprintf("tools[%d] %v", index, err)}
+		}
+		if slices.Contains(entries[:index], entry) {
+			return nil, &StatusError{Code: http.StatusBadRequest, Message: fmt.Sprintf("tools[%d] repeats %q", index, entry)}
+		}
+	}
+	return entries, nil
 }
 
 func decodedPathSegments(u *url.URL) ([]string, error) {

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -97,6 +98,23 @@ func TestManagerAddsResourceAndPromptToolsWhenTheToolsetAsks(t *testing.T) {
 		if tool.Definition.Server != "docs" || tool.Definition.Source != "mcp" {
 			t.Fatalf("tool %s: server %q source %q", tool.Definition.ID, tool.Definition.Server, tool.Definition.Source)
 		}
+	}
+	// The four feature tools only read, so plan mode keeps them; the server's own tool
+	// is not marked, whatever it says of itself.
+	planned, err := tools.NewCatalog(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned, err = planned.PlanMode(nil); err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, definition := range planned.Definitions() {
+		kept = append(kept, strings.TrimPrefix(definition.ID, "mcp:docs:"))
+	}
+	sort.Strings(kept)
+	if strings.Join(kept, ",") != "prompts/get,prompts/list,resources/list,resources/read" {
+		t.Fatalf("plan-mode tools = %v", kept)
 	}
 
 	list := featureTool(t, loaded, "mcp:docs:resources/list")

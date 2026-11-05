@@ -165,10 +165,20 @@ func messageTurnCursor(ctx context.Context, shared *sharedSession, index transcr
 	if err != nil {
 		return 0, err
 	}
+	// An answer's id is the provider's response id, which a provider may repeat: an id
+	// found in two turns names no fork point.
+	var found *int64
 	for _, message := range messages {
-		if message.ID == messageID && message.Cursor != nil {
-			return *message.Cursor, nil
+		if message.ID != messageID || message.Cursor == nil {
+			continue
 		}
+		if found != nil && *found != *message.Cursor {
+			return 0, &httpapi.StatusError{Code: http.StatusConflict, Message: "several turns hold a message with that id; fork at the turn's user message instead"}
+		}
+		found = message.Cursor
+	}
+	if found != nil {
+		return *found, nil
 	}
 	return 0, &httpapi.StatusError{Code: http.StatusNotFound, Message: "message not found in the transcript; a message of the compacted history cannot be a fork point"}
 }

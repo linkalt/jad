@@ -1,6 +1,6 @@
 // Package plugins installs plugin bundles into the catalog layout: one folder that holds
-// models, MCP servers, toolsets (with their hooks), profiles (agents), skills and files a
-// plugin's MCP servers or hooks run. Installing copies them into the layout, records what
+// models, MCP servers, toolsets (with their hooks), profiles (agents), skills, custom
+// slash commands and files a plugin's MCP servers or hooks run. Installing copies them into the layout, records what
 // was copied and its hash, and checks every catalog file with the loader's rules; removing
 // takes back exactly what was recorded. A file changed after it was installed is left
 // alone unless the caller forces it.
@@ -42,6 +42,9 @@ const (
 	// Entry kinds besides the catalog kinds (model, mcp, toolset, profile).
 	kindSkill = "skill"
 	kindFiles = "files"
+	// kindCommands is the plugin's commands/ folder, installed whole as
+	// <command folder>/<plugin name>, so its commands are /<plugin>:<command>.
+	kindCommands = "commands"
 )
 
 // catalogFolders are the plugin folders that hold catalog files, in the order they are
@@ -92,8 +95,15 @@ type Target struct {
 	// SkillDir is the skill folder skills are copied into: the first of libraries.skill_dirs,
 	// so an installed skill is found before one of the same name further down the list.
 	SkillDir string
-	// SkillMaxBytes is libraries.max_asset_bytes, the limit a SKILL.md is read with.
-	SkillMaxBytes  int64
+	// SkillMaxBytes is libraries.max_asset_bytes, the limit a SKILL.md and a command
+	// file are read with.
+	SkillMaxBytes int64
+	// CommandDir is the command folder a plugin's commands/ folder is copied into, as
+	// <CommandDir>/<plugin name>: the first of libraries.command_dirs.
+	CommandDir string
+	// ReadCommands checks the commands installed in root/folder the way the "/" menu
+	// reads them, and returns how many there are.
+	ReadCommands   func(ctx context.Context, root, folder string, maxBytes int64) (int, error)
 	ValidateServer sessionfs.ServerFileValidator
 	// ReadSkill checks an installed skill folder the way the skill tool reads it.
 	ReadSkill func(ctx context.Context, directory, name string, maxBytes int64) error
@@ -106,6 +116,22 @@ func (t Target) recordPath(name string) string {
 
 func (t Target) filesDir(name string) string {
 	return filepath.Join(t.Layout.State, recordFolder, name, "files")
+}
+
+// treePath is where a plugin's folder of the kind is installed.
+func (t Target) treePath(plugin string, item tree) string {
+	switch item.kind {
+	case kindSkill:
+		return filepath.Join(t.SkillDir, item.id)
+	case kindCommands:
+		return filepath.Join(t.CommandDir, plugin)
+	default:
+		return t.filesDir(plugin)
+	}
+}
+
+func isTreeKind(kind string) bool {
+	return kind == kindSkill || kind == kindFiles || kind == kindCommands
 }
 
 func (t Target) catalogDir(kind sessionfs.CatalogKind) string {
@@ -153,7 +179,7 @@ type catalogFile struct {
 	data []byte
 }
 
-// tree is a skill folder or the files folder of a plugin.
+// tree is a skill folder, the commands folder or the files folder of a plugin.
 type tree struct {
 	kind   string
 	id     string
@@ -208,7 +234,7 @@ func readBundle(source string) (bundle, error) {
 	if err != nil {
 		return bundle{}, fmt.Errorf("read %s: %w", source, fserr.UnwrapPathError(err))
 	}
-	known := map[string]bool{ManifestName: true, "skills": true, "files": true}
+	known := map[string]bool{ManifestName: true, "skills": true, "files": true, "commands": true}
 	for _, folder := range catalogFolders {
 		known[folder.folder] = true
 	}
@@ -218,7 +244,7 @@ func readBundle(source string) (bundle, error) {
 		if known[name] || strings.HasPrefix(name, ".") || strings.HasPrefix(upper, "README") || strings.HasPrefix(upper, "LICENSE") || strings.HasPrefix(upper, "CHANGELOG") {
 			continue
 		}
-		return bundle{}, fmt.Errorf("plugin %s: %s is not a plugin part; a plugin holds plugin.json, models/, mcp/, tools/, profiles/, skills/ and files/", manifest.Name, filepath.Join(source, name))
+		return bundle{}, fmt.Errorf("plugin %s: %s is not a plugin part; a plugin holds plugin.json, models/, mcp/, tools/, profiles/, skills/, commands/ and files/", manifest.Name, filepath.Join(source, name))
 	}
 	hasFiles := false
 	if info, err := os.Lstat(filepath.Join(source, "files")); err == nil {
@@ -249,8 +275,13 @@ func readBundle(source string) (bundle, error) {
 		return bundle{}, err
 	}
 	found.trees = append(found.trees, skills...)
-	if len(found.catalog) == 0 && len(skills) == 0 {
-		return bundle{}, fmt.Errorf("plugin %s holds no catalog file and no skill", manifest.Name)
+	commands, err := readCommandsFolder(manifest.Name, filepath.Join(source, "commands"))
+	if err != nil {
+		return bundle{}, err
+	}
+	found.trees = append(found.trees, commands...)
+	if len(found.catalog) == 0 && len(skills) == 0 && len(commands) == 0 {
+		return bundle{}, fmt.Errorf("plugin %s holds no catalog file, skill or command", manifest.Name)
 	}
 	return found, nil
 }
@@ -311,6 +342,44 @@ func readSkillsFolder(plugin, folder string) ([]tree, error) {
 	return skills, nil
 }
 
+// readCommandsFolder reads the commands/ folder: Markdown files, in subfolders or not,
+// which become /<plugin>:<path> commands. Another file is refused, so nothing the plugin
+// ships is silently left out of the menu.
+func readCommandsFolder(plugin, folder string) ([]tree, error) {
+	info, err := os.Lstat(folder)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", folder, fserr.UnwrapPathError(err))
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("plugin %s: commands must be a folder", plugin)
+	}
+	count := 0
+	err = filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			return fmt.Errorf("plugin %s: %s is not a command; the commands folder holds Markdown files (.md)", plugin, path)
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, fmt.Errorf("plugin %s: the commands folder holds no .md file", plugin)
+	}
+	hash, err := treeHash(folder)
+	if err != nil {
+		return nil, err
+	}
+	return []tree{{kind: kindCommands, id: plugin, source: folder, hash: hash}}, nil
+}
+
 // treeHash is the hash of a folder's regular files, their relative paths and contents. A
 // link or a special file is refused: copying it would put something other than the plugin's
 // own bytes in place.
@@ -348,7 +417,7 @@ func hashBytes(data []byte) string {
 
 // currentHash is the hash an entry's path has now, or "" when it is gone.
 func currentHash(entry Entry) (string, error) {
-	if entry.Kind == kindSkill || entry.Kind == kindFiles {
+	if isTreeKind(entry.Kind) {
 		if _, err := os.Lstat(entry.Path); errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}

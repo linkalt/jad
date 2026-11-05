@@ -10,7 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
+
+	"jad/backend-go/internal/tools"
 )
 
 func TestRunToolBatchRunsConcurrentlyUpToLimitAndReportsEachAsItFinishes(t *testing.T) {
@@ -119,9 +120,12 @@ func TestRunToolBatchFailureStartsNoFurtherCallsAndLetsInFlightCallsSettle(t *te
 	var started, finished []int
 	boom := errors.New("boom")
 	// Call 0 fails only once call 1 is in flight, so both workers have claimed a
-	// call before the failure and the outcome does not depend on scheduling.
+	// call before the failure. Call 1 then settles only after call 0 gave back its leaf
+	// token, which it does after the failure is recorded and before it frees its slot:
+	// whichever slot the batch takes next, the failure is already seen, with no timing.
 	secondStarted := make(chan struct{})
-	err := runToolBatch([]int{0, 1, 2, 3}, 2,
+	budget := tools.NewLeafBudget(2)
+	err := runToolBatchLeaves(budget, []int{0, 1, 2, 3}, 2, func(int) bool { return true },
 		func(call int) (int, error) {
 			mu.Lock()
 			started = append(started, call)
@@ -130,10 +134,9 @@ func TestRunToolBatchFailureStartsNoFurtherCallsAndLetsInFlightCallsSettle(t *te
 				<-secondStarted
 				return 0, boom
 			}
-			if call == 1 {
-				close(secondStarted)
-			}
-			time.Sleep(40 * time.Millisecond)
+			close(secondStarted)
+			budget.Acquire()
+			budget.Release()
 			return call, nil
 		},
 		func(call, _ int) error {

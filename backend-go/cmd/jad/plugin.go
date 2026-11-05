@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/plugins"
@@ -14,14 +16,16 @@ import (
 )
 
 const pluginUsage = `usage: jad plugin install [--force] <folder>
+       jad plugin install [--force] [--ref <branch|tag|commit>] [--subdir <folder>] [--timeout <duration>] <git URL>
        jad plugin remove  [--force] <name>
        jad plugin list
 
 A plugin is a folder with plugin.json ({"schema_version":1,"name":"<name>","version":"..."})
 and any of models/, mcp/, tools/ (toolsets, with their hooks), profiles/ (agents),
-skills/<skill>/SKILL.md and files/. install copies each catalog file to
-<catalog>/<name>/<file>.json, so the plugin's files name each other as <name>/<file>; each
-skill folder to the first of libraries.skill_dirs; and files/ to
+skills/<skill>/SKILL.md, commands/ (custom slash commands, .md files) and files/. install
+copies each catalog file to <catalog>/<name>/<file>.json, so the plugin's files name each
+other as <name>/<file>; each skill folder to the first of libraries.skill_dirs; commands/ to
+<first of libraries.command_dirs>/<name>, so its commands are /<name>:<command>; and files/ to
 <state>/.plugins/<name>/files, whose path replaces ${JAD_PLUGIN_FILES} in the catalog files.
 Every catalog file is checked as the loader reads it, and a failed install is undone.
 Installing a plugin that is already installed upgrades it: files the new version drops are
@@ -31,6 +35,13 @@ A file that exists and is not the plugin's is never overwritten. A file the plug
 installed and that was changed since stops install and remove unless --force is given.
 remove refuses, and changes nothing, while a session or another file still needs a profile,
 toolset, MCP server or model of the plugin.
+
+A git URL (https://, http://, ssh://, git://, file:// or user@host:path) is cloned into a
+temporary folder with git, which never asks for a password here: use an SSH key or a
+credential helper for a private repository. --ref picks a branch, tag or commit (the default
+branch otherwise), --subdir the plugin's folder in the repository, and --timeout bounds the
+clone (default 5m). The plugin list shows the URL without credentials, the ref, the folder
+and the commit installed.
 `
 
 func runPluginCommand(args []string, streams commandStreams) error {
@@ -49,8 +60,14 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	flags := flag.NewFlagSet("jad plugin "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	force := false
+	var git plugins.GitSource
 	if action != "list" {
 		flags.BoolVar(&force, "force", false, "overwrite or remove files changed since they were installed")
+	}
+	if action == "install" {
+		flags.StringVar(&git.Ref, "ref", "", "branch, tag or commit of a git URL")
+		flags.StringVar(&git.Subdir, "subdir", "", "the plugin's folder in a git repository")
+		flags.DurationVar(&git.Timeout, "timeout", 5*time.Minute, "how long the git clone may take")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -66,6 +83,19 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	if flags.NArg() != want {
 		return usageError("%s", pluginUsage)
 	}
+	fromGit := false
+	if action == "install" {
+		// An existing folder is a folder, whatever its name looks like.
+		if _, err := os.Stat(flags.Arg(0)); err != nil && plugins.IsGitURL(flags.Arg(0)) {
+			fromGit, git.URL = true, flags.Arg(0)
+		}
+		if !fromGit && (git.Ref != "" || git.Subdir != "") {
+			return usageError("--ref and --subdir go with a git URL\n\n%s", pluginUsage)
+		}
+		if git.Timeout < 0 {
+			return usageError("--timeout cannot be negative\n\n%s", pluginUsage)
+		}
+	}
 	target, err := pluginTarget()
 	if err != nil {
 		return &exitError{code: exitFailed, err: err}
@@ -74,7 +104,12 @@ func runPluginCommand(args []string, streams commandStreams) error {
 	defer stop()
 	switch action {
 	case "install":
-		result, err := target.Install(ctx, flags.Arg(0), force)
+		var result plugins.InstallResult
+		if fromGit {
+			result, err = target.InstallGit(ctx, git, force)
+		} else {
+			result, err = target.Install(ctx, flags.Arg(0), force)
+		}
 		if err != nil {
 			return &exitError{code: exitFailed, err: err}
 		}
@@ -121,8 +156,8 @@ func versionText(version string) string {
 	return version
 }
 
-// pluginTarget is the catalog layout of the roots and the first skill folder of its root
-// setting. The catalogs are global to the root setting, so every root shares them.
+// pluginTarget is the catalog layout of the roots and the first skill and command folders
+// of its root setting. The catalogs are global to the root setting, so every root shares them.
 func pluginTarget() (plugins.Target, error) {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
@@ -160,6 +195,14 @@ func pluginTarget() (plugins.Target, error) {
 	if len(directories) > 0 {
 		target.SkillDir = directories[0]
 	}
+	commandDirectories, err := contentlibrary.CommandDirectories(root.GlobalJadRoot)
+	if err != nil {
+		return plugins.Target{}, err
+	}
+	if len(commandDirectories) > 0 {
+		target.CommandDir = commandDirectories[0]
+	}
+	target.ReadCommands = contentlibrary.CheckCommands
 	if target.SkillMaxBytes, err = contentlibrary.AssetByteLimit(root.GlobalJadRoot); err != nil {
 		return plugins.Target{}, err
 	}

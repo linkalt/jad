@@ -1,6 +1,8 @@
 /**
- * The composer's `/` menu: three built-in commands, then every library item, then
- * the session profile's MCP prompts.
+ * The composer's `/` menu: the built-in commands, then the custom commands
+ * (`/<command>`, from libraries.command_dirs), then every library item, then
+ * the session profile's MCP prompts and MCP resources. `/plan` switches the composer's plan mode;
+ * the other built-ins run a session action.
  *
  * Astryx ends a trigger's query at the first space, so a library item cannot be
  * typed by its name ("Software engineering"). Each one gets a slug instead, and
@@ -15,9 +17,16 @@
  */
 
 import type {SearchableItem, SearchSource} from '@astryxdesign/core';
-import type {MCPPrompt, RootLibraryAssetSummary, RootLibraryCatalog, RootLibraryKind} from './api';
+import type {
+  MCPPrompt,
+  MCPResource,
+  RootLibraryAssetSummary,
+  RootLibraryCatalog,
+  RootLibraryCommand,
+  RootLibraryKind,
+} from './api';
 
-export type SlashCommandName = 'compact' | 'state' | 'reset';
+export type SlashCommandName = 'compact' | 'state' | 'reset' | 'plan';
 
 export type SlashCommand = {
   name: SlashCommandName;
@@ -30,7 +39,9 @@ export type SlashCommand = {
 export type SlashSelection =
   | {type: 'command'; name: SlashCommandName}
   | {type: 'library'; kind: RootLibraryKind; id: string; name: string}
-  | {type: 'mcp'; prompt: MCPPrompt};
+  | {type: 'mcp'; prompt: MCPPrompt}
+  | {type: 'custom'; command: RootLibraryCommand}
+  | {type: 'resource'; resource: MCPResource};
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
@@ -48,7 +59,17 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     description: 'Reset this conversation',
     keywords: ['clear', 'new'],
   },
+  {
+    name: 'plan',
+    description: 'Switch plan mode: read-only tools, the answer is a plan',
+    keywords: ['read-only', 'design', 'think'],
+  },
 ];
+
+/** The built-in commands, without `/plan` when the composer has no plan mode. */
+export function builtInSlashCommands(planModeEnabled: boolean): readonly SlashCommand[] {
+  return planModeEnabled ? SLASH_COMMANDS : SLASH_COMMANDS.filter(command => command.name !== 'plan');
+}
 
 export type SlashEntry = {
   item: SearchableItem<SlashSelection>;
@@ -85,6 +106,19 @@ function libraryEntries(items: readonly RootLibraryAssetSummary[], taken: Set<st
   });
 }
 
+function customEntries(commands: readonly RootLibraryCommand[], taken: Set<string>): SlashEntry[] {
+  // The server gives each command its own word and keeps the built-in words and the
+  // kind prefixes for themselves; a repeat is still dropped rather than shadowing one.
+  return commands.flatMap(command => {
+    if (taken.has(command.command)) return [];
+    taken.add(command.command);
+    return [{
+      item: {id: command.command, label: `/${command.command}`, auxiliaryData: {type: 'custom', command}},
+      terms: [command.name, command.description, command.argumentHint ?? ''].map(term => term.toLowerCase()),
+    }];
+  });
+}
+
 function mcpEntries(prompts: readonly MCPPrompt[], taken: Set<string>): SlashEntry[] {
   return prompts.map(prompt => {
     const base = `mcp:${prompt.server}:${librarySlug(prompt.name)}`;
@@ -100,11 +134,31 @@ function mcpEntries(prompts: readonly MCPPrompt[], taken: Set<string>): SlashEnt
   });
 }
 
-/** Commands first, then the library in the order the server lists it, then the MCP prompts. */
+function resourceEntries(resources: readonly MCPResource[], taken: Set<string>): SlashEntry[] {
+  return resources.map(resource => {
+    const base = `resource:${resource.server}:${librarySlug(resource.name)}`;
+    let key = base;
+    for (let suffix = 2; taken.has(key); suffix += 1) {
+      key = `${base}-${suffix}`;
+    }
+    taken.add(key);
+    return {
+      item: {id: key, label: `/${key}`, auxiliaryData: {type: 'resource', resource}},
+      terms: [resource.name, resource.title ?? '', resource.description ?? '', resource.uri ?? resource.uriTemplate ?? '']
+        .map(term => term.toLowerCase()),
+    };
+  });
+}
+
+/**
+ * Built-ins first, then custom commands, the library in the order the server lists it,
+ * the MCP prompts and the MCP resources.
+ */
 export function slashEntries(
   commands: readonly SlashCommand[],
   catalog: RootLibraryCatalog | null,
   mcpPrompts: readonly MCPPrompt[] = [],
+  mcpResources: readonly MCPResource[] = [],
 ): SlashEntry[] {
   const taken = new Set<string>(commands.map(command => command.name));
   const entries: SlashEntry[] = commands.map(command => ({
@@ -116,11 +170,13 @@ export function slashEntries(
     terms: [command.description.toLowerCase(), ...command.keywords.map(word => word.toLowerCase())],
   }));
   if (catalog !== null) {
+    entries.push(...customEntries(catalog.commands ?? [], taken));
     for (const items of [catalog.prompts, catalog.templates, catalog.skills]) {
       entries.push(...libraryEntries(items, taken));
     }
   }
   entries.push(...mcpEntries(mcpPrompts, taken));
+  entries.push(...resourceEntries(mcpResources, taken));
   return entries;
 }
 
@@ -161,6 +217,8 @@ export type SlashSourceOptions = {
   loadCatalog: () => Promise<RootLibraryCatalog>;
   /** Loads the session profile's MCP prompts; left out, the menu has none. */
   loadMCPPrompts?: () => Promise<readonly MCPPrompt[]>;
+  /** Loads the session profile's MCP resources; left out, the menu has none. */
+  loadMCPResources?: () => Promise<readonly MCPResource[]>;
   maxResults: number;
   /** How long a loaded catalog answers before the next search asks the server again. */
   refreshMs: number;
@@ -179,31 +237,38 @@ export function createSlashSource({
   commands,
   loadCatalog,
   loadMCPPrompts,
+  loadMCPResources,
   maxResults,
   refreshMs,
   now = Date.now,
 }: SlashSourceOptions): SearchSource {
   let catalog: RootLibraryCatalog | null = null;
   let mcpPrompts: readonly MCPPrompt[] = [];
+  let mcpResources: readonly MCPResource[] = [];
   let entries: SlashEntry[] = slashEntries(commands, null);
   let loadedAt: number | null = null;
   let inFlight: Promise<void> | null = null;
 
-  // The library and the MCP prompts load side by side. Either failing keeps what the
-  // menu had of it, shows the other, and leaves the whole load to be retried next search.
+  // The library, the MCP prompts and the MCP resources load side by side. One failing
+  // keeps what the menu had of it, shows the others, and leaves the whole load to be
+  // retried next search.
   const ensureFresh = (): Promise<void> => {
     if (loadedAt !== null && now() - loadedAt < refreshMs) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = (async () => {
       try {
-        const [library, mcp] = await Promise.allSettled([
+        const [library, mcp, resources] = await Promise.allSettled([
           loadCatalog(),
           loadMCPPrompts === undefined ? Promise.resolve(mcpPrompts) : loadMCPPrompts(),
+          loadMCPResources === undefined ? Promise.resolve(mcpResources) : loadMCPResources(),
         ]);
         if (library.status === 'fulfilled') catalog = library.value;
         if (mcp.status === 'fulfilled') mcpPrompts = mcp.value;
-        entries = slashEntries(commands, catalog, mcpPrompts);
-        if (library.status === 'fulfilled' && mcp.status === 'fulfilled') loadedAt = now();
+        if (resources.status === 'fulfilled') mcpResources = resources.value;
+        entries = slashEntries(commands, catalog, mcpPrompts, mcpResources);
+        if (library.status === 'fulfilled' && mcp.status === 'fulfilled' && resources.status === 'fulfilled') {
+          loadedAt = now();
+        }
       } finally {
         inFlight = null;
       }
@@ -216,6 +281,19 @@ export function createSlashSource({
     return rankSlashEntries(entries, query, maxResults);
   };
   return {search, bootstrap: () => search('')};
+}
+
+/** The variables to send for a resource template: the template's own, without empty ones. */
+export function mcpResourceVariableValues(
+  resource: MCPResource,
+  values: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const chosen: Record<string, string> = {};
+  for (const name of resource.variables) {
+    const value = values[name] ?? '';
+    if (value.trim() !== '') chosen[name] = value;
+  }
+  return chosen;
 }
 
 /** Whether every required argument of an MCP prompt has a value. */

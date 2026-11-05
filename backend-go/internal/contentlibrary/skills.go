@@ -28,6 +28,16 @@ type LoadedSkill struct {
 // the setting file from the working directory, and the file is read on every
 // call so an edit applies without a restart.
 func SkillDirectories(globalJadRoot string) ([]string, error) {
+	return rootDirectories(globalJadRoot, "skill_dirs", func(defaults libraryDefaults) []string { return defaults.Skills })
+}
+
+// CommandDirectories returns libraries.command_dirs of the root setting in globalJadRoot,
+// resolved like SkillDirectories.
+func CommandDirectories(globalJadRoot string) ([]string, error) {
+	return rootDirectories(globalJadRoot, "command_dirs", func(defaults libraryDefaults) []string { return defaults.Commands })
+}
+
+func rootDirectories(globalJadRoot, key string, pick func(libraryDefaults) []string) ([]string, error) {
 	root, err := filepath.Abs(globalJadRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve global root: %w", err)
@@ -56,7 +66,7 @@ func SkillDirectories(globalJadRoot string) ([]string, error) {
 	if err := json.Unmarshal(embeddedDefaults, &defaults); err != nil {
 		return nil, fmt.Errorf("decode embedded root-library defaults: %w", err)
 	}
-	return resolveLibraryDirectoryList(configured, "skill_dirs", defaults.Skills, label, root)
+	return resolveLibraryDirectoryList(configured, key, pick(defaults), label, root)
 }
 
 // ListSkills returns the skills visible across directories, in directory order.

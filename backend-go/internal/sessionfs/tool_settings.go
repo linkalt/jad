@@ -72,6 +72,26 @@ func normalizeMaxRunTokens(raw json.RawMessage, path string) (int64, error) {
 	return value, nil
 }
 
+// maxConfiguredRunDurationMS is a week: a cap for a run that should never be left alone
+// that long, not a working limit.
+const (
+	minConfiguredRunDurationMS = 1_000
+	maxConfiguredRunDurationMS = 604_800_000
+)
+
+// normalizeMaxRunDuration validates the most milliseconds one run may take. An absent key
+// means no limit.
+func normalizeMaxRunDuration(raw json.RawMessage, path string) (int64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	value, ok := plainToolInteger(raw)
+	if !ok || value < minConfiguredRunDurationMS || value > maxConfiguredRunDurationMS {
+		return 0, configError("%s: max_run_duration_ms must be a safe integer between %d and %d", path, minConfiguredRunDurationMS, maxConfiguredRunDurationMS)
+	}
+	return value, nil
+}
+
 // normalizeMaxParallelToolCalls validates the most tool calls of one provider
 // response that may run at the same time.
 func normalizeMaxParallelToolCalls(raw json.RawMessage, path string) (int64, error) {

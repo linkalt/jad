@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/logging"
+	"jad/backend-go/internal/outputcheck"
 	"jad/backend-go/internal/responses"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/tools"
@@ -85,6 +86,9 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		MemoryTrace:     h.memoryTrace,
 		ToolExecution:   toolExecution,
 		OutputFormat:    run.outputFormat,
+		Plan:            run.plan,
+		Tools:           run.tools,
+		ExecutePlan:     run.executePlan,
 		OnInputAccepted: func(input session.PersistedInput) { accepted = &input },
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)
@@ -145,7 +149,12 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 		run.onResult(result.Event)
 	}
 	message := normalizedRun.Complete(result.Event)
-	terminal, err := encodeTerminalEvents(message)
+	var verdict *outputcheck.Verdict
+	if run.outputValidator != nil {
+		checked := outputcheck.Check(run.outputValidator, message.Text)
+		verdict = &checked
+	}
+	terminal, err := encodeTerminalEvents(message, verdict)
 	if err != nil {
 		emitter.discard()
 		logger.Error("run failed", slog.Any("error", err))
@@ -257,12 +266,18 @@ func failureEvents(message string) []streamEvent {
 	return []streamEvent{errorEvent, doneEvent}
 }
 
-func encodeTerminalEvents(message webUIMessage) ([]streamEvent, error) {
+// encodeTerminalEvents ends a completed run. A run sent with output_format gets the verdict
+// on its answer as the completed event's output member.
+func encodeTerminalEvents(message webUIMessage, verdict *outputcheck.Verdict) ([]streamEvent, error) {
 	uiEvent, err := makeSSEEvent("ui.message", map[string]any{"message": message})
 	if err != nil {
 		return nil, err
 	}
-	completedEvent, err := makeSSEEvent("completed", map[string]any{"message": message, "committed": true})
+	completed := map[string]any{"message": message, "committed": true}
+	if verdict != nil {
+		completed["output"] = verdict
+	}
+	completedEvent, err := makeSSEEvent("completed", completed)
 	if err != nil {
 		return nil, err
 	}

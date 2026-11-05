@@ -6,7 +6,7 @@
  * The activity panels (notifications, checkpoints) are the app's own, and they
  * show in the left window — see `left-panel.ts`.
  */
-export type ConversationPanelId = 'inspector' | 'prompts';
+export type ConversationPanelId = 'inspector' | 'prompts' | 'resources';
 
 /**
  * A pane's own right-edge toggle: it closes the panel it already shows, and any

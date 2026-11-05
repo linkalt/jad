@@ -63,6 +63,9 @@ var (
 
 // NativeSubagentSettings contains the normalized settings of native.subagent.
 type NativeSubagentSettings struct {
+	// ProfileModels maps each model ID the calling profile lists to its file: the models a
+	// call's model argument may pick. The catalog-layout loader fills it; nil offers none.
+	ProfileModels map[string]string
 	// ResultMaxBytes is the most child text one call returns; a longer answer is cut
 	// and the result says so.
 	ResultMaxBytes int64
