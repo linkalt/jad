@@ -125,7 +125,7 @@ type NativeExecLang struct {
 
 // NativeExecSettings holds the normalized settings of native.exec. Child is how its
 // process runs (environment, spill, stream budgets, timeouts, path policy), read from
-// tools.native.exec with the same keys and defaults as native.bash; exec never reads bash.
+// tools.native.exec with the shared child keys and defaults (NativeBashSettings).
 type NativeExecSettings struct {
 	Child NativeBashSettings
 	// LangNames lists Langs in the order they are shown to the model.

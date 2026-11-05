@@ -1,3 +1,5 @@
+> **Removed.** The `bash` tool was removed when `exec` replaced the file, search, shell, process, patch, fetch and notebook tools (`backend-go/DECISIONS.md`, "`exec` replaces the file, search, shell, process, patch, fetch and notebook tools"); `tools.native.bash` is refused by name. This document is kept as history. See `design_exec.md` for the current design.
+
 # `bash` Tool Design
 
 **Status: implemented.** Sections 1–12 describe the shipped design; §13 records the confirmed decisions and

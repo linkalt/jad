@@ -120,7 +120,7 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 		settings.Tools = nil
 		for index, name := range names {
 			if hint, removed := removedNativeTools[name]; removed {
-				return nil, configError("%s: %s.tools[%d]: tools.native.%s was removed; %s", path, section, index, name, hint)
+				return nil, configError("%s: %s.tools[%d]: tools.native.%s was removed; %s", path, section, index, name, removedToolListHint(hint))
 			}
 			if !containsString(SandboxTools, name) {
 				return nil, configError("%s: %s.tools[%d] must be one of %s", path, section, index, strings.Join(SandboxTools, ", "))

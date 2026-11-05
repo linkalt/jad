@@ -181,10 +181,11 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	seen := make(map[string]struct{}, len(rawTools))
 	for _, rawTool := range rawTools {
 		var tool string
-		if err := json.Unmarshal(rawTool, &tool); err == nil && tool == "process" {
+		err := json.Unmarshal(rawTool, &tool)
+		if err == nil && tool == "process" {
 			return StateContextTrigger{}, configError("%s: %s.tools: the process provider was removed with tools.native.process; exec's background runs are listed by the async provider", settingPath, section)
 		}
-		if err := json.Unmarshal(rawTool, &tool); err != nil || (tool != "task" && tool != "memory" && tool != "subagent" && tool != "async") {
+		if err != nil || (tool != "task" && tool != "memory" && tool != "subagent" && tool != "async") {
 			return StateContextTrigger{}, configError("%s: %s.tools must contain only task, memory, subagent, or async", settingPath, section)
 		}
 		if _, duplicate := seen[tool]; !duplicate {

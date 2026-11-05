@@ -59,7 +59,7 @@ func nativeBashStyleKeysWithout(excluded ...string) []string {
 
 // NativeToolSmithSettings holds the normalized settings of native.tool_smith. Child is how
 // the script process runs, read from tools.native.tool_smith with the keys and defaults of
-// native.bash; tool_smith never reads bash.
+// the shared child settings (NativeBashSettings); tool_smith never reads exec.
 type NativeToolSmithSettings struct {
 	Child NativeBashSettings
 	// FunctionsDir is the function library directory as configured (relative to the working directory).
@@ -229,7 +229,7 @@ func normalizeNativeToolSmithTools(fields map[string]json.RawMessage, path strin
 			return nil, configError("%s[%d] must be a native tool name", path, index)
 		}
 		if hint, removed := removedNativeTools[name]; removed {
-			return nil, configError("%s[%d] \"%s\" was removed; %s", path, index, name, hint)
+			return nil, configError("%s[%d] \"%s\" was removed; %s", path, index, name, removedToolListHint(hint))
 		}
 		if containsString(nativeToolSmithExcludedTools, name) {
 			return nil, configError("%s[%d] \"%s\" cannot be called from a script", path, index, name)

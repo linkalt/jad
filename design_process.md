@@ -1,3 +1,5 @@
+> **Removed.** The `process` tool was removed when `exec` replaced the file, search, shell, process, patch, fetch and notebook tools (`backend-go/DECISIONS.md`, "`exec` replaces the file, search, shell, process, patch, fetch and notebook tools"); `tools.native.process` is refused by name. This document is kept as history. See `design_exec.md` for the current design.
+
 > **Superseded in part by design_async_manager.md:** the process tool now has only `command`, `stdin`, `cwd` and `block_ms`; wait, status, list and stop moved to the `async` tool, and `wait_timeout_ms`/`max_wait_timeout_ms` were removed in favour of the async manager's `default_block_ms`/`max_block_ms`.
 
 # Native `process` Tool Design

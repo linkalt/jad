@@ -120,7 +120,7 @@ type HooksSettings struct {
 	// MaxPayloadBytes cuts the event JSON a command reads on stdin.
 	MaxPayloadBytes int64
 	// The child-process settings of a check. They are the hooks' own: nothing is read from
-	// tools.native.bash. Env and EnvDeny shape the environment on top of the shared allowlist.
+	// tools.native.exec. Env and EnvDeny shape the environment on top of the shared allowlist.
 	KillGraceMs      int64
 	KillDeadlineMs   int64
 	DrainAfterExitMs int64

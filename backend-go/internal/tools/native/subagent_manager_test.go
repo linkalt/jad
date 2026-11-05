@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -469,6 +470,33 @@ func (l *lockedLog) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.text.String()
+}
+
+// A panic in execute after the launcher returned (the handle sweep, the worktree close,
+// finish) is recovered by recoverRun: the run ends failed, the call returns, the panic is
+// logged with its stack and its text stays out of the result.
+func TestSubagentPanicAfterTheLauncherFailsTheRunInsteadOfEndingTheServer(t *testing.T) {
+	logged := &lockedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	manager := NewSubagentManager()
+	t.Cleanup(func() { _ = manager.Close() })
+	manager.afterLaunch = func() { panic("sweep exploded") }
+	catalog, _ := buildSubagentCatalogOver(t, manager, newTestAsyncHost(t), &fakeLauncher{})
+	out, returned := callReturnsWithin(t, catalog, `{"task":"x"}`, 5*time.Second)
+	if !returned {
+		t.Fatal("the call never returned: the run was left going")
+	}
+	if !strings.Contains(out, "error_code: subagent_failed") || strings.Contains(out, "sweep exploded") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if views := manager.list(testSessionKey); len(views) != 1 || views[0].state != subagentRunFailed {
+		t.Fatalf("runs after the panic: %+v", views)
+	}
+	if text := logged.String(); !strings.Contains(text, "sweep exploded") || !strings.Contains(text, "stack=") {
+		t.Fatalf("the panic left no log line with its value and stack:\n%s", text)
+	}
 }
 
 func TestSubagentLauncherPanicTextStaysOutOfTheRunReason(t *testing.T) {

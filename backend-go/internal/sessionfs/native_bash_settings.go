@@ -68,8 +68,9 @@ type NativeBashSpillSettings struct {
 	StderrFull           string
 }
 
-// NativeBashSettings contains normalized shell, path, output, and environment
-// policy for native.bash.
+// NativeBashSettings contains the normalized shell, path, output, and environment
+// policy of a child process run by exec, tool_smith or a hook. The name predates the
+// removal of native.bash.
 type NativeBashSettings struct {
 	Policy       NativePathPolicy
 	Shell        string

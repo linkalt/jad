@@ -93,6 +93,9 @@ type SubagentManager struct {
 	// now reads the clock for the run times that the lists and the pruning order by; it is a
 	// field so a test can give runs an exact order.
 	now func() time.Time
+	// afterLaunch, when set, runs in execute right after the launcher returned; it is a field
+	// so a test can panic past the launcher's own recovery and reach recoverRun.
+	afterLaunch func()
 	// transcriptRoot, when set, is the storage directory whose child folders are
 	// deleted as runs are dropped; see DeleteTranscriptsUnder.
 	transcriptRoot string
@@ -843,6 +846,9 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	}
 	spec.request.OnTranscript = run.setDir
 	result, err := m.runLauncher(childContext, spec)
+	if m.afterLaunch != nil {
+		m.afterLaunch()
+	}
 	// The child is over, so nothing it started should go on: stop its async handles (exec
 	// runs, nested children) before the run is reported ended, and say how many there were.
 	stoppedHandles := 0
@@ -890,7 +896,7 @@ func (m *SubagentManager) runLauncher(ctx context.Context, spec subagentStart) (
 	return spec.launcher.Run(ctx, spec.request)
 }
 
-// recoverRun is the panic boundary of the rest of execute (the process sweep, finish and
+// recoverRun is the panic boundary of the rest of execute (the handle sweep, finish and
 // the bookkeeping in it): the goroutine has no caller that could recover it, and a panic
 // would end the server and leave the run going. The run is finished as failed, unless
 // finish had already begun, in which case only the waiters are released.

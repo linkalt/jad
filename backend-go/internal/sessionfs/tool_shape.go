@@ -14,21 +14,28 @@ var (
 	}
 	// removedNativeTools are the tools exec replaced, each with what to do instead. Their
 	// keys are refused by name, never ignored, so a setting that still names one says why.
+	// The advice is completed by removedToolKeyHint or removedToolListHint.
 	removedNativeTools = map[string]string{
-		"read":        "read files with exec (cat, sed -n, head) or a saved exec helper; delete the key",
-		"write":       "write files with exec (a heredoc, or a helper); delete the key",
-		"edit":        "edit files with exec (a helper or a short script); delete the key",
-		"apply_patch": "apply patches with exec (git apply, patch, or a helper); delete the key",
-		"notebook":    "edit notebooks with exec (a python helper using nbformat); delete the key",
-		"grep":        "search with exec (rg, grep); delete the key",
-		"glob":        "list files with exec (rg --files, find); delete the key",
-		"bash":        "exec runs shell commands (lang bash, its default); move the settings to tools.native.exec and delete the key",
-		"process":     "exec runs long commands: a call that outlasts block_ms becomes an async handle; delete the key",
-		"fetch":       "fetch pages with exec (curl, or a helper); delete the key",
+		"read":        "read files with exec (cat, sed -n, head) or a saved exec helper",
+		"write":       "write files with exec (a heredoc, or a helper)",
+		"edit":        "edit files with exec (a helper or a short script)",
+		"apply_patch": "apply patches with exec (git apply, patch, or a helper)",
+		"notebook":    "edit notebooks with exec (a python helper using nbformat)",
+		"grep":        "search with exec (rg, grep)",
+		"glob":        "list files with exec (rg --files, find)",
+		"bash":        "exec runs shell commands (lang bash, its default); move the settings to tools.native.exec",
+		"process":     "exec runs long commands: a call that outlasts block_ms becomes an async handle",
+		"fetch":       "fetch pages with exec (curl, or a helper)",
 	}
 	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
 	extensionToolNames = []string{"decide_systemone", "web_search"}
 )
+
+// removedToolKeyHint ends a removed tool's advice for a settings key that names it.
+func removedToolKeyHint(hint string) string { return hint + "; delete the key" }
+
+// removedToolListHint ends a removed tool's advice for a list entry that names it.
+func removedToolListHint(hint string) string { return hint + "; remove it from the list" }
 
 // NativeToolNames lists the names tools.native accepts, in registration order.
 func NativeToolNames() []string {
@@ -80,7 +87,7 @@ func validateToolSettingsShape(setting map[string]json.RawMessage, settingPath s
 		}
 		for _, key := range nativeKeys {
 			if hint, removed := removedNativeTools[key]; removed {
-				return configError("%s: tools.native.%s was removed; %s", settingPath, key, hint)
+				return configError("%s: tools.native.%s was removed; %s", settingPath, key, removedToolKeyHint(hint))
 			}
 			if !containsString(nativeToolNames, key) {
 				return unsupportedToolKey(settingPath+": tools.native", key, nativeToolNames, "MCP servers are configured under tools.mcp")

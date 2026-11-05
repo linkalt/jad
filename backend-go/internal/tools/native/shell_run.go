@@ -23,7 +23,6 @@ var bashEnvironmentAllowlist = []string{
 	"SYSTEMROOT", "WINDIR", "ComSpec", "PATHEXT",
 }
 
-// NewBashTool constructs native.bash from normalized per-session settings.
 // shellChildRun is what differs between the tools that run a child under the shell child policy (exec, tool_smith).
 type shellChildRun struct {
 	file      string
@@ -43,7 +42,7 @@ type shellChildRun struct {
 	resultFile *shellResultFile
 	// program names the interpreter in the "not installed" error; nil means the shell.
 	program *shellProgram
-	// section is the settings block the run reads, named in advice: tools.native.bash or tools.native.exec.
+	// section is the settings block the run reads, named in advice: tools.native.exec or tools.native.tool_smith.
 	section string
 	// standby is a waiting interpreter (exec) that runs standbyCode instead of a fresh start of
 	// file and argv; file and argv still start the program when the standby declines it.
