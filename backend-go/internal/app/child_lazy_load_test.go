@@ -13,8 +13,8 @@ import (
 func TestChildOfAParentWithLazyToolsLoadsIntoTheOwningProfilesSet(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
-	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{"load_tool", `{"names":["` + name + `"]}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -41,8 +41,8 @@ func TestChildOfAParentWithLazyToolsLoadsIntoTheOwningProfilesSet(t *testing.T) 
 // An owner with no tools.lazy gives its children no load_tool, even when the agent names it: load_tool
 // is offered only through the owner's set. The child's request lists no load_tool.
 func TestChildOfAParentWithoutLazyToolsGetsNoLoadTool(t *testing.T) {
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "load_tool"}, "__load_tool": true}, false, nil, nil)
-	f.provider.childFirstCall = [2]string{"read", `{"path":"notes.txt"}`}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "load_tool"}, "__load_tool": true}, false, nil, nil)
+	f.provider.childFirstCall = [2]string{"skill", notesCall}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}

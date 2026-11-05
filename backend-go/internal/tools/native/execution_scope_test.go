@@ -26,16 +26,15 @@ func filledRunScope(root string) tools.ExecutionContext {
 		OnInteractionResolved: func(tools.InteractionIdentity, tools.InteractionAnswer, json.RawMessage) error {
 			return nil
 		},
-		RawArguments:      json.RawMessage(`{"filled":true}`),
-		PathScope:         &tools.PathScope{Allow: []string{"src"}},
-		OnFileChange:      func(string, string) {},
-		ProcessOwner:      "sub_00000001",
-		ProcessOwnerLimit: 3,
-		ProcessAsync:      true,
-		AgentName:         "coder",
-		AgentDepth:        2,
-		RootRun:           "sub_00000001",
-		RemoteHops:        1,
+		RawArguments: json.RawMessage(`{"filled":true}`),
+		PathScope:    &tools.PathScope{Allow: []string{"src"}},
+		OnFileChange: func(string, string) {},
+		ProcessOwner: "sub_00000001",
+		ProcessAsync: true,
+		AgentName:    "coder",
+		AgentDepth:   2,
+		RootRun:      "sub_00000001",
+		RemoteHops:   1,
 	}
 }
 

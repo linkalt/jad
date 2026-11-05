@@ -49,23 +49,24 @@ func TestChildGetsAsyncOnlyWhenItsToolsListNamesIt(t *testing.T) {
 
 var exitSevenPattern = regexp.MustCompile(`"code":"7"`)
 
-// A child with process and async starts a process with a short block, waits for it with its
+// A child with exec and async starts a program with a short block, waits for it with its
 // own async tool and reads the exit code; its async tool never sees or stops a handle of
 // the parent; its live handles are stopped when it ends and the parent never sees them.
 func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("managed process groups require a POSIX platform")
+		t.Skip("exec process groups require a POSIX platform")
 	}
+	requireInterpreters(t, "bash")
 	baseline := baselineCount()
 	dir := t.TempDir()
 	host, err := NewAsyncHost(filepath.Join(dir, ".async"), asyncmgr.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	processes := NewProcessManager(filepath.Join(dir, "processes"))
-	settings := processTestRequest(dir, "", 1<<20).Policy
-	settings.StorageDir = filepath.Join(dir, "processes")
-	process, err := NewProcessToolWithAsync(settings, processes, "KEY", host)
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, dir)
+	settings.Child.TimeoutMs, settings.Child.MaxTimeoutMs = 20_000, 30_000
+	process, err := NewExecTool(settings, "KEY", host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,12 +77,12 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 	manager := NewSubagentManager()
 
 	const parentKey = "sess|a"
-	parentExec := tools.ExecutionContext{CallID: "p", WorkspaceRoot: dir, SessionKey: parentKey}
-	out, err := process.Execute(context.Background(), map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}, parentExec)
+	parentExec := tools.ExecutionContext{CallID: "p", WorkspaceRoot: dir, SessionDir: dir, SessionKey: parentKey}
+	out, err := process.Execute(context.Background(), map[string]any{"lang": "bash", "code": "sleep 30", "block_ms": json.Number("0")}, parentExec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parentProcess := processIDOf(t, out)
+	parentProcess := execRunIDOf(t, out)
 
 	var ids struct{ finished, stopped, left, run string }
 	var failures []string
@@ -92,6 +93,7 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 		exec := request.Execution
 		exec.CallID = "c"
 		exec.WorkspaceRoot = dir
+		exec.SessionDir = dir
 		ids.run = exec.ProcessOwner
 		call := func(tool tools.Tool, arguments map[string]any) string {
 			if tool.NormalizeArguments != nil {
@@ -103,12 +105,12 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 			}
 			return result
 		}
-		ids.finished = processIDOf(t, call(process, map[string]any{"command": "sleep 0.3; exit 7", "block_ms": json.Number("50")}))
+		ids.finished = execRunIDOf(t, call(process, map[string]any{"lang": "bash", "code": "sleep 0.3; exit 7", "block_ms": json.Number("50")}))
 		if got := call(async, map[string]any{"action": "wait", "wait_ms": json.Number("5000")}); !exitSevenPattern.MatchString(got) || !strings.Contains(got, ids.finished) {
 			fail("child wait did not give the exit code", got)
 		}
-		ids.stopped = processIDOf(t, call(process, map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}))
-		ids.left = processIDOf(t, call(process, map[string]any{"command": "sleep 30", "block_ms": json.Number("0")}))
+		ids.stopped = execRunIDOf(t, call(process, map[string]any{"lang": "bash", "code": "sleep 30", "block_ms": json.Number("0")}))
+		ids.left = execRunIDOf(t, call(process, map[string]any{"lang": "bash", "code": "sleep 30", "block_ms": json.Number("0")}))
 		listed := call(async, map[string]any{"action": "list"})
 		if !strings.Contains(listed, ids.stopped) || !strings.Contains(listed, ids.left) || strings.Contains(listed, parentProcess) {
 			fail("child list must hold its own handles only", listed)
@@ -125,7 +127,7 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 		return SubagentResult{Text: "done", Rounds: 1, Tokens: 1}, nil
 	}}
 
-	agent := writerAgent("runner", "read", "process", "async")
+	agent := writerAgent("runner", "read", "exec", "async")
 	parentTools := append(withExecutors(t, readOnlyTool("read")), process, async)
 	sub, err := newSubagentToolAsync(writeSettings(agent), parentTools, nil, launcher, nil, manager, host)
 	if err != nil {
@@ -139,21 +141,25 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 		t.Fatalf("inside the child:\n%s\nresult:\n%s", strings.Join(failures, "\n"), out)
 	}
 
-	stateOf := func(id string) ProcessState {
-		snapshot, found := processes.Snapshot(id)
-		if !found {
-			t.Fatalf("process %s unknown", id)
-		}
-		return snapshot.State
+	// A run still in the host's list has a live child; the child's two long runs must be
+	// gone (stopped) and the parent's must still run.
+	running := func(id string) bool {
+		host.mu.Lock()
+		defer host.mu.Unlock()
+		return host.shellRuns[id] != nil
 	}
-	if got := stateOf(ids.left); got != ProcessStopped {
-		t.Errorf("the child's live handle is %s after the child ended, want stopped", got)
+	settle := time.Now().Add(5 * time.Second)
+	for (running(ids.left) || running(ids.stopped)) && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
 	}
-	if got := stateOf(ids.stopped); got != ProcessStopped {
-		t.Errorf("the child's stopped process is %s", got)
+	if running(ids.left) {
+		t.Errorf("the child's live handle %s still runs after the child ended", ids.left)
 	}
-	if got := stateOf(parentProcess); got != ProcessRunning {
-		t.Errorf("the parent's process is %s: a child must not touch it", got)
+	if running(ids.stopped) {
+		t.Errorf("the child's stopped handle %s still runs", ids.stopped)
+	}
+	if entry, err := host.Manager().Status(parentKey, parentProcess); err != nil || entry.State != asyncmgr.StateRunning {
+		t.Errorf("the parent's handle is %+v, %v: a child must not touch it", entry, err)
 	}
 	for _, action := range []map[string]any{{"action": "list", "state": "all"}, {"action": "wait", "wait_ms": json.Number("0")}} {
 		got := callAsync(t, async, parentKey, action)
@@ -167,7 +173,7 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 		t.Errorf("parent counts = %+v, want one active handle and nothing unread", counts)
 	}
 	if _, ids := host.Manager().Snapshot(parentKey); len(ids) != 1 || ids[0] != parentProcess {
-		t.Errorf("the parent's SSE ids = %v, want only its own process", ids)
+		t.Errorf("the parent's SSE ids = %v, want only its own handle", ids)
 	}
 	if counts := host.Manager().Counts(ids.run); counts != (asyncmgr.Counts{}) {
 		t.Errorf("the ended child still owns handles: %+v", counts)
@@ -178,11 +184,10 @@ func TestChildAsyncIsScopedToTheChildsOwnRun(t *testing.T) {
 
 	callAsync(t, async, parentKey, map[string]any{"action": "stop", "id": parentProcess})
 	deadline := time.Now().Add(5 * time.Second)
-	for stateOf(parentProcess) == ProcessRunning && time.Now().Before(deadline) {
+	for running(parentProcess) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	_ = manager.Close()
-	_ = processes.Close()
 	host.Close()
 	requireNoGrowth(t, baseline, "a child with async ended")
 }

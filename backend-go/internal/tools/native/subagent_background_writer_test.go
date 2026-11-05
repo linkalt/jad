@@ -80,7 +80,7 @@ func callReturnsWithin(t *testing.T, catalog *tools.Catalog, arguments string, w
 func TestBackgroundWriterIsHandedOffAndCollectedThroughAsync(t *testing.T) {
 	baseline := baselineCount()
 	release := make(chan struct{})
-	catalog, manager, host := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
+	catalog, manager, host := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "exec")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("exec"))
 	out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 2*time.Second)
 	if !returned {
 		close(release)
@@ -116,9 +116,9 @@ func TestBackgroundWriterIsHandedOffAndCollectedThroughAsync(t *testing.T) {
 
 func TestBackgroundWriterOffByDefaultStillRunsToItsEnd(t *testing.T) {
 	release := make(chan struct{})
-	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "write"))
+	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "exec"))
 	settings.BackgroundWriters = false
-	catalog, _, _ := backgroundCatalog(t, settings, writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
+	catalog, _, _ := backgroundCatalog(t, settings, writingLauncher(release, nil), readOnlyTool("read"), writeTool("exec"))
 	defer close(release)
 	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 200*time.Millisecond); returned {
 		t.Fatalf("a writer was handed off without background_writers:\n%s", out)
@@ -127,7 +127,7 @@ func TestBackgroundWriterOffByDefaultStillRunsToItsEnd(t *testing.T) {
 
 func TestBackgroundWriterIsHandedOffWhenTheListNamesIt(t *testing.T) {
 	release := make(chan struct{})
-	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
+	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "exec")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("exec"))
 	defer close(release)
 	if out, returned := callReturnsWithin(t, catalog, `{"task":"fix","block_ms":0}`, 2*time.Second); !returned || !strings.Contains(out, "still running") {
 		t.Fatalf("a writer was not handed off though nothing else gates it:\n%s", out)
@@ -136,7 +136,7 @@ func TestBackgroundWriterIsHandedOffWhenTheListNamesIt(t *testing.T) {
 
 func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 	host := newTestAsyncHost(t)
-	plain := subagentAgent{config: writerAgent("w", "read", "write"), nativeTools: withExecutors(t, readOnlyTool("read"), writeTool("write"))}
+	plain := subagentAgent{config: writerAgent("w", "read", "exec"), nativeTools: withExecutors(t, readOnlyTool("read"), writeTool("exec"))}
 	reader := subagentAgent{config: agentNamed("r"), nativeTools: withExecutors(t, readOnlyTool("read"))}
 	on := backgroundWriterSettings(1)
 	off := on
@@ -160,7 +160,7 @@ func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 
 func TestBackgroundWriterOverTheCapRunsToItsEndAndSaysWhy(t *testing.T) {
 	release := make(chan struct{})
-	catalog, manager, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
+	catalog, manager, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "exec")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("exec"))
 	first, returned := callReturnsWithin(t, catalog, `{"task":"one","block_ms":0}`, 2*time.Second)
 	if !returned {
 		close(release)
@@ -194,7 +194,7 @@ func TestBackgroundWriterOverTheCapRunsToItsEndAndSaysWhy(t *testing.T) {
 
 func TestBackgroundWriterCapIsPerSession(t *testing.T) {
 	release := make(chan struct{})
-	catalog, manager, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("write"))
+	catalog, manager, _ := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "exec")), writingLauncher(release, nil), readOnlyTool("read"), writeTool("exec"))
 	defer close(release)
 	for _, session := range []string{"alpha", "beta"} {
 		out := subagentCallAs(t, catalog, session, `{"task":"x","block_ms":0}`)
@@ -227,7 +227,7 @@ func TestBackgroundWriterIsReachedByStopResetAndDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			baseline := baselineCount()
 			var cancelled atomic.Int64
-			catalog, manager, host := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "write")), writingLauncher(make(chan struct{}), &cancelled), readOnlyTool("read"), writeTool("write"))
+			catalog, manager, host := backgroundCatalog(t, backgroundWriterSettings(1, writerAgent("fixer", "read", "exec")), writingLauncher(make(chan struct{}), &cancelled), readOnlyTool("read"), writeTool("exec"))
 			id := runIDOf(t, subagentCall(t, catalog, `{"task":"fix","block_ms":0}`))
 			stop(t, catalog, host, id)
 			eventually(t, "the writer to be cancelled", func() bool { return cancelled.Load() == 1 })
@@ -240,14 +240,14 @@ func TestBackgroundWriterIsReachedByStopResetAndDelete(t *testing.T) {
 }
 
 func TestBackgroundWriterDoesNotChangeTheListMarkerOfOtherAgents(t *testing.T) {
-	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "write"), writerAgent("careful", "read", "write")}
+	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "exec"), writerAgent("careful", "read", "exec")}
 	list := subagentAgentList(agents, 4096, map[string]bool{"fixer": true})
 	for _, want := range []string{"- fixer [can change files; may run in the background]", "- careful [can change files; runs to its end]", "- reader\n"} {
 		if !strings.Contains(list+"\n", want) {
 			t.Errorf("list lacks %q:\n%s", want, list)
 		}
 	}
-	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, agents...), &fakeLauncher{}, readOnlyTool("read"), writeTool("write"))
+	catalog, _, _ := backgroundCatalog(t, backgroundWriterSettings(1, agents...), &fakeLauncher{}, readOnlyTool("read"), writeTool("exec"))
 	if out := subagentCall(t, catalog, `{}`); !strings.Contains(out, "fixer [can change files; may run in the background]") {
 		t.Errorf("the agent list call does not mark a background writer:\n%s", out)
 	}
@@ -260,9 +260,9 @@ func TestLostBackgroundWriterKeepsItsRecordedFiles(t *testing.T) {
 	first := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = first.Close() })
 	host := newTestAsyncHost(t)
-	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "write"))
+	settings := backgroundWriterSettings(1, writerAgent("fixer", "read", "exec"))
 	settings.StorageDir = root
-	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	tool, err := newSubagentToolAsync(settings, parent, nil, writingLauncher(release, nil), nil, first, host)
 	if err != nil {
 		t.Fatal(err)

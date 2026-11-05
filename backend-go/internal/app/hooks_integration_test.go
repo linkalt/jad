@@ -4,30 +4,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 )
 
-// hooksFixture is a writer child (write + bash) under a parent session whose setting.json
-// carries the given hooks node (nil leaves the key out). The child writes made.txt.
+// hooksFixture is a writer child (exec) under a parent session whose setting.json carries
+// the given hooks node (nil leaves the key out). The child writes made.txt with exec; an
+// enabled hooks node scans exec's changes (shell_changes scan) so post_edit sees the file.
 func hooksFixture(t *testing.T, hooks any) subagentFixture {
 	t.Helper()
-	shell, err := exec.LookPath("bash")
-	if err != nil {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
 	session := map[string]any{}
+	if node, ok := hooks.(map[string]any); ok {
+		if _, set := node["shell_changes"]; !set {
+			node["shell_changes"] = "scan"
+		}
+	}
 	if hooks != nil {
 		session["hooks"] = hooks
 	}
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "write"},
-		"__write":   map[string]any{"max_bytes": 4096},
-		"__bash":    map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
+		"model": "child.json", "tools": []string{"skill", "exec"},
+		"__exec":    map[string]any{},
 		"__session": session,
 	})
-	f.provider.childFirstCall = [2]string{"write", `{"path":"made.txt","content":"by the child"}`}
+	f.provider.childFirstCall = [2]string{"exec", execWrite("made.txt", "by the child")}
 	return f
 }
 
@@ -35,7 +40,7 @@ func checkEntry(command string) map[string]any {
 	return map[string]any{"name": "lint", "ext": []string{".txt"}, "argv": []string{"sh", "-c", command, "{rel}"}}
 }
 
-// childWriteResult is the write tool's output as the child's second request carried it.
+// childWriteResult is the exec call's output as the child's second request carried it.
 func childWriteResult(t *testing.T, f subagentFixture) string {
 	t.Helper()
 	child := f.provider.forModel("child-model")
@@ -63,7 +68,7 @@ func TestHooksRunForAWriterChildAndTheModelSeesTheReport(t *testing.T) {
 		t.Fatalf("made.txt = %q, %v; a failing check must not undo the write", data, err)
 	}
 	output := childWriteResult(t, f)
-	for _, want := range []string{"Created made.txt", "post-edit checks for made.txt", "[lint] failed, exit 2", "type error in made.txt"} {
+	for _, want := range []string{"post-edit checks for made.txt", "[lint] failed, exit 2", "type error in made.txt"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("the child's tool output lacks %q:\n%s", want, output)
 		}
@@ -75,7 +80,10 @@ func TestHooksOffLeaveTheToolOutputExactlyAsItWas(t *testing.T) {
 	baseline.run(t)
 	off := hooksFixture(t, map[string]any{"enabled": false, "post_edit": []any{checkEntry(`echo never`)}})
 	off.run(t)
-	if a, b := childWriteResult(t, baseline), childWriteResult(t, off); a != b {
+	// exec's summary carries the run time, which differs between two runs.
+	elapsed := regexp.MustCompile(`completed in [0-9]+ ms`)
+	same := func(text string) string { return elapsed.ReplaceAllString(text, "completed in <n> ms") }
+	if a, b := same(childWriteResult(t, baseline)), same(childWriteResult(t, off)); a != b {
 		t.Fatalf("a disabled hook changed the tool output:\n%s\n---\n%s", a, b)
 	}
 	if strings.Contains(childWriteResult(t, off), "post-edit") {
@@ -87,7 +95,7 @@ func TestHooksOffLeaveTheToolOutputExactlyAsItWas(t *testing.T) {
 func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "event.json")
 	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
-		map[string]any{"name": "log", "match": "write", "argv": []string{"sh", "-c", "cat > " + marker}},
+		map[string]any{"name": "log", "match": "exec", "argv": []string{"sh", "-c", "cat > " + marker}},
 	}})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -96,7 +104,7 @@ func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the hook did not run for the child's write: %v", err)
 	}
-	for _, want := range []string{`"event":"pre_tool"`, `"tool":"write"`, `"agent":"`} {
+	for _, want := range []string{`"event":"pre_tool"`, `"tool":"exec"`, `"agent":"`} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("payload lacks %q: %s", want, data)
 		}
@@ -104,8 +112,8 @@ func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
 	if strings.Contains(string(data), `"agent":""`) {
 		t.Errorf("the child's agent name is empty: %s", data)
 	}
-	if output := childWriteResult(t, f); !strings.Contains(output, "Created made.txt") {
-		t.Errorf("the write itself changed: %s", output)
+	if data, err := os.ReadFile(filepath.Join(f.workspace, "made.txt")); err != nil || string(data) != "by the child" {
+		t.Errorf("the write itself changed: %q, %v", data, err)
 	}
 }
 
@@ -113,7 +121,7 @@ func TestToolEventHooksRunForAChildAndNameTheAgent(t *testing.T) {
 // model's next request carries the blocked result and the hook's report.
 func TestBlockingPreToolHookStopsAChildWriteAndTheModelSeesWhy(t *testing.T) {
 	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
-		map[string]any{"name": "freeze", "match": "write", "blocking": true, "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
+		map[string]any{"name": "freeze", "match": "exec", "blocking": true, "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
 	}})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -132,7 +140,7 @@ func TestBlockingPreToolHookStopsAChildWriteAndTheModelSeesWhy(t *testing.T) {
 // The same hook with blocking left off only reports: the write goes ahead.
 func TestNonBlockingPreToolHookLetsAChildWriteGoAhead(t *testing.T) {
 	f := hooksFixture(t, map[string]any{"enabled": true, "pre_tool": []any{
-		map[string]any{"name": "freeze", "match": "write", "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
+		map[string]any{"name": "freeze", "match": "exec", "argv": []string{"sh", "-c", "echo writes-are-frozen; exit 1"}},
 	}})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -195,10 +203,10 @@ func TestBlockingPreToolHookStopsAChildsSessionMCPCall(t *testing.T) {
 // buildChildMCPHookFixture is a child that lists one session MCP tool, which the child calls first.
 func buildChildMCPHookFixture(t *testing.T, hooks map[string]any, calls *atomic.Int32) subagentFixture {
 	t.Helper()
-	profileTools := map[string]any{"allow": []string{"subagent", "read", "mcp:fixture:lookup"}}
+	profileTools := map[string]any{"allow": []string{"subagent", "skill", "mcp:fixture:lookup"}}
 	session := profileSession(profileTools)
 	session["hooks"] = hooks
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": session}, false, nil, &mcpFixture{calls: calls})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"}, "__session": session}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
 	return f
 }
@@ -209,13 +217,13 @@ func TestRefusedLazyCallFiresAChildHooksOnce(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "events")
 	calls := &atomic.Int32{}
 	name := mcpToolNameFor("fixture", "lookup")
-	profileTools := map[string]any{"allow": []string{"subagent", "read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	session := profileSession(profileTools)
 	session["hooks"] = map[string]any{"enabled": true,
 		"pre_tool":  []any{map[string]any{"name": "pre", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo pre >> " + marker}}},
 		"post_tool": []any{map[string]any{"name": "post", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo post >> " + marker}}},
 	}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}, "__session": session, "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"}, "__session": session, "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{name, `{}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)

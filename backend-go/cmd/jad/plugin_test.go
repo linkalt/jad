@@ -18,7 +18,7 @@ func TestPluginCommandInstallsListsAndRemoves(t *testing.T) {
 	source := t.TempDir()
 	for path, contents := range map[string]string{
 		"plugin.json":                `{"schema_version":1,"name":"acme","version":"1.0.0"}`,
-		"tools/review.json":          `{"schema_version":1,"native":{"glob":{}}}`,
+		"tools/review.json":          `{"schema_version":1,"native":{"read_image":{}}}`,
 		"skills/acme-notes/SKILL.md": "---\nname: acme-notes\ndescription: Notes.\n---\nBody.\n",
 		"commands/review.md":         "Review $ARGUMENTS.\n",
 	} {
@@ -91,7 +91,7 @@ func TestPluginCommandInstallsFromAGitURL(t *testing.T) {
 	repo := t.TempDir()
 	for path, contents := range map[string]string{
 		"acme/plugin.json":       `{"schema_version":1,"name":"acme","version":"1.2.0"}`,
-		"acme/tools/review.json": `{"schema_version":1,"native":{"glob":{}}}`,
+		"acme/tools/review.json": `{"schema_version":1,"native":{"read_image":{}}}`,
 	} {
 		full := filepath.Join(repo, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -142,7 +142,7 @@ func TestPluginInstallTimeoutComesFromTheRootSetting(t *testing.T) {
 	repo := t.TempDir()
 	for path, contents := range map[string]string{
 		"plugin.json":       `{"schema_version":1,"name":"acme","version":"1.0.0"}`,
-		"tools/review.json": `{"schema_version":1,"native":{"glob":{}}}`,
+		"tools/review.json": `{"schema_version":1,"native":{"read_image":{}}}`,
 	} {
 		full := filepath.Join(repo, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {

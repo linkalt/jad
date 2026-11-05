@@ -93,20 +93,6 @@ func TestRunEndSweepOffLeavesTheChild(t *testing.T) {
 	expectAlive(t, pid, "kill_children_on_run_end off still stopped the child")
 }
 
-func TestRunEndSweepSkipsProcessToolProcesses(t *testing.T) {
-	root := t.TempDir()
-	_, sweep := WithChildGroups(context.Background())
-	manager := NewProcessManager(filepath.Join(root, "processes"))
-	t.Cleanup(func() { _ = manager.Close() })
-	snapshot, err := manager.Start(processTestRequest(root, "sleep 300", 1024))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid := snapshot.PID
-	sweep()
-	expectAlive(t, pid, "run end stopped a process-tool process")
-}
-
 func TestRunEndSweepAfterCancelledRun(t *testing.T) {
 	root := t.TempDir()
 	base, cancel := context.WithCancel(context.Background())

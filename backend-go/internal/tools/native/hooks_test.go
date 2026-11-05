@@ -466,26 +466,6 @@ func TestHooksNearestSaysSoForAFileOutsideTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestHooksFollowASymlinkedFileToItsTarget(t *testing.T) {
-	check := shHook("where", `pwd`, ".txt")
-	check.Cwd = sessionfs.HookCwdFileDir
-	_, _, root := hookedTools(t, hookTestSettings(check))
-	target := filepath.Join(root, "src", "real.txt")
-	if err := os.WriteFile(target, []byte("x\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(root, "docs", "link.txt")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skip("symlinks are not available")
-	}
-	plain := fileChangeTool(false)
-	hooked := WithPostEditHooks(plain, hookTestSettings(check), "")
-	output := callTool(t, hooked, root, map[string]any{"path": "docs/link.txt", "content": "y\n"}, nil)
-	if !strings.Contains(output, filepath.Join(root, "src")) {
-		t.Fatalf("the check did not run in the symlink target's directory:\n%s", output)
-	}
-}
-
 // The guard against an empty changed path only matters when the workspace root itself
 // carries a hooked extension: the path "" then resolves to the root and would match.
 func TestHooksNeverRunWithoutAChangedFileEvenWhenTheRootLooksLikeOne(t *testing.T) {

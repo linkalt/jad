@@ -8,19 +8,18 @@ import (
 	"testing"
 )
 
-// A writer child's bash starts in the session's cwd, not in the folder the server runs from:
+// A writer child's exec starts in the session's cwd, not in the folder the server runs from:
 // pwd names the workspace, a relative read finds the workspace's file, and a relative write
 // lands in the workspace.
-func TestSubagentBashRunsInTheSessionCwdNotTheServers(t *testing.T) {
-	shell, err := exec.LookPath("bash")
-	if err != nil {
+func TestSubagentExecRunsInTheSessionCwdNotTheServers(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"bash"},
-		"__bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}},
+		"model": "child.json", "tools": []string{"exec"},
+		"__exec": map[string]any{},
 	})
-	f.provider.childFirstCall = [2]string{"bash", `{"command":"pwd; cat notes.txt; echo from-child > made-by-child.txt"}`}
+	f.provider.childFirstCall = [2]string{"exec", `{"code":"pwd; cat notes.txt; echo from-child > made-by-child.txt"}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}

@@ -201,14 +201,14 @@ func TestSubagentSmallestCallRunsTheOnlyAgentAndRendersTheAnswer(t *testing.T) {
 func TestSubagentChildGetsOnlyReadOnlyNativeToolsAndNeverItself(t *testing.T) {
 	launcher := &fakeLauncher{}
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher,
-		readOnlyTool("read"), writeTool("write"), writeTool("bash"), mcpReadOnlyTool("lookup"), readOnlyTool("grep"))
+		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"), mcpReadOnlyTool("lookup"), readOnlyTool("grep"))
 	subagentCall(t, catalog, `{"task":"x"}`)
 
 	got := toolNames(launcher.requests[0].Tools)
 	if strings.Join(got, ",") != "read,grep" {
-		t.Fatalf("child tools = %v, want read and grep only (no write, bash, MCP tool or subagent)", got)
+		t.Fatalf("child tools = %v, want read and grep only (no exec, tool_smith, MCP tool or subagent)", got)
 	}
-	if strings.Join(toolNames(catalog), ",") != "read,write,bash,lookup,grep,subagent,async" {
+	if strings.Join(toolNames(catalog), ",") != "read,exec,tool_smith,lookup,grep,subagent,async" {
 		t.Fatalf("parent catalog changed: %v", toolNames(catalog))
 	}
 }
@@ -236,7 +236,7 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bad := agentNamed("bad")
 			bad.Tools, bad.HasTools = tc.tools, true
-			_, err := NewSubagentTool(subagentSettings(bad), withExecutors(t, readOnlyTool("read"), readOnlyTool("grep"), writeTool("write"), mcpReadOnlyTool("lookup")), nil)
+			_, err := NewSubagentTool(subagentSettings(bad), withExecutors(t, readOnlyTool("read"), readOnlyTool("grep"), writeTool("exec"), mcpReadOnlyTool("lookup")), nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
@@ -244,25 +244,25 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 	}
 }
 
-// Flipped on purpose (allow_write removed, B-4b): "write" in a child's tools list is no
-// longer refused; the list alone grants it, as long as the session enables write.
+// Flipped on purpose (allow_write removed, B-4b): "exec" in a child's tools list is no
+// longer refused; the list alone grants it, as long as the session enables exec.
 func TestSubagentToolsListMayNameAChangeToolTheSessionEnables(t *testing.T) {
 	agent := agentNamed("writer")
-	agent.Tools, agent.HasTools = []string{"write"}, true
+	agent.Tools, agent.HasTools = []string{"exec"}, true
 	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), launcher, readOnlyTool("read"), writeTool("exec"))
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "write" {
-		t.Fatalf("child tools = %q, want write", got)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "exec" {
+		t.Fatalf("child tools = %q, want exec", got)
 	}
 	_, err := NewSubagentTool(subagentSettings(agent), withExecutors(t, readOnlyTool("read")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled native tool (enabled: read)`) {
+	if err == nil || !strings.Contains(err.Error(), `lists "exec", which is not an enabled native tool (enabled: read)`) {
 		t.Fatalf("a change tool the session does not enable: error = %v", err)
 	}
 }
 
 func TestSubagentNeedsAtLeastOneReadOnlyToolToGiveAChild(t *testing.T) {
-	_, err := NewSubagentTool(subagentSettings(agentNamed("explore")), withExecutors(t, writeTool("write")), nil)
+	_, err := NewSubagentTool(subagentSettings(agentNamed("explore")), withExecutors(t, writeTool("exec")), nil)
 	if err == nil || !strings.Contains(err.Error(), "agents.explore has no tool to use") {
 		t.Fatalf("error = %v", err)
 	}
@@ -839,8 +839,8 @@ func TestSubagentProfileDenyThatEmptiesAnAgentIsAnError(t *testing.T) {
 
 // A denied change tool is not available to a child either.
 func TestSubagentProfileDenyAlsoRemovesAChangeTool(t *testing.T) {
-	settings := withDeny(subagentSettings(agentWithTools("a", "read", "write")), "write")
-	parentTools := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	settings := withDeny(subagentSettings(agentWithTools("a", "read", "exec")), "exec")
+	parentTools := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	_, err := NewSubagentTool(settings, parentTools, &fakeLauncher{})
 	if err != nil {
 		t.Fatalf("a denied change tool must be dropped from the list, not fail: %v", err)
@@ -851,15 +851,15 @@ func TestSubagentProfileDenyAlsoRemovesAChangeTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !tool.MayChangeFiles(map[string]any{"task": "x", "agent": "a"}) {
-		t.Fatal("control: without a deny list the agent that lists write may change files")
+		t.Fatal("control: without a deny list the agent that lists exec may change files")
 	}
-	settings.DenyTools = []string{"write"}
+	settings.DenyTools = []string{"exec"}
 	tool, err = NewSubagentTool(settings, parentTools, &fakeLauncher{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tool.MayChangeFiles(map[string]any{"task": "x", "agent": "a"}) {
-		t.Fatal("with write denied the agent must no longer count as a file changer")
+		t.Fatal("with exec denied the agent must no longer count as a file changer")
 	}
 }
 

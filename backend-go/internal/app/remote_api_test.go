@@ -412,7 +412,9 @@ func TestUnixSocketOnlyRemoteAPIKeepsTheTCPListenerOut(t *testing.T) {
 }
 
 func TestRemoteAPISubagentResolvesPathsInTheTargetSessionsWorkspace(t *testing.T) {
-	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts.", "tools": []string{"exec"}, "__exec": map[string]any{}})
+	// A relative cat runs in the cwd of the session the call names.
+	f.provider.childFirstCall = [2]string{"exec", `{"code":"cat notes.txt"}`}
 	other := filepath.Join(f.workspace, "other-workspace")
 	writeFile(t, filepath.Join(other, "notes.txt"), []byte("the other workspace says 7\n"))
 	raw, err := os.ReadFile(f.sessionFile)

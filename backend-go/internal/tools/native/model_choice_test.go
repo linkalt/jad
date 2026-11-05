@@ -92,16 +92,16 @@ func TestDefinitionFilesFromBeforeModelChoiceStillLoad(t *testing.T) {
 	}
 	build := func(choice bool, subagentSchema string) error {
 		agent := agentNamed("explore")
-		agent.Tools, agent.HasTools = []string{"read"}, true
+		agent.Tools, agent.HasTools = []string{"read_image"}, true
 		subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{agent}, ModelChoice: choice}
 		config := sessionfs.SessionConfig{
 			SettingPath: filepath.Join(directory, "setting.json"),
 			ToolDefinitionPaths: []string{
-				filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"),
+				filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"),
 				write("subagent", subagentToolID, subagentSchema),
 				write("profile_message", profileMessageToolID, profileMessageSchemaWithoutModel),
 			},
-			NativeRead:           &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+			NativeReadImage:      &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 			NativeSubagent:       &subagent,
 			NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, ModelChoice: choice},
 			Profile:              "main",

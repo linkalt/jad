@@ -196,9 +196,9 @@ func TestCommandRunOptions(t *testing.T) {
 	root := t.TempDir()
 	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["commands"]}}`)
 	for name, text := range map[string]string{
-		"flow.md":     "---\nmodel: openai/fast@high\nprofile: dev/coder\nplan: true\nallowed-tools: [read, \"grep\", read]\n---\nPlan it.\n",
-		"comma.md":    "---\nallowed-tools: read, mcp:docs:*\n---\nRead it.\n",
-		"block.md":    "---\nallowed-tools:\n  - glob\n- 'mcp:docs:search'\nplan: false\n---\nFind it.\n",
+		"flow.md":     "---\nmodel: openai/fast@high\nprofile: dev/coder\nplan: true\nallowed-tools: [lsp, \"read_image\", lsp]\n---\nPlan it.\n",
+		"comma.md":    "---\nallowed-tools: lsp, mcp:docs:*\n---\nRead it.\n",
+		"block.md":    "---\nallowed-tools:\n  - skill\n- 'mcp:docs:search'\nplan: false\n---\nFind it.\n",
 		"plain.md":    "Just text.\n",
 		"badplan.md":  "---\nplan: yes\n---\nx\n",
 		"badtool.md":  "---\nallowed-tools: Bash\n---\nx\n",
@@ -217,9 +217,9 @@ func TestCommandRunOptions(t *testing.T) {
 		byWord[command.Command] = command
 	}
 	want := map[string]CommandOptions{
-		"flow":  {Model: "openai/fast@high", Profile: "dev/coder", Plan: true, AllowedTools: []string{"read", "grep"}},
-		"comma": {AllowedTools: []string{"read", "mcp:docs:*"}},
-		"block": {AllowedTools: []string{"glob", "mcp:docs:search"}},
+		"flow":  {Model: "openai/fast@high", Profile: "dev/coder", Plan: true, AllowedTools: []string{"lsp", "read_image"}},
+		"comma": {AllowedTools: []string{"lsp", "mcp:docs:*"}},
+		"block": {AllowedTools: []string{"skill", "mcp:docs:search"}},
 		"plain": {},
 	}
 	for word, options := range want {
@@ -244,7 +244,7 @@ func TestCommandRunOptions(t *testing.T) {
 		t.Fatalf("empty run options were sent: %s", encoded)
 	}
 	encoded, _ = json.Marshal(byWord["flow"])
-	if !strings.Contains(string(encoded), `"model":"openai/fast@high","profile":"dev/coder","plan":true,"allowed_tools":["read","grep"]`) {
+	if !strings.Contains(string(encoded), `"model":"openai/fast@high","profile":"dev/coder","plan":true,"allowed_tools":["lsp","read_image"]`) {
 		t.Fatalf("run options: %s", encoded)
 	}
 

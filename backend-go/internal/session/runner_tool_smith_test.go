@@ -182,11 +182,21 @@ func TestRunnerToolSmithRunWithNestedReadPersistsOneFunctionCallOutput(t *testin
 	if err := os.WriteFile(filepath.Join(workspace, "data.txt"), []byte("needle-123\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	read, err := native.NewReadTool(sessionfs.NativeReadSettings{
-		Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}, MaxBytes: 1024, MaxFileBytes: 4096, DefaultLimit: 20,
-	})
+	// A read-only stand-in tool that returns a file's text: the nested call is what is tested.
+	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	read := tools.Tool{
+		Definition: tools.Definition{ID: "native.peek", Source: "native", Name: "peek", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Validator:  validator, ReadOnly: true,
+		Execute: func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+			content, err := os.ReadFile(filepath.Join(execution.WorkspaceRoot, arguments["path"].(string)))
+			if err != nil {
+				return tools.ExecutionError(execution.CallID, tools.StatusError, "unreadable", err.Error()), nil
+			}
+			return tools.RenderToolResult(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "read", Content: &tools.Content{Text: string(content)}})
+		},
 	}
 	nested := &native.ToolSmithNested{}
 	nested.Bind([]tools.Tool{read}, sessionfs.ProfileToolSettings{})
@@ -196,13 +206,13 @@ func TestRunnerToolSmithRunWithNestedReadPersistsOneFunctionCallOutput(t *testin
 		ResultMaxBytes:       4096,
 		NestedResultMaxBytes: 4096, NestedRequestMaxBytes: 65536,
 		MaxNestedCalls: 100, MaxParallelCalls: 4,
-		Tools:       []string{"read"},
+		Tools:       []string{"peek"},
 		Interpreter: interpreter,
 	}, "", nested, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments := `{"code":"const r = await tools.read({ path: 'data.txt' });\nreturn { ok: r.ok, has: r.content.includes('needle-123') };"}`
+	arguments := `{"code":"const r = await tools.peek({ path: 'data.txt' });\nreturn { ok: r.ok, has: r.content.includes('needle-123') };"}`
 	output, _ := runToolSmithThroughRunner(t, tool, workspace, arguments)
 	if !strings.Contains(output, `"has":true`) || !strings.Contains(output, "nested_calls: 1") {
 		t.Fatalf("run output:\n%s", output)

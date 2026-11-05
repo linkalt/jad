@@ -33,16 +33,14 @@ func TestTracingRecordsARunWithItsRoundsAndToolCalls(t *testing.T) {
 		if strings.Contains(body, "function_call_output") {
 			return ""
 		}
-		arguments, _ := json.Marshal(map[string]string{"path": "hello.txt"})
-		item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call-read-1", "name": "read", "arguments": string(arguments)})
+		arguments, _ := json.Marshal(map[string]string{"name": "hello"})
+		item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call-read-1", "name": "skill", "arguments": string(arguments)})
 		return string(item)
 	}
-	if err := os.WriteFile(filepath.Join(f.root, "tools", "coding", "none.json"), []byte(`{"native":{"read":{}},"mcp":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.root, "tools", "coding", "none.json"), []byte(`{"native":{"skill":{}},"mcp":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.cwd, "hello.txt"), []byte("top secret file body"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSkill(t, f.root, "hello", "top secret file body")
 	runner := headlessFor(t, f)
 	result, err := runner.Run(context.Background(), headless.Request{Session: "local:demo", Profile: "dev/coder", Input: "read hello.txt"})
 	if err != nil || result.Status != headless.StatusCompleted {
@@ -66,7 +64,7 @@ func TestTracingRecordsARunWithItsRoundsAndToolCalls(t *testing.T) {
 		switch span.Name {
 		case "chat model-small":
 			chats = append(chats, span)
-		case "execute_tool read":
+		case "execute_tool skill":
 			read = span
 		}
 		for _, kv := range span.Attributes {

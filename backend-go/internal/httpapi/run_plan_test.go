@@ -41,8 +41,8 @@ func TestReadRunBodyReadsToolsAndExecutePlan(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(raw))
 		return readRunBody(httptest.NewRecorder(), request, 1<<20, 1<<20, limits)
 	}
-	body, err := read(`{"input":"x","tools":["read","mcp:docs:*"]}`)
-	if err != nil || strings.Join(body.Tools, ",") != "read,mcp:docs:*" {
+	body, err := read(`{"input":"x","tools":["lsp","mcp:docs:*"]}`)
+	if err != nil || strings.Join(body.Tools, ",") != "lsp,mcp:docs:*" {
 		t.Fatalf("tools: %+v %v", body, err)
 	}
 	if body, err = read(`{"input":"x","tools":[]}`); err != nil || body.Tools == nil || len(body.Tools) != 0 {
@@ -66,7 +66,8 @@ func TestReadRunBodyReadsToolsAndExecutePlan(t *testing.T) {
 		`{"input":"x","tools":"read"}`:                               "tools must be an array of tool names",
 		`{"input":"x","tools":null}`:                                 "tools must be an array of tool names",
 		`{"input":"x","tools":["rm"]}`:                               `tools[0] "rm" is not a native tool`,
-		`{"input":"x","tools":["read","read"]}`:                      `tools[1] repeats "read"`,
+		`{"input":"x","tools":["lsp","lsp"]}`:                        `tools[1] repeats "lsp"`,
+		`{"input":"x","tools":["read"]}`:                             `tools[0] "read" was removed`,
 		`{"input":"x","tools":["mcp:docs"]}`:                         `tools[0] "mcp:docs" must be mcp:<server>:<tool>`,
 		`{"input":"x","execute_plan":"yes"}`:                         "execute_plan must be a boolean",
 		`{"execute_plan":false}`:                                     "input must be a non-empty string",

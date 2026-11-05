@@ -54,7 +54,7 @@ func TestRemoteSubagentGatesTheTargetsLazyToolFromItsOwnStateFolder(t *testing.T
 	name := mcpToolNameFor("fixture", "lookup")
 	profileTools := map[string]any{"allow": []string{"subagent", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "description": "Finds facts.", "tools": []string{"read", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "description": "Finds facts.", "tools": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{"load_tool", `{"names":["` + name + `"]}`}
 	callerState := addCallerProfile(t, f)
 	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))

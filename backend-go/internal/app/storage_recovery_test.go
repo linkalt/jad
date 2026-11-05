@@ -5,28 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
-	"jad/backend-go/internal/tools/native"
 )
-
-// orphan is a real sleep that a "crashed server" left running, with the manifest and
-// owner record that server would have written.
-type orphan struct {
-	id     string
-	dir    string
-	cmd    *exec.Cmd
-	reaped chan struct{}
-}
 
 func linuxStartTime(t *testing.T, pid int) uint64 {
 	t.Helper()
@@ -42,99 +29,6 @@ func linuxStartTime(t *testing.T, pid int) uint64 {
 		t.Fatal(err)
 	}
 	return value
-}
-
-// leaveOrphan starts a sleep in its own process group and writes its manifest and owner
-// record into storage/<id>.
-func leaveOrphan(t *testing.T, storage, id string) orphan {
-	t.Helper()
-	return leaveOrphanRunning(t, storage, id, "sleep", "120")
-}
-
-// leaveOrphanRunning is leaveOrphan for any command.
-func leaveOrphanRunning(t *testing.T, storage, id, name string, args ...string) orphan {
-	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("the start-time proof the orphan stop relies on is Linux only")
-	}
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	reaped := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(reaped) }()
-	t.Cleanup(func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Process.Kill()
-		<-reaped
-	})
-	dir := filepath.Join(storage, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	manifest := native.ProcessManifest{SchemaVersion: 1, ID: id, State: native.ProcessRunning, CWD: "/w", StartedAt: "2025-01-01T00:00:00.000Z", PID: cmd.Process.Pid}
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// The server that started it is gone: a pid no process holds.
-	owner := fmt.Sprintf(`{"server":{"pid":2000000000},"start":%d}`, linuxStartTime(t, cmd.Process.Pid))
-	if err := os.WriteFile(filepath.Join(dir, "owner.json"), []byte(owner), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return orphan{id: id, dir: dir, cmd: cmd, reaped: reaped}
-}
-
-func (o orphan) alive() bool {
-	select {
-	case <-o.reaped:
-		return false
-	default:
-		return true
-	}
-}
-
-// waitGone waits until the process has ended.
-func (o orphan) waitGone(t *testing.T, limit time.Duration) bool {
-	t.Helper()
-	select {
-	case <-o.reaped:
-		return true
-	case <-time.After(limit):
-		return false
-	}
-}
-
-// settledManifest waits for the manifest to leave the running state: Recover signals the
-// process first and writes the manifest after, so the process can be gone a moment
-// before the file says so.
-func (o orphan) settledManifest(t *testing.T, limit time.Duration) native.ProcessManifest {
-	t.Helper()
-	deadline := time.Now().Add(limit)
-	for {
-		manifest := o.manifest(t)
-		if manifest.State != native.ProcessRunning || time.Now().After(deadline) {
-			return manifest
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func (o orphan) manifest(t *testing.T) native.ProcessManifest {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(o.dir, "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest native.ProcessManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	return manifest
 }
 
 // recoveryFixture is a workspace with a catalog-layout root. Each session is added with
@@ -206,22 +100,10 @@ func (f recoveryFixture) resolver(t *testing.T) *Resolver {
 	return resolver
 }
 
-// processTool is the native process settings with a storage directory (none when empty).
-func processTool(storage string, extra map[string]any) map[string]any {
-	tool := map[string]any{"shell": "/bin/sh", "kill_grace_ms": 200}
-	if storage != "" {
-		tool["storage_dir"] = storage
-	}
-	for key, value := range extra {
-		tool[key] = value
-	}
-	return tool
-}
-
 // subagentTool is the native subagent settings with one agent and a storage directory
 // (none when empty).
 func subagentTool(storage string, extra map[string]any) map[string]any {
-	tool := map[string]any{"agents": map[string]any{"explore": map[string]any{"description": "d", "model": "openai/default", "instructions": "p", "tools": []string{"read"}}}}
+	tool := map[string]any{"agents": map[string]any{"explore": map[string]any{"description": "d", "model": "openai/default", "instructions": "p", "tools": []string{"read_image"}}}}
 	if storage != "" {
 		tool["storage_dir"] = storage
 	}
@@ -229,171 +111,6 @@ func subagentTool(storage string, extra map[string]any) map[string]any {
 		tool[key] = value
 	}
 	return tool
-}
-
-func (f recoveryFixture) processSetting(storage string) map[string]any {
-	return map[string]any{"process": processTool(storage, nil)}
-}
-
-func TestRecoverProcessesStopsAnOrphanWithoutAnyRequest(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", f.processSetting(storage))
-	crashed := leaveOrphan(t, storage, "proc_a")
-
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !crashed.waitGone(t, 3*time.Second) {
-		t.Fatal("the orphan is still running after the start-time recovery")
-	}
-	manifest := crashed.settledManifest(t, 3*time.Second)
-	if manifest.State != native.ProcessLost || manifest.StopReason != "backend_restarted_stopped" {
-		t.Fatalf("manifest = state %q, stop_reason %q; want lost / backend_restarted_stopped", manifest.State, manifest.StopReason)
-	}
-	if report.Sessions != 1 || report.Storages != 1 || report.Unreadable != 0 || report.Failed != 0 {
-		t.Fatalf("report = %+v, want 1 session and 1 storage", report)
-	}
-}
-
-func TestRecoverProcessesLeavesNoNewDirectoryForASessionThatNeverStartedAProcess(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "never-created")
-	f.session(t, "demo", f.processSetting(storage))
-
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(storage); !os.IsNotExist(err) {
-		t.Fatalf("stat(%s) error = %v; the scan must not create a storage directory", storage, err)
-	}
-	if report.Sessions != 1 || report.Storages != 0 {
-		t.Fatalf("report = %+v, want 1 session and 0 storages", report)
-	}
-}
-
-func TestRecoverProcessesSkipsSessionsWithoutTheProcessTool(t *testing.T) {
-	f := newRecoveryFixture(t)
-	f.session(t, "plain", nil)
-	// A file that is not <id>.json is not a session.
-	if err := os.WriteFile(filepath.Join(f.layout.SessionsDir, "not-a-session.txt"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Sessions != 1 || report.Storages != 0 || report.Unreadable != 0 {
-		t.Fatalf("report = %+v, want 1 session, 0 storages, 0 unreadable", report)
-	}
-}
-
-func TestRecoverProcessesSkipsABrokenSessionAndKeepsGoing(t *testing.T) {
-	f := newRecoveryFixture(t)
-	good := filepath.Join(f.workspace, "good-procs")
-	f.brokenSession(t, "a-broken")
-	f.session(t, "b-good", f.processSetting(good))
-	crashed := leaveOrphan(t, good, "proc_good")
-
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatalf("a broken session must not fail the scan: %v", err)
-	}
-	if !crashed.waitGone(t, 3*time.Second) {
-		t.Fatal("the orphan of the good session was not stopped after a broken one")
-	}
-	if report.Unreadable != 1 || report.Storages != 1 {
-		t.Fatalf("report = %+v, want 1 unreadable and 1 storage", report)
-	}
-}
-
-// A profile that keeps its tools in its own tool_storage keeps its processes there too,
-// so a scan of the active profile alone would miss them.
-func TestRecoverProcessesVisitsEveryProfilesStorage(t *testing.T) {
-	f := newTwoProfileFixture(t, map[string]any{"process": map[string]any{"shell": "/bin/sh", "kill_grace_ms": 200}})
-	blue := filepath.Join(f.profileTools("blue"), ".processes")
-	green := filepath.Join(f.profileTools("green"), ".processes")
-	inBlue := leaveOrphan(t, blue, "proc_blue")
-	inGreen := leaveOrphan(t, green, "proc_green")
-
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !inBlue.waitGone(t, 3*time.Second) || !inGreen.waitGone(t, 3*time.Second) {
-		t.Fatalf("orphans left: blue alive=%v green alive=%v", inBlue.alive(), inGreen.alive())
-	}
-	if report.Storages != 2 {
-		t.Fatalf("report = %+v, want 2 storages", report)
-	}
-}
-
-// Two sessions that name one storage directory share one manager: it is recovered once.
-func TestRecoverProcessesRecoversASharedStorageOnce(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "shared")
-	f.session(t, "one", f.processSetting(storage))
-	f.session(t, "two", f.processSetting(storage))
-	crashed := leaveOrphan(t, storage, "proc_shared")
-
-	report, err := f.resolver(t).RecoverProcesses(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !crashed.waitGone(t, 3*time.Second) {
-		t.Fatal("the shared orphan was not stopped")
-	}
-	if report.Storages != 1 {
-		t.Fatalf("report = %+v, want the shared storage counted once", report)
-	}
-}
-
-func TestRecoverProcessesHonoursStopOrphansOff(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": storage, "stop_orphans": false}})
-	crashed := leaveOrphan(t, storage, "proc_keep")
-
-	if _, err := f.resolver(t).RecoverProcesses(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if crashed.waitGone(t, 500*time.Millisecond) {
-		t.Fatal("the orphan was stopped although stop_orphans is false")
-	}
-	manifest := crashed.settledManifest(t, 3*time.Second)
-	if manifest.State != native.ProcessLost || manifest.StopReason != "backend_restarted" {
-		t.Fatalf("manifest = state %q, stop_reason %q; want lost / backend_restarted", manifest.State, manifest.StopReason)
-	}
-}
-
-func TestRecoverProcessesStopsWhenTheContextIsCancelled(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", f.processSetting(storage))
-	crashed := leaveOrphan(t, storage, "proc_cancelled")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := f.resolver(t).RecoverProcesses(ctx); err == nil {
-		t.Fatal("RecoverProcesses with a cancelled context returned no error")
-	}
-	if crashed.waitGone(t, 300*time.Millisecond) {
-		t.Fatal("a cancelled scan still stopped the orphan")
-	}
-}
-
-func TestRecoverProcessesOnAClosedResolverFailsInsteadOfPanicking(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", f.processSetting(storage))
-	leaveOrphan(t, storage, "proc_closed")
-	resolver := f.resolver(t)
-	resolver.Close()
-	if _, err := resolver.RecoverProcesses(context.Background()); err == nil {
-		t.Fatal("RecoverProcesses on a closed resolver returned no error")
-	}
 }
 
 // serviceConfig loads the fixture through LoadConfig, so the root setting key reaches
@@ -427,79 +144,43 @@ func serviceConfig(t *testing.T, f recoveryFixture, server string) Config {
 	return config
 }
 
-func TestLoadConfigReadsTheRecoverProcessesSwitch(t *testing.T) {
-	f := newRecoveryFixture(t)
-	for _, c := range []struct {
-		server string
-		want   bool
-	}{
-		{`{}`, true},
-		{`{"recover_processes_at_start":null}`, true},
-		{`{"recover_processes_at_start":true}`, true},
-		{`{"recover_processes_at_start":false}`, false},
-	} {
-		if got := serviceConfig(t, f, c.server).RecoverProcessesAtStart; got != c.want {
-			t.Errorf("server %s: RecoverProcessesAtStart = %v, want %v", c.server, got, c.want)
-		}
-	}
-}
-
 func TestLoadConfigReadsTheRecoverSubagentRunsSwitch(t *testing.T) {
 	f := newRecoveryFixture(t)
 	for _, c := range []struct {
-		server        string
-		wantRuns      bool
-		wantProcesses bool
+		server   string
+		wantRuns bool
 	}{
-		{`{}`, true, true},
-		{`{"recover_subagent_runs_at_start":null}`, true, true},
-		{`{"recover_subagent_runs_at_start":false}`, false, true},
-		{`{"recover_subagent_runs_at_start":false,"recover_processes_at_start":false}`, false, false},
-		{`{"recover_processes_at_start":false}`, true, false},
+		{`{}`, true},
+		{`{"recover_subagent_runs_at_start":null}`, true},
+		{`{"recover_subagent_runs_at_start":false}`, false},
 	} {
-		config := serviceConfig(t, f, c.server)
-		if config.RecoverSubagentRunsAtStart != c.wantRuns || config.RecoverProcessesAtStart != c.wantProcesses {
-			t.Errorf("server %s: runs=%v processes=%v, want runs=%v processes=%v", c.server, config.RecoverSubagentRunsAtStart, config.RecoverProcessesAtStart, c.wantRuns, c.wantProcesses)
+		if config := serviceConfig(t, f, c.server); config.RecoverSubagentRunsAtStart != c.wantRuns {
+			t.Errorf("server %s: runs=%v, want %v", c.server, config.RecoverSubagentRunsAtStart, c.wantRuns)
 		}
 	}
 }
 
-func TestServiceRecoversOrphansAtStartInTheBackground(t *testing.T) {
+// recover_processes_at_start went with the process tool: a root setting that still has it
+// is refused by name, not ignored.
+func TestLoadConfigRefusesTheRemovedRecoverProcessesSwitch(t *testing.T) {
 	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", f.processSetting(storage))
-	crashed := leaveOrphan(t, storage, "proc_service")
-
-	service, err := NewService(serviceConfig(t, f, `{}`))
+	serviceConfig(t, f, `{}`)
+	data, err := os.ReadFile(f.layout.RootSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
-	// No request was sent: only the start-time scan can stop it.
-	if !crashed.waitGone(t, 5*time.Second) {
-		t.Fatal("the service did not stop the orphan at start")
-	}
-	if manifest := crashed.settledManifest(t, 3*time.Second); manifest.StopReason != "backend_restarted_stopped" {
-		t.Fatalf("stop_reason = %q, want backend_restarted_stopped", manifest.StopReason)
-	}
-}
-
-func TestServiceLeavesOrphansAloneWhenTheSwitchIsOff(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", f.processSetting(storage))
-	crashed := leaveOrphan(t, storage, "proc_off")
-
-	service, err := NewService(serviceConfig(t, f, `{"recover_processes_at_start":false}`))
-	if err != nil {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatal(err)
 	}
-	defer service.Close()
-	if crashed.waitGone(t, time.Second) {
-		t.Fatal("the orphan was stopped although recover_processes_at_start is off")
+	root["server"] = json.RawMessage(`{"recover_processes_at_start":false}`)
+	data, _ = json.Marshal(root)
+	if err := os.WriteFile(f.layout.RootSetting, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if manifest := crashed.manifest(t); manifest.State != native.ProcessRunning {
-		t.Fatalf("manifest state = %q, want running (untouched)", manifest.State)
+	_, err = LoadConfig(sessionfs.LoadOptions{WorkingDir: f.layout.Root, RootSettingPath: f.layout.RootSetting, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	if err == nil || !strings.Contains(err.Error(), "recover_processes_at_start was removed") {
+		t.Fatalf("LoadConfig() error = %v, want the removed key named", err)
 	}
 }
 
@@ -507,7 +188,7 @@ func TestServiceLeavesOrphansAloneWhenTheSwitchIsOff(t *testing.T) {
 func TestServiceCloseEndsTheStartScan(t *testing.T) {
 	f := newRecoveryFixture(t)
 	for i := 0; i < 20; i++ {
-		f.session(t, fmt.Sprintf("s%02d", i), f.processSetting(filepath.Join(f.workspace, fmt.Sprintf("p%02d", i))))
+		f.session(t, fmt.Sprintf("s%02d", i), f.subagentSetting(filepath.Join(f.workspace, fmt.Sprintf("r%02d", i)), nil))
 	}
 	service, err := NewService(serviceConfig(t, f, `{}`))
 	if err != nil {
@@ -522,113 +203,15 @@ func TestServiceCloseEndsTheStartScan(t *testing.T) {
 	}
 }
 
-// The scan must not delay the server. An orphan that ignores the polite signal makes its
-// recovery last the whole kill grace; NewService has to return long before that.
-func TestServiceStartDoesNotWaitForTheScan(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": storage, "kill_grace_ms": 1500}})
-	stubborn := leaveOrphanRunning(t, storage, "proc_stubborn", "sh", "-c", `trap "" TERM; sleep 120`)
-	// Let the shell install its trap before the scan signals it.
-	time.Sleep(200 * time.Millisecond)
-
-	config := serviceConfig(t, f, `{}`)
-	began := time.Now()
-	service, err := NewService(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
-	if took := time.Since(began); took > 700*time.Millisecond {
-		t.Fatalf("NewService took %v; the scan must run in the background", took)
-	}
-	if !stubborn.alive() {
-		t.Fatal("the stubborn orphan ended at once; the test no longer shows a slow scan")
-	}
-	if !stubborn.waitGone(t, 6*time.Second) {
-		t.Fatal("the stubborn orphan was never stopped")
-	}
-}
-
 // Cancelling ends the scan before the next session is even loaded: with no session
-// having the process tool, the only effect of the cancel is the error it returns.
-func TestRecoverProcessesChecksTheContextBeforeEachSession(t *testing.T) {
+// having the subagent tool, the only effect of the cancel is the error it returns.
+func TestRecoverStoragesChecksTheContextBeforeEachSession(t *testing.T) {
 	f := newRecoveryFixture(t)
 	f.session(t, "plain", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := f.resolver(t).RecoverProcesses(ctx); err == nil {
+	if _, err := f.resolver(t).RecoverStorages(ctx, StorageRecoveryOptions{SubagentRuns: true}); err == nil {
 		t.Fatal("a cancelled scan over a session without the tool returned no error")
-	}
-}
-
-// Cancelling while one storage is being recovered must keep the next storage of the same
-// session untouched. The default profile (blue, the first by ID) is recovered first and
-// holds an orphan that ignores the polite signal, so its recovery lasts the kill grace.
-func TestRecoverProcessesChecksTheContextBeforeEachStorage(t *testing.T) {
-	f := newTwoProfileFixture(t, map[string]any{"process": map[string]any{"shell": "/bin/sh", "kill_grace_ms": 1500}})
-	blue := filepath.Join(f.profileTools("blue"), ".processes")
-	green := filepath.Join(f.profileTools("green"), ".processes")
-	stubborn := leaveOrphanRunning(t, blue, "proc_blue", "sh", "-c", `trap "" TERM; sleep 120`)
-	untouched := leaveOrphan(t, green, "proc_green")
-	time.Sleep(200 * time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(400*time.Millisecond, cancel)
-	if _, err := f.resolver(t).RecoverProcesses(ctx); err == nil {
-		t.Fatal("a scan cancelled during the first storage returned no error")
-	}
-	if !stubborn.waitGone(t, 100*time.Millisecond) {
-		t.Fatal("the recovery that was already going on should have finished")
-	}
-	if untouched.waitGone(t, 300*time.Millisecond) {
-		t.Fatal("the next storage was recovered after the scan was cancelled")
-	}
-}
-
-// Closing the service while the scan is in a slow recovery must cancel the rest of the
-// scan instead of waiting for it.
-func TestServiceCloseCancelsTheRestOfTheScan(t *testing.T) {
-	f := newRecoveryFixture(t)
-	slow := filepath.Join(f.workspace, "slow")
-	rest := filepath.Join(f.workspace, "rest")
-	f.session(t, "a-slow", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": slow, "kill_grace_ms": 1500}})
-	f.session(t, "b-rest", f.processSetting(rest))
-	leaveOrphanRunning(t, slow, "proc_slow", "sh", "-c", `trap "" TERM; sleep 120`)
-	untouched := leaveOrphan(t, rest, "proc_rest")
-	time.Sleep(200 * time.Millisecond)
-
-	service, err := NewService(serviceConfig(t, f, `{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(300 * time.Millisecond)
-	service.Close()
-	if untouched.waitGone(t, 300*time.Millisecond) {
-		t.Fatal("Close let the scan go on to the next session")
-	}
-}
-
-// Service.Close returns only after the scan has ended, so nothing of it (a log line, a
-// recovery that signals a process) happens after the resolver and the log are closed.
-func TestServiceCloseWaitsForTheScanToEnd(t *testing.T) {
-	f := newRecoveryFixture(t)
-	slow := filepath.Join(f.workspace, "slow")
-	f.session(t, "demo", map[string]any{"process": map[string]any{"shell": "/bin/sh", "storage_dir": slow, "kill_grace_ms": 1500}})
-	leaveOrphanRunning(t, slow, "proc_slow", "sh", "-c", `trap "" TERM; sleep 120`)
-	time.Sleep(200 * time.Millisecond)
-
-	service, err := NewService(serviceConfig(t, f, `{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(300 * time.Millisecond) // the scan is inside the slow recovery
-	service.Close()
-	select {
-	case <-service.recovering:
-	default:
-		t.Fatal("Service.Close returned while the scan was still going")
 	}
 }
 
@@ -715,8 +298,8 @@ func TestRecoverStoragesMarksAnInterruptedRunLostWithoutAnyRequest(t *testing.T)
 	if state, _, _ := runState(t, done); state != "done" {
 		t.Errorf("an ended run changed to %q", state)
 	}
-	if report.RunStorages != 1 || report.Storages != 0 {
-		t.Fatalf("report = %+v, want 1 run storage and 0 process storages", report)
+	if report.RunStorages != 1 {
+		t.Fatalf("report = %+v, want 1 run storage", report)
 	}
 }
 
@@ -813,40 +396,6 @@ func TestRecoverStoragesVisitsEveryProfilesRunStorage(t *testing.T) {
 	}
 }
 
-// One scan with both options recovers a session's processes and its runs, and neither
-// option touches the other's storage.
-func TestRecoverStoragesOptionsAreIndependent(t *testing.T) {
-	f := newRecoveryFixture(t)
-	procs := filepath.Join(f.workspace, "procs")
-	runs := filepath.Join(f.workspace, "runs")
-	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(runs, nil)})
-	crashed := leaveOrphan(t, procs, "proc_a")
-	run := leaveRun(t, runs, "sub_0000aaaa", "running", time.Time{})
-
-	// Processes only: the orphan goes, the run stays as the crashed server left it.
-	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{Processes: true}); err != nil {
-		t.Fatal(err)
-	}
-	if !crashed.waitGone(t, 3*time.Second) {
-		t.Fatal("a processes scan did not stop the orphan")
-	}
-	if state, _, _ := runState(t, run); state != "running" {
-		t.Fatalf("run is %q after a processes-only scan, want running (untouched)", state)
-	}
-
-	// Runs only: the run is marked lost; a second orphan is not signalled.
-	second := leaveOrphan(t, procs, "proc_b")
-	if _, err := f.resolver(t).RecoverStorages(context.Background(), StorageRecoveryOptions{SubagentRuns: true}); err != nil {
-		t.Fatal(err)
-	}
-	if state, _, _ := runState(t, run); state != "lost" {
-		t.Fatalf("run is %q after a runs-only scan, want lost", state)
-	}
-	if second.waitGone(t, 300*time.Millisecond) {
-		t.Fatal("a runs-only scan stopped a process")
-	}
-}
-
 func TestServiceRecoversInterruptedRunsAtStartInTheBackground(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
@@ -864,67 +413,20 @@ func TestServiceRecoversInterruptedRunsAtStartInTheBackground(t *testing.T) {
 	}
 }
 
-func TestServiceLeavesRunsAloneWhenOnlyTheRunSwitchIsOff(t *testing.T) {
+func TestServiceStartsNoScanWhenTheSwitchIsOff(t *testing.T) {
 	f := newRecoveryFixture(t)
 	storage := filepath.Join(f.workspace, "runs")
-	procs := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(storage, nil)})
+	f.session(t, "demo", f.subagentSetting(storage, nil))
 	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
-	crashed := leaveOrphan(t, procs, "proc_a")
-
 	service, err := NewService(serviceConfig(t, f, `{"recover_subagent_runs_at_start":false}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	if !crashed.waitGone(t, 5*time.Second) {
-		t.Fatal("the process scan did not run although only the run switch is off")
-	}
-	// The scan stops a process before it reaches the run branch, so look only once it ended.
-	select {
-	case <-service.recovering:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the start scan did not end")
+	if service.recovering != nil {
+		t.Fatal("a scan was started with the switch off")
 	}
 	if state, _, _ := runState(t, run); state != "running" {
 		t.Fatalf("run is %q although recover_subagent_runs_at_start is off", state)
-	}
-}
-
-func TestServiceStartsNoScanWhenBothSwitchesAreOff(t *testing.T) {
-	f := newRecoveryFixture(t)
-	service, err := NewService(serviceConfig(t, f, `{"recover_subagent_runs_at_start":false,"recover_processes_at_start":false}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
-	if service.recovering != nil {
-		t.Fatal("a scan was started with both switches off")
-	}
-}
-
-func TestServiceRecoversRunsAtStartWhenOnlyTheProcessSwitchIsOff(t *testing.T) {
-	f := newRecoveryFixture(t)
-	storage := filepath.Join(f.workspace, "runs")
-	procs := filepath.Join(f.workspace, "procs")
-	f.session(t, "demo", map[string]any{"process": processTool(procs, nil), "subagent": subagentTool(storage, nil)})
-	run := leaveRun(t, storage, "sub_0000aaaa", "running", time.Time{})
-	crashed := leaveOrphan(t, procs, "proc_a")
-
-	service, err := NewService(serviceConfig(t, f, `{"recover_processes_at_start":false}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
-	if got := waitForState(t, run, "lost", 5*time.Second); got != "lost" {
-		t.Fatalf("run is %q, want lost: the run scan must start although the process switch is off", got)
-	}
-	select {
-	case <-service.recovering:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the start scan did not end")
-	}
-	if crashed.waitGone(t, 300*time.Millisecond) {
-		t.Fatal("the orphan was stopped although recover_processes_at_start is off")
 	}
 }

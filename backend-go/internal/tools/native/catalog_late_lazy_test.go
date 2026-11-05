@@ -30,7 +30,7 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 	}[name]
 	config.ToolDefinitionPaths = []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", manifest)}
 	if name == "subagent" {
-		config.ToolDefinitionPaths = append(config.ToolDefinitionPaths, filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"))
+		config.ToolDefinitionPaths = append(config.ToolDefinitionPaths, filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"))
 	}
 	switch name {
 	case "transcript":
@@ -43,8 +43,8 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 		config.NativeProfileMessage = &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024}
 	case "subagent":
 		reader := agentNamed("explore")
-		reader.Tools, reader.HasTools = []string{"read"}, true
-		config.NativeRead = &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100}
+		reader.Tools, reader.HasTools = []string{"read_image"}, true
+		config.NativeReadImage = &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20}
 		config.NativeSubagent = &sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{reader}}
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
@@ -150,20 +150,20 @@ func TestChildOfAParentWithALazyProfileMessageGetsTheGatedCopy(t *testing.T) {
 // holds a lazy copy of subagent and a lazy copy of read: both are refused until the owner's set loads them,
 // as the resolver wires it: the catalog is built, then SetLazy gives the set to the subagent tool.
 func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"subagent", "read"}, 256, nil, nil)
+	set, err := tools.OpenLazySet(t.TempDir(), []string{"subagent", "read_image"}, 256, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAgent := nestingAgent("explore", "read", "subagent")
+	childAgent := nestingAgent("explore", "read_image", "subagent")
 	settings := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeSubagent:      &settings,
 		Profile:             "main",
 		Profiles:            []string{"main"},
-		ProfileTools:        sessionfs.ProfileToolSettings{Lazy: []string{"subagent", "read"}},
+		ProfileTools:        sessionfs.ProfileToolSettings{Lazy: []string{"subagent", "read_image"}},
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
 	_, err = BuildCatalogWithAsync(config, nil, nil, nil, &fakeLauncher{}, mcp, nil, nil, nil, nil, set)
@@ -177,8 +177,8 @@ func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
 		t.Fatal("the child catalog was not built")
 	}
 	child := mcp.tool.agents[0].catalog
-	for _, name := range []string{"read", "subagent"} {
-		args := `{"path":"notes.txt"}`
+	for _, name := range []string{"read_image", "subagent"} {
+		args := `{"path":"notes.png"}`
 		if name == "subagent" {
 			args = `{"task":"y","agent":"explore"}`
 		}
@@ -186,12 +186,12 @@ func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
 			t.Fatalf("the nested child's call to unloaded %s was not refused: %s", name, before)
 		}
 	}
-	for _, name := range []string{"read", "subagent"} {
+	for _, name := range []string{"read_image", "subagent"} {
 		if err := set.Load(name); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if read := executeNamedCall(t, child, "read", `{"path":"notes.txt"}`); strings.Contains(read, "tool_not_loaded") {
+	if read := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(read, "tool_not_loaded") {
 		t.Fatalf("the nested child's read after load was refused: %s", read)
 	}
 	if nested := executeNamedCall(t, child, "subagent", `{"task":"y","agent":"explore"}`); strings.Contains(nested, "tool_not_loaded") {

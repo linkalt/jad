@@ -10,11 +10,11 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-func makeReadManifest(t *testing.T, directory string, tamper bool) string {
+func makeReadImageManifest(t *testing.T, directory string, tamper bool) string {
 	t.Helper()
-	tool, err := NewReadTool(sessionfs.NativeReadSettings{MaxBytes: 1024, MaxFileBytes: 4096, DefaultLimit: 20})
+	tool, err := NewReadImageTool(sessionfs.NativeReadImageSettings{MaxImageBytes: 1 << 20}, nil)
 	if err != nil {
-		t.Fatalf("NewReadTool() error = %v", err)
+		t.Fatalf("NewReadImageTool() error = %v", err)
 	}
 	definition := tool.Definition
 	if tamper {
@@ -37,31 +37,29 @@ func makeReadManifest(t *testing.T, directory string, tamper bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(directory, "read.json")
+	path := filepath.Join(directory, "read_image.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-func TestBuildCatalogLoadsOnlyConfiguredNativeReadAndMatchesManifest(t *testing.T) {
+func TestBuildCatalogLoadsOnlyConfiguredNativeReadImageAndMatchesManifest(t *testing.T) {
 	directory := t.TempDir()
-	manifest := makeReadManifest(t, directory, false)
+	manifest := makeReadImageManifest(t, directory, false)
 	catalog, err := BuildCatalog(sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(directory, "setting.json"),
 		ToolDefinitionPaths: []string{manifest},
-		NativeRead: &sessionfs.NativeReadSettings{
-			Policy:       sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
-			MaxBytes:     1024,
-			MaxFileBytes: 4096,
-			DefaultLimit: 20,
+		NativeReadImage: &sessionfs.NativeReadImageSettings{
+			Policy:        sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}},
+			MaxImageBytes: 1 << 20,
 		},
 	})
 	if err != nil {
 		t.Fatalf("BuildCatalog() error = %v", err)
 	}
 	definitions := catalog.Definitions()
-	if len(definitions) != 1 || definitions[0].ID != readToolID || definitions[0].Name != "read" {
+	if len(definitions) != 1 || definitions[0].ID != readImageToolID || definitions[0].Name != "read_image" {
 		t.Fatalf("catalog definitions = %#v", definitions)
 	}
 
@@ -74,19 +72,19 @@ func TestBuildCatalogLoadsOnlyConfiguredNativeReadAndMatchesManifest(t *testing.
 	}
 }
 
-func TestBuildCatalogRejectsMissingOrTamperedReadManifest(t *testing.T) {
+func TestBuildCatalogRejectsMissingOrTamperedReadImageManifest(t *testing.T) {
 	directory := t.TempDir()
-	settings := &sessionfs.NativeReadSettings{MaxBytes: 1024, MaxFileBytes: 4096, DefaultLimit: 20}
-	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), NativeRead: settings})
+	settings := &sessionfs.NativeReadImageSettings{MaxImageBytes: 1 << 20}
+	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), NativeReadImage: settings})
 	if err == nil || !strings.Contains(err.Error(), "missing from tool_definition_paths") {
 		t.Fatalf("BuildCatalog(missing manifest) error = %v", err)
 	}
 
-	manifest := makeReadManifest(t, directory, true)
+	manifest := makeReadImageManifest(t, directory, true)
 	_, err = BuildCatalog(sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(directory, "setting.json"),
 		ToolDefinitionPaths: []string{manifest},
-		NativeRead:          settings,
+		NativeReadImage:     settings,
 	})
 	if err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") {
 		t.Fatalf("BuildCatalog(tampered schema) error = %v", err)

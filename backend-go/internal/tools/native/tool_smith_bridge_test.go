@@ -92,33 +92,6 @@ func requireGoroutinesSettle(t *testing.T, before int) {
 	}
 }
 
-func TestToolSmithBridgeReadsThroughReadAndGrep(t *testing.T) {
-	rg := installedRipgrep(t)
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\nworld\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	read, err := NewReadTool(sessionfs.NativeReadSettings{Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}, MaxBytes: 1024, MaxFileBytes: 4096, DefaultLimit: 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	grep, err := NewGrepTool(nativeGrepSettings(rg))
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings := bridgeSettings(t, root, "read", "grep")
-	result := runWithBridge(context.Background(), root, settings, bridgeNested(read, grep), tools.ExecutionContext{}, `
-const r = await tools.read({ path: 'a.txt' });
-const g = await tools.grep({ pattern: 'wor', path: '.' });
-return { read: r.ok && r.content.includes('hello'), grep: g.ok && g.content.includes('world'), status: r.status };`)
-	if got := execContent(result); !strings.Contains(got, `"read":true`) || !strings.Contains(got, `"grep":true`) {
-		t.Fatalf("result:\n%s", result)
-	}
-	if execField(result, "nested_calls") != "2" || execField(result, "nested_tools") != "grep=1, read=1" || execField(result, "nested_writes") != "0" || execField(result, "nested_bytes_returned") == "" || execField(result, "nested_duration_ms") == "" {
-		t.Fatalf("counters missing:\n%s", result)
-	}
-}
-
 func TestToolSmithBridgePromiseAllOfReads(t *testing.T) {
 	root := t.TempDir()
 	echo := bridgeTestTool(t, "read", true, func(arguments map[string]any) string { return arguments["path"].(string) })
@@ -134,7 +107,7 @@ return all.map((r) => r.content).join(',');`)
 func TestToolSmithBridgeRefusesToolsOutsideTheAllowlistAndTheExcludedOnes(t *testing.T) {
 	root := t.TempDir()
 	excluded := sessionfs.NativeToolSmithExcludedTools()
-	if len(excluded) != 7 {
+	if len(excluded) != 5 {
 		t.Fatalf("excluded list = %v", excluded)
 	}
 	list := []tools.Tool{bridgeTestTool(t, "read", true, func(map[string]any) string { return "r" }), bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })}
@@ -145,7 +118,7 @@ func TestToolSmithBridgeRefusesToolsOutsideTheAllowlistAndTheExcludedOnes(t *tes
 	settings := bridgeSettings(t, root, append([]string{"read"}, excluded...)...)
 	result := runWithBridge(context.Background(), root, settings, bridgeNested(list...), tools.ExecutionContext{}, `
 const out = [];
-for (const name of ['write', 'bash', 'exec', 'process', 'async', 'subagent', 'tool_smith', 'task']) {
+for (const name of ['write', 'exec', 'async', 'subagent', 'tool_smith', 'task']) {
   const r = await tools[name]({});
   out.push(name + ':' + r.status + ':' + r.ok + ':' + r.summary.includes('not allowed; allowed: read'));
 }
@@ -162,10 +135,10 @@ return out.join('|');`)
 }
 
 func TestToolSmithNestedCatalogHoldsOnlyAllowedNativeTools(t *testing.T) {
-	list := []tools.Tool{bridgeTestTool(t, "read", true, nil), bridgeTestTool(t, "grep", true, nil), bridgeTestTool(t, "bash", false, nil), mcpReadOnlyTool("read_mcp")}
+	list := []tools.Tool{bridgeTestTool(t, "read", true, nil), bridgeTestTool(t, "grep", true, nil), bridgeTestTool(t, "exec", false, nil), mcpReadOnlyTool("read_mcp")}
 	nested := &ToolSmithNested{}
 	nested.Bind(list, sessionfs.ProfileToolSettings{Restricted: true, Deny: []string{"grep"}})
-	got := poolNames(nested.allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"bash", "grep", "read", "read_mcp"}}))
+	got := poolNames(nested.allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"exec", "grep", "read", "read_mcp"}}))
 	if len(got) != 1 || got[0] != "read" {
 		t.Fatalf("allowed = %v", got)
 	}
@@ -517,8 +490,10 @@ func TestToolSmithBridgeForwardsTheExecutionHooksOfTheOuterCall(t *testing.T) {
 	root := t.TempDir()
 	write := bridgeTestTool(t, "write", false, nil)
 	write.Execute = func(_ context.Context, _ map[string]any, execution tools.ExecutionContext) (string, error) {
-		reportFileChange(execution, "out.txt", "created")
-		if execution.ProcessOwner != "owner-1" || execution.ProcessOwnerLimit != 3 || execution.RequestInteraction == nil || execution.OnInteractionResolved == nil {
+		if execution.OnFileChange != nil {
+			execution.OnFileChange("out.txt", "created")
+		}
+		if execution.ProcessOwner != "owner-1" || execution.RequestInteraction == nil || execution.OnInteractionResolved == nil {
 			return tools.ExecutionError(execution.CallID, tools.StatusError, "missing_hooks", "the nested context lost a field"), nil
 		}
 		return tools.RenderToolResult(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "done"})
@@ -531,8 +506,7 @@ func TestToolSmithBridgeForwardsTheExecutionHooksOfTheOuterCall(t *testing.T) {
 			defer mu.Unlock()
 			changes = append(changes, path+":"+action)
 		},
-		ProcessOwner:      "owner-1",
-		ProcessOwnerLimit: 3,
+		ProcessOwner: "owner-1",
 		RequestInteraction: func(context.Context, tools.InteractionIdentity, tools.InteractionQuestion) (tools.InteractionAnswer, error) {
 			return tools.InteractionAnswer{}, nil
 		},

@@ -362,9 +362,9 @@ func subagentOrphanCatalog(t *testing.T, workspace string, manager *native.Subag
 	loaded, _ := layoutConfig(t, layouttest.Spec{
 		SessionID:           "orphan",
 		CWD:                 workspace,
-		ToolDefinitionPaths: []string{subagentSampleTool(t, "read.json"), subagentSampleTool(t, "subagent.json"), subagentSampleTool(t, "async.json")},
+		ToolDefinitionPaths: []string{subagentSampleTool(t, "skill.json"), subagentSampleTool(t, "subagent.json"), subagentSampleTool(t, "async.json")},
 		Native: map[string]any{
-			"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
+			"skill":    map[string]any{},
 			"subagent": map[string]any{"agents": map[string]any{"explore": map[string]any{"model": "openai/default"}}},
 			"async":    map[string]any{},
 		},

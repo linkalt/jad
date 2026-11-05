@@ -35,7 +35,7 @@ func TestRunPlanMode(t *testing.T) {
 	}))
 	t.Cleanup(provider.Close)
 	var definitions []string
-	for _, name := range []string{"read", "grep", "write", "edit", "task"} {
+	for _, name := range []string{"read_image", "exec", "task"} {
 		path, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
 		if err != nil {
 			t.Fatal(err)
@@ -46,7 +46,7 @@ func TestRunPlanMode(t *testing.T) {
 		ToolDefinitionPaths: definitions,
 		Models:              map[string]map[string]any{"openai/default": {"provider": "openai", "model": "m", "api_key_env": "FIXTURE_KEY", "base_url": provider.URL + "/v1"}},
 		Server:              map[string]any{"log_level": "off"},
-		Native:              map[string]any{"read": map[string]any{}, "grep": map[string]any{}, "write": map[string]any{}, "edit": map[string]any{}, "task": map[string]any{}},
+		Native:              map[string]any{"read_image": map[string]any{}, "exec": map[string]any{}, "task": map[string]any{}},
 		Settings:            map[string]any{"plan_mode": map[string]any{"instructions": "PLAN-ONLY", "allow_tools": []string{"task"}, "execute_prompt": "GO-AHEAD"}},
 	})
 	t.Setenv("FIXTURE_KEY", "k")
@@ -75,7 +75,7 @@ func TestRunPlanMode(t *testing.T) {
 		t.Fatalf("--plan: %q %q %v", stdout, stderr, err)
 	}
 	tools, lastInput := last()
-	if strings.Join(tools, ",") != "grep,read,task" {
+	if strings.Join(tools, ",") != "read_image,task" {
 		t.Fatalf("plan-mode tools = %v", tools)
 	}
 	if !strings.Contains(lastInput, `"role":"developer"`) || !strings.Contains(lastInput, "PLAN-ONLY") {
@@ -86,7 +86,7 @@ func TestRunPlanMode(t *testing.T) {
 	if err != nil || stdout != "plan\n" {
 		t.Fatalf("/plan: %q %v", stdout, err)
 	}
-	if tools, lastInput = last(); strings.Join(tools, ",") != "grep,read,task" || !strings.Contains(lastInput, "PLAN-ONLY") {
+	if tools, lastInput = last(); strings.Join(tools, ",") != "read_image,task" || !strings.Contains(lastInput, "PLAN-ONLY") {
 		t.Fatalf("/plan request: %v %s", tools, lastInput)
 	}
 
@@ -94,7 +94,7 @@ func TestRunPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, lastInput = last()
-	if strings.Join(tools, ",") != "edit,grep,read,task,write" || strings.Contains(lastInput, "PLAN-ONLY") {
+	if strings.Join(tools, ",") != "exec,read_image,task" || strings.Contains(lastInput, "PLAN-ONLY") {
 		t.Fatalf("a run without plan mode: %v %s", tools, lastInput)
 	}
 	data, err := os.ReadFile(filepath.Join(fixture.SessionStateDir, "dev", "coder", "messages.jsonl"))
@@ -106,10 +106,10 @@ func TestRunPlanMode(t *testing.T) {
 	}
 
 	// --tools narrows the run's tools; an entry the profile does not have narrows nothing more.
-	if _, _, err = runJad(t, "", "run", "--session", session, "--tools", "read, write,mcp:docs:*", "look"); err != nil {
+	if _, _, err = runJad(t, "", "run", "--session", session, "--tools", "read_image, exec,mcp:docs:*", "look"); err != nil {
 		t.Fatal(err)
 	}
-	if tools, _ = last(); strings.Join(tools, ",") != "read,write" {
+	if tools, _ = last(); strings.Join(tools, ",") != "exec,read_image" {
 		t.Fatalf("--tools: %v", tools)
 	}
 
@@ -120,7 +120,7 @@ func TestRunPlanMode(t *testing.T) {
 	if err != nil || json.Unmarshal([]byte(stdout), &result) != nil || !result.ExecutePlan || result.Plan {
 		t.Fatalf("--execute-plan: %q %q %v", stdout, stderr, err)
 	}
-	if tools, lastInput = last(); strings.Join(tools, ",") != "edit,grep,read,task,write" || !strings.Contains(lastInput, "GO-AHEAD") {
+	if tools, lastInput = last(); strings.Join(tools, ",") != "exec,read_image,task" || !strings.Contains(lastInput, "GO-AHEAD") {
 		t.Fatalf("--execute-plan request: %v %s", tools, lastInput)
 	}
 	if _, _, err = runJad(t, "", "run", "--session", session, "--execute-plan", "skip", "the", "docs"); err != nil {

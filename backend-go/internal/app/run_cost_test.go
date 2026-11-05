@@ -14,7 +14,7 @@ import (
 )
 
 // costFixture is the layout fixture whose model is priced (when pricing is set), whose
-// provider reports usage, and whose toolset has read; its first answer reads a file and
+// provider reports usage, and whose toolset has skill; its first answer loads a skill and
 // the second answers. settings go into the coder profile.
 func costFixture(t *testing.T, pricing, settings map[string]any) *layoutFixture {
 	t.Helper()
@@ -24,7 +24,7 @@ func costFixture(t *testing.T, pricing, settings map[string]any) *layoutFixture 
 		if strings.Contains(body, `"function_call_output"`) {
 			return ""
 		}
-		return `{"type":"function_call","call_id":"call_r","name":"read","arguments":"{\"path\":\"hello.txt\"}"}`
+		return `{"type":"function_call","call_id":"call_r","name":"skill","arguments":"{\"name\":\"notes\"}"}`
 	}
 	modelPath := filepath.Join(f.root, "models", "openai", "small.json")
 	var model map[string]any
@@ -37,7 +37,7 @@ func costFixture(t *testing.T, pricing, settings map[string]any) *layoutFixture 
 	}
 	files := map[string]any{
 		"models/openai/small.json": model,
-		"tools/coding/none.json":   map[string]any{"native": map[string]any{"read": map[string]any{}}, "mcp": map[string]any{}},
+		"tools/coding/none.json":   map[string]any{"native": map[string]any{"skill": map[string]any{}}, "mcp": map[string]any{}},
 		"profiles/dev/coder.json":  map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none", "settings": settings},
 	}
 	for rel, value := range files {

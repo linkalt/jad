@@ -66,7 +66,7 @@ func requireParentReceivedProfileMessageOutput(t *testing.T, f *layoutFixture, b
 // The target's read is a leaf that needs a token while the parent's call waits on the target.
 func targetReadsThenAnswers(f *layoutFixture, message map[string]any) {
 	call := scriptFunctionCall("profile_message", message)
-	read := scriptFunctionCall("read", map[string]any{"path": "notes.txt"})
+	read := scriptFunctionCall("skill", map[string]any{"name": "notes"})
 	f.script = func(model, body string) string {
 		if model == "model-large" {
 			if strings.Contains(body, "function_call_output") {
@@ -81,7 +81,7 @@ func targetReadsThenAnswers(f *layoutFixture, message map[string]any) {
 // TestDeadlockProfileMessageNotHandledFinishesWithBudgetOne: no async tool, so the call waits
 // for the target's answer inside the parent's call and gets it inline.
 func TestDeadlockProfileMessageNotHandledFinishesWithBudgetOne(t *testing.T) {
-	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"read":{}},"mcp":{}}`)
+	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"skill":{}},"mcp":{}}`)
 	targetReadsThenAnswers(f, map[string]any{"profile": "review/reviewer", "message": "first", "block_ms": 0})
 	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "Profile review/reviewer answered")
 	requireTargetReadTheNotes(t, f)
@@ -115,7 +115,7 @@ func requireTargetReadTheNotes(t *testing.T, f *layoutFixture) {
 // on profile_message therefore does not deadlock this path, so this test is a completion check
 // only; the structural guard in internal/tools/native is what keeps the wrapper off the budget.
 func TestDeadlockProfileMessageHandledFinishesWithBudgetOne(t *testing.T) {
-	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"read":{},"async":{}},"mcp":{}}`)
+	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"skill":{},"async":{}},"mcp":{}}`)
 	targetReadsThenAnswers(f, map[string]any{"profile": "review/reviewer", "message": "first", "block_ms": 0})
 	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "use the async tool with id pm_")
 	requireTargetReadTheNotes(t, f)

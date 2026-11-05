@@ -15,7 +15,7 @@ import (
 
 func planBashCall(t *testing.T, catalog *tools.Catalog, callID, command, root string) string {
 	t.Helper()
-	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": callID, "name": "bash", "arguments": `{"command":` + strconvQuote(command) + `}`})
+	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": callID, "name": "exec", "arguments": `{"lang":"bash","code":` + strconvQuote(command) + `}`})
 	output, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: root, SessionDir: root})
 	if err != nil {
 		t.Fatal(err)
@@ -28,23 +28,24 @@ func strconvQuote(value string) string {
 	return string(encoded)
 }
 
-// A bash an allow entry keeps in plan mode runs with the project read-only: the same call
+// An exec call an allow entry keeps in plan mode runs with the project read-only: the same call
 // outside plan mode writes it. The temp folder stays writable.
 func TestPlanModeRunsSandboxedCallsWithTheProjectReadOnly(t *testing.T) {
 	requireBwrap(t)
 	root, _, _ := sandboxDirs(t)
-	settings := bashTestSettings(t, root)
-	settings.Sandbox = bwrapSandbox()
-	settings.Sandbox.PlanWritablePaths = []string{"{tmp}"}
-	bash, err := NewBashTool(settings, "")
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, root)
+	settings.Child.Sandbox = bwrapSandbox()
+	settings.Child.Sandbox.PlanWritablePaths = []string{"{tmp}"}
+	execTool, err := NewExecTool(settings, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := tools.NewCatalog([]tools.Tool{bash})
+	catalog, err := tools.NewCatalog([]tools.Tool{execTool})
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := catalog.PlanMode([]string{"bash"})
+	plan, err := catalog.PlanMode([]string{"exec"})
 	if err != nil {
 		t.Fatal(err)
 	}

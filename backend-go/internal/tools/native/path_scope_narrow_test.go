@@ -3,7 +3,6 @@ package native
 import (
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"jad/backend-go/internal/tools"
@@ -55,18 +54,4 @@ func TestNarrowScopeNeverReachesMoreThanTheParent(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGrandchildWriteIsConfinedToTheIntersectionOfScopes(t *testing.T) {
-	root := scopeWorkspace(t)
-	scope := narrowScope(root, &tools.PathScope{Allow: []string{"src"}}, &tools.PathScope{Allow: []string{"src", "docs"}})
-	write, err := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := scopeRun(t, write, root, scope, map[string]any{"path": "docs/a.txt", "content": "x"})
-	if !strings.Contains(out, "path_outside_agent_paths") || pathExists(filepath.Join(root, "docs", "a.txt")) {
-		t.Fatalf("a grandchild wrote outside its parent's scope: %s", out)
-	}
-	assertMutationStatus(t, scopeRun(t, write, root, scope, map[string]any{"path": "src/a.txt", "content": "x"}), "ok")
 }

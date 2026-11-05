@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const catalogToolsetBody = `{"schema_version":1,"native":{"read":{}},"mcp":{}}`
+const catalogToolsetBody = `{"schema_version":1,"native":{"skill":{}},"mcp":{}}`
 
 func TestCatalogToolsetsListReadAndCreate(t *testing.T) {
 	f := newLayoutFixture(t)
@@ -31,7 +31,7 @@ func TestCatalogToolsetsListReadAndCreate(t *testing.T) {
 	if again := f.catalogCall(t, "PUT", path, catalogToolsetBody, map[string]string{"If-None-Match": "*"}); again.status != http.StatusPreconditionFailed {
 		t.Fatalf("create over an existing file = %d", again.status)
 	}
-	replaced := f.catalogCall(t, "PUT", path, `{"native":{"read":{},"grep":{}}}`, map[string]string{"If-Match": created.etag})
+	replaced := f.catalogCall(t, "PUT", path, `{"native":{"skill":{},"async":{}}}`, map[string]string{"If-Match": created.etag})
 	if replaced.status != http.StatusOK || replaced.etag == created.etag {
 		t.Fatalf("replace = %d %s", replaced.status, replaced.body)
 	}
@@ -65,7 +65,7 @@ func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 		"unknown key":            {`{"bogus":1}`, "unknown field"},
 		"schema version":         {`{"schema_version":2}`, "unsupported schema_version 2"},
 		"unknown native tool":    {`{"native":{"nope":{}}}`, "nope"},
-		"unknown native key":     {`{"native":{"read":{"bogus":1}}}`, "bogus"},
+		"unknown native key":     {`{"native":{"skill":{"bogus":1}}}`, "bogus"},
 		"hooks of a wrong type":  {`{"hooks":5}`, "hooks"},
 		"unknown mcp server":     {`{"mcp":{"ext/missing":{}}}`, "ext/missing"},
 		"unknown mcp use key":    {`{"mcp":{"ext/one":{"bogus":true}}}`, "bogus"},
@@ -92,7 +92,7 @@ func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 			t.Fatalf("temporary file left behind: %s", entry.Name())
 		}
 	}
-	good := `{"native":{"read":{}},"mcp":{"ext/one":{"deny_tools":["x"]}}}`
+	good := `{"native":{"skill":{}},"mcp":{"ext/one":{"deny_tools":["x"]}}}`
 	if reply := f.catalogCall(t, "PUT", path, good, map[string]string{"If-Match": before.etag}); reply.status != http.StatusOK {
 		t.Fatalf("a valid toolset naming an MCP server = %d %s", reply.status, reply.body)
 	}

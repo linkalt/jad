@@ -360,7 +360,7 @@ func TestManifestSchemaMatchesTheReader(t *testing.T) {
 func TestInstallPlacesCommandsUnderThePluginsName(t *testing.T) {
 	target, _ := testTarget(t)
 	files := acmePlugin("1.0.0")
-	files["commands/review.md"] = "---\ndescription: Review a file.\nplan: true\nallowed-tools: [read, grep]\n---\nReview $ARGUMENTS.\n"
+	files["commands/review.md"] = "---\ndescription: Review a file.\nplan: true\nallowed-tools: [lsp, read_image]\n---\nReview $ARGUMENTS.\n"
 	files["commands/git/commit.md"] = "Write a commit message.\n"
 	result, err := target.Install(context.Background(), writePlugin(t, files), false)
 	if err != nil {

@@ -8,10 +8,46 @@ import (
 	"strings"
 	"testing"
 
-	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
-	"jad/backend-go/internal/tools/native"
 )
+
+// orderingTools are an edit that replaces oldText with newText in a file (failing when the
+// file does not hold oldText) and a read-only read that returns the file: the scheduler
+// decides their order only from ReadOnly, so they stand for any changing and reading tool.
+func orderingTools(t *testing.T) []tools.Tool {
+	t.Helper()
+	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := func(id string, status tools.Status, text string) (string, error) {
+		return tools.RenderToolResult(tools.ResultOptions{ID: id, Status: status, Summary: "done", Content: &tools.Content{Text: text}})
+	}
+	edit := func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+		path := filepath.Join(execution.WorkspaceRoot, arguments["path"].(string))
+		content, err := os.ReadFile(path)
+		oldText, newText := arguments["oldText"].(string), arguments["newText"].(string)
+		if err != nil || !strings.Contains(string(content), oldText) {
+			return result(execution.CallID, tools.StatusError, "oldText not found")
+		}
+		if err := os.WriteFile(path, []byte(strings.Replace(string(content), oldText, newText, 1)), 0o644); err != nil {
+			return result(execution.CallID, tools.StatusError, err.Error())
+		}
+		return result(execution.CallID, tools.StatusOK, "")
+	}
+	read := func(_ context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+		content, err := os.ReadFile(filepath.Join(execution.WorkspaceRoot, arguments["path"].(string)))
+		if err != nil {
+			return result(execution.CallID, tools.StatusError, err.Error())
+		}
+		return result(execution.CallID, tools.StatusOK, string(content))
+	}
+	schema := json.RawMessage(`{"type":"object"}`)
+	return []tools.Tool{
+		{Definition: tools.Definition{ID: "test:edit", Source: "native", Name: "edit", InputSchema: schema}, Validator: validator, Execute: edit},
+		{Definition: tools.Definition{ID: "test:read", Source: "native", Name: "read", InputSchema: schema}, Validator: validator, ReadOnly: true, Execute: read},
+	}
+}
 
 // orderingOutcome is what one edit+edit+edit+read response left behind.
 type orderingOutcome struct {
@@ -26,18 +62,7 @@ type orderingOutcome struct {
 func runChainedResponse(t *testing.T, limit int, scheduling string) orderingOutcome {
 	t.Helper()
 	workspace := t.TempDir()
-	backupDir := filepath.Join(workspace, "backups")
-	mutation := sessionfs.NativeMutationSettings{BackupDir: &backupDir, BackupMaxCount: 5, BackupMaxTotalBytes: 10 << 20}
-	policy := sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}
-	readTool, err := native.NewReadTool(sessionfs.NativeReadSettings{Policy: policy, MaxBytes: 64 << 10, MaxFileBytes: 1 << 20, DefaultLimit: 250})
-	if err != nil {
-		t.Fatal(err)
-	}
-	editTool, err := native.NewEditTool(sessionfs.NativeEditSettings{Policy: policy, MaxBytes: 1 << 20, NativeMutationSettings: mutation}, native.NewPathLocks())
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := tools.NewCatalog([]tools.Tool{readTool, editTool})
+	catalog, err := tools.NewCatalog(orderingTools(t))
 	if err != nil {
 		t.Fatal(err)
 	}

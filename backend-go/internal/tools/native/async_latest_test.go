@@ -42,28 +42,57 @@ func latestTextOf(t *testing.T, out, id string) string {
 	return ""
 }
 
-func newLatestFixture(t *testing.T) processAsyncFixture {
+// latestFixture runs bash through exec and hands each run off as an async handle at once,
+// so its output is read through the async tool's latest blocks.
+type latestFixture struct{ execAsyncFixture }
+
+func newLatestFixture(t *testing.T) latestFixture {
 	t.Helper()
-	return newProcessAsyncFixtureWith(t, func(s *sessionfs.NativeProcessSettings) {
-		s.Stdout = sessionfs.NativeBashStreamBudget{HeadBytes: 1024, TailBytes: 4096}
-		s.Stderr = sessionfs.NativeBashStreamBudget{HeadBytes: 1024, TailBytes: 4096}
-	})
+	f := newExecAsyncFixture(t)
+	settings := execTestSettings()
+	settings.Child = bashTestSettings(t, f.root)
+	settings.Child.TimeoutMs, settings.Child.MaxTimeoutMs = 20_000, 30_000
+	settings.Child.Stdout = sessionfs.NativeBashStreamBudget{HeadBytes: 1024, TailBytes: 4096}
+	settings.Child.Stderr = sessionfs.NativeBashStreamBudget{HeadBytes: 1024, TailBytes: 4096}
+	execTool, err := NewExecTool(settings, "", f.host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.exec = execTool
+	return latestFixture{f}
 }
 
-func (f processAsyncFixture) status(t *testing.T, id string) string {
+// start runs command and returns the id of its handle.
+func (f latestFixture) start(t *testing.T, owner, command string) string {
+	t.Helper()
+	arguments, _ := json.Marshal(map[string]any{"lang": "bash", "code": command, "block_ms": 0})
+	return execRunIDOf(t, f.run(t, owner, string(arguments)))
+}
+
+func (f latestFixture) status(t *testing.T, id string) string {
 	t.Helper()
 	return callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id})
 }
 
-func (f processAsyncFixture) waitForOutput(t *testing.T, id, want string) {
+// waitForOutput waits until the run's live output holds want, without reading a latest
+// block (which would move its cursor).
+func (f latestFixture) waitForOutput(t *testing.T, id, want string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if snapshot, found := f.manager.Snapshot(id); found && strings.Contains(snapshot.Output.stdout.text+snapshot.Output.stderr.text, want) {
-			return
+		f.host.mu.Lock()
+		run := f.host.shellRuns[id]
+		f.host.mu.Unlock()
+		if run != nil {
+			if collector := run.watch.get(); collector != nil {
+				rendered := collector.render()
+				if strings.Contains(rendered.stdout.text+rendered.stderr.text, want) {
+					return
+				}
+			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("process %s never printed %q", id, want)
+			t.Fatalf("run %s never printed %q", id, want)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -118,11 +147,8 @@ func TestLatestCutsTheFrontWithAMarkerAndStripsControlCodes(t *testing.T) {
 
 func TestLatestStartToolReturnsTheBlockAndWaitContinuesFromIt(t *testing.T) {
 	f := newLatestFixture(t)
-	out, err := f.process.Execute(context.Background(), map[string]any{"command": "echo early; sleep 30", "block_ms": json.Number("300")}, tools.ExecutionContext{CallID: "p1", WorkspaceRoot: f.dir, SessionKey: "s1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := processIDOf(t, out)
+	out := f.run(t, "s1", `{"lang":"bash","code":"echo early; sleep 30","block_ms":300}`)
+	id := execRunIDOf(t, out)
 	if !strings.Contains(execField(out, "latest"), "early") {
 		t.Fatalf("the still-running start result lacks the latest block:\n%s", out)
 	}
@@ -374,9 +400,9 @@ func TestRemoteRunLatestNamesNoPaths(t *testing.T) {
 }
 
 func TestLatestIsNotShownForAFinishedHandle(t *testing.T) {
-	f := newProcessAsyncFixture(t)
-	id := f.start(t, "s1", "echo all-done")
-	f.wait(t, "s1", 5000)
+	f := newLatestFixture(t)
+	id := f.start(t, "s1", "sleep 0.2; echo all-done")
+	f.waitState(t, "s1", id, asyncmgr.StateDone)
 	if status := f.status(t, id); len(latestBlocksOf(t, status)) != 0 {
 		t.Fatalf("finished handle shows a latest block:\n%s", status)
 	}

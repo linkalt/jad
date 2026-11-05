@@ -11,7 +11,7 @@ import (
 // level start.
 func TestNestedSubagentThroughTheRealLauncherCarriesDepthAndSessionKey(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "subagent"},
+		"model": "child.json", "tools": []string{"skill", "subagent"},
 		"__subagent_settings": map[string]any{"max_depth": 3, "max_runs_per_session": 2, "max_runs_per_root": 8},
 	})
 	f.provider.childFirstCall = [2]string{"subagent", `{"task":"go deeper"}`}
@@ -29,7 +29,7 @@ func TestNestedSubagentThroughTheRealLauncherCarriesDepthAndSessionKey(t *testin
 
 func TestNestedSubagentThroughTheRealLauncherStopsAtMaxDepth(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "subagent"},
+		"model": "child.json", "tools": []string{"skill", "subagent"},
 	})
 	f.provider.childFirstCall = [2]string{"subagent", `{"task":"go deeper"}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {

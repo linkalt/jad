@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-// writerFixture is the subagent fixture with a write tool, a checkpoint and one agent
-// that lists write.
+// writerFixture is the subagent fixture with exec, a checkpoint and one agent that lists
+// exec.
 func writerFixture(t *testing.T) subagentFixture {
 	t.Helper()
 	return writerFixtureWith(t, nil, nil)
@@ -23,28 +23,18 @@ func writerFixture(t *testing.T) subagentFixture {
 // session settings (for example tool_call_scheduling).
 func writerFixtureWith(t *testing.T, files map[string]string, session map[string]any) subagentFixture {
 	t.Helper()
-	return writerFixtureWithPaths(t, files, session, nil)
-}
-
-// writerFixtureWithPaths is writerFixtureWith plus the agent's paths (nil for none).
-func writerFixtureWithPaths(t *testing.T, files map[string]string, session, paths map[string]any) subagentFixture {
-	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	write := map[string]any{"max_bytes": 4096}
 	setting := map[string]any{
-		"model": "child.json", "tools": []string{"read", "write"},
-		"__write": write, "__checkpoint": `{"enabled":true}`,
+		"model": "child.json", "tools": []string{"skill", "exec"},
+		"__exec": map[string]any{}, "__checkpoint": `{"enabled":true}`,
 	}
 	if session != nil {
 		setting["__session"] = session
 	}
-	if paths != nil {
-		setting["paths"] = paths
-	}
 	f := newSubagentFixtureWithFiles(t, setting, files)
-	f.provider.childFirstCall = [2]string{"write", `{"path":"made.txt","content":"by the child"}`}
+	f.provider.childFirstCall = [2]string{"exec", execWrite("made.txt", "by the child")}
 	return f
 }
 
@@ -107,8 +97,8 @@ func TestSubagentReaderRunTakesNoCheckpointEvenWithWriterSupportOn(t *testing.T)
 		t.Skip("git is not installed")
 	}
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read"},
-		"__write": map[string]any{"max_bytes": 4096}, "__checkpoint": `{"enabled":true}`,
+		"model": "child.json", "tools": []string{"skill"},
+		"__exec": map[string]any{}, "__checkpoint": `{"enabled":true}`,
 	})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -231,47 +221,13 @@ func TestSubagentWriterCreatedFileIsRemovedByTheRestore(t *testing.T) {
 	}
 }
 
-// A writer child with paths: its write inside the allowed folder happens, and the same
-// write outside it is refused by the real write tool with a result the child sees.
-func TestSubagentWriterPathsLimitWhereTheChildMayWrite(t *testing.T) {
-	for name, tc := range map[string]struct {
-		target    string
-		wantFile  bool
-		wantError string
-	}{
-		"inside allow":  {target: "src/made.txt", wantFile: true},
-		"outside allow": {target: "docs/made.txt", wantError: "path_outside_agent_paths"},
-		"denied inside": {target: "src/secret/made.txt", wantError: "path_denied"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := writerFixtureWithPaths(t, map[string]string{"src/keep.txt": "k", "docs/keep.txt": "k", "src/secret/keep.txt": "k"}, nil,
-				map[string]any{"allow": []string{"src"}, "deny": []string{"src/secret"}})
-			f.provider.childFirstCall = [2]string{"write", `{"path":"` + tc.target + `","content":"by the child"}`}
-			if body := f.run(t); !strings.Contains(body, "event: completed") {
-				t.Fatalf("run did not complete:\n%s", body)
-			}
-			_, err := os.Stat(filepath.Join(f.workspace, tc.target))
-			if wrote := err == nil; wrote != tc.wantFile {
-				t.Fatalf("file %s written = %v, want %v", tc.target, wrote, tc.wantFile)
-			}
-			if tc.wantError != "" {
-				seen := false
-				for _, request := range f.provider.forModel("child-model") {
-					if strings.Contains(request.Text, tc.wantError) {
-						seen = true
-					}
-				}
-				if !seen {
-					t.Fatalf("the child never got %s in a tool result", tc.wantError)
-				}
-			}
-		})
-	}
-}
+// scanHooks turns on the change scan of exec calls, which is how a writer child's changed
+// files are found.
+var scanHooks = map[string]any{"hooks": map[string]any{"enabled": true, "shell_changes": "scan"}}
 
-// The parent sees which files a writer child changed, taken from the real write tool.
+// The parent sees which files a writer child changed, found by the scan of its exec call.
 func TestSubagentWriterResultListsTheFilesItChanged(t *testing.T) {
-	f := writerFixture(t)
+	f := writerFixtureWith(t, nil, scanHooks)
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
@@ -283,14 +239,14 @@ func TestSubagentWriterResultListsTheFilesItChanged(t *testing.T) {
 }
 
 func TestSubagentWriterThatFailedToWriteListsNone(t *testing.T) {
-	f := writerFixtureWithPaths(t, map[string]string{"src/keep.txt": "k"}, nil, map[string]any{"allow": []string{"src"}})
-	f.provider.childFirstCall = [2]string{"write", `{"path":"docs/made.txt","content":"x"}`}
+	f := writerFixtureWith(t, map[string]string{"src/keep.txt": "k"}, scanHooks)
+	f.provider.childFirstCall = [2]string{"exec", `{"code":"exit 1"}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
 	parent := f.provider.forModel("parent-model")
 	last := parent[len(parent)-1].Text
-	if !strings.Contains(last, "written_files: none (changes made by bash, exec or process are not listed)") {
+	if !strings.Contains(last, "written_files: none (exec's changes are listed only with hooks.shell_changes scan)") {
 		t.Fatalf("a refused write must not be listed as a change:\n%s", last)
 	}
 }

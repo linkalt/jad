@@ -15,7 +15,7 @@ import (
 )
 
 func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
-	read, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", "read.json"))
+	read, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", "skill.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
 		}},
 	})
 	for _, id := range []string{"extra/first", "extra/second"} {
-		body, _ := json.Marshal(map[string]any{"native": map[string]any{"read": map[string]any{}}})
+		body, _ := json.Marshal(map[string]any{"native": map[string]any{"skill": map[string]any{}}})
 		writeFile(t, filepath.Join(fixture.Root, "tools", filepath.FromSlash(id)+".json"), body)
 	}
 	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
@@ -51,7 +51,7 @@ func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
 	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
 		t.Fatalf("LockSession logged %d warnings, want 1:\n%s", got, logs.String())
 	}
-	for _, want := range []string{"read", "extra/first", "extra/second"} {
+	for _, want := range []string{"skill", "extra/first", "extra/second"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the warning does not name %q:\n%s", want, logs.String())
 		}
@@ -75,10 +75,10 @@ func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
 func TestSubagentWithTwoToolsetsConnectsTheSecondToolsetsMCPServer(t *testing.T) {
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{
-		"model": "child.json", "toolset": []string{"extra/reader", "extra/lookup"}, "tools": []string{"read", "mcp:fixture:lookup"},
-		"__session_without": []string{"read"},
+		"model": "child.json", "toolset": []string{"extra/reader", "extra/lookup"}, "tools": []string{"skill", "mcp:fixture:lookup"},
+		"__session_without": []string{"skill"},
 		"__toolsets": map[string]any{
-			"extra/reader": map[string]any{"native": map[string]any{"read": map[string]any{}}},
+			"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}},
 			"extra/lookup": map[string]any{
 				"native": map[string]any{},
 				"mcp":    map[string]any{"m/fixture": map[string]any{"deny_tools": []string{}}},
@@ -98,7 +98,7 @@ func TestSubagentWithTwoToolsetsConnectsTheSecondToolsetsMCPServer(t *testing.T)
 		t.Fatalf("child requests = %d, want at least 2", len(child))
 	}
 	got := append([]string(nil), child[0].Tools...)
-	want := []string{"read", mcpToolNameFor("fixture", "lookup")}
+	want := []string{"skill", mcpToolNameFor("fixture", "lookup")}
 	sort.Strings(got)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {

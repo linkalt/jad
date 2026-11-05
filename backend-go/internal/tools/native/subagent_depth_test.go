@@ -14,20 +14,20 @@ import (
 // owner loads it; the child refuses its lazy read until the owner loads read; the grandchild, started by the
 // child's nested subagent, refuses its read the same way.
 func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read", "subagent"}, 256, nil, nil)
+	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image", "subagent"}, 256, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAgent := nestingAgent("explore", "read", "subagent")
+	childAgent := nestingAgent("explore", "read_image", "subagent")
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 3, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeSubagent:      &subagent,
 		Profile:             "main",
 		Profiles:            []string{"main"},
-		ProfileTools:        sessionfs.ProfileToolSettings{Lazy: []string{"read", "subagent"}},
+		ProfileTools:        sessionfs.ProfileToolSettings{Lazy: []string{"read_image", "subagent"}},
 	}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
 	launcher := &fakeLauncher{}
@@ -49,7 +49,7 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 		t.Fatalf("the child ran %d times, want 1", len(launcher.requests))
 	}
 	child := launcher.requests[0].Tools
-	if out := executeNamedCall(t, child, "read", `{"path":"notes.txt"}`); !strings.Contains(out, "not loaded") {
+	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "not loaded") {
 		t.Fatalf("the child's read before load was not refused: %s", out)
 	}
 	// The grandchild is started while read is still unloaded: the read copy it holds is refused.
@@ -57,10 +57,10 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 	if len(launcher.requests) != 2 {
 		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
 	}
-	if out := executeNamedCall(t, launcher.requests[1].Tools, "read", `{"path":"notes.txt"}`); !strings.Contains(out, "not loaded") {
+	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "not loaded") {
 		t.Fatalf("the grandchild's read before load was not refused: %s", out)
 	}
-	if err := set.Load("read"); err != nil {
+	if err := set.Load("read_image"); err != nil {
 		t.Fatal(err)
 	}
 	// A grandchild started after the owner loads read may read.
@@ -68,7 +68,7 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 	if len(launcher.requests) != 3 {
 		t.Fatalf("the second grandchild ran %d times in total, want 3", len(launcher.requests))
 	}
-	if out := executeNamedCall(t, launcher.requests[2].Tools, "read", `{"path":"notes.txt"}`); strings.Contains(out, "not loaded") {
+	if out := executeNamedCall(t, launcher.requests[2].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "not loaded") {
 		t.Fatalf("the grandchild's read after load was refused: %s", out)
 	}
 }
@@ -81,10 +81,10 @@ func TestNestedSubagentCopyIsGatedBeforeTheOwnerLoadsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAgent := nestingAgent("explore", "read", "subagent")
+	childAgent := nestingAgent("explore", "read_image", "subagent")
 	settings := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
-	parent := withExecutors(t, readOnlyTool("read"))
+	parent := withExecutors(t, readOnlyTool("read_image"))
 	// The owner's subagent tool is built first, then bound, as BuildCatalogWithAsync does: a lazy copy needs a
 	// real definition, validator and executor.
 	owner, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, mcp, nil, nil)
@@ -108,14 +108,14 @@ func TestNestedSubagentCopyIsGatedBeforeTheOwnerLoadsIt(t *testing.T) {
 func TestGrandchildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	root := shortTempDir(t)
 	smith := bridgeSettings(t, root)
-	smith.Tools = []string{"read"}
-	childAgent := nestingAgent("explore", "read", "subagent", "tool_smith")
+	smith.Tools = []string{"read_image"}
+	childAgent := nestingAgent("explore", "read_image", "subagent", "tool_smith")
 	launcher := &fakeLauncher{}
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeToolSmith:     &smith,
 		NativeSubagent:      &subagent,
 		Profile:             "main",
@@ -135,8 +135,8 @@ func TestGrandchildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	if len(launcher.requests) != 2 {
 		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
 	}
-	got := runScriptThroughCatalog(t, launcher.requests[1].Tools, root, "read")
-	if !strings.Contains(got, "read:invalid_input:tool read not allowed") {
+	got := runScriptThroughCatalog(t, launcher.requests[1].Tools, root, "read_image")
+	if !strings.Contains(got, "read_image:invalid_input:tool read_image not allowed") {
 		t.Fatalf("the grandchild's script reached read outside the owner's allow list: %s", got)
 	}
 }
@@ -147,14 +147,14 @@ func TestGrandchildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 func TestDepthThreeToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	root := shortTempDir(t)
 	smith := bridgeSettings(t, root)
-	smith.Tools = []string{"read"}
-	childAgent := nestingAgent("explore", "read", "subagent", "tool_smith")
+	smith.Tools = []string{"read_image"}
+	childAgent := nestingAgent("explore", "read_image", "subagent", "tool_smith")
 	launcher := &fakeLauncher{}
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 3, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeToolSmith:     &smith,
 		NativeSubagent:      &subagent,
 		Profile:             "main",
@@ -178,8 +178,8 @@ func TestDepthThreeToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	if len(launcher.requests) != 3 {
 		t.Fatalf("the great-grandchild ran %d times in total, want 3", len(launcher.requests))
 	}
-	got := runScriptThroughCatalog(t, launcher.requests[2].Tools, root, "read")
-	if !strings.Contains(got, "read:invalid_input:tool read not allowed") {
+	got := runScriptThroughCatalog(t, launcher.requests[2].Tools, root, "read_image")
+	if !strings.Contains(got, "read_image:invalid_input:tool read_image not allowed") {
 		t.Fatalf("the depth-3 script reached read outside the owner's allow list: %s", got)
 	}
 }

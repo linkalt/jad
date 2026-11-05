@@ -45,10 +45,10 @@ func postRunWithDeadlockTimeout(t *testing.T, baseURL string) string {
 // call that gets an async handle; the child's read is a leaf that needs the only token.
 func TestDeadlockSubagentWithHandleFinishesWithBudgetOne(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "subagent", "async"}, "__leaf_budget": 1,
+		"model": "child.json", "tools": []string{"skill", "subagent", "async"}, "__leaf_budget": 1,
 	})
 	f.provider.parentFirstCall = [2]string{"subagent", `{"task":"read it"}`}
-	f.provider.childFirstCall = [2]string{"read", `{"path":"notes.txt"}`}
+	f.provider.childFirstCall = [2]string{"skill", notesCall}
 	requireChildReadTheNotes(t, f, postRunWithDeadlockTimeout(t, f.apiURL))
 }
 
@@ -56,10 +56,10 @@ func TestDeadlockSubagentWithHandleFinishesWithBudgetOne(t *testing.T) {
 // tool, so the subagent runs to its end inside the parent's call and has no handle.
 func TestDeadlockSubagentWithoutHandleFinishesWithBudgetOne(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "subagent"}, "__leaf_budget": 1,
+		"model": "child.json", "tools": []string{"skill", "subagent"}, "__leaf_budget": 1,
 	})
 	f.provider.parentFirstCall = [2]string{"subagent", `{"task":"read it"}`}
-	f.provider.childFirstCall = [2]string{"read", `{"path":"notes.txt"}`}
+	f.provider.childFirstCall = [2]string{"skill", notesCall}
 	requireChildReadTheNotes(t, f, postRunWithDeadlockTimeout(t, f.apiURL))
 }
 

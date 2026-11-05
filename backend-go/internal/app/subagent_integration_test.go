@@ -219,24 +219,24 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 		case body.Model == "parent-model":
 			events = messageEvents("parent saw: "+lastOutput(record.Text), 31)
 		case body.Model == "child-model" && p.childRounds > 0 && childRequest <= p.childRounds:
-			events = functionCallEvents(fmt.Sprintf("call-read-%d", childRequest), "read", `{"path":"notes.txt"}`)
+			events = functionCallEvents(fmt.Sprintf("call-read-%d", childRequest), "skill", notesCall)
 			events[len(events)-1] = strings.Replace(events[len(events)-1], `"id":"resp-call"`, fmt.Sprintf(`"id":"resp-child-%d"`, childRequest), 1)
 		case !strings.Contains(record.Text, "function_call_output"):
 			// A child's first round: its own history holds no tool result yet. Judging by the
 			// request's own history, not a global count, keeps several children apart.
 			if p.childPartial {
-				events = textThenCallEvents("checking notes.txt first", "call-read", "read", `{"path":"notes.txt"}`)
+				events = textThenCallEvents("checking notes.txt first", "call-read", "skill", notesCall)
 			} else if p.childWritesByTask {
 				number := regexp.MustCompile(`task number (\d+)`).FindStringSubmatch(record.Text)
 				index := "x"
 				if number != nil {
 					index = number[1]
 				}
-				events = functionCallEvents("call-first", "write", fmt.Sprintf(`{"path":"w%s.txt","content":"child %s"}`, index, index))
+				events = functionCallEvents("call-first", "exec", execWrite("w"+index+".txt", "child "+index))
 			} else if p.childFirstCall[0] != "" {
 				events = functionCallEvents("call-first", p.childFirstCall[0], p.childFirstCall[1])
 			} else {
-				events = functionCallEvents("call-read", "read", `{"path":"notes.txt"}`)
+				events = functionCallEvents("call-read", "skill", notesCall)
 			}
 		default:
 			events = messageEvents("the answer is 42", 17)
@@ -403,16 +403,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	t.Cleanup(server.Close)
 
 	sampleTool := func(file string) string { return subagentSampleTool(t, file) }
-	definitions := []string{sampleTool("read.json"), sampleTool("subagent.json"), sampleTool("async.json")}
-	writeSettings, withWrite := agentSetting["__write"].(map[string]any)
-	if withWrite {
-		definitions = append(definitions, sampleTool("write.json"))
-		delete(agentSetting, "__write")
-	}
-	bashSettings, withBash := agentSetting["__bash"].(map[string]any)
-	if withBash {
-		definitions = append(definitions, sampleTool("bash.json"))
-		delete(agentSetting, "__bash")
+	definitions := []string{sampleTool("skill.json"), sampleTool("subagent.json"), sampleTool("async.json")}
+	// __exec enables tools.native.exec with these settings: the tool a child writes files
+	// and runs commands with.
+	execSettings, withExec := agentSetting["__exec"].(map[string]any)
+	if withExec {
+		definitions = append(definitions, sampleTool("exec.json"))
+		delete(agentSetting, "__exec")
 	}
 	checkpointJSON, withCheckpoint := agentSetting["__checkpoint"].(string)
 	delete(agentSetting, "__checkpoint")
@@ -509,22 +506,19 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		subagent = map[string]any{"agents_dir": []string{dir}}
 	}
 	spec.Native = map[string]any{
-		"read":     map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}},
+		"skill":    map[string]any{},
 		"subagent": subagent,
 		"async":    map[string]any{},
 	}
 	if withLoadTool {
 		spec.Native["load_tool"] = map[string]any{}
 	}
-	if withWrite {
-		writeTool := map[string]any{"paths": map[string]any{"allow": []string{workspace}, "deny": []string{}}}
-		for key, value := range writeSettings {
-			writeTool[key] = value
+	if withExec {
+		execTool := map[string]any{"spill": map[string]any{"enabled": false}}
+		for key, value := range execSettings {
+			execTool[key] = value
 		}
-		spec.Native["write"] = writeTool
-	}
-	if withBash {
-		spec.Native["bash"] = bashSettings
+		spec.Native["exec"] = execTool
 	}
 	for _, name := range sessionWithout {
 		delete(spec.Native, name)
@@ -566,6 +560,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	spec.Models = map[string]map[string]any{"openai/parent": parentModel, "openai/child": childModel}
 	layout := layouttest.Write(t, spec)
+	writeNotesSkill(t, layout.Root, "the secret is 42\n")
 	if mcpServerFile != nil {
 		body, _ := json.Marshal(mcpServerFile)
 		writeFile(t, filepath.Join(layout.Root, "mcp", "m", "fixture.json"), body)
@@ -627,6 +622,30 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		stateDir: profileState, toolDir: filepath.Join(workspace, ".jad", "state", "demo", "dev", "coder", "tools"),
 		modelsDir: filepath.Join(layout.Root, "models", "openai"), config: config,
 	}
+}
+
+// notesCall is the arguments of the child's usual read-only call: the notes skill, whose
+// text the fixture writes (writeNotesSkill).
+const notesCall = `{"name":"notes"}`
+
+// writeNotesSkill writes the notes skill into the root's skill folder; a skill call is the
+// fixture's read-only tool call that returns text.
+func writeNotesSkill(t *testing.T, root, text string) {
+	t.Helper()
+	writeSkill(t, root, "notes", text)
+}
+
+// writeSkill writes one skill into the root's skill folder.
+func writeSkill(t *testing.T, root, name, text string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, ".agent", "skills", name, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: The "+name+" skill.\n---\n"+text))
+}
+
+// execWrite is the arguments of an exec call that writes content to path.
+func execWrite(path, content string) string {
+	quote := func(text string) string { return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'" }
+	arguments, _ := json.Marshal(map[string]string{"code": "printf %s " + quote(content) + " > " + quote(path)})
+	return string(arguments)
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
@@ -691,12 +710,12 @@ func TestHTTPRunHandsATaskToASubagentWithItsOwnModelAndContext(t *testing.T) {
 	}
 
 	// The parent sees the subagent tool, with the agent list in its description.
-	if strings.Join(parent[0].Tools, ",") != "read,async,subagent" {
+	if strings.Join(parent[0].Tools, ",") != "async,skill,subagent" {
 		t.Fatalf("parent tools = %v", parent[0].Tools)
 	}
 	// The child sees read and nothing else: no subagent, so it cannot start another child.
-	if strings.Join(child[0].Tools, ",") != "read" {
-		t.Fatalf("child tools = %v, want read only", child[0].Tools)
+	if strings.Join(child[0].Tools, ",") != "skill" {
+		t.Fatalf("child tools = %v, want skill only", child[0].Tools)
 	}
 	// The child's context is its instructions and the task, not the parent's conversation.
 	if !strings.Contains(child[0].Text, "You are the explorer.") || !strings.Contains(child[0].Text, "find the answer") {
@@ -812,8 +831,8 @@ func TestSubagentLoadedFromAFolderRunsWithTheFoldersModelAndPrompt(t *testing.T)
 	if len(parent) != 2 || len(child) != 2 {
 		t.Fatalf("provider requests: parent %d (want 2), child %d (want 2)", len(parent), len(child))
 	}
-	if strings.Join(child[0].Tools, ",") != "read" {
-		t.Fatalf("child tools = %v, want read only", child[0].Tools)
+	if strings.Join(child[0].Tools, ",") != "skill" {
+		t.Fatalf("child tools = %v, want skill only", child[0].Tools)
 	}
 	prompt := child[0].Text
 	first := strings.Index(prompt, "FOLDER PROMPT: you are the explorer.")
@@ -834,7 +853,7 @@ func TestSubagentLoadedFromAFolderRunsWithTheFoldersModelAndPrompt(t *testing.T)
 
 func TestSubagentCallsAnMCPToolItsListNamesThroughTheSharedConnection(t *testing.T) {
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"}}, false, nil, &mcpFixture{calls: calls})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"}}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
 
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
@@ -850,7 +869,7 @@ func TestSubagentCallsAnMCPToolItsListNamesThroughTheSharedConnection(t *testing
 		t.Fatalf("parent tools = %v", parent[0].Tools)
 	}
 	// The child sees read and the one MCP tool its list named, and no subagent tool.
-	if strings.Join(child[0].Tools, ",") != "read,"+mcpToolNameFor("fixture", "lookup") {
+	if strings.Join(child[0].Tools, ",") != "skill,"+mcpToolNameFor("fixture", "lookup") {
 		t.Fatalf("child tools = %v", child[0].Tools)
 	}
 	if calls.Load() != 1 {
@@ -867,8 +886,8 @@ func TestSubagentWithoutAnMCPListGetsNoMCPTool(t *testing.T) {
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json"}, false, nil, &mcpFixture{calls: calls})
 	f.run(t)
 	child := f.provider.forModel("child-model")
-	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "read" {
-		t.Fatalf("child tools = %v, want read only", child)
+	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "skill" {
+		t.Fatalf("child tools = %v, want skill only", child)
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("the MCP server saw %d calls", calls.Load())

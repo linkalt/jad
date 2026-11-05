@@ -9,12 +9,12 @@ import (
 )
 
 // The session registers only the subagent tool. The agent's toolset gives the child
-// read, which the child uses to read a file; the parent is never sent it.
+// skill, which the child uses to load the notes; the parent is never sent it.
 func TestSubagentToolsetGivesTheChildAToolTheSessionDoesNotRegister(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.", "toolset": "extra/reader",
-		"__session_without": []string{"read"},
-		"__toolsets":        map[string]any{"extra/reader": map[string]any{"native": map[string]any{"read": map[string]any{}}}},
+		"__session_without": []string{"skill"},
+		"__toolsets":        map[string]any{"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}}},
 	})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -27,11 +27,11 @@ func TestSubagentToolsetGivesTheChildAToolTheSessionDoesNotRegister(t *testing.T
 	if got := strings.Join(parent[0].Tools, ","); got != "async,subagent" {
 		t.Errorf("parent tools = %q, want only async and subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "read" {
-		t.Errorf("child tools = %q, want read from its toolset", got)
+	if got := strings.Join(child[0].Tools, ","); got != "skill" {
+		t.Errorf("child tools = %q, want skill from its toolset", got)
 	}
 	if !strings.Contains(child[1].Text, "the secret is 42") {
-		t.Errorf("the child's read did not run:\n%s", child[1].Text)
+		t.Errorf("the child's skill call did not run:\n%s", child[1].Text)
 	}
 }
 
@@ -39,12 +39,12 @@ func TestSubagentToolsetGivesTheChildAToolTheSessionDoesNotRegister(t *testing.T
 func TestSubagentWithoutToolsetKeepsTheSessionTools(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
-		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"read": map[string]any{}}}},
+		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}}},
 	})
 	f.run(t)
 	child := f.provider.forModel("child-model")
-	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "read" {
-		t.Fatalf("child requests %+v, want the session's read", child)
+	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "skill" {
+		t.Fatalf("child requests %+v, want the session's skill", child)
 	}
 }
 
@@ -102,8 +102,8 @@ func TestSubagentToolsetConnectsItsOwnMCPServer(t *testing.T) {
 // the toolset named; the session's own server list does not count.
 func TestSubagentToolsetRefusesAnMCPToolOfAnotherServer(t *testing.T) {
 	f := buildSubagentFixtureWithMCP(t, map[string]any{
-		"model": "child.json", "toolset": "extra/reader", "tools": []string{"read", "mcp:fixture:lookup"},
-		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"read": map[string]any{}}}},
+		"model": "child.json", "toolset": "extra/reader", "tools": []string{"skill", "mcp:fixture:lookup"},
+		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}}},
 	}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
 	status, body := f.sessionTools(t)
 	body = errorText([]byte(body))
@@ -112,23 +112,22 @@ func TestSubagentToolsetRefusesAnMCPToolOfAnotherServer(t *testing.T) {
 	}
 }
 
-// A bash that comes from a toolset hides the running model's API key variable from the
-// child's shell even when the toolset's own env sets it, as the session's own bash does.
+// An exec that comes from a toolset hides the running model's API key variable from the
+// child's shell even when the toolset's own env sets it, as the session's own exec does.
 // The toolset is loaded before the model file is read, so it must be given the model.
-func TestSubagentToolsetBashHidesTheModelsAPIKeyFromTheChild(t *testing.T) {
-	shell, err := exec.LookPath("bash")
-	if err != nil {
+func TestSubagentToolsetExecHidesTheModelsAPIKeyFromTheChild(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
 	}
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "toolset": "extra/shell", "tools": []string{"bash"},
-		"__bash":            map[string]any{},
-		"__session_without": []string{"bash"},
+		"model": "child.json", "toolset": "extra/shell", "tools": []string{"exec"},
+		"__exec":            map[string]any{},
+		"__session_without": []string{"exec"},
 		"__toolsets": map[string]any{"extra/shell": map[string]any{"native": map[string]any{
-			"bash": map[string]any{"shell": shell, "spill": map[string]any{"enabled": false}, "env": map[string]any{"FIXTURE_OPENAI_KEY": "secret-provider-value"}},
+			"exec": map[string]any{"spill": map[string]any{"enabled": false}, "env": map[string]any{"FIXTURE_OPENAI_KEY": "secret-provider-value"}},
 		}}},
 	})
-	f.provider.childFirstCall = [2]string{"bash", `{"command":"echo KEY=[$FIXTURE_OPENAI_KEY]"}`}
+	f.provider.childFirstCall = [2]string{"exec", `{"code":"echo KEY=[$FIXTURE_OPENAI_KEY]"}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
@@ -140,17 +139,17 @@ func TestSubagentToolsetBashHidesTheModelsAPIKeyFromTheChild(t *testing.T) {
 		t.Errorf("the model's API key reached the child's shell:\n%s", child[1].Text)
 	}
 	if !strings.Contains(child[1].Text, "KEY=[]") {
-		t.Errorf("the child's bash did not run:\n%s", child[1].Text)
+		t.Errorf("the child's exec did not run:\n%s", child[1].Text)
 	}
 }
 
-// The profile's tools.deny reaches the toolset's tools: read is denied, so the toolset
+// The profile's tools.deny reaches the toolset's tools: skill is denied, so the toolset
 // gives the agent nothing and the session refuses to build, naming the deny.
 func TestSubagentToolsetToolDeniedByTheProfileIsNotGiven(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "toolset": "extra/reader",
-		"__session":  profileSession(map[string]any{"deny": []string{"read"}}),
-		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"read": map[string]any{}}}},
+		"__session":  profileSession(map[string]any{"deny": []string{"skill"}}),
+		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}}},
 	})
 	status, body := f.runStatus(t, "ask the explorer")
 	if status != http.StatusOK || !strings.Contains(body, "event: error") {
@@ -158,7 +157,7 @@ func TestSubagentToolsetToolDeniedByTheProfileIsNotGiven(t *testing.T) {
 	}
 	status, body = f.sessionTools(t)
 	body = errorText([]byte(body))
-	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: read") {
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: skill") {
 		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
 	if len(f.provider.forModel("parent-model")) != 0 {

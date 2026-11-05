@@ -176,7 +176,7 @@ func TestSubagentStartOverTheAsyncCapCreatesNoRun(t *testing.T) {
 }
 
 func TestSubagentWriterIsNeverAHandle(t *testing.T) {
-	settings := subagentSettings(sessionfs.NativeSubagentAgent{Name: "writer", MaxToolRounds: 5, TimeoutMS: 5000, HasTools: true, Tools: []string{"write"}})
+	settings := subagentSettings(sessionfs.NativeSubagentAgent{Name: "writer", MaxToolRounds: 5, TimeoutMS: 5000, HasTools: true, Tools: []string{"exec"}})
 	dir := t.TempDir()
 	host, err := NewAsyncHost(filepath.Join(dir, ".async"), asyncmgr.DefaultConfig(), nil)
 	if err != nil {
@@ -185,7 +185,7 @@ func TestSubagentWriterIsNeverAHandle(t *testing.T) {
 	defer host.Close()
 	manager := NewSubagentManager()
 	defer manager.Close()
-	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	tool, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, nil, manager, host)
 	if err != nil {
 		t.Fatal(err)

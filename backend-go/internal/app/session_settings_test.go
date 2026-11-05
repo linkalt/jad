@@ -55,8 +55,11 @@ func TestHTTPProfileModelAndSessionFilesRoutes(t *testing.T) {
 			"openai/alternate": {"provider": "openai", "model": "gpt-alternate", "api_key_env": "FIXTURE_OPENAI_KEY", "efforts": []string{"low", "high"}, "request": map[string]any{"reasoning": map[string]any{"effort": "low"}}},
 		},
 		Profiles: map[string]map[string]any{"dev/green": green, "dev/blue": blue},
-		Native:   map[string]any{"read": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}}},
-		Settings: map[string]any{"persistence": map[string]any{"durability": "process"}},
+		Native:   map[string]any{"skill": map[string]any{}},
+		Settings: map[string]any{
+			"persistence":   map[string]any{"durability": "process"},
+			"session_files": map[string]any{"paths": []map[string]string{{"action": "deny", "path": filepath.Join(projectDir, "private")}}},
+		},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "fixture-key"})
 	service, err := NewService(config)
 	if err != nil {

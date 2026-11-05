@@ -126,7 +126,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
 	}
 	toolDefinitions := make([]string, 0, 2)
-	for _, name := range []string{"write", "profile_message", "async", "read"} {
+	for _, name := range []string{"exec", "profile_message", "async", "skill"} {
 		definition, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
 		if err != nil {
 			t.Fatal(err)
@@ -147,6 +147,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 		"schema_version": 1, "cwd": f.cwd, "category": "work",
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
+	writeNotesSkill(t, f.root, "the secret is 42\n")
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),

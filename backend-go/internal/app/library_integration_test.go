@@ -134,7 +134,7 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 	writeAppLibraryFile(t, filepath.Join(workspace, "setting.json"), `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"command_dirs":["commands"]}}`)
 	writeAppLibraryFile(t, filepath.Join(workspace, "commands/git/commit.md"), "---\ndescription: Commit\nargument-hint: <message>\n---\nCommit with the message: $ARGUMENTS\n")
 	writeAppLibraryFile(t, filepath.Join(workspace, "commands/blank.md"), "$ARGUMENTS\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/plan.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: read, grep\n---\nPlan $1.\n")
+	writeAppLibraryFile(t, filepath.Join(workspace, "commands/plan.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nPlan $1.\n")
 	writeAppLibraryFile(t, filepath.Join(workspace, "commands/broken.md"), "---\nplan: maybe\n---\nBroken.\n")
 	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 		t.Fatalf("expand of a command with bad options = %d %s", status, body)
 	}
 	// The run options of the front matter come with the text.
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/review.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: read, grep\n---\nReview $1.\n")
+	writeAppLibraryFile(t, filepath.Join(workspace, "commands/review.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nReview $1.\n")
 	response = getAppLibrary(t, server.URL+"/api/library", integrationAPIToken)
 	catalog = contentlibrary.Catalog{}
 	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {
@@ -212,7 +212,7 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 			review = command.ID
 		}
 	}
-	if status, body := post(review, `{"arguments":"main.go"}`, integrationAPIToken); status != 200 || body != `{"command":"review","text":"Review main.go.","model":"openai/default","plan":true,"allowed_tools":["read","grep"]}`+"\n" {
+	if status, body := post(review, `{"arguments":"main.go"}`, integrationAPIToken); status != 200 || body != `{"command":"review","text":"Review main.go.","model":"openai/default","plan":true,"allowed_tools":["skill","exec"]}`+"\n" {
 		t.Fatalf("expand with run options = %d %s", status, body)
 	}
 	// The asset route reads a command like any library item.

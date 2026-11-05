@@ -1,7 +1,6 @@
 package native
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -116,17 +115,17 @@ func TestSubagentToolsetIsStillSubjectToProfileDeny(t *testing.T) {
 // A change tool in a toolset is given by the agent's tools list alone, and counts as a file
 // changer.
 func TestSubagentToolsetChangeToolFollowsTheToolsList(t *testing.T) {
-	toolset := []tools.Tool{readOnlyTool("grep"), writeTool("write")}
+	toolset := []tools.Tool{readOnlyTool("grep"), writeTool("exec")}
 	// With no tools list the change tool is never given.
-	allowed := subagentSettings(toolsetAgent("fixer", "grep", "write"))
+	allowed := subagentSettings(toolsetAgent("fixer", "grep", "exec"))
 	launcher := &fakeLauncher{}
 	catalog, err := buildWithToolset(t, allowed, launcher, toolset, readOnlyTool("read"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := childToolsOf(launcher, "fixer"); got != "grep,write" {
-		t.Errorf("fixer tools = %q, want grep,write", got)
+	if got := childToolsOf(launcher, "fixer"); got != "grep,exec" {
+		t.Errorf("fixer tools = %q, want grep,exec", got)
 	}
 	open := subagentSettings(toolsetAgent("viewer"))
 	launcher = &fakeLauncher{}
@@ -142,10 +141,10 @@ func TestSubagentToolsetChangeToolFollowsTheToolsList(t *testing.T) {
 // A call to an agent whose change tool comes from a toolset counts as a file change, so it
 // takes the checkpoint and runs in order; a read-only toolset agent does not.
 func TestSubagentToolsetChangeToolCountsAsAFileChange(t *testing.T) {
-	settings := subagentSettings(toolsetAgent("fixer", "write"), toolsetAgent("viewer", "grep"))
-	_, tool := buildSubagentCatalogWithToolset(t, settings, []tools.Tool{readOnlyTool("grep"), writeTool("write")})
+	settings := subagentSettings(toolsetAgent("fixer", "exec"), toolsetAgent("viewer", "grep"))
+	_, tool := buildSubagentCatalogWithToolset(t, settings, []tools.Tool{readOnlyTool("grep"), writeTool("exec")})
 	if !tool.MayChangeFiles(map[string]any{"task": "x", "agent": "fixer"}) {
-		t.Error("an agent whose write comes from a toolset must count as a file changer")
+		t.Error("an agent whose exec comes from a toolset must count as a file changer")
 	}
 	if tool.MayChangeFiles(map[string]any{"task": "x", "agent": "viewer"}) {
 		t.Error("a read-only toolset agent must not count as a file changer")
@@ -176,52 +175,6 @@ func buildSubagentCatalogWithToolset(t *testing.T, settings sessionfs.NativeSuba
 		t.Fatalf("newSubagentTool: %v", err)
 	}
 	return nil, tool
-}
-
-// A child that gets process from its toolset starts its processes in the toolset's
-// process manager, and its run's end stops them there. The session's manager and its
-// processes are not touched.
-func TestSubagentToolsetProcessesAreStoppedInTheToolsetsManager(t *testing.T) {
-	session := newProcessFixture(t)
-	toolset := newProcessFixture(t)
-	sessionProcess := session.start(t, "", "sleep 30")
-
-	agent := writerAgent("runner", "process")
-	agent.Toolset = []string{searchToolset}
-	process := toolset.tool
-	process.ReadOnly = false
-	settings := writeSettings(agent)
-
-	var started string
-	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
-		started = toolset.start(t, request.Execution.ProcessOwner, "sleep 30")
-		return SubagentResult{Text: "done", Rounds: 1, Tokens: 1}, nil
-	}}
-	manager := NewSubagentManager()
-	t.Cleanup(func() { _ = manager.Close() })
-	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentTool(settings, parent, map[string]subagentToolset{searchToolset: {native: []tools.Tool{process}, processes: toolset.manager}}, launcher, nil, manager)
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := tools.NewCatalog(append(parent, tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	out := subagentCall(t, catalog, `{"task":"serve"}`)
-	if started == "" {
-		t.Fatalf("the child never ran:\n%s", out)
-	}
-	if got := toolset.state(t, started); got != ProcessStopped {
-		t.Errorf("the child's process is %s after its run ended, want stopped", got)
-	}
-	if got := session.state(t, sessionProcess); got != ProcessRunning {
-		t.Errorf("the session's own process is %s: a child's end must not touch it", got)
-	}
-	if !strings.Contains(out, "stopped_processes: 1") {
-		t.Errorf("the result does not say a process was stopped:\n%s", out)
-	}
 }
 
 // An agent with a toolset resolves its mcp: entries against that toolset's servers only.

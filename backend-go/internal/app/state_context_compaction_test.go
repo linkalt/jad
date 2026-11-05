@@ -107,8 +107,8 @@ func TestHTTPCompactPersistsTaskStateContextAndInjectsItIntoNextRequest(t *testi
 			"statecontext":    map[string]any{"enabled": true, "role": "developer", "triggers": map[string]any{"compaction": map[string]any{"tools": []string{"task"}, "max_bytes": 4096}}},
 		},
 		Native: map[string]any{
-			"async":   map[string]any{},
-			"task":    map[string]any{"storage_dir": taskStorage, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
+			"async": map[string]any{},
+			"task":  map[string]any{"storage_dir": taskStorage, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})

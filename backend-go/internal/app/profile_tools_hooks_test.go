@@ -10,7 +10,7 @@ import (
 
 func TestCheckHookMatches(t *testing.T) {
 	registered := []tools.Definition{
-		{ID: "native.bash", Source: "native", Name: "bash"},
+		{ID: "native.exec", Source: "native", Name: "exec"},
 		{ID: "mcp:docs:lookup", Source: "mcp", Name: "lookup"},
 	}
 	config := func(match string) sessionfs.SessionConfig {
@@ -23,13 +23,13 @@ func TestCheckHookMatches(t *testing.T) {
 			Hooks: sessionfs.HooksSettings{PreTool: []sessionfs.ToolEventHook{{Name: "guard", Match: match, Blocking: true}}},
 		}
 	}
-	for _, match := range []string{"*", "bash", "mcp:docs:lookup", "mcp:docs:*"} {
+	for _, match := range []string{"*", "exec", "mcp:docs:lookup", "mcp:docs:*"} {
 		if err := checkHookMatches(config(match), registered, nil); err != nil {
 			t.Errorf("match %q: %v", match, err)
 		}
 	}
 	err := checkHookMatches(config("bsh"), registered, nil)
-	if err == nil || !strings.Contains(err.Error(), `hooks.pre_tool[0].match lists "bsh", which is not a registered tool (registered: bash, mcp:docs:lookup)`) {
+	if err == nil || !strings.Contains(err.Error(), `hooks.pre_tool[0].match lists "bsh", which is not a registered tool (registered: exec, mcp:docs:lookup)`) {
 		t.Fatalf("unregistered match: %v", err)
 	}
 	if err := checkHookMatches(config("mcp:ghost:*"), registered, nil); err == nil {

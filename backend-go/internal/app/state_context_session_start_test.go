@@ -23,12 +23,12 @@ import (
 // sessionStartFixture runs a session whose only configured trigger is session_start and
 // returns, for each provider request, whether it carried a developer state block.
 type sessionStartFixture struct {
-	t      *testing.T
-	api    *httptest.Server
-	config Config
-	taskStore      *native.TaskStore
-	taskSettings   sessionfs.NativeTaskSettings
-	mu             sync.Mutex
+	t            *testing.T
+	api          *httptest.Server
+	config       Config
+	taskStore    *native.TaskStore
+	taskSettings sessionfs.NativeTaskSettings
+	mu           sync.Mutex
 	// failProvider makes the provider answer every request with a 400.
 	failProvider atomic.Bool
 	// onProviderRequest, when set before a run, is called as each provider request arrives.
@@ -146,8 +146,8 @@ func newStateContextFixtureWith(t *testing.T, seed bool, triggers, extraSettings
 		ToolDefinitionPaths: []string{filepath.Join(workspace, "task.json"), asyncSampleToolPath(t)},
 		Settings:            settings,
 		Native: map[string]any{
-			"async":   map[string]any{},
-			"task":    map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
+			"async": map[string]any{},
+			"task":  map[string]any{"storage_dir": taskStorage, "max_tasks": 10, "statecontext": map[string]any{"statuses": []string{"in-progress"}, "limit": 5}},
 		},
 		Models: map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})

@@ -35,8 +35,8 @@ func TestProfileToolsHideAToolFromTheParentButNotFromAChild(t *testing.T) {
 	if got := strings.Join(parent[0].Tools, ","); got != "subagent" {
 		t.Errorf("parent tools = %q, want only subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "read" {
-		t.Errorf("child tools = %q, want read, which the profile hides from the parent", got)
+	if got := strings.Join(child[0].Tools, ","); got != "skill" {
+		t.Errorf("child tools = %q, want skill, which the profile hides from the parent", got)
 	}
 	if !strings.Contains(child[len(child)-1].Text, "function_call_output") {
 		t.Errorf("the child's read call did not run:\n%s", child[len(child)-1].Text)
@@ -51,8 +51,8 @@ func TestProfileWithoutToolsBlockShowsEveryRegisteredTool(t *testing.T) {
 	if len(parent) == 0 {
 		t.Fatal("the parent made no request")
 	}
-	if got := strings.Join(parent[0].Tools, ","); got != "read,async,subagent" {
-		t.Errorf("parent tools = %q, want read,async,subagent", got)
+	if got := strings.Join(parent[0].Tools, ","); got != "async,skill,subagent" {
+		t.Errorf("parent tools = %q, want async,skill,subagent", got)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestProfileToolsEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 		entry, want string
 		atLoad      bool
 	}{
-		"misspelled":            {"raed", `allow[0] "raed" is not a native tool; use one of apply_patch, async, bash, decide_systemone`, true},
-		"not enabled":           {"bash", `lists "bash", which is not a registered tool (registered: async, read, subagent)`, false},
+		"misspelled":            {"raed", `allow[0] "raed" is not a native tool; use one of async, decide_systemone, exec`, true},
+		"not enabled":           {"exec", `lists "exec", which is not a registered tool (registered: async, skill, subagent)`, false},
 		"mcp not loaded":        {"mcp:ghost:lookup", `lists "mcp:ghost:lookup", which is not a registered tool`, false},
 		"mcp server not listed": {"mcp:ghost:*", `lists "mcp:ghost:*", which is not a registered tool`, false},
 	} {
@@ -156,7 +156,7 @@ func TestToolsRouteListsHiddenToolsApart(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Tools) != 1 || body.Tools[0].Name != "subagent" || len(body.Hidden) != 2 || body.Hidden[0].Name != "read" {
+	if len(body.Tools) != 1 || body.Tools[0].Name != "subagent" || len(body.Hidden) != 2 || body.Hidden[1].Name != "skill" {
 		t.Fatalf("tools route = %+v", body)
 	}
 	plain := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Reads files."})
@@ -205,8 +205,8 @@ func TestProfileToolsAllowAnMCPToolByIdOrByServer(t *testing.T) {
 			if got := mcpNames(body.Tools); got != "mcp:mcp:fixture:lookup" {
 				t.Errorf("shown = %q, want only the MCP tool", got)
 			}
-			if got := mcpNames(body.Hidden); got != "native:native.read,native:native.async,native:native.subagent" {
-				t.Errorf("hidden = %q, want read and subagent", got)
+			if got := mcpNames(body.Hidden); got != "native:native.async,native:native.skill,native:native.subagent" {
+				t.Errorf("hidden = %q, want async, skill and subagent", got)
 			}
 		})
 	}
@@ -215,7 +215,7 @@ func TestProfileToolsAllowAnMCPToolByIdOrByServer(t *testing.T) {
 // "mcp:<server>:*" names a server the session lists, even when the server shows no tool
 // that matches; a server the session does not list is refused (covered above).
 func TestProfileToolMatching(t *testing.T) {
-	native := tools.Definition{ID: "native.read", Source: "native", Name: "read"}
+	native := tools.Definition{ID: "native.skill", Source: "native", Name: "skill"}
 	lookup := tools.Definition{ID: "mcp:docs:lookup", Source: "mcp", Server: "docs", Name: "mcp_docs_lookup_abc"}
 	other := tools.Definition{ID: "mcp:docsx:lookup", Source: "mcp", Server: "docsx", Name: "mcp_docsx_lookup_abc"}
 	for _, tc := range []struct {
@@ -223,10 +223,10 @@ func TestProfileToolMatching(t *testing.T) {
 		def   tools.Definition
 		want  bool
 	}{
-		{"read", native, true},
-		{"write", native, false},
-		{"read", lookup, false},
-		{"read", tools.Definition{ID: "mcp:docs:read", Source: "mcp", Server: "docs", Name: "read"}, false},
+		{"skill", native, true},
+		{"exec", native, false},
+		{"skill", lookup, false},
+		{"skill", tools.Definition{ID: "mcp:docs:skill", Source: "mcp", Server: "docs", Name: "skill"}, false},
 		{"mcp:docs:lookup", lookup, true},
 		{"mcp:docs:other", lookup, false},
 		{"mcp:docs:*", lookup, true},
@@ -245,7 +245,7 @@ func TestProfileToolMatching(t *testing.T) {
 func TestProfileToolsHideAnMCPToolFromTheParentButNotFromAChild(t *testing.T) {
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"},
+		"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"},
 		"__session": profileSession(map[string]any{"allow": []string{"subagent"}}),
 	}, false, nil, &mcpFixture{calls: calls})
 	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"answer"}`}
@@ -261,7 +261,7 @@ func TestProfileToolsHideAnMCPToolFromTheParentButNotFromAChild(t *testing.T) {
 	if got := strings.Join(parent[0].Tools, ","); got != "subagent" {
 		t.Errorf("parent tools = %q, want only subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "read,"+mcpToolNameFor("fixture", "lookup") {
+	if got := strings.Join(child[0].Tools, ","); got != "skill,"+mcpToolNameFor("fixture", "lookup") {
 		t.Errorf("child tools = %q", got)
 	}
 	if calls.Load() != 1 || !strings.Contains(child[1].Text, "MCP says answer is 99") {
@@ -301,14 +301,14 @@ func TestProfileToolsDenySubtractsAndWinsOverAllow(t *testing.T) {
 		tools        map[string]any
 		shown, hides string
 	}{
-		"deny alone":            {map[string]any{"deny": []string{"mcp:fixture:lookup"}}, "native:native.async,native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
-		"deny a native tool":    {map[string]any{"deny": []string{"subagent"}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.read", "native:native.subagent"},
-		"deny a whole server":   {map[string]any{"deny": []string{"mcp:fixture:*"}}, "native:native.async,native:native.read,native:native.subagent", "mcp:mcp:fixture:lookup"},
-		"empty deny":            {map[string]any{"deny": []string{}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.read,native:native.subagent", ""},
-		"deny beats exact":      {map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
-		"deny beats wildcard":   {map[string]any{"allow": []string{"read", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
-		"deny beats own allow":  {map[string]any{"allow": []string{"read", "subagent"}, "deny": []string{"subagent"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
-		"allow only, no change": {map[string]any{"allow": []string{"read"}}, "native:native.read", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"deny alone":            {map[string]any{"deny": []string{"mcp:fixture:lookup"}}, "native:native.async,native:native.skill,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"deny a native tool":    {map[string]any{"deny": []string{"subagent"}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.skill", "native:native.subagent"},
+		"deny a whole server":   {map[string]any{"deny": []string{"mcp:fixture:*"}}, "native:native.async,native:native.skill,native:native.subagent", "mcp:mcp:fixture:lookup"},
+		"empty deny":            {map[string]any{"deny": []string{}}, "mcp:mcp:fixture:lookup,native:native.async,native:native.skill,native:native.subagent", ""},
+		"deny beats exact":      {map[string]any{"allow": []string{"skill", "mcp:fixture:lookup"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.skill", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"deny beats wildcard":   {map[string]any{"allow": []string{"skill", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:lookup"}}, "native:native.skill", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"deny beats own allow":  {map[string]any{"allow": []string{"skill", "subagent"}, "deny": []string{"subagent"}}, "native:native.skill", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
+		"allow only, no change": {map[string]any{"allow": []string{"skill"}}, "native:native.skill", "mcp:mcp:fixture:lookup,native:native.async,native:native.subagent"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := buildSubagentFixtureWithMCP(t, map[string]any{
@@ -331,7 +331,7 @@ func TestProfileToolsDenySubtractsAndWinsOverAllow(t *testing.T) {
 func TestProfileToolsDenyAlsoLimitsTheChild(t *testing.T) {
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "mcp:fixture:lookup"},
+		"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"},
 		"__session": profileSession(map[string]any{"deny": []string{"mcp:fixture:lookup"}}),
 	}, false, nil, &mcpFixture{calls: calls})
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
@@ -342,10 +342,10 @@ func TestProfileToolsDenyAlsoLimitsTheChild(t *testing.T) {
 	if len(parent) == 0 || len(child) == 0 {
 		t.Fatalf("requests: parent %d, child %d", len(parent), len(child))
 	}
-	if got := strings.Join(parent[0].Tools, ","); got != "read,async,subagent" {
-		t.Errorf("parent tools = %q, want read,async,subagent", got)
+	if got := strings.Join(parent[0].Tools, ","); got != "async,skill,subagent" {
+		t.Errorf("parent tools = %q, want async,skill,subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "read" {
+	if got := strings.Join(child[0].Tools, ","); got != "skill" {
 		t.Errorf("child tools = %q, want only read: the denied MCP tool must not reach the child", got)
 	}
 	if calls.Load() != 0 {
@@ -361,7 +361,7 @@ func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 		atLoad      bool
 	}{
 		"misspelled":     {"raed", `deny[0] "raed" is not a native tool`, true},
-		"not enabled":    {"bash", `tools.deny lists "bash", which is not a registered tool (registered: async, read, subagent)`, false},
+		"not enabled":    {"exec", `tools.deny lists "exec", which is not a registered tool (registered: async, skill, subagent)`, false},
 		"mcp not loaded": {"mcp:ghost:lookup", `tools.deny lists "mcp:ghost:lookup", which is not a registered tool`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -386,11 +386,11 @@ func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 func TestProfileToolsDenyThatEmptiesAnAgentFailsTheLoad(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
-		"__session": profileSession(map[string]any{"deny": []string{"read"}}),
+		"__session": profileSession(map[string]any{"deny": []string{"skill"}}),
 	})
 	status, raw := f.sessionTools(t)
 	body := errorText([]byte(raw))
-	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: read") {
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: skill") {
 		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
 }

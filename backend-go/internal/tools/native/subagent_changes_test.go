@@ -11,51 +11,8 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-func TestWriteAndEditReportOnlyRealChanges(t *testing.T) {
-	root := scopeWorkspace(t)
-	write, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	edit, _ := NewEditTool(testEditSettings(root, 1<<20), NewPathLocks())
-	type change struct{ path, action string }
-	var seen []change
-	run := func(tool tools.Tool, arguments map[string]any) {
-		t.Helper()
-		_, err := tool.Execute(context.Background(), arguments, tools.ExecutionContext{
-			CallID: "c", WorkspaceRoot: root,
-			OnFileChange: func(path, action string) { seen = append(seen, change{path, action}) },
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	run(write, map[string]any{"path": "src/a.txt", "content": "one"})                      // created
-	run(write, map[string]any{"path": "src/a.txt", "content": "one"})                      // unchanged
-	run(write, map[string]any{"path": "src/a.txt", "content": "two"})                      // updated
-	run(edit, map[string]any{"path": "src/a.txt", "oldText": "two", "newText": "three"})   // edited
-	run(edit, map[string]any{"path": "src/a.txt", "oldText": "three", "newText": "three"}) // unchanged
-	run(edit, map[string]any{"path": "src/a.txt", "oldText": "absent", "newText": "x"})    // no match
-	run(edit, map[string]any{"path": "src/missing.txt", "oldText": "a", "newText": "b"})   // not found
-	want := []change{{"src/a.txt", "created"}, {"src/a.txt", "updated"}, {"src/a.txt", "edited"}}
-	if len(seen) < len(want) {
-		t.Fatalf("reported %v, want at least %v", seen, want)
-	}
-	for i, w := range want {
-		if seen[i] != w {
-			t.Errorf("report %d = %v, want %v (all: %v)", i, seen[i], w, seen)
-		}
-	}
-	for _, c := range seen[len(want):] {
-		t.Errorf("a call that changed nothing was reported: %v", c)
-	}
-}
-
-func TestWriteWithoutAHookDoesNotPanic(t *testing.T) {
-	root := scopeWorkspace(t)
-	write, _ := NewWriteTool(testWriteSettings(root, 1<<20), NewPathLocks())
-	assertMutationStatus(t, scopeRun(t, write, root, nil, map[string]any{"path": "src/n.txt", "content": "x"}), "ok")
-}
-
 // changesLauncher makes the child "write" the given files through the request's hook, the
-// way the real write and edit tools do.
+// way exec's change scan does.
 func changesLauncher(files ...string) *fakeLauncher {
 	return &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 		for _, file := range files {
@@ -66,9 +23,9 @@ func changesLauncher(files ...string) *fakeLauncher {
 }
 
 func TestSubagentResultListsTheFilesAWriterChanged(t *testing.T) {
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.ChangedFilesMax = 100
-	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher("src/a.go", "src/b.go", "src/a.go"), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher("src/a.go", "src/b.go", "src/a.go"), readOnlyTool("read"), writeTool("exec"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
 	if !strings.Contains(out, "written_files: src/a.go (created), src/b.go (created)") {
 		t.Fatalf("the finished result does not list the files once each, in order:\n%s", out)
@@ -79,19 +36,19 @@ func TestSubagentResultListsTheFilesAWriterChanged(t *testing.T) {
 }
 
 func TestSubagentResultSaysWhenAWriterChangedNoFile(t *testing.T) {
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.ChangedFilesMax = 100
-	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(), readOnlyTool("read"), writeTool("exec"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
-	if !strings.Contains(out, "written_files: none (changes made by bash, exec or process are not listed)") {
-		t.Fatalf("an empty list must say so, because bash, exec and process are not covered:\n%s", out)
+	if !strings.Contains(out, "written_files: none (exec's changes are listed only with hooks.shell_changes scan)") {
+		t.Fatalf("an empty list must say so, because exec's changes need the scan:\n%s", out)
 	}
 }
 
 func TestSubagentChangedFilesAreCappedAndTheRestCounted(t *testing.T) {
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.ChangedFilesMax = 2
-	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher("a", "b", "c", "d", "a"), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher("a", "b", "c", "d", "a"), readOnlyTool("read"), writeTool("exec"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
 	if !strings.Contains(out, "written_files: a (created), b (created)\n") || !strings.Contains(out, "written_files_omitted: 2") {
 		t.Fatalf("two kept, two counted (a repeat of a kept file is not a new file):\n%s", out)
@@ -99,16 +56,16 @@ func TestSubagentChangedFilesAreCappedAndTheRestCounted(t *testing.T) {
 }
 
 func TestSubagentChangedFilesOffAndReadersSayNothing(t *testing.T) {
-	off := writeSettings(writerAgent("fixer", "read", "write"))
+	off := writeSettings(writerAgent("fixer", "read", "exec"))
 	off.ChangedFilesMax = 0
-	catalog, _ := buildSubagentCatalog(t, off, changesLauncher(), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, off, changesLauncher(), readOnlyTool("read"), writeTool("exec"))
 	if out := subagentCall(t, catalog, `{"task":"fix"}`); strings.Contains(out, "written_files") {
 		t.Fatalf("changed_files_max 0 still printed a list:\n%s", out)
 	}
 	reader := writeSettings(agentNamed("reader"))
 	reader.ChangedFilesMax = 100
 	launcher := &fakeLauncher{}
-	catalog, _ = buildSubagentCatalog(t, reader, launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ = buildSubagentCatalog(t, reader, launcher, readOnlyTool("read"), writeTool("exec"))
 	if out := subagentCall(t, catalog, `{"task":"look"}`); strings.Contains(out, "written_files") {
 		t.Fatalf("a read-only agent printed a file list:\n%s", out)
 	}
@@ -118,7 +75,7 @@ func TestSubagentChangedFilesOffAndReadersSayNothing(t *testing.T) {
 }
 
 func TestSubagentCutOffWriterStillListsWhatItChanged(t *testing.T) {
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.ChangedFilesMax = 100
 	settings.Agents[0].TimeoutMS = 1000
 	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
@@ -126,7 +83,7 @@ func TestSubagentCutOffWriterStillListsWhatItChanged(t *testing.T) {
 		<-ctx.Done()
 		return SubagentResult{Text: "partway", Rounds: 1}, ctx.Err()
 	}}
-	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
 	for _, want := range []string{"subagent_timeout", "some changes may already be made", "written_files: src/half.go (created)"} {
 		if !strings.Contains(out, want) {
@@ -188,11 +145,11 @@ func persistedWriterCatalog(t *testing.T, dir string, launcher SubagentLauncher)
 	t.Helper()
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: dir, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
-	settings := writeSettings(writerAgent("explore", "read", "write"))
+	settings := writeSettings(writerAgent("explore", "read", "exec"))
 	settings.StorageDir = dir
 	settings.PersistRuns = true
 	settings.ChangedFilesMax = 100
-	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	tool, err := NewSubagentToolWithManager(settings, parent, launcher, nil, manager)
 	if err != nil {
 		t.Fatal(err)
@@ -207,13 +164,13 @@ func persistedWriterCatalog(t *testing.T, dir string, launcher SubagentLauncher)
 // The changed-file list is bounded in bytes as well as by count: a long list of long paths
 // is cut to the result limit, and the files it leaves out are counted.
 func TestSubagentChangedFilesListIsCutToTheResultLimit(t *testing.T) {
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.ChangedFilesMax, settings.ResultMaxBytes = 100, 512
 	var files []string
 	for i := range 40 {
 		files = append(files, fmt.Sprintf("generated/%03d/%s.go", i, strings.Repeat("deep", 20)))
 	}
-	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(files...), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, settings, changesLauncher(files...), readOnlyTool("read"), writeTool("exec"))
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
 	line := ""
 	for _, text := range strings.Split(out, "\n") {

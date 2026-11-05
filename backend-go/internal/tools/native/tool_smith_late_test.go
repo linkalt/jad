@@ -24,8 +24,8 @@ func lateToolSmithCatalog(t *testing.T, root string, names, allow, deny, lazy []
 	smith.Tools = names
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeToolSmith:     &smith,
 		NativeProfile:       &sessionfs.NativeProfileSettings{},
 		Profile:             "main",
@@ -62,7 +62,7 @@ func runScriptThroughCatalog(t *testing.T, catalog *tools.Catalog, root string, 
 // late tool is refused before the owner's set loads it.
 func TestToolSmithScriptReachesAnAllowedLateToolOnly(t *testing.T) {
 	root := shortTempDir(t)
-	catalog, set := lateToolSmithCatalog(t, root, []string{"read", "profile", "transcript"}, nil, []string{"transcript"}, []string{"profile"})
+	catalog, set := lateToolSmithCatalog(t, root, []string{"read_image", "profile", "transcript"}, nil, []string{"transcript"}, []string{"profile"})
 	before := runScriptThroughCatalog(t, catalog, root, "profile", "transcript")
 	if !strings.Contains(before, "profile:error:Tool profile is lazy and not loaded yet") {
 		t.Fatalf("the lazy late tool profile was not refused before load: %s", before)
@@ -83,15 +83,15 @@ func TestToolSmithScriptReachesAnAllowedLateToolOnly(t *testing.T) {
 // uses. A late tool outside allow is refused as not allowed, and so is an early one.
 func TestToolSmithScriptReachesOnlyWhatTheAllowListShows(t *testing.T) {
 	root := shortTempDir(t)
-	catalog, _ := lateToolSmithCatalog(t, root, []string{"read", "profile"}, []string{"tool_smith", "profile"}, nil, nil)
-	got := runScriptThroughCatalog(t, catalog, root, "read", "profile")
-	if !strings.Contains(got, "read:invalid_input:tool read not allowed") {
+	catalog, _ := lateToolSmithCatalog(t, root, []string{"read_image", "profile"}, []string{"tool_smith", "profile"}, nil, nil)
+	got := runScriptThroughCatalog(t, catalog, root, "read_image", "profile")
+	if !strings.Contains(got, "read_image:invalid_input:tool read_image not allowed") {
 		t.Fatalf("read outside allow was not refused as not allowed: %s", got)
 	}
 	if strings.Contains(got, "tool profile not allowed") {
 		t.Fatalf("the allowed profile was refused as not allowed: %s", got)
 	}
-	catalog, _ = lateToolSmithCatalog(t, root, []string{"read", "profile"}, []string{"tool_smith", "read"}, nil, nil)
+	catalog, _ = lateToolSmithCatalog(t, root, []string{"read_image", "profile"}, []string{"tool_smith", "read_image"}, nil, nil)
 	got = runScriptThroughCatalog(t, catalog, root, "profile")
 	if !strings.Contains(got, "profile:invalid_input:") || !strings.Contains(got, "not allowed") {
 		t.Fatalf("profile outside allow was not refused as not allowed: %s", got)
@@ -121,14 +121,14 @@ func TestToolSmithAllowedLazyLateToolWaitsForLoad(t *testing.T) {
 func TestChildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	root := shortTempDir(t)
 	smith := bridgeSettings(t, root)
-	smith.Tools = []string{"read"}
-	childAgent := nestingAgent("scripter", "read", "tool_smith")
+	smith.Tools = []string{"read_image"}
+	childAgent := nestingAgent("scripter", "read_image", "tool_smith")
 	launcher := &fakeLauncher{}
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
 		SettingPath:         filepath.Join(t.TempDir(), "setting.json"),
-		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
-		NativeRead:          &sessionfs.NativeReadSettings{MaxBytes: 4096, DefaultLimit: 100},
+		ToolDefinitionPaths: []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "tool_smith.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json")},
+		NativeReadImage:     &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 		NativeToolSmith:     &smith,
 		NativeSubagent:      &subagent,
 		Profile:             "main",
@@ -144,8 +144,8 @@ func TestChildToolSmithReachesNoMoreThanTheOwnersAllowList(t *testing.T) {
 	if len(launcher.requests) != 1 {
 		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
 	}
-	got := runScriptThroughCatalog(t, launcher.requests[0].Tools, root, "read")
-	if !strings.Contains(got, "read:invalid_input:tool read not allowed") {
+	got := runScriptThroughCatalog(t, launcher.requests[0].Tools, root, "read_image")
+	if !strings.Contains(got, "read_image:invalid_input:tool read_image not allowed") {
 		t.Fatalf("the child's script reached read outside the owner's allow list: %s", got)
 	}
 }

@@ -18,19 +18,17 @@ import (
 )
 
 // translatorFixture is the layout fixture with dev/coder's model served by a fake
-// provider of another protocol, and the read tool on.
+// provider of another protocol, and the skill tool on (its hello skill says "file body 42").
 func translatorFixture(t *testing.T, model map[string]any) *layoutFixture {
 	t.Helper()
 	f := newLayoutFixture(t)
-	for rel, value := range map[string]any{"models/openai/small.json": model, "tools/coding/none.json": map[string]any{"native": map[string]any{"read": map[string]any{}}, "mcp": map[string]any{}}} {
+	for rel, value := range map[string]any{"models/openai/small.json": model, "tools/coding/none.json": map[string]any{"native": map[string]any{"skill": map[string]any{}}, "mcp": map[string]any{}}} {
 		data, _ := json.Marshal(value)
 		if err := os.WriteFile(filepath.Join(f.root, rel), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(f.cwd, "hello.txt"), []byte("file body 42"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSkill(t, f.root, "hello", "file body 42")
 	return f
 }
 
@@ -69,7 +67,7 @@ func TestChatCompletionsModelRunsAToolRoundInProcess(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
-			`{"id":"chatcmpl-1","model":"local-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_r","type":"function","function":{"name":"read","arguments":"{\"path\":\"hello.txt\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			`{"id":"chatcmpl-1","model":"local-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_r","type":"function","function":{"name":"skill","arguments":"{\"name\":\"hello\"}"}}]},"finish_reason":"tool_calls"}]}`,
 			`{"id":"chatcmpl-1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25}}`,
 		}
 		if strings.Contains(body, `"role":"tool"`) {
@@ -125,8 +123,8 @@ func TestAnthropicModelRunsAToolRoundInProcess(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
 			`{"type":"message_start","message":{"id":"msg_1","model":"claude-test","usage":{"input_tokens":30,"output_tokens":1}}}`,
-			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_r","name":"read","input":{}}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"hello.txt\"}"}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_r","name":"skill","input":{}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\":\"hello\"}"}}`,
 			`{"type":"content_block_stop","index":0}`,
 			`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}`,
 			`{"type":"message_stop"}`,

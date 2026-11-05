@@ -66,25 +66,3 @@ func TestParseProcStatReadsStateAndGroupAfterTheLastParenthesis(t *testing.T) {
 		t.Fatal("a line without a command name parsed")
 	}
 }
-
-// A leader that already exited (a zombie nobody reaps) can leave a member that ignores
-// SIGTERM. stopOrphanGroups must still hard-kill it, and report the group gone afterwards.
-func TestStopOrphanGroupsHardKillsAMemberOfAZombieLeader(t *testing.T) {
-	command := startGroupLeader(t, "trap '' TERM; sleep 120 & exit 0")
-	pid := command.Process.Pid
-	defer func() {
-		signalProcessGroupID(pid, true)
-		_ = command.Wait()
-	}()
-	waitForZombie(t, pid)
-	if !processGroupAlive(pid) {
-		t.Fatal("the background member is not running")
-	}
-	gone := stopOrphanGroups([]int{pid}, 200*time.Millisecond)
-	if processGroupAlive(pid) {
-		t.Fatal("the member that ignores SIGTERM survived the stop")
-	}
-	if !gone[pid] {
-		t.Fatal("the stopped group is not reported gone")
-	}
-}

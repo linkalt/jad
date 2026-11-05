@@ -25,16 +25,16 @@ func writeSettings(agents ...sessionfs.NativeSubagentAgent) sessionfs.NativeSuba
 
 func TestSubagentChildGetsExactlyTheChangeToolsItLists(t *testing.T) {
 	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write", "bash")), launcher,
-		readOnlyTool("read"), writeTool("write"), writeTool("edit"), writeTool("bash"), writeTool("exec"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "exec")), launcher,
+		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"))
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read,write,bash" {
-		t.Fatalf("child tools = %q, want exactly the listed read, write and bash", got)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read,exec" {
+		t.Fatalf("child tools = %q, want exactly the listed read and exec", got)
 	}
 
 	// The session must still enable a change tool the list names.
-	_, err := NewSubagentTool(subagentSettings(writerAgent("fixer", "read", "write")), withExecutors(t, readOnlyTool("read")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled native tool`) {
+	_, err := NewSubagentTool(subagentSettings(writerAgent("fixer", "read", "exec")), withExecutors(t, readOnlyTool("read")), nil)
+	if err == nil || !strings.Contains(err.Error(), `lists "exec", which is not an enabled native tool`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -42,7 +42,7 @@ func TestSubagentChildGetsExactlyTheChangeToolsItLists(t *testing.T) {
 func TestSubagentAgentWithoutAToolsListNeverGetsChangeTools(t *testing.T) {
 	launcher := &fakeLauncher{}
 	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("plain")), launcher,
-		readOnlyTool("read"), writeTool("write"), writeTool("bash"), writeTool("exec"), writeTool("edit"))
+		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"))
 	subagentCall(t, catalog, `{"task":"x"}`)
 	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read" {
 		t.Fatalf("an agent with no tools list got %q; change tools must be named", got)
@@ -50,8 +50,8 @@ func TestSubagentAgentWithoutAToolsListNeverGetsChangeTools(t *testing.T) {
 }
 
 func TestSubagentChangeToolListDoesNotLetAnythingElseThrough(t *testing.T) {
-	// A mutating tool that is not one of write, edit, bash, exec and process is not a
-	// change tool.
+	// A mutating tool that is not one of exec, tool_smith, subagent and profile_message is
+	// not a change tool.
 	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "task")),
 		withExecutors(t, readOnlyTool("read"), writeTool("task")), nil)
 	if err == nil || !strings.Contains(err.Error(), `lists "task"`) {
@@ -65,16 +65,16 @@ func TestSubagentChangeToolListDoesNotLetAnythingElseThrough(t *testing.T) {
 }
 
 func TestSubagentChangeToolsMustBeEnabledInTheSession(t *testing.T) {
-	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "write")),
+	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "exec")),
 		withExecutors(t, readOnlyTool("read")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "write", which is not an enabled native tool (enabled: read)`) {
+	if err == nil || !strings.Contains(err.Error(), `lists "exec", which is not an enabled native tool (enabled: read)`) {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestSubagentCallMayChangeFilesOnlyForAnAgentThatCan(t *testing.T) {
-	catalog, tool := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "write")), &fakeLauncher{},
-		readOnlyTool("read"), writeTool("write"))
+	catalog, tool := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "exec")), &fakeLauncher{},
+		readOnlyTool("read"), writeTool("exec"))
 	if tool.MayChangeFiles == nil || !tool.ReadOnly {
 		t.Fatalf("the tool must stay ReadOnly and carry the per-call hook: readOnly=%v hook=%v", tool.ReadOnly, tool.MayChangeFiles != nil)
 	}
@@ -100,12 +100,12 @@ func TestSubagentCallMayChangeFilesOnlyForAnAgentThatCan(t *testing.T) {
 }
 
 func TestSubagentListMarksTheAgentsThatCanChangeFiles(t *testing.T) {
-	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "write")}
+	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "exec")}
 	list := subagentAgentList(agents, 4096, nil)
 	if !strings.Contains(list, "- fixer [can change files; runs to its end]") || strings.Contains(list, "reader [can") {
 		t.Fatalf("agent list:\n%s", list)
 	}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(agents...), &fakeLauncher{}, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(agents...), &fakeLauncher{}, readOnlyTool("read"), writeTool("exec"))
 	if out := subagentCall(t, catalog, `{}`); !strings.Contains(out, "fixer [can change files; runs to its end]") {
 		t.Fatalf("the list call does not mark the writer:\n%s", out)
 	}
@@ -115,7 +115,7 @@ func TestSubagentWriterIsNeverHandedOffAndBlockMSIsIgnored(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Int64
 	launcher := blockedLauncher(release, &cancelled)
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write")), launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "exec")), launcher, readOnlyTool("read"), writeTool("exec"))
 	done := make(chan string, 1)
 	go func() { done <- subagentCall(t, catalog, `{"task":"fix","block_ms":0}`) }()
 	select {
@@ -137,7 +137,7 @@ func TestSubagentWriterIsNeverHandedOffAndBlockMSIsIgnored(t *testing.T) {
 func TestSubagentReaderIsStillHandedOffNextToWriters(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Int64
-	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "write")), blockedLauncher(release, &cancelled), readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "exec")), blockedLauncher(release, &cancelled), readOnlyTool("read"), writeTool("exec"))
 	defer close(release)
 	out := subagentCall(t, catalog, `{"agent":"reader","task":"look","block_ms":0}`)
 	if !strings.Contains(out, "still running") {
@@ -147,14 +147,14 @@ func TestSubagentReaderIsStillHandedOffNextToWriters(t *testing.T) {
 
 func TestSubagentWriterTimeoutStillBoundsTheCallAndWarnsAboutChanges(t *testing.T) {
 	var cancelled atomic.Int64
-	writer := writerAgent("fixer", "read", "write")
+	writer := writerAgent("fixer", "read", "exec")
 	writer.TimeoutMS = 1000
 	launcher := &fakeLauncher{run: func(ctx context.Context, _ SubagentRequest) (SubagentResult, error) {
 		<-ctx.Done()
 		cancelled.Add(1)
 		return SubagentResult{Text: "edited a.go, was about to edit b.go"}, ctx.Err()
 	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writer), launcher, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(writer), launcher, readOnlyTool("read"), writeTool("exec"))
 	started := time.Now()
 	out := subagentCall(t, catalog, `{"task":"fix"}`)
 	if time.Since(started) > 5*time.Second {
@@ -187,7 +187,7 @@ func TestSubagentWriterFailureAndStopWarnAboutChanges(t *testing.T) {
 	boom := &fakeLauncher{run: func(context.Context, SubagentRequest) (SubagentResult, error) {
 		return SubagentResult{}, errTest("provider down")
 	}}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "write")), boom, readOnlyTool("read"), writeTool("write"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("fixer", "read", "exec")), boom, readOnlyTool("read"), writeTool("exec"))
 	if out := subagentCall(t, catalog, `{"task":"fix"}`); !strings.Contains(out, "subagent_failed") || !strings.Contains(out, "some changes may already be made") {
 		t.Fatalf("failed writer result:\n%s", out)
 	}
@@ -201,8 +201,8 @@ func TestSubagentWriterFailureAndStopWarnAboutChanges(t *testing.T) {
 	}}
 	manager := NewSubagentManager()
 	t.Cleanup(func() { _ = manager.Close() })
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
-	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	tool, err := NewSubagentToolWithManager(settings, parent, slow, nil, manager)
 	if err != nil {
 		t.Fatal(err)
@@ -237,9 +237,9 @@ func TestSubagentWriterRunSurvivesManifestRoundTripWithItsChangesFlag(t *testing
 	}}
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
-	settings := writeSettings(writerAgent("fixer", "read", "write"))
+	settings := writeSettings(writerAgent("fixer", "read", "exec"))
 	settings.StorageDir = root
-	parent := withExecutors(t, readOnlyTool("read"), writeTool("write"))
+	parent := withExecutors(t, readOnlyTool("read"), writeTool("exec"))
 	tool, err := NewSubagentToolWithManager(settings, parent, boom, nil, manager)
 	if err != nil {
 		t.Fatal(err)
@@ -257,28 +257,5 @@ func TestSubagentWriterRunSurvivesManifestRoundTripWithItsChangesFlag(t *testing
 	restored := again.list(testSessionKey)
 	if len(restored) != 1 || !restored[0].changes {
 		t.Fatalf("restored views = %+v; the flag was lost with the manifest", restored)
-	}
-}
-
-func TestSubagentPassesTheAgentsPathsToTheChild(t *testing.T) {
-	scoped := writerAgent("scoped", "read", "write")
-	scoped.Paths = sessionfs.NativeSubagentPaths{Allow: []string{"src"}, Deny: []string{"src/secret"}}
-	open := writerAgent("open", "read", "write")
-	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, writeSettings(scoped, open), launcher, readOnlyTool("read"), writeTool("write"))
-
-	subagentCall(t, catalog, `{"agent":"scoped","task":"x"}`)
-	subagentCall(t, catalog, `{"agent":"open","task":"x"}`)
-	got := launcher.requests[0].Execution.PathScope
-	if got == nil || strings.Join(got.Allow, ",") != "src" || strings.Join(got.Deny, ",") != "src/secret" {
-		t.Fatalf("scoped agent's child scope = %+v, want allow src and deny src/secret", got)
-	}
-	if launcher.requests[1].Execution.PathScope != nil {
-		t.Fatalf("an agent without paths got a scope: %+v", launcher.requests[1].Execution.PathScope)
-	}
-	// The child's scope is a copy, so changing it cannot change the agent's settings.
-	got.Allow[0] = "changed"
-	if scoped.Paths.Allow[0] != "src" {
-		t.Fatal("the child's scope shares memory with the agent's settings")
 	}
 }

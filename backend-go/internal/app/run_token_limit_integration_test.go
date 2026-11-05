@@ -17,8 +17,8 @@ import (
 	"jad/backend-go/internal/tools/native"
 )
 
-// tokenCapFixture is one session with a real read tool whose provider asks for another
-// read in every round and reports 70 tokens each time, so a run's count is 70 * rounds.
+// tokenCapFixture is one session with a real read-only tool (read_image) whose provider asks
+// for another call in every round and reports 70 tokens each time, so a run's count is 70 * rounds.
 type tokenCapFixture struct {
 	t           *testing.T
 	stagingDir  string
@@ -32,9 +32,9 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("sample content\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	readTool, err := native.NewReadTool(sessionfs.NativeReadSettings{
-		Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}, MaxBytes: 1024, MaxFileBytes: 4096, DefaultLimit: 250,
-	})
+	readTool, err := native.NewReadImageTool(sessionfs.NativeReadImageSettings{
+		Policy: sessionfs.NativePathPolicy{Paths: []sessionfs.NativePathRule{}}, MaxImageBytes: 4096,
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 				fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-final-%d","status":"completed","model":"gpt-test",%s,"output":[]}}`, call, usage),
 			}
 		} else {
-			item := fmt.Sprintf(`{"type":"function_call","call_id":"call-%d","name":"read","arguments":"{\"path\":\"sample.txt\"}"}`, call)
+			item := fmt.Sprintf(`{"type":"function_call","call_id":"call-%d","name":"read_image","arguments":"{\"path\":\"sample.txt\"}"}`, call)
 			events = []string{
 				`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 				fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-%d","status":"completed","model":"gpt-test",%s,"output":[]}}`, call, usage),
@@ -81,7 +81,7 @@ func newTokenCapFixture(t *testing.T, maxRunTokens string, finalAfter int32) *to
 	}
 	config, layout := layoutConfig(t, layouttest.Spec{
 		SessionID: "demo", CWD: workspace, ToolDefinitionPaths: []string{filepath.Join(workspace, "read.json")},
-		Native:   map[string]any{"read": map[string]any{"max_bytes": 1024, "max_file_bytes": 4096, "default_limit": 250}},
+		Native:   map[string]any{"read_image": map[string]any{}},
 		Settings: settings,
 		Models:   map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	}, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})

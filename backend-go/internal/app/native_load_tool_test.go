@@ -34,7 +34,7 @@ func sessionToolNames(t *testing.T, f subagentFixture) []string {
 // load_tool is not added by the app: a profile without tools.native.load_tool has no load_tool. Its
 // tools.lazy is refused at load for the missing key, so the profile never runs without load_tool.
 func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(map[string]any{"allow": []string{"read", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"read"}})}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(map[string]any{"allow": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"skill"}})}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
 	status, body := f.sessionTools(t)
 	if status == http.StatusOK {
 		t.Fatalf("a profile with tools.lazy and no load_tool key was not refused: %s", body)
@@ -48,27 +48,27 @@ func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
 // tools: an allow that names neither still lists load_tool, keeps the lazy read unlisted until it is
 // loaded, and lists it once load_tool loads it.
 func TestLazyToolsNeedNoAllowEntry(t *testing.T) {
-	steps := []subagentStep{{"load_tool", `{"names":["read"]}`}}
-	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"mcp:fixture:lookup"}, "lazy": []string{"read"}}, nil, steps)
+	steps := []subagentStep{{"load_tool", `{"names":["skill"]}`}}
+	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"mcp:fixture:lookup"}, "lazy": []string{"skill"}}, nil, steps)
 	status, body := f.sessionTools(t)
 	if status != http.StatusOK {
 		t.Fatalf("a lazy profile whose allow names neither read nor load_tool was refused: %d %s", status, body)
 	}
-	if names := sessionToolNames(t, f); slices.Contains(names, "read") || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded read", names)
+	if names := sessionToolNames(t, f); slices.Contains(names, "skill") || !slices.Contains(names, "load_tool") {
+		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded skill", names)
 	}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if names := sessionToolNames(t, f); !slices.Contains(names, "read") {
-		t.Fatalf("after a load the route lists %v, want read", names)
+	if names := sessionToolNames(t, f); !slices.Contains(names, "skill") {
+		t.Fatalf("after a load the route lists %v, want skill", names)
 	}
 }
 
 // deny still wins over tools.lazy: a lazy profile whose deny names load_tool is refused, since load_tool
 // is the only way to load its lazy tools.
 func TestLoadToolHiddenByDenyRefusesALazyProfile(t *testing.T) {
-	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"deny": []string{"load_tool"}, "lazy": []string{"read"}}, nil, nil)
+	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"deny": []string{"load_tool"}, "lazy": []string{"skill"}}, nil, nil)
 	status, body := f.sessionTools(t)
 	if status == http.StatusOK {
 		t.Fatalf("a lazy profile whose deny hides load_tool was not refused: %s", body)
@@ -80,7 +80,7 @@ func TestLoadToolHiddenByDenyRefusesALazyProfile(t *testing.T) {
 
 // With tools.native.load_tool enabled and tools.lazy set, the session lists load_tool.
 func TestLoadToolIsListedWhenEnabled(t *testing.T) {
-	f, _ := lazyFixture(t, []string{"read"}, nil)
+	f, _ := lazyFixture(t, []string{"skill"}, nil)
 	if !slices.Contains(sessionToolNames(t, f), "load_tool") {
 		t.Fatal("load_tool is not listed with tools.native.load_tool enabled")
 	}
@@ -88,16 +88,16 @@ func TestLoadToolIsListedWhenEnabled(t *testing.T) {
 
 // The tools route lists what the model sees: an unloaded lazy tool is absent until a load lists it.
 func TestLazyRouteListsOnlyTheLazyToolsTheModelSees(t *testing.T) {
-	steps := []subagentStep{{"load_tool", `{"names":["read"]}`}}
-	f, _ := lazyFixture(t, []string{"read"}, steps)
-	if names := sessionToolNames(t, f); slices.Contains(names, "read") || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded read", names)
+	steps := []subagentStep{{"load_tool", `{"names":["skill"]}`}}
+	f, _ := lazyFixture(t, []string{"skill"}, steps)
+	if names := sessionToolNames(t, f); slices.Contains(names, "skill") || !slices.Contains(names, "load_tool") {
+		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded skill", names)
 	}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if names := sessionToolNames(t, f); !slices.Contains(names, "read") {
-		t.Fatalf("after a load the route lists %v, want read", names)
+	if names := sessionToolNames(t, f); !slices.Contains(names, "skill") {
+		t.Fatalf("after a load the route lists %v, want skill", names)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestLazyRouteListsAnUnloadedMCPLazyToolOnlyAfterLoad(t *testing.T) {
 
 // tools.lazy without tools.native.load_tool refuses the session at load, and the error names both.
 func TestLazyWithoutLoadToolRefusesTheSession(t *testing.T) {
-	profileTools := map[string]any{"allow": []string{"read", "mcp:fixture:lookup"}, "lazy": []string{"read"}}
+	profileTools := map[string]any{"allow": []string{"skill", "mcp:fixture:lookup"}, "lazy": []string{"skill"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools)}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
 	status, body := f.sessionTools(t)
 	if status == 200 {

@@ -44,8 +44,9 @@ func TestCollectStateContextSnapshotTrimsItemsToConfiguredByteBudget(t *testing.
 	if !include || int64(len(snapshot.Text)) > config.StateContext.Triggers["compaction"].MaxBytes {
 		t.Fatalf("included = %v, text bytes = %d; want within %d", include, len(snapshot.Text), config.StateContext.Triggers["compaction"].MaxBytes)
 	}
-	if !strings.Contains(snapshot.Text, `"omitted_by_snapshot":`) {
-		t.Fatalf("trimmed snapshot lacks omitted_by_snapshot: %s", snapshot.Text)
+	// The task provider marks the items the budget left out with has_more.
+	if !strings.Contains(snapshot.Text, `"has_more": true`) {
+		t.Fatalf("trimmed snapshot lacks has_more: %s", snapshot.Text)
 	}
 }
 

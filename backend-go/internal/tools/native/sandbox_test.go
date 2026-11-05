@@ -132,34 +132,6 @@ func TestSandboxedToolSmithRuns(t *testing.T) {
 	}
 }
 
-func TestSandboxedProcessCannotWriteOutsideTheWorkspace(t *testing.T) {
-	requireBwrap(t)
-	root, outside, _ := sandboxDirs(t)
-	manager := NewProcessManager(filepath.Join(root, "processes"))
-	t.Cleanup(func() { _ = manager.Close() })
-	request := processTestRequest(root, "touch in.txt && echo in; touch "+outside+"/x 2>&1", 1<<16)
-	request.Workspace = root
-	request.Policy.Sandbox = bwrapSandbox()
-	snapshot, err := manager.Start(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waited := manager.Wait(snapshot.ID, 10_000)
-	if !waited.Found || waited.Snapshot == nil || waited.Snapshot.State != ProcessExited {
-		t.Fatalf("Wait() = %#v", waited)
-	}
-	output, err := os.ReadFile(filepath.Join(root, "processes", snapshot.ID, "stdout.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(output), "in\n") || !strings.Contains(string(output), "Read-only file system") {
-		t.Fatalf("process output = %q", output)
-	}
-	if _, err := os.Stat(filepath.Join(outside, "x")); err == nil {
-		t.Fatal("the sandboxed process wrote outside its writable paths")
-	}
-}
-
 // The command backend puts its argv in front of the child; env stands in for a sandbox program.
 func TestSandboxCommandBackendWrapsTheChild(t *testing.T) {
 	if runtime.GOOS == "windows" {

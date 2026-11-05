@@ -30,10 +30,10 @@ func TestIsolatedWriterChangesABranchNotTheSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	f := newSubagentFixture(t, map[string]any{
-		"model": "child.json", "tools": []string{"read", "write"}, "isolation": "worktree",
-		"__write": map[string]any{"max_bytes": 4096}, "__checkpoint": `{"enabled":true}`,
+		"model": "child.json", "tools": []string{"skill", "exec"}, "isolation": "worktree",
+		"__exec": map[string]any{}, "__checkpoint": `{"enabled":true}`,
 	})
-	f.provider.childFirstCall = [2]string{"write", `{"path":"made.txt","content":"by the child"}`}
+	f.provider.childFirstCall = [2]string{"exec", execWrite("made.txt", "by the child")}
 	gitIn(t, f.workspace, "init", "--quiet")
 	gitIn(t, f.workspace, "add", "notes.txt")
 	gitIn(t, f.workspace, "commit", "--quiet", "-m", "init")
