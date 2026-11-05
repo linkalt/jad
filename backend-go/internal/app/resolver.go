@@ -499,11 +499,12 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 			Message: fmt.Sprintf("budget caps a cost in US dollars, but the model file %s has no pricing, so the run's cost cannot be counted", config.ModelPath),
 		}
 	}
-	streamer, fallbackIdentity := r.runStreamer(config, apiKey)
-	runnerKey := fingerprintRunner(config, apiKey) + fallbackIdentity
+	// The provider clients are built only for a new runner; a cached runner keeps its own.
+	plan := r.planRunStreamer(config, apiKey)
+	runnerKey := fingerprintRunner(config, apiKey) + plan.identity
 	runner := shared.runners[runnerKey]
 	if runner == nil {
-		runner, err = session.NewRunner(shared.store, streamer, runnerModelSettings(config))
+		runner, err = session.NewRunner(shared.store, r.buildRunStreamer(plan), runnerModelSettings(config))
 		if err != nil {
 			return preparedRun{}, fmt.Errorf("create session runner: %w", err)
 		}

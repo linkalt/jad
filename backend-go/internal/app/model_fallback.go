@@ -214,13 +214,47 @@ func sameJSON(a, b json.RawMessage) bool {
 // runStreamer is the provider client of a run: the model's own, wrapped with the session's
 // model_fallback when it has one. A fallback whose model file or credential cannot be
 // used is left out with a warning, so a missing spare key never stops the session's own
-// model; a fallback that names the session's model is left out too.
+// model; a fallback that names the session's model is left out too. The string is the
+// fallback part of the runner's identity (planRunStreamer).
 func (r *Resolver) runStreamer(config sessionfs.SessionConfig, apiKey string) (responses.Streamer, string) {
-	primary := withPricing(r.newProviderStreamer(config, apiKey), config.Model)
+	plan := r.planRunStreamer(config, apiKey)
+	return r.buildRunStreamer(plan), plan.identity
+}
+
+// streamerPlan is a run's provider client before it is built: the fallback model files
+// and keys are loaded, so the runner's identity is known, but no client exists and nothing
+// is logged yet. prepareRun plans on every run and builds only when it creates a runner,
+// so a cached runner costs no client and a fallback that cannot be used is reported once
+// per runner, not on every run.
+type streamerPlan struct {
+	config   sessionfs.SessionConfig
+	apiKey   string
+	targets  []plannedFallback
+	skipped  []skippedFallback
+	identity string
+}
+
+// plannedFallback is a fallback model whose file and credential loaded.
+type plannedFallback struct {
+	id     string
+	config sessionfs.SessionConfig
+	apiKey string
+}
+
+// skippedFallback is a fallback left out, with the warning buildRunStreamer logs for it.
+type skippedFallback struct {
+	message string
+	args    []any
+}
+
+// planRunStreamer loads the session's model_fallback entries. The identity is empty when
+// no fallback can be used (the run streams from its own model alone), and otherwise the
+// model_fallback settings followed by each usable fallback's runner fingerprint.
+func (r *Resolver) planRunStreamer(config sessionfs.SessionConfig, apiKey string) streamerPlan {
+	plan := streamerPlan{config: config, apiKey: apiKey}
 	if config.ModelFallback == nil {
-		return primary, ""
+		return plan
 	}
-	streamer := &fallbackStreamer{primary: primary, shape: shapeOf(config.Model), settings: *config.ModelFallback, logger: r.logger, now: time.Now}
 	identity := ""
 	for _, entry := range config.ModelFallback.Models {
 		if entry.ModelPath == config.ModelPath && entry.ReasoningEffort == config.ReasoningEffort {
@@ -230,25 +264,41 @@ func (r *Resolver) runStreamer(config sessionfs.SessionConfig, apiKey string) (r
 		fallback.ModelPath, fallback.ReasoningEffort = entry.ModelPath, entry.ReasoningEffort
 		loaded, err := fallback.WithModel()
 		if err != nil {
-			r.logger.Warn("model_fallback: model left out", "model", entry.ID, "error", err)
+			plan.skipped = append(plan.skipped, skippedFallback{message: "model_fallback: model left out", args: []any{"model", entry.ID, "error", err}})
 			continue
 		}
 		key, err := r.providerAPIKey(loaded)
 		if err != nil {
-			r.logger.Warn("model_fallback: model left out", "model", entry.ID, "error", err)
+			plan.skipped = append(plan.skipped, skippedFallback{message: "model_fallback: model left out", args: []any{"model", entry.ID, "error", err}})
 			continue
 		}
 		if config.MaxRunCostUSD > 0 && loaded.Model.Pricing == nil {
 			// Its responses could not be counted against the cap.
-			r.logger.Warn("model_fallback: model left out: max_run_cost_usd is set and the model file has no pricing", "model", entry.ID)
+			plan.skipped = append(plan.skipped, skippedFallback{message: "model_fallback: model left out: max_run_cost_usd is set and the model file has no pricing", args: []any{"model", entry.ID}})
 			continue
 		}
-		streamer.targets = append(streamer.targets, fallbackTarget{id: entry.ID, shape: shapeOf(loaded.Model), streamer: withPricing(r.newProviderStreamer(loaded, key), loaded.Model)})
+		plan.targets = append(plan.targets, plannedFallback{id: entry.ID, config: loaded, apiKey: key})
 		identity += "|" + fingerprintRunner(loaded, key)
 	}
-	if len(streamer.targets) == 0 {
-		return primary, ""
+	if len(plan.targets) > 0 {
+		settings, _ := json.Marshal(config.ModelFallback)
+		plan.identity = string(settings) + identity
 	}
-	settings, _ := json.Marshal(config.ModelFallback)
-	return streamer, string(settings) + identity
+	return plan
+}
+
+// buildRunStreamer builds the provider clients of a plan and logs the fallbacks it left out.
+func (r *Resolver) buildRunStreamer(plan streamerPlan) responses.Streamer {
+	for _, skipped := range plan.skipped {
+		r.logger.Warn(skipped.message, skipped.args...)
+	}
+	primary := withPricing(r.newProviderStreamer(plan.config, plan.apiKey), plan.config.Model)
+	if len(plan.targets) == 0 {
+		return primary
+	}
+	streamer := &fallbackStreamer{primary: primary, shape: shapeOf(plan.config.Model), settings: *plan.config.ModelFallback, logger: r.logger, now: time.Now}
+	for _, target := range plan.targets {
+		streamer.targets = append(streamer.targets, fallbackTarget{id: target.id, shape: shapeOf(target.config.Model), streamer: withPricing(r.newProviderStreamer(target.config, target.apiKey), target.config.Model)})
+	}
+	return streamer
 }

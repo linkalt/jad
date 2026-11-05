@@ -267,3 +267,46 @@ func TestIsContextOverflowReadsOnlyTheProvidersErrorOfAFailedStream(t *testing.T
 		}
 	}
 }
+
+// A steering message stored in the middle of a run continues the run's turn. An overflow
+// compaction after it keeps the run's first message and tool work with it, instead of
+// keeping only the steering message as if it had started a new turn.
+func TestOverflowKeepsTheRunsWorkBeforeASteeringMessage(t *testing.T) {
+	store, journal, _ := newAutomaticCompactionStore(t, "")
+	appendOlderCompactionTurn(t, store, journal)
+	queue := NewSteerQueue(4)
+	streamer := &pushingStreamer{scriptedStreamer: scriptedStreamer{
+		errs:   []error{nil, errOverflow},
+		rounds: [][]responses.Event{tokenRound(0, 1, ""), nil, finalAnswerRound("recovered", 10)},
+	}}
+	streamer.before = func(index int) {
+		if index == 0 {
+			if _, err := queue.Push(json.RawMessage(`"also check the tests"`)); err != nil {
+				t.Errorf("Push() error = %v", err)
+			}
+		}
+	}
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []overflowCall
+	if _, err := runner.Run(context.Background(), json.RawMessage(`"new request"`), RunOptions{
+		ToolCatalog: newLookupCatalog(t), MaxToolRounds: 8, Steer: queue,
+		AutomaticCompaction: overflowCompaction(true, 1, &calls),
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(streamer.requests) != 3 || len(calls) != 1 || calls[0] != (overflowCall{1, true}) {
+		t.Fatalf("requests = %d, overflow calls = %+v", len(streamer.requests), calls)
+	}
+	retry := streamer.requests[2]
+	for _, want := range []string{"new request", `"function_call"`, `"function_call_output"`, "also check the tests"} {
+		if !strings.Contains(retry, want) {
+			t.Fatalf("the retry is missing %s of the run: %s", want, retry)
+		}
+	}
+	if strings.Contains(retry, "older context") {
+		t.Fatalf("the retry kept the older turn: %s", retry)
+	}
+}

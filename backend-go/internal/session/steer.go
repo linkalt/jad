@@ -112,22 +112,32 @@ func (q *SteerQueue) Close() []json.RawMessage {
 }
 
 // storeSteerMessages appends the queued messages as user input, in arrival order, and
-// tells OnSteer about each.
-func (r *Runner) storeSteerMessages(options RunOptions) error {
+// tells OnSteer about each. It returns how many of the stored items are user messages:
+// the run's compactions count them in the run's own turn (ContinuedUserMessages).
+func (r *Runner) storeSteerMessages(options RunOptions) (int, error) {
+	userMessages := 0
 	for _, input := range options.Steer.drain() {
 		items, err := NormalizeInput(input)
 		if err != nil {
-			return fmt.Errorf("normalize a steering message: %w", err)
+			return userMessages, fmt.Errorf("normalize a steering message: %w", err)
 		}
 		for index, item := range items {
 			items[index], _ = options.ImageStore.Externalize(item)
 		}
 		if _, err := r.store.AppendInputItemsAt(items...); err != nil {
-			return fmt.Errorf("persist a steering message: %w", err)
+			return userMessages, fmt.Errorf("persist a steering message: %w", err)
+		}
+		for _, item := range items {
+			var message struct {
+				Role string `json:"role"`
+			}
+			if json.Unmarshal(item, &message) == nil && message.Role == "user" {
+				userMessages++
+			}
 		}
 		if options.OnSteer != nil {
 			options.OnSteer(items)
 		}
 	}
-	return nil
+	return userMessages, nil
 }

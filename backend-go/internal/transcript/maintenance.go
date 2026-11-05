@@ -35,6 +35,13 @@ type CompactionOptions struct {
 	// strip. The overflow compaction of a run sets it, so the run's own tool work is not
 	// dropped while it is still going.
 	KeepLatestTurn bool
+	// ContinuedUserMessages is how many of the last user messages of the history continue
+	// the turn before them instead of starting one: the steering messages a running run
+	// stored between its rounds. They belong to that run, so a compaction keeps or drops
+	// them with the run's first message and its tool work. A count larger than the user
+	// messages there are joins every one of them to the first turn. Zero splits at every
+	// user message.
+	ContinuedUserMessages int
 	// Summarize, when set, is handed the items of the turns this compaction drops and
 	// returns one history item that is kept in front of the retained turns (see
 	// compaction_summary.go). It runs without the store lock held. Nil drops the turns
@@ -63,7 +70,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if options.TurnType != "assistant_final" && options.TurnType != "full" {
 		return result, errors.New("turn type must be assistant_final or full")
 	}
-	if options.KeepTurns < 0 || options.KeepToolPairs < 0 {
+	if options.KeepTurns < 0 || options.KeepToolPairs < 0 || options.ContinuedUserMessages < 0 {
 		return result, errors.New("compaction counts must not be negative")
 	}
 	if options.BackupMode != "replace" && options.BackupMode != "append" {

@@ -242,3 +242,50 @@ func TestModelFallbackAnswersAHeadlessRun(t *testing.T) {
 		t.Fatalf("primary %d, fallback %d, body %s", primaryCalls, fallbackCalls, fallbackBody)
 	}
 }
+
+// A runner is cached across runs, so a fallback that cannot be used is reported when the
+// runner is built, not again on every run that reuses it.
+func TestModelFallbackLeftOutIsReportedOncePerRunner(t *testing.T) {
+	f := newLayoutFixture(t)
+	files := map[string]any{
+		"models/spare/nokey.json": map[string]any{"provider": "openai", "model": "nokey", "api_key_env": "MISSING_KEY", "base_url": "http://127.0.0.1:1/v1"},
+		"profiles/dev/coder.json": map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none",
+			"settings": map[string]any{"model_fallback": map[string]any{"models": []string{"spare/nokey"}}}},
+	}
+	for rel, value := range files {
+		data, _ := json.Marshal(value)
+		path := filepath.Join(f.root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, err := LoadConfig(sessionfs.LoadOptions{
+		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
+		Environment: map[string]string{"FIXTURE_KEY": "k"},
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	var logs lockedBuffer
+	config.HTTP.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	service, runner, err := NewHeadless(config)
+	if err != nil {
+		t.Fatalf("NewHeadless: %v", err)
+	}
+	t.Cleanup(service.Close)
+	for _, input := range []string{"first", "second", "third"} {
+		result, err := runner.Run(context.Background(), headless.Request{Session: "local:demo", Profile: "dev/coder", Input: input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != headless.StatusCompleted {
+			t.Fatalf("result = %+v", result)
+		}
+	}
+	if count := strings.Count(logs.String(), "model_fallback: model left out"); count != 1 {
+		t.Fatalf("left-out warnings = %d, want 1 for one runner:\n%s", count, logs.String())
+	}
+}
