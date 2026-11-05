@@ -30,6 +30,11 @@ type CompactionOptions struct {
 	BackupMode         string
 	BackupMinTurns     int
 	PreserveResponseID string
+	// KeepLatestTurn keeps the newest turn (the latest user message and everything after
+	// it) whole, even when KeepTurns is 0 and with every tool pair assistant_final would
+	// strip. The overflow compaction of a run sets it, so the run's own tool work is not
+	// dropped while it is still going.
+	KeepLatestTurn bool
 	// Summarize, when set, is handed the items of the turns this compaction drops and
 	// returns one history item that is kept in front of the retained turns (see
 	// compaction_summary.go). It runs without the store lock held. Nil drops the turns
@@ -85,8 +90,17 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if len(options.summaryItem) > 0 {
 		retained = append(retained, append([]byte(nil), options.summaryItem...))
 	}
-	keepPairs := keptToolPairs(selected, options)
-	for _, turn := range selected {
+	pairTurns := selected
+	if options.KeepLatestTurn && len(selected) > 0 {
+		// The latest turn keeps all its pairs; keep_tool_pairs counts in the turns before it.
+		pairTurns = selected[:len(selected)-1]
+	}
+	keepPairs := keptToolPairs(pairTurns, options)
+	for index, turn := range selected {
+		if options.KeepLatestTurn && index == len(selected)-1 {
+			retained = append(retained, turn...)
+			continue
+		}
 		retained = append(retained, retainCompactedTurn(turn, options, finalAssistant, keepPairs)...)
 	}
 	compactedActiveTail := activeTail

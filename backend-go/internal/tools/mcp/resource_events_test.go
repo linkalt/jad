@@ -105,6 +105,11 @@ func TestResourceSubscriptionsRecordChangesAndTellTheNextRunOnce(t *testing.T) {
 	if got := callFeature(t, subscribeTool, map[string]any{"uri": "docs://plan"}); !strings.Contains(got, `\"subscribed\":true`) {
 		t.Fatalf("subscribe tool = %s", got)
 	}
+	// A second subscribe to the same resource sends nothing and waits for no acknowledgement.
+	again := time.Now()
+	if got := callFeature(t, subscribeTool, map[string]any{"uri": "docs://plan"}); !strings.Contains(got, `\"subscribed\":true`) || time.Since(again) > 2*time.Second {
+		t.Fatalf("second subscribe = %s after %s", got, time.Since(again))
+	}
 	if _, _, subscriptions := manager.ResourceEvents(0); len(subscriptions) != 1 || subscriptions[0] != (ResourceSubscription{Server: "docs", URI: "docs://plan"}) {
 		t.Fatalf("subscriptions = %+v", subscriptions)
 	}

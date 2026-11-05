@@ -439,6 +439,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	// __child_model adds fields to the child's model file (for example hosted_tools).
 	childModelExtra, _ := agentSetting["__child_model"].(map[string]any)
 	delete(agentSetting, "__child_model")
+	// __parent_model adds fields to the parent's model file (for example pricing).
+	parentModelExtra, _ := agentSetting["__parent_model"].(map[string]any)
+	delete(agentSetting, "__parent_model")
 	for name, text := range files {
 		writeFile(t, filepath.Join(workspace, name), []byte(text))
 	}
@@ -543,6 +546,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	childModel := map[string]any{"provider": "openai", "model": "child-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": server.URL + "/v1"}
 	for key, value := range childModelExtra {
 		childModel[key] = value
+	}
+	for key, value := range parentModelExtra {
+		parentModel[key] = value
 	}
 	var childProvider *subagentProvider
 	if splitChild {

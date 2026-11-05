@@ -93,3 +93,30 @@ func TestSteerQueueRefusesBadInputAFullQueueAndAfterClose(t *testing.T) {
 		t.Fatal("a nil queue must refuse and close")
 	}
 }
+
+// A message accepted during a round that then fails is never stored; OnSteerDropped is
+// told about it.
+func TestSteerMessageOfAFailedRunIsReportedDropped(t *testing.T) {
+	store, _, _ := newAutomaticCompactionStore(t, "")
+	queue := NewSteerQueue(4)
+	streamer := &pushingStreamer{scriptedStreamer: scriptedStreamer{errs: []error{errors.New("500 server error")}}}
+	streamer.before = func(int) {
+		if _, err := queue.Push(json.RawMessage(`"also check the tests"`)); err != nil {
+			t.Errorf("Push() error = %v", err)
+		}
+	}
+	runner, err := NewRunner(store, streamer, ModelSettings{Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dropped []json.RawMessage
+	if _, err := runner.Run(context.Background(), json.RawMessage(`"fix the bug"`), RunOptions{
+		Steer:          queue,
+		OnSteerDropped: func(inputs []json.RawMessage) { dropped = append(dropped, inputs...) },
+	}); err == nil {
+		t.Fatal("Run() succeeded, want the provider's error")
+	}
+	if len(dropped) != 1 || string(dropped[0]) != `"also check the tests"` {
+		t.Fatalf("dropped = %q", dropped)
+	}
+}

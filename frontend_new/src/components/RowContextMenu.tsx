@@ -50,6 +50,7 @@ export function RowContextMenu({
   canOpenPane,
   paneLimit,
   onDuplicate,
+  canDuplicate,
 }: {
   target: RowMenuTarget | null;
   anchorRef: RefObject<HTMLElement | null>;
@@ -63,6 +64,8 @@ export function RowContextMenu({
   paneLimit: number;
   /** Duplicates a session or profile row; a dialog asks the new name and what to copy. */
   onDuplicate?: (target: RowMenuTarget) => void;
+  /** Whether the row can be duplicated (the server copies only a catalog profile); absent means yes. */
+  canDuplicate?: (target: RowMenuTarget) => boolean;
 }) {
   const menuRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -157,7 +160,7 @@ export function RowContextMenu({
               />
             </Tooltip>
           )}
-          {target.kind === 'category' || onDuplicate === undefined ? null : (
+          {target.kind === 'category' || onDuplicate === undefined || canDuplicate?.(target) === false ? null : (
             <Tooltip content="Duplicate" placement="end">
               <IconButton
                 label={`Duplicate ${target.label}`}

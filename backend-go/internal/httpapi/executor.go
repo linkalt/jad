@@ -96,6 +96,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 				logger.Warn("failed to publish steering message", slog.Any("error", err))
 			}
 		},
+		OnSteerDropped: func(inputs []json.RawMessage) { publishSteerDropped(run, inputs, logger) },
 		OnTurnStarted: func(partialContentPath string) {
 			run.setPartialContentPath(partialContentPath)
 		},
@@ -134,6 +135,12 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			publishToolResult(run, normalizedRun, emitter, item, logger)
 		},
 	})
+	// A run that failed before the session runner took its queue (a blocked prompt, a model
+	// that did not load) never closed it: close it now, so a later message is refused, and
+	// report the ones accepted that the run will never store.
+	if dropped := run.steer.Close(); len(dropped) > 0 {
+		publishSteerDropped(run, dropped, logger)
+	}
 	runErr = err
 	if err != nil {
 		// Like the TypeScript run, a failed or stopped run drops the snapshot still
@@ -324,5 +331,15 @@ func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *m
 	run.keepLiveImages(item, part)
 	if err := emitter.push(streaming.AddToolResultPart(part)); err != nil {
 		logging.Or(logger).Warn("failed to publish tool result", slog.Any("error", err))
+	}
+}
+
+// publishSteerDropped reports steering messages that were accepted (202) but never stored
+// because the run ended first, as a "steer_dropped" event ({turn_id, inputs}) and a warning,
+// so the sender can send them again.
+func publishSteerDropped(run *activeRun, inputs []json.RawMessage, logger *slog.Logger) {
+	logger.Warn("steering messages dropped: the run ended before storing them", slog.Int("count", len(inputs)))
+	if err := run.publish("steer_dropped", map[string]any{"turn_id": run.turnID, "inputs": inputs}); err != nil {
+		logger.Warn("failed to publish dropped steering messages", slog.Any("error", err))
 	}
 }

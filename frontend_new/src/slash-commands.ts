@@ -246,29 +246,41 @@ export function createSlashSource({
   let mcpPrompts: readonly MCPPrompt[] = [];
   let mcpResources: readonly MCPResource[] = [];
   let entries: SlashEntry[] = slashEntries(commands, null);
-  let loadedAt: number | null = null;
+  // When each source last loaded; null until it has, and again after it failed.
+  const loadedAt: {library: number | null; prompts: number | null; resources: number | null} = {library: null, prompts: null, resources: null};
   let inFlight: Promise<void> | null = null;
 
-  // The library, the MCP prompts and the MCP resources load side by side. One failing
-  // keeps what the menu had of it, shows the others, and leaves the whole load to be
-  // retried next search.
+  // The library, the MCP prompts and the MCP resources load side by side, each on its own
+  // clock. One failing keeps what the menu had of it and shows the others; only it is
+  // tried again next search, so a source that stays down does not make every keystroke
+  // fetch the other two as well.
   const ensureFresh = (): Promise<void> => {
-    if (loadedAt !== null && now() - loadedAt < refreshMs) return Promise.resolve();
+    const stale = (at: number | null) => at === null || now() - at >= refreshMs;
+    const want = {library: stale(loadedAt.library), prompts: stale(loadedAt.prompts), resources: stale(loadedAt.resources)};
+    if (!want.library && !want.prompts && !want.resources) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = (async () => {
       try {
+        const skip = Promise.resolve(undefined);
         const [library, mcp, resources] = await Promise.allSettled([
-          loadCatalog(),
-          loadMCPPrompts === undefined ? Promise.resolve(mcpPrompts) : loadMCPPrompts(),
-          loadMCPResources === undefined ? Promise.resolve(mcpResources) : loadMCPResources(),
+          want.library ? loadCatalog() : skip,
+          want.prompts && loadMCPPrompts !== undefined ? loadMCPPrompts() : skip,
+          want.resources && loadMCPResources !== undefined ? loadMCPResources() : skip,
         ]);
-        if (library.status === 'fulfilled') catalog = library.value;
-        if (mcp.status === 'fulfilled') mcpPrompts = mcp.value;
-        if (resources.status === 'fulfilled') mcpResources = resources.value;
-        entries = slashEntries(commands, catalog, mcpPrompts, mcpResources);
-        if (library.status === 'fulfilled' && mcp.status === 'fulfilled' && resources.status === 'fulfilled') {
-          loadedAt = now();
+        const at = now();
+        if (want.library) {
+          if (library.status === 'fulfilled' && library.value !== undefined) catalog = library.value;
+          loadedAt.library = library.status === 'fulfilled' ? at : null;
         }
+        if (want.prompts) {
+          if (mcp.status === 'fulfilled' && mcp.value !== undefined) mcpPrompts = mcp.value;
+          loadedAt.prompts = mcp.status === 'fulfilled' ? at : null;
+        }
+        if (want.resources) {
+          if (resources.status === 'fulfilled' && resources.value !== undefined) mcpResources = resources.value;
+          loadedAt.resources = resources.status === 'fulfilled' ? at : null;
+        }
+        entries = slashEntries(commands, catalog, mcpPrompts, mcpResources);
       } finally {
         inFlight = null;
       }

@@ -265,3 +265,30 @@ test('a failing resource load leaves the rest of the menu and is retried', async
   assert.equal(ids(await menu.search('')).length, SLASH_COMMANDS.length + 6);
   assert.equal(loads, 2);
 });
+
+test('a source that stays down is tried again alone: the others keep their own refresh clock', async () => {
+  let libraryLoads = 0;
+  let promptLoads = 0;
+  let resourceLoads = 0;
+  const menu = source({
+    loadCatalog: async () => {
+      libraryLoads += 1;
+      throw new Error('offline');
+    },
+    loadMCPPrompts: async () => {
+      promptLoads += 1;
+      return MCP_PROMPTS;
+    },
+    loadMCPResources: async () => {
+      resourceLoads += 1;
+      return RESOURCES;
+    },
+  });
+  await menu.search('');
+  await menu.search('r');
+  await menu.search('re');
+  assert.equal(libraryLoads, 3, 'the failing library is retried each search');
+  assert.equal(promptLoads, 1, 'the MCP prompts are not fetched again before refreshMs');
+  assert.equal(resourceLoads, 1, 'the MCP resources are not fetched again before refreshMs');
+  assert.ok(ids(await menu.search('mcp:')).includes('mcp:docs:standup'), 'what loaded stays listed');
+});

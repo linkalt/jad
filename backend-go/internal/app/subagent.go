@@ -82,6 +82,13 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	if err != nil {
 		return native.SubagentResult{}, err
 	}
+	// The child's spend adds into the calling run's meter, so the caller's max_run_cost_usd
+	// and budget count it (the child's own context hangs off the sub-agent manager).
+	if request.CallerValues != nil {
+		if callerMeter := session.CostMeterFrom(request.CallerValues); callerMeter != nil && session.CostMeterFrom(ctx) == nil {
+			ctx = session.WithCostMeter(ctx, callerMeter)
+		}
+	}
 	ctx, sweepChildren := native.WithChildGroups(ctx)
 	defer sweepChildren()
 	var rounds, tokens atomic.Int64

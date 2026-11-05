@@ -723,7 +723,9 @@ func requireDefinition(config sessionfs.SessionConfig, definitions map[string]to
 		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: invalid %s %s inputSchema: %v", config.SettingPath, source, name, err)}
 	}
 	if !matches {
-		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s inputSchema must exactly match the %s tool schema", config.SettingPath, id, source)}
+		// The usual cause is a definition file copied from an older version: the schema
+		// changed with the binary, so the message names the file to copy again.
+		return tools.Definition{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %s inputSchema must exactly match the %s tool schema; a definition file copied from an older version must be replaced with sample/tools/%s/%s.json of this version", config.SettingPath, id, source, source, name)}
 	}
 	return definition, nil
 }

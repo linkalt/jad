@@ -36,7 +36,11 @@ test('the app passes plan to the run request and lists /plan only when enabled',
 test('Execute plan leaves plan mode and sends execute_plan with the draft text only', () => {
   const execute = composer.match(/const executePlan = useCallback\([\s\S]*?\n  \}, \[/);
   assert.ok(execute, 'executePlan found');
-  assert.match(execute[0], /onSubmit\(text, \[\], \[\], \{plan: false, executePlan: true\}\)/);
+  assert.match(execute[0], /const options: ComposerSubmitOptions = \{\s*plan: false,\s*executePlan: true,/);
+  assert.match(execute[0], /onSubmit\(text, \[\], \[\], options\)/);
+  // A pending custom command's model and tools are not dropped (they used to be cleared unsent).
+  assert.match(execute[0], /pendingCommand\?\.model === undefined \? \{\} : \{model: pendingCommand\.model\}/);
+  assert.match(execute[0], /pendingCommand\?\.tools === undefined \? \{\} : \{tools: pendingCommand\.tools\}/);
   assert.match(execute[0], /\[draftKey\]: false/);
   // The button shows while plan mode is on and nothing runs.
   assert.match(composer, /\{isPlan && !isRunning \? \(\s*<Button\s*label=\{appConfig\.plan_mode_execute_label\}/);

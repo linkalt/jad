@@ -737,16 +737,23 @@ export function ComposerPane({
 
   // Execute plan: the next message leaves plan mode and carries out the plan, with the
   // draft's text, if any, after the server's execute prompt. Attachments stay in the draft.
+  // A custom command's model and tools waiting for the draft go with it, as on a send.
   const executePlan = useCallback(() => {
     if (isDisabled) return;
     const text = inputRef.current?.getValue() ?? value;
-    if (onSubmit(text, [], [], {plan: false, executePlan: true})) {
+    const options: ComposerSubmitOptions = {
+      plan: false,
+      executePlan: true,
+      ...(pendingCommand?.model === undefined ? {} : {model: pendingCommand.model}),
+      ...(pendingCommand?.tools === undefined ? {} : {tools: pendingCommand.tools}),
+    };
+    if (onSubmit(text, [], [], options)) {
       historyCursorRef.current = IDLE_HISTORY;
       setDraft(draftKey, '');
       setPlanViews(current => ({...current, [draftKey]: false}));
       clearPendingCommand();
     }
-  }, [clearPendingCommand, draftKey, isDisabled, onSubmit, setDraft, value]);
+  }, [clearPendingCommand, draftKey, isDisabled, onSubmit, pendingCommand, setDraft, value]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (handleShiftEnter(event) || handleHistoryKey(event)) {

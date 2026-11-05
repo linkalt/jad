@@ -199,6 +199,8 @@ type Manager struct {
 	connects       sync.WaitGroup
 	// events keeps the servers' resource change notifications and subscriptions.
 	events resourceEvents
+	// acks wakes a subscribe when the server acknowledged it (listen protocol).
+	acks subscriptionAcks
 	// sampler answers the servers' sampling requests and logger takes their server_log
 	// messages; both are set by the owner and guarded by mu.
 	sampler Sampler
@@ -503,6 +505,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	options := m.clientOptions(server.ID, config.resourceEventsMax)
 	m.featureClientOptions(options, server.ID, config.features, state, config.resourceEventsMax)
 	client := mcpSDK.NewClient(&mcpSDK.Implementation{Name: "jad-" + server.ID, Version: "1.0.0"}, options)
+	client.AddReceivingMiddleware(m.subscriptionAckMiddleware(server.ID))
 	if config.features.Roots == RootsWorkspace {
 		if root := workspaceRoot(cwd); root != nil {
 			client.AddRoots(root)

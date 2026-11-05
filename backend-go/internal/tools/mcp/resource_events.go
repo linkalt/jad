@@ -82,6 +82,12 @@ func (e *resourceEvents) since(after int64) ([]ResourceEvent, int64) {
 	return events, e.seq
 }
 
+func (e *resourceEvents) isSubscribed(server, uri string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.subscribed[server][uri]
+}
+
 func (e *resourceEvents) setSubscribed(server, uri string, on bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -129,7 +135,7 @@ func (m *Manager) clientOptions(serverID string, limit int) *mcpSDK.ClientOption
 func (m *Manager) resubscribe(ctx context.Context, current *connection) {
 	for _, uri := range m.events.subscriptions(current.serverID) {
 		err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
-			return session.Subscribe(ctx, &mcpSDK.SubscribeParams{URI: uri})
+			return m.subscribeAcknowledged(ctx, current.serverID, session, uri)
 		})
 		if err != nil {
 			m.events.setSubscribed(current.serverID, uri, false)
@@ -230,9 +236,14 @@ func subscribe(ctx context.Context, m *Manager, current *connection, uri string,
 	if !current.receivesNotifications() {
 		return fmt.Errorf("resource subscriptions work with stdio servers only for now: a streamable_http connection does not open the stream the server's notifications travel on")
 	}
+	if on && m.events.isSubscribed(current.serverID, uri) {
+		// The session already holds it; under the listen protocol a second Subscribe sends
+		// nothing, so no acknowledgement would come.
+		return nil
+	}
 	err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
 		if on {
-			return session.Subscribe(ctx, &mcpSDK.SubscribeParams{URI: uri})
+			return m.subscribeAcknowledged(ctx, current.serverID, session, uri)
 		}
 		return session.Unsubscribe(ctx, &mcpSDK.UnsubscribeParams{URI: uri})
 	})

@@ -21,11 +21,13 @@ type CompactionSummary struct {
 
 // CompactionOverflow is compaction.overflow: when the provider refuses a request because
 // the history is larger than the model's context window, the run compacts and sends the
-// round again, up to MaxAttempts times. It needs compaction.auto_enabled.
+// round again, up to MaxAttempts times. It is off by default and needs
+// compaction.auto_enabled.
 type CompactionOverflow struct {
 	Enabled     bool
 	MaxAttempts int64
-	// Patterns are matched, case-insensitively, against the provider's error text.
+	// Patterns are matched, case-insensitively, against the provider's error: the code and
+	// message of a failed stream, or the text of any other error.
 	Patterns []string
 }
 
@@ -47,7 +49,7 @@ const (
 	maxCompactionSummaryTimeoutMS           = 1_800_000
 	defaultCompactionSummaryOnFailure       = "compact"
 
-	defaultCompactionOverflowEnabled     = true
+	defaultCompactionOverflowEnabled     = false
 	defaultCompactionOverflowMaxAttempts = 1
 	maxCompactionOverflowMaxAttempts     = 5
 	maxCompactionOverflowPatterns        = 64

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestCompactionSummaryIsOffByDefaultAndOverflowOn(t *testing.T) {
+func TestCompactionSummaryAndOverflowAreOffByDefault(t *testing.T) {
 	for _, raw := range []string{``, `{}`, `{"summary":null,"overflow":null}`} {
 		settings, err := normalizeCompaction(json.RawMessage(raw), "setting.json")
 		if err != nil {
@@ -17,14 +17,14 @@ func TestCompactionSummaryIsOffByDefaultAndOverflowOn(t *testing.T) {
 		if settings.Summary.Enabled || !reflect.DeepEqual(settings.Summary, DefaultCompactionSummary()) {
 			t.Fatalf("%q: summary = %+v, want the defaults with enabled false", raw, settings.Summary)
 		}
-		if !settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 1 || !reflect.DeepEqual(settings.Overflow.Patterns, defaultCompactionOverflowPatterns) {
+		if settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 1 || !reflect.DeepEqual(settings.Overflow.Patterns, defaultCompactionOverflowPatterns) {
 			t.Fatalf("%q: overflow = %+v", raw, settings.Overflow)
 		}
 	}
 }
 
 func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
-	settings, err := normalizeCompaction(json.RawMessage(`{"summary":{"enabled":true,"prompt":"P","header":"H","role":"user","max_input_bytes":5000,"max_item_bytes":200,"max_output_tokens":0,"timeout_ms":3000,"on_failure":"skip"},"overflow":{"enabled":false,"max_attempts":3,"patterns":["too big"]}}`), "setting.json")
+	settings, err := normalizeCompaction(json.RawMessage(`{"summary":{"enabled":true,"prompt":"P","header":"H","role":"user","max_input_bytes":5000,"max_item_bytes":200,"max_output_tokens":0,"timeout_ms":3000,"on_failure":"skip"},"overflow":{"enabled":true,"max_attempts":3,"patterns":["too big"]}}`), "setting.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
 	if settings.Summary != want {
 		t.Fatalf("summary = %+v, want %+v", settings.Summary, want)
 	}
-	if settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 3 || !reflect.DeepEqual(settings.Overflow.Patterns, []string{"too big"}) {
+	if !settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 3 || !reflect.DeepEqual(settings.Overflow.Patterns, []string{"too big"}) {
 		t.Fatalf("overflow = %+v", settings.Overflow)
 	}
 }

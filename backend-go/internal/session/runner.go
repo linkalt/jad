@@ -197,6 +197,9 @@ type RunOptions struct {
 	Steer *SteerQueue
 	// OnSteer, when not nil, is told about the items of each steering message once stored.
 	OnSteer func(items [][]byte)
+	// OnSteerDropped, when not nil, is told about the steering messages that were accepted
+	// but never stored because the run ended first (it failed or was stopped).
+	OnSteerDropped func(inputs []json.RawMessage)
 	// OnStop, when set, is asked each time the run would end without an error and with no
 	// steering message waiting. A non-empty message makes the run store it as one message
 	// of StopMessageRole and go another round, at most StopMaxContinues times per run.
@@ -541,11 +544,20 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 	trace := options.MemoryTrace.BeginRun()
 	defer trace.Stop()
 
-	// A message sent once the run returned is refused to its sender instead of being lost.
-	defer options.Steer.Close()
-	// A spent budget refuses the run before its input is stored.
-	if err := options.Budget.Check(time.Now()); err != nil {
-		return RunResult{}, err
+	// A message sent once the run returned is refused to its sender instead of being lost;
+	// one accepted but never stored is reported.
+	defer func() {
+		if dropped := options.Steer.Close(); len(dropped) > 0 && options.OnSteerDropped != nil {
+			options.OnSteerDropped(dropped)
+		}
+	}()
+	// A spent budget refuses the run before its input is stored. A caller that stored the
+	// input itself (PersistedInput) checked the budget before storing it; checking again
+	// here could refuse a run whose message is already stored, leaving it unanswered.
+	if options.PersistedInput == nil {
+		if err := options.Budget.Check(time.Now()); err != nil {
+			return RunResult{}, err
+		}
 	}
 	persisted, err := r.persistRunInput(input, options)
 	if err != nil {
@@ -605,6 +617,11 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 				return run.result, err
 			}
 			if message != "" {
+				// The round a stop hook adds is a provider round like a tool round: a
+				// reached cap does not start it.
+				if _, err := runLimit(run.usedTokens, run.meter, run.options); err != nil {
+					return run.result, err
+				}
 				if err := r.storeStopMessage(message, options); err != nil {
 					return run.result, err
 				}
@@ -612,9 +629,13 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 				continue
 			}
 		}
-		// A steering message that is still waiting gets one more round.
+		// A steering message that is still waiting gets one more round, unless a cap is
+		// reached (the message is then reported dropped).
 		if options.Steer.closeIfEmpty() {
 			return run.result, nil
+		}
+		if _, err := runLimit(run.usedTokens, run.meter, run.options); err != nil {
+			return run.result, err
 		}
 	}
 }
@@ -665,6 +686,9 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	// A declined draft ends the round it happened in, not the rounds a steering message
+	// adds after it.
+	run.declined = false
 	if err := r.storeSteerMessages(*options); err != nil {
 		return false, err
 	}
@@ -768,12 +792,20 @@ func (r *Runner) overflowRetryAllowed(ctx context.Context, err error, options Ru
 	return IsContextOverflow(err, settings.Overflow.Patterns)
 }
 
-// IsContextOverflow reports whether the text of err contains one of patterns, ignoring case.
+// IsContextOverflow reports whether the provider's error contains one of patterns, ignoring
+// case. For a stream that ended with response.failed or an error event, only the provider's
+// error code and message are matched, not the response it echoed (its instructions and
+// tools may name a pattern); any other error is matched by its text.
 func IsContextOverflow(err error, patterns []string) bool {
 	if err == nil {
 		return false
 	}
-	text := strings.ToLower(err.Error())
+	text := err.Error()
+	var failed *ResponseFailedError
+	if errors.As(err, &failed) {
+		text = failed.Detail
+	}
+	text = strings.ToLower(text)
 	for _, pattern := range patterns {
 		if pattern = strings.ToLower(strings.TrimSpace(pattern)); pattern != "" && strings.Contains(text, pattern) {
 			return true
@@ -783,11 +815,14 @@ func IsContextOverflow(err error, patterns []string) bool {
 }
 
 // compactForOverflow compacts the history with the automatic compaction settings, keeping
-// no response whole (the latest round's calls already have their results, and the turn
-// rule keeps or drops each call with its result), and refreshes the state context when
-// the transcript was rewritten.
+// the latest turn whole (the run's own calls and results stay, so the model does not lose
+// the work it is doing), and refreshes the state context when the transcript was
+// rewritten. When only that turn is left, nothing is compacted and the provider's error
+// stands.
 func (r *Runner) compactForOverflow(ctx context.Context, run *runRounds) (bool, error) {
-	compacted, err := r.compactAutomatically(r.automaticCompactionOptions(ctx, run.options), run.options)
+	compactionOptions := r.automaticCompactionOptions(ctx, run.options)
+	compactionOptions.KeepLatestTurn = true
+	compacted, err := r.compactAutomatically(compactionOptions, run.options)
 	if err != nil || !compacted {
 		return false, err
 	}
@@ -939,40 +974,40 @@ func (r *Runner) enforceToolLimits(calls []json.RawMessage, round int, usedToken
 	// The cap is checked here, between rounds, from usage already reported: a
 	// round in flight is never cut, but the next one is not started. The calls
 	// get a result so the transcript stays a valid history for a later run.
-	if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
-		limit := &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
-		if _, err := appendToolOutputs(r.store, calls, nil, "run_token_limit", "Tool execution was not started. "+limit.Error()); err != nil {
-			return err
-		}
-		if err := refreshAfterCompaction(); err != nil {
-			return err
-		}
+	code, limit := runLimit(usedTokens, meter, options)
+	if limit == nil {
+		return nil
+	}
+	if code == "" {
 		return limit
 	}
+	if _, err := appendToolOutputs(r.store, calls, nil, code, "Tool execution was not started. "+limit.Error()); err != nil {
+		return err
+	}
+	if err := refreshAfterCompaction(); err != nil {
+		return err
+	}
+	return limit
+}
+
+// runLimit returns the cap the run has reached (max_run_tokens, max_run_cost_usd, the
+// budget) with the status code its unstarted calls get, or nil. A budget that fails for
+// another reason returns that error with no code.
+func runLimit(usedTokens int64, meter *CostMeter, options RunOptions) (string, error) {
+	if options.MaxRunTokens > 0 && usedTokens >= options.MaxRunTokens {
+		return "run_token_limit", &RunTokenLimitError{Used: usedTokens, Limit: options.MaxRunTokens}
+	}
 	if cost, _ := meter.Total(); options.MaxRunCostUSD > 0 && cost >= options.MaxRunCostUSD {
-		limit := &RunCostLimitError{Used: cost, Limit: options.MaxRunCostUSD}
-		if _, err := appendToolOutputs(r.store, calls, nil, "run_cost_limit", "Tool execution was not started. "+limit.Error()); err != nil {
-			return err
-		}
-		if err := refreshAfterCompaction(); err != nil {
-			return err
-		}
-		return limit
+		return "run_cost_limit", &RunCostLimitError{Used: cost, Limit: options.MaxRunCostUSD}
 	}
 	if err := options.Budget.Check(time.Now()); err != nil {
 		var limit *BudgetLimitError
 		if !errors.As(err, &limit) {
-			return err
+			return "", err
 		}
-		if _, err := appendToolOutputs(r.store, calls, nil, "budget_limit", "Tool execution was not started. "+limit.Error()); err != nil {
-			return err
-		}
-		if err := refreshAfterCompaction(); err != nil {
-			return err
-		}
-		return limit
+		return "budget_limit", limit
 	}
-	return nil
+	return "", nil
 }
 
 // recordBudget adds the tokens of the round's response and what the run's meter counted
@@ -1338,10 +1373,22 @@ func marshalStagedOutput(staged map[int64]json.RawMessage) (json.RawMessage, err
 	return output, nil
 }
 
+// ResponseFailedError is a stream that ended with response.failed or an error event
+// instead of response.completed.
+type ResponseFailedError struct {
+	message string
+	// Detail is the provider's own error: the code and message of response.error, of a
+	// top-level error, or of the error event itself. It is empty when the event has none.
+	Detail string
+}
+
+func (e *ResponseFailedError) Error() string { return e.message }
+
 func terminalFailureError(raw []byte, eventType string) error {
+	const prefix = "Responses stream terminated without response.completed: "
 	fields, err := decodeJSONObject(raw)
 	if err != nil {
-		return fmt.Errorf("Responses stream terminated without response.completed: %s", string(raw))
+		return &ResponseFailedError{message: prefix + string(raw)}
 	}
 	details, exists := rawField(fields, "response")
 	if !exists {
@@ -1350,7 +1397,56 @@ func terminalFailureError(raw []byte, eventType string) error {
 	if !exists {
 		details, _ = json.Marshal(eventType)
 	}
-	return fmt.Errorf("Responses stream terminated without response.completed: %s", details)
+	return &ResponseFailedError{message: prefix + string(details), Detail: failureDetail(fields)}
+}
+
+// failureDetail returns the code and message of a failed stream event's error: response.error,
+// then a top-level error (an object or a string), then the event's own code and message.
+func failureDetail(fields []rawObjectField) string {
+	if response, exists := rawField(fields, "response"); exists {
+		if responseFields, err := decodeJSONObject(response); err == nil {
+			if errorRaw, exists := rawField(responseFields, "error"); exists {
+				if detail := errorObjectDetail(errorRaw); detail != "" {
+					return detail
+				}
+			}
+		}
+	}
+	if errorRaw, exists := rawField(fields, "error"); exists {
+		if detail := errorObjectDetail(errorRaw); detail != "" {
+			return detail
+		}
+	}
+	return errorFieldsDetail(fields)
+}
+
+// errorObjectDetail returns "<code> <message>" of an error object, or the error itself
+// when it is a string.
+func errorObjectDetail(raw json.RawMessage) string {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	fields, err := decodeJSONObject(raw)
+	if err != nil {
+		return ""
+	}
+	return errorFieldsDetail(fields)
+}
+
+func errorFieldsDetail(fields []rawObjectField) string {
+	parts := make([]string, 0, 3)
+	for _, key := range []string{"type", "code", "message"} {
+		raw, exists := rawField(fields, key)
+		if !exists {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) == nil && value != "" && !(key == "type" && (value == "error" || strings.HasPrefix(value, "response."))) {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func parseSafeOutputIndex(raw []byte) (int64, error) {

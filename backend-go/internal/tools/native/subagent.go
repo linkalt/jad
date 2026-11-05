@@ -51,6 +51,11 @@ type SubagentRequest struct {
 	// Seed, when set, is the transcript of the run this one resumes: the launcher copies it
 	// into the new run's own folder before it opens the journal, and never writes to it.
 	Seed string
+	// CallerValues is the calling tool call's context, kept only for its values (the
+	// calling run's cost meter, so the child's spend counts toward the caller's
+	// max_run_cost_usd and budget). The child's cancellation does not come from it: a run
+	// hangs off the manager. Nil when there is no caller.
+	CallerValues context.Context
 }
 
 // SubagentResult is what a finished child run reports.

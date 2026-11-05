@@ -69,6 +69,8 @@ export type SessionGroupListProps = {
   paneLimit: number;
   /** Duplicates a session or profile row (the row menu's Duplicate). */
   onDuplicate?: (target: RowMenuTarget) => void;
+  /** Whether a row can be duplicated (the row menu hides Duplicate otherwise). */
+  canDuplicate?: (target: RowMenuTarget) => boolean;
   /** Opens the shared right-click menu anchored to the right-clicked row. */
   onRowContextMenu: (target: RowMenuTarget, anchor: HTMLElement) => void;
   /**
@@ -98,6 +100,7 @@ export function SessionGroupList({
   canOpenPane,
   paneLimit,
   onDuplicate,
+  canDuplicate,
   onRowContextMenu,
   rowMenuTarget,
   rowMenuAnchorRef,
@@ -255,6 +258,7 @@ export function SessionGroupList({
                 canOpenPane={canOpenPane}
                 paneLimit={paneLimit}
                 onDuplicate={onDuplicate}
+                canDuplicate={canDuplicate}
               />
             )}
           </SideNavItem>

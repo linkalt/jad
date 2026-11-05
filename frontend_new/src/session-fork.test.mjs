@@ -60,6 +60,36 @@ test('the fork buttons open the name dialog and fork into a profile; the row men
   assert.match(app, /onDuplicate=\{duplicateRow\}/);
   assert.ok(!/forkSession\(target\.sessionRef, \{session: newRef/.test(app), 'a message fork no longer makes a new session');
   assert.match(menu, /<Tooltip content="Duplicate" placement="end">/);
-  assert.match(menu, /target\.kind === 'category' \|\| onDuplicate === undefined \? null/);
+  assert.match(menu, /target\.kind === 'category' \|\| onDuplicate === undefined \|\| canDuplicate\?\.\(target\) === false \? null/);
   assert.match(editor, /<Button label="Duplicate"/);
+});
+
+test('answers of the compacted history cannot be forked after their turn', async () => {
+  const {answersOfCompactedTurns} = await import('./session-fork.ts');
+  const messages = [
+    {id: 'resp-0', sender: 'assistant'},
+    {id: 'session-user-c12', sender: 'user'},
+    {id: 'resp-1', sender: 'assistant'},
+    {id: 'resp-1b', sender: 'assistant'},
+    {id: 'session-user-o0', sender: 'user'},
+    {id: 'resp-2', sender: 'assistant'},
+  ];
+  assert.deepEqual([...answersOfCompactedTurns(messages)], ['resp-1', 'resp-1b'], 'an answer with no user message before it stays forkable');
+});
+
+test('only a catalog profile can be forked or duplicated', async () => {
+  const {isForkableProfile} = await import('./session-fork.ts');
+  for (const profile of ['main/coder', 'a/b']) assert.equal(isForkableProfile(profile), true, profile);
+  for (const profile of [undefined, '', 'coder', '/coder', 'main/']) assert.equal(isForkableProfile(profile), false, String(profile));
+});
+
+test('the transcript and the row menu hide fork and Duplicate where the server refuses', async () => {
+  const {readFileSync} = await import('node:fs');
+  const view = readFileSync(new URL('./components/ViewPane.tsx', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+  const menu = readFileSync(new URL('./components/RowContextMenu.tsx', import.meta.url), 'utf8');
+  assert.match(view, /onFork=\{isFrontCompactionSelectionMode \|\| unforkableAnswers\.has\(message\.id\) \? undefined : forkMessage\}/);
+  assert.match(app, /if \(effectiveProfile !== undefined && !isForkableProfile\(effectiveProfile\)\) return undefined;/);
+  assert.match(app, /canDuplicate=\{canDuplicateRow\}/);
+  assert.match(menu, /canDuplicate\?\.\(target\) === false \? null :/);
 });

@@ -38,7 +38,7 @@ import {type DraftDecision} from './draft-answer';
 import {EMPTY_HISTORY_BLOCKS, type HistoryBlock, type HistoryBlocks, forgetHistoryBlock, forgetHistoryBlocks, historyBlockFor, historyEtagFromHeader, putHistoryBlock} from './history-blocks';
 import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput, userMessageImages} from './image-attachments';
-import {forkProfileName, forkSessionRef, sessionIdOf, sessionRefInRootOf} from './session-fork';
+import {forkProfileName, forkSessionRef, isForkableProfile, sessionIdOf, sessionRefInRootOf} from './session-fork';
 import {ForkDialog, type ForkDialogAnswer, type ForkDialogRequest} from './components/ForkDialog';
 import type {RowMenuTarget} from './components/RowContextMenu';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
@@ -2083,14 +2083,21 @@ function App({
       keepTurn,
     });
   }, [recordNotification]);
+  /** The profile a row menu's Duplicate copies: the row's own, else the session's current one. */
+  const duplicatedProfile = useCallback((rowTarget: RowMenuTarget): string | undefined => {
+    const session = sessions.find(candidate => (candidate.sessionRef ?? candidate.id) === rowTarget.sessionRef);
+    const rowProfile = rowTarget.kind === 'profile' ? profileOfViewKey(rowTarget.id) : undefined;
+    return rowProfile ?? session?.activeProfile ?? session?.defaultProfile;
+  }, [sessions]);
+  /** A profile row offers Duplicate only for a catalog profile: the server copies no other. */
+  const canDuplicateRow = useCallback((rowTarget: RowMenuTarget) =>
+    rowTarget.kind !== 'profile' || isForkableProfile(duplicatedProfile(rowTarget)), [duplicatedProfile]);
   /** Opens the dialog that duplicates a session or profile row. */
   const duplicateRow = useCallback((rowTarget: RowMenuTarget) => {
     if (rowTarget.sessionRef === undefined) return;
-    const session = sessions.find(candidate => (candidate.sessionRef ?? candidate.id) === rowTarget.sessionRef);
-    const rowProfile = rowTarget.kind === 'profile' ? profileOfViewKey(rowTarget.id) : undefined;
-    const profile = rowProfile ?? session?.activeProfile ?? session?.defaultProfile;
+    const profile = duplicatedProfile(rowTarget);
     if (rowTarget.kind === 'profile') {
-      if (profile === undefined) return;
+      if (profile === undefined || !isForkableProfile(profile)) return;
       const slash = profile.indexOf('/');
       setPendingFork({
         request: {
@@ -2119,7 +2126,7 @@ function App({
       sourceTitle: rowTarget.label,
       paneKey: rowTarget.id,
     });
-  }, [sessions]);
+  }, [duplicatedProfile]);
   const submitFork = useCallback(async (answer: ForkDialogAnswer) => {
     const pending = pendingFork;
     if (pending === null) return;
@@ -3643,6 +3650,7 @@ function App({
           canOpenPane={canOpenAnotherPane}
           paneLimit={paneLimit}
           onDuplicate={duplicateRow}
+          canDuplicate={canDuplicateRow}
           paneCount={panes.keys.length}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
@@ -3811,10 +3819,14 @@ function App({
                         onLoadFull={loadFullMessage}
                         onForkMessage={(() => {
                           if (!pane.isLive || pane.isRunning || pane.session === undefined || pane.sessionRef === undefined) return undefined;
+                          const effectiveProfile = pane.profile ?? pane.session.activeProfile ?? pane.session.defaultProfile;
+                          // Only a catalog profile can be forked; an unknown one still
+                          // offers the button, which explains what is missing.
+                          if (effectiveProfile !== undefined && !isForkableProfile(effectiveProfile)) return undefined;
                           forkTargetsRef.current.set(paneViewKey, {
                             sessionRef: pane.sessionRef,
                             profile: pane.profile,
-                            effectiveProfile: pane.profile ?? pane.session.activeProfile ?? pane.session.defaultProfile,
+                            effectiveProfile,
                             title: pane.label,
                             ...(pane.session.profileNames === undefined ? {} : {profileNames: pane.session.profileNames}),
                           });

@@ -16,12 +16,17 @@ func TestKeepToolPairsCountsAcrossAllKeptTurns(t *testing.T) {
 		name      string
 		pairs     int
 		turnsKept int
+		latest    bool
 		want      []string
 	}{
-		{"one pair over five turns", 1, 5, []string{"c4"}},
-		{"two pairs over five turns", 2, 5, []string{"c3", "c4"}},
-		{"more pairs than the kept turns hold", 9, 4, []string{"c1", "c2", "c3", "c4"}},
-		{"only the kept turns count", 3, 2, []string{"c3", "c4"}},
+		{"one pair over five turns", 1, 5, false, []string{"c4"}},
+		{"two pairs over five turns", 2, 5, false, []string{"c3", "c4"}},
+		{"more pairs than the kept turns hold", 9, 4, false, []string{"c1", "c2", "c3", "c4"}},
+		{"only the kept turns count", 3, 2, false, []string{"c3", "c4"}},
+		// KeepLatestTurn (overflow compaction) keeps the newest turn whole; the pairs are
+		// counted in the kept turns before it.
+		{"latest turn whole, one pair before it", 1, 3, true, []string{"c3", "c4"}},
+		{"latest turn whole with keep_turns 0", 0, 0, true, []string{"c4"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -59,7 +64,7 @@ func TestKeepToolPairsCountsAcrossAllKeptTurns(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: tc.turnsKept, KeepToolPairs: tc.pairs, BackupMode: "replace"}); err != nil {
+			if _, err := store.CompactHistory(CompactionOptions{TurnType: "assistant_final", KeepTurns: tc.turnsKept, KeepToolPairs: tc.pairs, KeepLatestTurn: tc.latest, BackupMode: "replace"}); err != nil {
 				t.Fatal(err)
 			}
 			raw, err := os.ReadFile(filepath.Join(staging, "compaction-cache.json"))

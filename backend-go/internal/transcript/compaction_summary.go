@@ -83,6 +83,9 @@ func (s *TurnStore) planCompaction(options CompactionOptions) (compactionPlan, e
 	} else if len(plan.selected) > options.KeepTurns {
 		plan.selected = plan.selected[len(plan.selected)-options.KeepTurns:]
 	}
+	if options.KeepLatestTurn && len(plan.selected) == 0 && len(plan.turns) > 0 {
+		plan.selected = plan.turns[len(plan.turns)-1:]
+	}
 	return plan, nil
 }
 

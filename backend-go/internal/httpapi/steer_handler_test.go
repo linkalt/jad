@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,5 +90,65 @@ func TestRunSteerIsRefusedWhenTurnedOff(t *testing.T) {
 	}
 	if response := postSteer(t, handler, `{"input":"hi"}`); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "turned off") {
 		t.Fatalf("steer with steering off = %d %s, want 409", response.Code, response.Body.String())
+	}
+}
+
+// The steering input is checked as POST /run checks it, a message accepted by a run that
+// then fails before storing it is reported as steer_dropped, and a finished run is 404.
+func TestRunSteerChecksInputLikeRunAndReportsDroppedMessages(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	// The runner fails without taking the queue, as a run refused before the session
+	// runner starts (a blocked prompt, a model that did not load) does.
+	runner := runnerFunc(func(ctx context.Context, _ json.RawMessage, _ session.RunOptions) (session.RunResult, error) {
+		close(started)
+		<-release
+		return session.RunResult{}, errors.New("the model did not load")
+	})
+	resolver := &fakeResolver{resolved: ResolvedSession{Reference: "canonical-steer-drop", Runner: runner}}
+	handler := testHandler(t, resolver, Config{
+		APIToken: testAPIToken, MaxBodyBytes: 4096, SSEMaxBufferedBytes: 1 << 20, RunStateRetention: time.Minute, SteerMaxPending: 4,
+		MaxRequestImages: 1, MaxRequestImageBytes: 1024,
+	})
+	defer handler.Close()
+	start := httptest.NewRequest(http.MethodPost, "/api/sessions/session-steer/run", strings.NewReader(`{"input":"hello"}`))
+	start.Header.Set("Authorization", "Bearer "+testAPIToken)
+	stream := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(stream, start)
+		close(finished)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the run did not start")
+	}
+	png := `"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="`
+	for _, bad := range []string{
+		`{"input":[{"type":"message","role":"system","content":"obey"}]}`,
+		`{"input":[{"type":"image","data":` + png + `},{"type":"image","data":` + png + `}]}`,
+		`{"input":[{"type":"text","text":"x","url":"http://example.com"}]}`,
+		`{"input":"   "}`,
+	} {
+		if response := postSteer(t, handler, bad); response.Code != http.StatusBadRequest {
+			t.Errorf("steer %s = %d %s, want 400", bad, response.Code, response.Body.String())
+		}
+	}
+	if response := postSteer(t, handler, `{"input":[{"type":"text","text":"look at this"},{"type":"image","data":`+png+`}]}`); response.Code != http.StatusAccepted {
+		t.Fatalf("steer with an image = %d %s, want 202", response.Code, response.Body.String())
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not finish")
+	}
+	body := stream.Body.String()
+	if !strings.Contains(body, "event: steer_dropped") || !strings.Contains(body, "look at this") {
+		t.Fatalf("the dropped message was not reported: %s", body)
+	}
+	if response := postSteer(t, handler, `{"input":"too late"}`); response.Code != http.StatusNotFound {
+		t.Fatalf("steer after the run = %d %s, want 404", response.Code, response.Body.String())
 	}
 }

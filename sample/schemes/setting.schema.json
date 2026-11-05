@@ -1179,11 +1179,11 @@
         },
         "overflow": {
           "type": "object",
-          "description": "When the provider refuses a round because the history is over the model's context window (its error text contains one of patterns, case-insensitive), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. Needs auto_enabled; a compaction that finds nothing to drop returns the provider's error.",
+          "description": "Off by default. When the provider refuses a round because the history is over the model's context window (its error contains one of patterns, case-insensitive: the code and message of a failed stream, or the text of an HTTP error), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. The run's own turn is kept whole, so only earlier turns are dropped. Needs auto_enabled; a compaction that finds nothing to drop returns the provider's error.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "default": true
+              "default": false
             },
             "max_attempts": {
               "type": "integer",

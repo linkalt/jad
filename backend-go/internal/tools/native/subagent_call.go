@@ -151,6 +151,8 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 			CallID:    callID,
 			Tools:     agent.catalog,
 			Execution: childExecution,
+			// Values only: a background child outlives the call that started it.
+			CallerValues: context.WithoutCancel(ctx),
 		},
 		processes:  agent.processes,
 		limit:      int(s.settings.MaxConcurrent),

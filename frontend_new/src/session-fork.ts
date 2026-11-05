@@ -41,6 +41,32 @@ export function forkPointMessage<M extends {id: string; sender: string}>(message
   return message;
 }
 
+/**
+ * The answers that cannot be a fork point after their turn: those whose turn starts with a
+ * user message of the compacted history. The server finds fork points in the live history
+ * only, so it refuses them (404). An answer with no user message before it in the list is
+ * left out: its own id may still name a live turn.
+ */
+export function answersOfCompactedTurns<M extends {id: string; sender: string}>(messages: readonly M[]): Set<string> {
+  const compacted = new Set<string>();
+  let turnIsCompacted = false;
+  for (const message of messages) {
+    if (message.sender === 'user') turnIsCompacted = !LIVE_USER_MESSAGE_ID.test(message.id);
+    else if (message.sender === 'assistant' && turnIsCompacted) compacted.add(message.id);
+  }
+  return compacted;
+}
+
+/**
+ * Whether a profile can be forked into a new profile (or duplicated): the server forks only
+ * a catalog profile, `<category>/<name>`, and answers 400 for any other.
+ */
+export function isForkableProfile(profile: string | undefined): boolean {
+  if (profile === undefined) return false;
+  const slash = profile.indexOf('/');
+  return slash > 0 && slash < profile.length - 1;
+}
+
 /** The longest profile name the server accepts for a fork. */
 const MAX_PROFILE_NAME = 200;
 

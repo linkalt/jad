@@ -72,7 +72,7 @@ type Compaction struct {
 	BackupMinTurns int
 	// Summary is compaction.summary (off by default).
 	Summary CompactionSummary
-	// Overflow is compaction.overflow (on by default, with auto_enabled).
+	// Overflow is compaction.overflow (off by default; needs auto_enabled).
 	Overflow CompactionOverflow
 }
 

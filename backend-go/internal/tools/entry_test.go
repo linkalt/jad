@@ -19,6 +19,11 @@ func TestProfileShowsCountsLazyEntriesAsAllowed(t *testing.T) {
 	lazy := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"bash"}, Lazy: []string{"read", "mcp:docs:*"}}
 	noLazy := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"bash"}}
 	emptyAllow := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"read"}}
+	search := Definition{ID: "mcp:docs:search", Source: "mcp", Name: "mcp__docs__search"}
+	narrowed := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:docs:search"}, Lazy: []string{"mcp:docs:*"}}
+	wholeServer := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:docs:*"}, Lazy: []string{"mcp:docs:*"}}
+	prefixServer := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:docsx:search"}, Lazy: []string{"mcp:docs:*"}}
+	exactLazy := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:docs:search"}, Lazy: []string{"mcp:docs:*", "mcp:docs:lookup"}}
 	denied := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"bash"}, Deny: []string{"read", "load_tool"}, Lazy: []string{"read"}}
 	for _, tc := range []struct {
 		name       string
@@ -39,6 +44,12 @@ func TestProfileShowsCountsLazyEntriesAsAllowed(t *testing.T) {
 		{"lazy but denied", denied, read, false},
 		{"load_tool denied", denied, loadTool, false},
 		{"not native load_tool", lazy, extensionLoadTool, false},
+		// A lazy wildcard does not widen an allow list that names some of the server's tools.
+		{"lazy wildcard, allow names another tool of the server", narrowed, lookup, false},
+		{"lazy wildcard, allow names this tool", narrowed, search, true},
+		{"lazy wildcard, allow names the whole server", wholeServer, lookup, true},
+		{"lazy wildcard, allow names a server with a longer name", prefixServer, lookup, true},
+		{"exact lazy entry beside a narrower allow", exactLazy, lookup, true},
 	} {
 		if got := ProfileShows(tc.settings, tc.definition); got != tc.want {
 			t.Errorf("%s: ProfileShows = %v, want %v", tc.name, got, tc.want)

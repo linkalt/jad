@@ -83,7 +83,7 @@ func TestBuildCatalogRequiresExactNativeMemoryManifest(t *testing.T) {
 	_, err = BuildCatalog(sessionfs.SessionConfig{
 		SettingPath: filepath.Join(directory, "setting.json"), ToolDefinitionPaths: []string{badManifest}, NativeMemory: &settings,
 	})
-	if err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") {
+	if err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") || !strings.Contains(err.Error(), "replaced with sample/tools/native/memory.json") {
 		t.Fatalf("mismatched memory schema error = %v", err)
 	}
 }

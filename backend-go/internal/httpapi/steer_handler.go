@@ -13,9 +13,12 @@ import (
 // /api/sessions/{ref}/run/steer with {"input": <string or input items>}, the input shapes
 // POST /run takes. The run stores it as user input before its next provider round, so the
 // model sees it without the run stopping; the stored items are published as a "steer"
-// event on the run stream. 202 answers {"steer":{"turn_id","pending"}}. No running run is
-// 404; a run that has finished taking messages, a full queue, or steering turned off
-// (server.steer_max_pending 0) is 409.
+// event on the run stream. 202 answers {"steer":{"turn_id","pending"}}. The input is checked
+// as POST /run checks it (shape, images and files against the server.max_request_* limits).
+// No running run (none, or only finished ones) is 404; a run that has finished taking
+// messages, a full queue, or steering turned off (server.steer_max_pending 0) is 409. A
+// message accepted but never stored because the run then failed or was stopped is reported
+// as a "steer_dropped" event.
 func (h *Handler) handleRunSteer(w http.ResponseWriter, r *http.Request, reference, profile string) {
 	resolved, err := h.resolve(r.Context(), reference, profile, "")
 	if err != nil {
@@ -23,7 +26,7 @@ func (h *Handler) handleRunSteer(w http.ResponseWriter, r *http.Request, referen
 		return
 	}
 	run := h.runs.current(h.runKey(resolved))
-	if run == nil {
+	if run == nil || run.state() != "running" {
 		writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "no run of this session is running; start a run instead"})
 		return
 	}
@@ -31,7 +34,7 @@ func (h *Handler) handleRunSteer(w http.ResponseWriter, r *http.Request, referen
 		writeJSONError(w, &StatusError{Code: http.StatusConflict, Message: "steering a run is turned off (server.steer_max_pending is 0)"})
 		return
 	}
-	fields, err := readInteractionBody(w, r, h.maxBodyBytes)
+	fields, err := readInteractionBody(w, r, h.runBodyLimit())
 	if err != nil {
 		writeJSONError(w, err)
 		return
@@ -42,9 +45,14 @@ func (h *Handler) handleRunSteer(w http.ResponseWriter, r *http.Request, referen
 			return
 		}
 	}
-	input, ok := fields["input"]
-	if !ok || strings.TrimSpace(string(input)) == "null" || strings.TrimSpace(string(input)) == `""` {
+	raw, ok := fields["input"]
+	if !ok || strings.TrimSpace(string(raw)) == "null" {
 		writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "input is required"})
+		return
+	}
+	input, err := parseRunInput(raw, h.runInputLimits)
+	if err != nil {
+		writeJSONError(w, err)
 		return
 	}
 	pending, err := run.steer.Push(input)

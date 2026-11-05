@@ -28,7 +28,7 @@ import {PANE_HEADER_Z_INDEX} from '../panel-layers';
 import {conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
-import {forkPointMessage} from '../session-fork';
+import {answersOfCompactedTurns, forkPointMessage} from '../session-fork';
 import {profileMessageBusyNote, profileMessageRunLabel} from '../session-views';
 import {useActiveTranscript} from '../use-active-transcript';
 import {useRowWidth} from '../use-row-width';
@@ -337,6 +337,9 @@ export function ViewPane({
     : (message: MessageRecord, keepTurn: boolean) =>
       onForkMessage(forkPointMessage(forkMessagesRef.current, message, keepTurn), keepTurn),
   [onForkMessage]);
+  // Answers of the compacted history get no "Fork after this turn": the server cannot
+  // find their turn.
+  const unforkableAnswers = useMemo(() => answersOfCompactedTurns(visibleMessages), [visibleMessages]);
   /**
    * This pane's own right-edge panel.
    *
@@ -595,7 +598,7 @@ export function ViewPane({
                       onSelectFrontCompaction={isFrontCompactionSelectionMode
                         ? onSelectFrontCompaction
                         : undefined}
-                      onFork={isFrontCompactionSelectionMode ? undefined : forkMessage}
+                      onFork={isFrontCompactionSelectionMode || unforkableAnswers.has(message.id) ? undefined : forkMessage}
                     />
                     {placedFailures.byMessageId.get(message.id)?.map(failure => (
                       <RunFailureRow key={failure.turn_id} failure={failure} />
