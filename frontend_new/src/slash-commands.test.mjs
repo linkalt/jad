@@ -292,3 +292,11 @@ test('a source that stays down is tried again alone: the others keep their own r
   assert.equal(resourceLoads, 1, 'the MCP resources are not fetched again before refreshMs');
   assert.ok(ids(await menu.search('mcp:')).includes('mcp:docs:standup'), 'what loaded stays listed');
 });
+
+test('a library that could not list its commands shows why where the commands would be', () => {
+  const entries = slashEntries(SLASH_COMMANDS, {...CATALOG, commands: [], commandsError: 'folder is a file'}).map(entry => entry.item);
+  assert.deepEqual(ids(entries).slice(0, 6), ['compact', 'state', 'reset', 'plan', 'commands-unavailable', 'prompt:software-engineering']);
+  const notice = entries.find(item => item.id === 'commands-unavailable');
+  assert.deepEqual(notice.auxiliaryData, {type: 'notice', message: 'Custom commands are unavailable: folder is a file'});
+  assert.equal(ids(slashEntries(SLASH_COMMANDS, {...CATALOG, commands: []}).map(entry => entry.item)).includes('commands-unavailable'), false);
+});

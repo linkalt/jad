@@ -279,7 +279,9 @@ func (o commandOptions) apply(request *Request) {
 
 // customCommandText finds the custom command named by the word and returns its text
 // filled with the command's text as arguments, as the expand route gives it. A word the
-// library has no command for is errNotACommand.
+// library has no command for is errNotACommand, unless the library could not list its
+// commands (commands_error): the word may then be a command that is not listed, so it is
+// refused with the reason instead of being sent to the model as a prompt.
 func (r *Runner) customCommandText(ctx context.Context, command Command) (string, commandOptions, error) {
 	raw, err := r.call(ctx, http.MethodGet, "/api/library", nil)
 	if err != nil {
@@ -290,6 +292,7 @@ func (r *Runner) customCommandText(ctx context.Context, command Command) (string
 			ID      string `json:"id"`
 			Command string `json:"command"`
 		} `json:"commands"`
+		CommandsError string `json:"commands_error"`
 	}
 	if err := json.Unmarshal(raw, &catalog); err != nil {
 		return "", commandOptions{}, fmt.Errorf("read the library: %w", err)
@@ -310,6 +313,9 @@ func (r *Runner) customCommandText(ctx context.Context, command Command) (string
 			return "", commandOptions{}, fmt.Errorf("read the command's text: %w", err)
 		}
 		return expanded.Text, expanded.commandOptions, nil
+	}
+	if catalog.CommandsError != "" {
+		return "", commandOptions{}, fmt.Errorf("/%s: the library's commands could not be listed: %s (use --no-commands to send the text as a prompt)", command.Item, catalog.CommandsError)
 	}
 	return "", commandOptions{}, errNotACommand
 }

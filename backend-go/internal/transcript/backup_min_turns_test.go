@@ -107,3 +107,21 @@ func TestCompactHistoryKeepsFullerReplaceBackup(t *testing.T) {
 		t.Fatalf("fuller backup was overwritten: %q", after)
 	}
 }
+
+// A steering record continues the run's turn, so backup_min_turns does not count it, as
+// compaction does not start a turn at it.
+func TestCountUserTurnsSkipsSteeringRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	records := `{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"}]}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"also this"}],"` + SessionInputSteerField + `":true}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"b"}]}
+{"type":"message","role":"user","content":[{"type":"input_text","text":"next"}]}
+`
+	if err := os.WriteFile(path, []byte(records), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if turns, err := countUserTurns(path); err != nil || turns != 2 {
+		t.Fatalf("turns = %d, %v; want 2", turns, err)
+	}
+}

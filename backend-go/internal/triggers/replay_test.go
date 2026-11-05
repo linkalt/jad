@@ -39,7 +39,7 @@ func replayManager(t *testing.T, windowMS int64, timestampHeader string) (http.H
 	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
 	config := settings(webhookEntry())
 	config.HistoryLimit = 100
-	config.ReplayWindowMS, config.TimestampHeader = windowMS, timestampHeader
+	config.ReplayWindowMS, config.TimestampHeader, config.ReplayMaxRecords = windowMS, timestampHeader, 100
 	manager, err := New(Options{Settings: config, Environment: map[string]string{"CI_SECRET": "s3cret"}, Runner: runner, APIToken: "api-token", Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
@@ -143,17 +143,47 @@ func TestWebhookTimestampBindsTheSignatureToTheTime(t *testing.T) {
 // The record of accepted signatures drops what the window no longer covers.
 func TestDeliveredSignaturesExpire(t *testing.T) {
 	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
-	manager := &Manager{settings: sessionfs.TriggerSettings{ReplayWindowMS: 1000}, now: clock.Now, delivered: map[string]time.Time{}}
+	manager := &Manager{settings: sessionfs.TriggerSettings{ReplayWindowMS: 1000, ReplayMaxRecords: 100}, now: clock.Now, delivered: map[string]time.Time{}}
 	for index := range 5 {
 		manager.firstDelivery("ci", []byte{byte(index)}, time.Time{})
 	}
 	clock.advance(1001 * time.Millisecond)
 	manager.firstDelivery("ci", []byte{9}, time.Time{})
-	if len(manager.delivered) != 1 {
-		t.Fatalf("delivered holds %d signatures, want 1", len(manager.delivered))
+	if len(manager.delivered) != 1 || len(manager.expiries) != 1 {
+		t.Fatalf("delivered holds %d signatures and %d expiries, want 1", len(manager.delivered), len(manager.expiries))
 	}
-	if _, first := manager.firstDelivery("other", []byte{9}, time.Time{}); !first {
+	if _, first, _ := manager.firstDelivery("other", []byte{9}, time.Time{}); !first {
 		t.Fatal("a signature accepted by one trigger was refused by another")
+	}
+}
+
+// A full replay record refuses a new signature instead of dropping a live record, which
+// would let that request run again; it takes new ones once records expire. A repeat of a
+// recorded signature is still a repeat. Forgotten records do not grow the heap for ever.
+func TestReplayRecordIsBounded(t *testing.T) {
+	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
+	manager := &Manager{settings: sessionfs.TriggerSettings{ReplayWindowMS: 1000, ReplayMaxRecords: 3}, now: clock.Now, delivered: map[string]time.Time{}}
+	for index := range 3 {
+		if _, first, full := manager.firstDelivery("ci", []byte{byte(index)}, time.Time{}); !first || full {
+			t.Fatalf("signature %d: first %v full %v", index, first, full)
+		}
+	}
+	if _, first, full := manager.firstDelivery("ci", []byte{9}, time.Time{}); first || !full {
+		t.Fatalf("a new signature with the record full: first %v full %v, want refused as full", first, full)
+	}
+	if _, first, full := manager.firstDelivery("ci", []byte{0}, time.Time{}); first || full {
+		t.Fatalf("a repeat with the record full: first %v full %v, want a repeat", first, full)
+	}
+	clock.advance(1001 * time.Millisecond)
+	if _, first, full := manager.firstDelivery("ci", []byte{9}, time.Time{}); !first || full {
+		t.Fatalf("after the records expired: first %v full %v", first, full)
+	}
+	for index := range 500 {
+		key, _, _ := manager.firstDelivery("busy", []byte{byte(index), byte(index >> 8)}, time.Time{})
+		manager.forgetDelivery(key)
+	}
+	if len(manager.delivered) != 1 || len(manager.expiries) > 2*len(manager.delivered)+65 {
+		t.Fatalf("after 500 forgotten records: %d records, %d heap entries", len(manager.delivered), len(manager.expiries))
 	}
 }
 
@@ -163,7 +193,7 @@ func TestWebhookRefusedFiringKeepsTheSignature(t *testing.T) {
 	runner := newFakeRunner()
 	clock := &clock{now: time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)}
 	config := settings(webhookEntry())
-	config.HistoryLimit, config.ReplayWindowMS = 100, 60_000
+	config.HistoryLimit, config.ReplayWindowMS, config.ReplayMaxRecords = 100, 60_000, 100
 	manager, err := New(Options{Settings: config, Environment: map[string]string{"CI_SECRET": "s3cret"}, Runner: runner, APIToken: "api-token", Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)

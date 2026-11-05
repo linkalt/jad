@@ -109,6 +109,9 @@ func TestTriggerSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"replay_window_ms":999,"timestamp_header":"X-Time"}`, false},
 		{`{"replay_window_ms":1000,"timestamp_header":"X-Time"}`, true},
 		{`{"replay_window_ms":999}`, true},
+		{`{"replay_max_records":1000000}`, true},
+		{`{"replay_max_records":0}`, false},
+		{`{"replay_max_records":1000001}`, false},
 	} {
 		if got := schemaAccepts(t, schema, test.raw); got != test.accept {
 			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
@@ -228,8 +231,11 @@ func TestTriggerNotifySchemaAgreesWithTheLoader(t *testing.T) {
 
 func TestTriggerReplaySettings(t *testing.T) {
 	got, err := normalizeTriggers(json.RawMessage(`{}`), "s")
-	if err != nil || got.ReplayWindowMS != 0 || got.TimestampHeader != "" {
+	if err != nil || got.ReplayWindowMS != 0 || got.TimestampHeader != "" || got.ReplayMaxRecords != 10_000 {
 		t.Fatalf("defaults = %+v, %v", got, err)
+	}
+	if got, err = normalizeTriggers(json.RawMessage(`{"replay_max_records":5}`), "s"); err != nil || got.ReplayMaxRecords != 5 {
+		t.Fatalf("replay_max_records = %+v, %v", got, err)
 	}
 	got, err = normalizeTriggers(json.RawMessage(`{"replay_window_ms":300000,"timestamp_header":"x-jad-timestamp"}`), "s")
 	if err != nil || got.ReplayWindowMS != 300000 || got.TimestampHeader != "X-Jad-Timestamp" {
@@ -238,6 +244,7 @@ func TestTriggerReplaySettings(t *testing.T) {
 	for raw, want := range map[string]string{
 		`{"replay_window_ms":-1}`:                                            "replay_window_ms must be a safe integer between 0 and 86400000",
 		`{"replay_window_ms":86400001}`:                                      "replay_window_ms must be a safe integer between 0 and 86400000",
+		`{"replay_max_records":0}`:                                           "replay_max_records must be a safe integer between 1 and 1000000",
 		`{"timestamp_header":"X-Time"}`:                                      "timestamp_header needs replay_window_ms",
 		`{"replay_window_ms":999,"timestamp_header":"X-Time"}`:               "timestamp_header needs replay_window_ms of at least 1000",
 		`{"replay_window_ms":1000,"timestamp_header":"X Time"}`:              "timestamp_header must be an HTTP header name",

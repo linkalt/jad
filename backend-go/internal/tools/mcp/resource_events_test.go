@@ -59,6 +59,10 @@ func waitForEvents(t *testing.T, manager *Manager, want int) []ResourceEvent {
 
 const watchFixtureEnvironment = "JAD_MCP_WATCH_FIXTURE"
 
+// watchFixtureNoAckEnvironment, set to 1, makes the watch fixture drop its subscription
+// acknowledgements: a listen-protocol server that never acknowledges.
+const watchFixtureNoAckEnvironment = "JAD_MCP_WATCH_FIXTURE_NO_ACK"
+
 // TestMCPWatchFixtureProcess is the stdio server of the subscription test: one resource,
 // subscriptions on, and a "touch" tool that reports the resource changed and adds another
 // resource (a list change). It does nothing unless started as the fixture.
@@ -67,6 +71,16 @@ func TestMCPWatchFixtureProcess(t *testing.T) {
 		return
 	}
 	server, _ := newWatchServer(true)
+	if os.Getenv(watchFixtureNoAckEnvironment) == "1" {
+		server.AddSendingMiddleware(func(next mcpSDK.MethodHandler) mcpSDK.MethodHandler {
+			return func(ctx context.Context, method string, request mcpSDK.Request) (mcpSDK.Result, error) {
+				if method == methodSubscriptionsAcknowledged {
+					return nil, nil
+				}
+				return next(ctx, method, request)
+			}
+		})
+	}
 	server.AddTool(&mcpSDK.Tool{Name: "touch", InputSchema: json.RawMessage(`{"type":"object"}`)}, func(ctx context.Context, _ *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
 		_ = server.ResourceUpdated(ctx, &mcpSDK.ResourceUpdatedNotificationParams{URI: "docs://plan"})
 		server.AddResource(&mcpSDK.Resource{URI: "docs://new", Name: "new"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
@@ -155,6 +169,72 @@ func TestResourceSubscriptionsRecordChangesAndTellTheNextRunOnce(t *testing.T) {
 	}
 	if _, _, subscriptions := manager.ResourceEvents(0); len(subscriptions) != 0 {
 		t.Fatalf("subscriptions after unsubscribe = %+v", subscriptions)
+	}
+}
+
+// A new connection makes the subscriptions again in one request: with a server that
+// acknowledges they all work again, and with one that never does they are all dropped after
+// one timeout_ms, not one per subscription.
+func TestResubscribeWaitsForTheAcknowledgementsTogether(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "watch.json")
+	writeConfig := func(noAck string, timeoutMS int) {
+		config, _ := json.Marshal(map[string]any{
+			"transport":           map[string]any{"type": "stdio", "command": mustExecutable(t), "args": []string{"-test.run=^TestMCPWatchFixtureProcess$"}, "cwd": directory, "env": map[string]string{watchFixtureEnvironment: "1", watchFixtureNoAckEnvironment: noAck}},
+			"timeout_ms":          timeoutMS,
+			"resource_events_max": 10,
+		})
+		if err := os.WriteFile(configPath, config, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig("0", 2_000)
+	servers := []sessionfs.MCPServerReference{{ID: "docs", ConfigPath: configPath, Enabled: true, Resources: true}}
+	manager := NewManager(currentEnvironment())
+	defer manager.Close()
+	if _, err := manager.LoadTools(context.Background(), servers, directory); err != nil {
+		t.Fatal(err)
+	}
+	uris := []string{"docs://a", "docs://b", "docs://c", "docs://plan"}
+	for _, uri := range uris {
+		if err := manager.SubscribeUserResource(context.Background(), servers, directory, "docs", uri, true); err != nil {
+			t.Fatalf("subscribe %s: %v", uri, err)
+		}
+	}
+	// A changed config is a new connection: an acknowledging server keeps every subscription.
+	writeConfig("0", 2_001)
+	loaded, err := manager.LoadTools(context.Background(), servers, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, subscriptions := manager.ResourceEvents(0); len(subscriptions) != len(uris) {
+		t.Fatalf("subscriptions after a reconnect = %+v", subscriptions)
+	}
+	for index := range loaded {
+		if loaded[index].Definition.ID == "mcp:docs:touch" {
+			if _, err := loaded[index].ExecuteOutput(context.Background(), map[string]any{}, tools.ExecutionContext{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	found := false
+	for _, event := range waitForEvents(t, manager, 2) {
+		found = found || (event.Kind == ResourceEventUpdated && event.URI == "docs://plan")
+	}
+	if !found {
+		t.Fatal("no update of docs://plan after the reconnect")
+	}
+	// A server that never acknowledges: the four subscriptions cost one timeout, together.
+	writeConfig("1", 1_000)
+	started := time.Now()
+	if _, err := manager.LoadTools(context.Background(), servers, directory); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(started); took > 3*time.Second {
+		t.Fatalf("reconnecting with %d unacknowledged subscriptions took %s, want about one timeout_ms", len(uris), took)
+	}
+	if _, _, subscriptions := manager.ResourceEvents(0); len(subscriptions) != 0 {
+		t.Fatalf("unacknowledged subscriptions were kept: %+v", subscriptions)
 	}
 }
 

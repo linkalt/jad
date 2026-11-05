@@ -73,3 +73,13 @@ test('expand posts the arguments and returns the text, or the server refusal', a
   reply = () => json({command: 'p', text: 'Plan.', plan: 'yes'});
   await assert.rejects(expandRootLibraryCommand('c1', ''), /invalid command data/);
 });
+
+test('the catalog carries why the commands could not be listed, and refuses a non-string reason', async () => {
+  reply = () => json({...empty, commands: [], commands_error: 'library directory .agent/commands is not a directory'});
+  const catalog = await fetchRootLibrary();
+  assert.equal(catalog.commandsError, 'library directory .agent/commands is not a directory');
+  reply = () => json({...empty, commands: []});
+  assert.equal('commandsError' in (await fetchRootLibrary()), false);
+  reply = () => json({...empty, commands: [], commands_error: 3});
+  await assert.rejects(fetchRootLibrary(), /invalid library data/);
+});

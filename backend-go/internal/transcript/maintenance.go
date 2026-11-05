@@ -580,11 +580,12 @@ func compactedInputBytes(items [][]byte) int {
 }
 
 // countUserTurns counts the records of a transcript file that are user messages
-// (role == "user"). It reads the file as it is on disk: no compaction overlay, and
-// each record of an input batch counts, where the web UI's backup reader merges a
-// batch into one turn. A steering message (SessionInputSteerField) counts as a turn
-// here, as it does for the session's turn numbers and the web UI, while
-// CompactHistory keeps it in the turn of the run it steered.
+// (role == "user") and start a turn. It reads the file as it is on disk: no
+// compaction overlay, and each record of an input batch counts, where the web UI's
+// backup reader merges a batch into one turn. A record marked as steering
+// (SessionInputSteerField: a steering message or a stop hook's message) continues the
+// run's turn and is not counted, as CompactHistory does not start a turn at it. The
+// session's turn numbers and the web UI still count it as a turn of its own.
 func countUserTurns(path string) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -601,7 +602,8 @@ func countUserTurns(path string) (int, error) {
 				return 0, err
 			}
 			if roleRaw, ok := fieldValue(fields, "role"); ok {
-				if role, _ := stringValue(roleRaw); role == "user" {
+				steered, marked := fieldValue(fields, SessionInputSteerField)
+				if role, _ := stringValue(roleRaw); role == "user" && !(marked && string(steered) == "true") {
 					turns++
 				}
 			}

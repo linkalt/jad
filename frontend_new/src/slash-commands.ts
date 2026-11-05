@@ -41,7 +41,12 @@ export type SlashSelection =
   | {type: 'library'; kind: RootLibraryKind; id: string; name: string}
   | {type: 'mcp'; prompt: MCPPrompt}
   | {type: 'custom'; command: RootLibraryCommand}
-  | {type: 'resource'; resource: MCPResource};
+  | {type: 'resource'; resource: MCPResource}
+  /** Not an item: why the custom commands are missing. Picking it shows the reason. */
+  | {type: 'notice'; message: string};
+
+/** The id of the entry that says the custom commands could not be listed. */
+export const COMMANDS_UNAVAILABLE_ID = 'commands-unavailable';
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
@@ -170,6 +175,15 @@ export function slashEntries(
     terms: [command.description.toLowerCase(), ...command.keywords.map(word => word.toLowerCase())],
   }));
   if (catalog !== null) {
+    if (catalog.commandsError !== undefined) {
+      // The server could not list the custom commands (a broken command folder): say so
+      // where they would have been, instead of a menu that silently lacks them.
+      const message = `Custom commands are unavailable: ${catalog.commandsError}`;
+      entries.push({
+        item: {id: COMMANDS_UNAVAILABLE_ID, label: '/commands: unavailable', auxiliaryData: {type: 'notice', message}},
+        terms: ['commands', 'custom', catalog.commandsError.toLowerCase()],
+      });
+    }
     entries.push(...customEntries(catalog.commands ?? [], taken));
     for (const items of [catalog.prompts, catalog.templates, catalog.skills]) {
       entries.push(...libraryEntries(items, taken));

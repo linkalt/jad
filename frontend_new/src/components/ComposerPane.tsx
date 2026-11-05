@@ -934,6 +934,10 @@ export function ComposerPane({
   // A library pick inserts the way the prompt library panel does: a prompt by its
   // length rule, a template as plain text, a skill as a badge.
   slashPickRef.current = selection => {
+    if (selection.type === 'notice') {
+      onSlashError?.(selection.message);
+      return;
+    }
     if (selection.type === 'resource') {
       if (selection.resource.uriTemplate !== undefined && selection.resource.variables.length > 0) {
         setVariableResource(selection.resource);

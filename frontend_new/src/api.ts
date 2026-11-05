@@ -623,6 +623,8 @@ export interface RootLibraryCatalog {
   skills: RootLibraryAssetSummary[];
   /** Listed by the `/` menu only; an older server sends none. */
   commands: RootLibraryCommand[];
+  /** Why the server could not list the commands (`commands_error`); absent when it could. */
+  commandsError?: string;
 }
 
 function parseRootLibraryCommand(value: unknown): RootLibraryCommand | null {
@@ -692,7 +694,28 @@ export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibrar
       commands.push(command);
     }
   }
-  return {prompts, templates, skills, commands};
+  if (value.commands_error !== undefined && typeof value.commands_error !== 'string') {
+    throw new Error('the server returned invalid library data');
+  }
+  const commandsError = typeof value.commands_error === 'string' && value.commands_error !== '' ? value.commands_error : undefined;
+  return {prompts, templates, skills, commands, ...(commandsError !== undefined ? {commandsError} : {})};
+}
+
+/** The server settings a client must follow (GET /api/server). */
+export interface ServerInfo {
+  /** server.fork_name_max_bytes: the longest name a fork into a new profile may give. */
+  forkNameMaxBytes: number;
+}
+
+/** Reads GET /api/server; an older server without the route answers 404, which rejects. */
+export async function fetchServerInfo(signal?: AbortSignal): Promise<ServerInfo> {
+  const response = await authenticatedFetch(apiUrl('/server'), {signal, cache: 'no-store'});
+  if (!response.ok) throw new Error(await readError(response));
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.fork_name_max_bytes !== 'number' || !Number.isInteger(value.fork_name_max_bytes) || value.fork_name_max_bytes < 1) {
+    throw new Error('the server returned invalid server info');
+  }
+  return {forkNameMaxBytes: value.fork_name_max_bytes};
 }
 
 /** A custom command's text, filled with the arguments typed for it. */

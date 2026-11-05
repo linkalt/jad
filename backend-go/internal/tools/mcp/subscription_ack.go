@@ -94,6 +94,47 @@ func usesListenSubscriptions(session *mcpSDK.ClientSession) bool {
 	return result != nil && result.ProtocolVersion >= listenProtocolVersion
 }
 
+// subscribeAllAcknowledged is subscribeAcknowledged for several URIs at once: under the
+// listen protocol it sends every subscribe, then waits for all the acknowledgements until
+// ctx ends. It returns the URIs that failed or were not acknowledged in time, each
+// withdrawn again.
+func (m *Manager) subscribeAllAcknowledged(ctx context.Context, serverID string, session *mcpSDK.ClientSession, uris []string) []string {
+	var failed []string
+	if !usesListenSubscriptions(session) {
+		for _, uri := range uris {
+			if err := session.Subscribe(ctx, &mcpSDK.SubscribeParams{URI: uri}); err != nil {
+				failed = append(failed, uri)
+			}
+		}
+		return failed
+	}
+	waiting := map[string]chan struct{}{}
+	for _, uri := range uris {
+		acked := m.acks.wait(serverID, uri)
+		if err := session.Subscribe(ctx, &mcpSDK.SubscribeParams{URI: uri}); err != nil {
+			m.acks.forget(serverID, uri, acked)
+			failed = append(failed, uri)
+			continue
+		}
+		waiting[uri] = acked
+	}
+	for _, uri := range uris {
+		acked, ok := waiting[uri]
+		if !ok {
+			continue
+		}
+		select {
+		case <-acked:
+		case <-ctx.Done():
+			m.acks.forget(serverID, uri, acked)
+			// As in subscribeAcknowledged: withdraw the listen, so a later subscribe sends a new one.
+			_ = session.Unsubscribe(context.WithoutCancel(ctx), &mcpSDK.UnsubscribeParams{URI: uri})
+			failed = append(failed, uri)
+		}
+	}
+	return failed
+}
+
 // subscribeAcknowledged subscribes the session to uri and, under the listen protocol, waits
 // until the server acknowledged it (or ctx ends), so a change right after the subscribe is
 // not lost. A subscription the server does not acknowledge in time is withdrawn and refused.

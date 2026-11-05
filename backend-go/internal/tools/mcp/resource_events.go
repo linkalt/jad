@@ -143,16 +143,25 @@ func (m *Manager) clientOptions(serverID string, limit int) *mcpSDK.ClientOption
 	}
 }
 
-// resubscribe makes the subscriptions of a server again on a new connection. A server that
-// refuses one is left without it, and the subscription is dropped.
+// resubscribe makes the subscriptions of a server again on a new connection, in one
+// request: every subscribe is sent first and the acknowledgements are awaited together, so
+// a server that never acknowledges costs one timeout_ms, not one per subscription. A
+// subscription the server refuses or does not acknowledge in time is dropped.
 func (m *Manager) resubscribe(ctx context.Context, current *connection) {
-	for _, uri := range m.events.subscriptions(current.serverID) {
-		err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
-			return m.subscribeAcknowledged(ctx, current.serverID, session, uri)
-		})
-		if err != nil {
-			m.events.setSubscribed(current.serverID, uri, false)
-		}
+	uris := m.events.subscriptions(current.serverID)
+	if len(uris) == 0 {
+		return
+	}
+	var failed []string
+	err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
+		failed = m.subscribeAllAcknowledged(ctx, current.serverID, session, uris)
+		return nil
+	})
+	if err != nil {
+		failed = uris
+	}
+	for _, uri := range failed {
+		m.events.setSubscribed(current.serverID, uri, false)
 	}
 }
 

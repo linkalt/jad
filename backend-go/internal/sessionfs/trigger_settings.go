@@ -30,6 +30,10 @@ const (
 	// minTriggerTimestampWindowMS is the least replay_window_ms that timestamp_header takes:
 	// one second, the timestamp's resolution.
 	minTriggerTimestampWindowMS int64 = 1000
+	// server.triggers.replay_max_records: the most accepted signatures the replay record
+	// holds at once, and its upper bound.
+	defaultTriggerReplayMaxRecords int64 = 10_000
+	maxTriggerReplayMaxRecords     int64 = 1_000_000
 
 	defaultTriggerNotifyTimeoutMS    int64 = 10_000
 	maxTriggerNotifyTimeoutMS        int64 = 120_000
@@ -64,7 +68,7 @@ var triggerNotifyKeys = []string{"url", "url_env", "format", "template", "header
 // triggerHeaderPattern is an HTTP header name (an RFC 9110 token).
 var triggerHeaderPattern = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
-var triggerKeys = []string{"enabled", "max_payload_bytes", "history_limit", "signature_header", "replay_window_ms", "timestamp_header", "notify", "entries"}
+var triggerKeys = []string{"enabled", "max_payload_bytes", "history_limit", "signature_header", "replay_window_ms", "replay_max_records", "timestamp_header", "notify", "entries"}
 
 var triggerEntryKeys = []string{"enabled", "session", "profile", "model", "prompt", "schedule", "timezone", "webhook", "timeout_ms", "notify"}
 
@@ -85,6 +89,10 @@ type TriggerSettings struct {
 	// ReplayWindowMS, when above zero, refuses a webhook whose signature was already
 	// accepted in that many milliseconds (409). Zero, the default, keeps no record.
 	ReplayWindowMS int64
+	// ReplayMaxRecords is the most signatures the replay record holds at once. With the
+	// record full, a new signed request is refused (503) until records expire: dropping
+	// one early would let its request run again.
+	ReplayMaxRecords int64
 	// TimestampHeader, when set, is the header that carries the request's time in Unix
 	// seconds. The signature then covers "<timestamp>.<body>", and a request whose time is
 	// more than ReplayWindowMS from the server's is refused (401). It needs
@@ -153,7 +161,7 @@ type TriggerEntry struct {
 }
 
 func defaultTriggerSettings() TriggerSettings {
-	return TriggerSettings{MaxPayloadBytes: defaultTriggerMaxPayloadBytes, HistoryLimit: defaultTriggerHistoryLimit, SignatureHeader: defaultTriggerSignatureHeader}
+	return TriggerSettings{MaxPayloadBytes: defaultTriggerMaxPayloadBytes, HistoryLimit: defaultTriggerHistoryLimit, SignatureHeader: defaultTriggerSignatureHeader, ReplayMaxRecords: defaultTriggerReplayMaxRecords}
 }
 
 func normalizeTriggers(raw json.RawMessage, path string) (TriggerSettings, error) {
@@ -189,6 +197,9 @@ func normalizeTriggers(raw json.RawMessage, path string) (TriggerSettings, error
 	}
 	settings.SignatureHeader = textproto.CanonicalMIMEHeaderKey(settings.SignatureHeader)
 	if settings.ReplayWindowMS, err = configuredInteger(fields, "replay_window_ms", 0, 0, maxTriggerReplayWindowMS, path, section); err != nil {
+		return TriggerSettings{}, err
+	}
+	if settings.ReplayMaxRecords, err = configuredInteger(fields, "replay_max_records", defaultTriggerReplayMaxRecords, 1, maxTriggerReplayMaxRecords, path, section); err != nil {
 		return TriggerSettings{}, err
 	}
 	if settings.TimestampHeader, err = bashString(fields, "timestamp_header", "", path+": "+section, false); err != nil {

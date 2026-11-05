@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-// storeStopMessage appends the message a stop hook asked the run to go on with.
+// storeStopMessage appends the message a stop hook asked the run to go on with. It is
+// stored as steering input (transcript.SessionInputSteerField), like a steering message: it
+// continues the run's turn, so compaction keeps it with the run's earlier rounds instead of
+// starting a turn at it.
 func (r *Runner) storeStopMessage(message string, options RunOptions) error {
 	role := options.StopMessageRole
 	if role == "" {
@@ -24,7 +27,7 @@ func (r *Runner) storeStopMessage(message string, options RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("encode the stop hook's message: %w", err)
 	}
-	if _, err := r.store.AppendInputItemsAt(item); err != nil {
+	if _, err := r.store.AppendSteerInputItemsAt(item); err != nil {
 		return fmt.Errorf("persist the stop hook's message: %w", err)
 	}
 	return nil

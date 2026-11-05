@@ -14,7 +14,8 @@ import (
 )
 
 // A round a stop hook adds is not started once max_run_tokens is reached: the run returns
-// the cap and the hook's message is not stored.
+// the cap, and the hook is not even run, so its side effects do not happen for a round
+// that could not start.
 func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 	streamer := &multiRoundStreamer{rounds: [][]responses.Event{tokenRound(0, 0, seventyTokens), tokenRound(1, 0, seventyTokens)}}
 	store, journal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
@@ -22,14 +23,18 @@ func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hookRuns := 0
 	_, err = runner.Run(context.Background(), json.RawMessage(`"go"`), RunOptions{
 		MaxRunTokens:     50,
 		StopMaxContinues: 3,
-		OnStop:           func(context.Context, string, string, int) (string, error) { return "keep going", nil },
+		OnStop:           func(context.Context, string, string, int) (string, error) { hookRuns++; return "keep going", nil },
 	})
 	var limit *RunTokenLimitError
 	if !errors.As(err, &limit) {
 		t.Fatalf("Run() error = %v, want the run token cap", err)
+	}
+	if hookRuns != 0 {
+		t.Fatalf("the stop hook ran %d times with the cap reached, want 0", hookRuns)
 	}
 	if len(streamer.requests) != 1 {
 		t.Fatalf("provider requests = %d, want 1", len(streamer.requests))

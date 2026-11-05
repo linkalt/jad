@@ -5,6 +5,7 @@
 package triggers
 
 import (
+	"container/heap"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -106,8 +107,12 @@ type Manager struct {
 	closed  bool
 	// delivered holds the accepted signatures still inside their replay window, by trigger
 	// name and signature, with the time each record expires. Only signed requests enter
-	// it, so it grows with the senders' own traffic. Empty when replay_window_ms is 0.
+	// it, so it grows with the senders' own traffic, at most to replay_max_records. Empty
+	// when replay_window_ms is 0. expiries orders the same records by expiry, so pruning
+	// looks only at the expired ones; an entry whose record was forgotten or replaced is
+	// skipped when it comes up.
 	delivered map[string]time.Time
+	expiries  expiryHeap
 }
 
 // New checks the settings against the environment: every webhook's secret variable must be
@@ -322,7 +327,12 @@ func (m *Manager) serveWebhook(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, http.StatusUnauthorized, "missing or wrong "+m.settings.SignatureHeader+" (HMAC-SHA256 of "+what+")")
 		return
 	}
-	key, first := m.firstDelivery(name, signature, stamp)
+	key, first, full := m.firstDelivery(name, signature, stamp)
+	if full {
+		m.logger.Warn("trigger webhook refused: the replay record is full", slog.String("trigger", name))
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("the replay record holds %d signed requests; try again later (setting: server.triggers.replay_max_records)", m.settings.ReplayMaxRecords))
+		return
+	}
 	if !first {
 		m.logger.Warn("trigger webhook repeated a delivery", slog.String("trigger", name))
 		writeError(w, http.StatusConflict, "this signed request was already accepted (setting: server.triggers.replay_window_ms)")
@@ -423,11 +433,12 @@ func (m *Manager) signedContent(r *http.Request, body []byte) ([]byte, time.Time
 // the same trigger still holds it. A record is kept until replay_window_ms after the later
 // of its acceptance and its timestamp (zero without timestamp_header), so it outlives the
 // time the timestamp is accepted even from a sender whose clock runs ahead. Expired records
-// are dropped on the way. It returns the record's key for forgetDelivery. With
+// are dropped on the way. It returns the record's key for forgetDelivery. A new signature
+// that finds replay_max_records records is not recorded and reports full. With
 // replay_window_ms 0 every delivery is new and nothing is kept.
-func (m *Manager) firstDelivery(name string, signature []byte, stamp time.Time) (string, bool) {
+func (m *Manager) firstDelivery(name string, signature []byte, stamp time.Time) (key string, first, full bool) {
 	if m.settings.ReplayWindowMS <= 0 {
-		return "", true
+		return "", true, false
 	}
 	now := m.now()
 	from := now
@@ -435,19 +446,44 @@ func (m *Manager) firstDelivery(name string, signature []byte, stamp time.Time) 
 		from = stamp
 	}
 	expires := from.Add(time.Duration(m.settings.ReplayWindowMS) * time.Millisecond)
-	key := name + "\x00" + string(signature)
+	key = name + "\x00" + string(signature)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for seen, until := range m.delivered {
-		if now.After(until) {
-			delete(m.delivered, seen)
+	for len(m.expiries) > 0 && now.After(m.expiries[0].expires) {
+		oldest := heap.Pop(&m.expiries).(expiry)
+		if until, ok := m.delivered[oldest.key]; ok && until.Equal(oldest.expires) {
+			delete(m.delivered, oldest.key)
 		}
 	}
 	if _, repeated := m.delivered[key]; repeated {
-		return key, false
+		return key, false, false
+	}
+	if limit := m.settings.ReplayMaxRecords; limit > 0 && int64(len(m.delivered)) >= limit {
+		return "", false, true
 	}
 	m.delivered[key] = expires
-	return key, true
+	heap.Push(&m.expiries, expiry{key: key, expires: expires})
+	return key, true, false
+}
+
+// expiry is one record of Manager.delivered in Manager.expiries.
+type expiry struct {
+	key     string
+	expires time.Time
+}
+
+// expiryHeap is a min-heap of records by expiry (container/heap).
+type expiryHeap []expiry
+
+func (h expiryHeap) Len() int           { return len(h) }
+func (h expiryHeap) Less(i, j int) bool { return h[i].expires.Before(h[j].expires) }
+func (h expiryHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *expiryHeap) Push(x any)        { *h = append(*h, x.(expiry)) }
+func (h *expiryHeap) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
 }
 
 // forgetDelivery drops the record firstDelivery made, for a request that started no run
@@ -457,8 +493,17 @@ func (m *Manager) forgetDelivery(key string) {
 		return
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.delivered, key)
-	m.mu.Unlock()
+	// The record's heap entry stays until it expires. Busy refusals each leave one, so the
+	// heap is rebuilt from the records once stale entries outnumber them.
+	if len(m.expiries) > 2*len(m.delivered)+64 {
+		m.expiries = m.expiries[:0]
+		for seen, until := range m.delivered {
+			m.expiries = append(m.expiries, expiry{key: seen, expires: until})
+		}
+		heap.Init(&m.expiries)
+	}
 }
 
 // validSignature checks header, the hex HMAC-SHA256 of signed with or without "sha256=",

@@ -73,10 +73,16 @@ export function isForkableProfile(profile: string | undefined): boolean {
 }
 
 /**
- * The longest profile name the server accepts for a fork: config.json's
- * fork_profile_name_max, which must equal the server's server.fork_name_max_bytes.
+ * The longest profile name the server accepts for a fork: the server's
+ * server.fork_name_max_bytes once GET /api/server answered (setForkProfileNameMax), and
+ * until then, or with an older server, config.json's fork_profile_name_max.
  */
-const MAX_PROFILE_NAME: number = appConfig.fork_profile_name_max;
+let MAX_PROFILE_NAME: number = appConfig.fork_profile_name_max;
+
+/** Takes the server's fork name limit; a value that is not a positive integer is ignored. */
+export function setForkProfileNameMax(limit: number): void {
+  if (Number.isInteger(limit) && limit >= 1) MAX_PROFILE_NAME = limit;
+}
 
 /** A catalog identifier: letters, digits, '-', '_' and '.', starting with a letter or digit. */
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

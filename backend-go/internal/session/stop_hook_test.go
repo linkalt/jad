@@ -45,6 +45,24 @@ func TestStopHookMakesTheRunGoOnUpToItsLimit(t *testing.T) {
 	if strings.Count(all, "keep going") != 2 {
 		t.Fatalf("transcript = %s", all)
 	}
+	// A stop hook's message continues the run's turn, as a steering message does: its
+	// record is marked so compaction keeps it with the run, and the mark never reaches the
+	// provider.
+	var marked int
+	_ = journal.ReadLines(func(line []byte) error {
+		if strings.Contains(string(line), "keep going") && strings.Contains(string(line), `"`+transcript.SessionInputSteerField+`":true`) {
+			marked++
+		}
+		return nil
+	})
+	if marked != 2 {
+		t.Fatalf("stop hook records with the steer mark = %d, want 2: %s", marked, all)
+	}
+	for index, request := range streamer.requests {
+		if strings.Contains(string(request), transcript.SessionInputSteerField) {
+			t.Fatalf("request %d carries the steer mark: %s", index, request)
+		}
+	}
 }
 
 func TestStopHookWithNoMessageLetsTheRunEnd(t *testing.T) {

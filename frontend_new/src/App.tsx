@@ -8,7 +8,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, type ForkTarget, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, type ForkTarget, fetchServerInfo, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
@@ -38,7 +38,7 @@ import {type DraftDecision} from './draft-answer';
 import {EMPTY_HISTORY_BLOCKS, type HistoryBlock, type HistoryBlocks, forgetHistoryBlock, forgetHistoryBlocks, historyBlockFor, historyEtagFromHeader, putHistoryBlock} from './history-blocks';
 import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput, userMessageImages} from './image-attachments';
-import {forkProfileName, forkSessionRef, isForkableProfile, sessionIdOf, sessionRefInRootOf} from './session-fork';
+import {forkProfileName, forkSessionRef, isForkableProfile, sessionIdOf, sessionRefInRootOf, setForkProfileNameMax} from './session-fork';
 import {ForkDialog, type ForkDialogAnswer, type ForkDialogRequest} from './components/ForkDialog';
 import type {RowMenuTarget} from './components/RowContextMenu';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
@@ -205,6 +205,13 @@ function App({
   useEffect(() => {
     showToastRef.current = showToast;
   }, [showToast]);
+  // The fork name limit is the server's (server.fork_name_max_bytes); until it answers, or
+  // with a server older than GET /api/server, config.json's copy stands.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchServerInfo(controller.signal).then(info => setForkProfileNameMax(info.forkNameMaxBytes), () => undefined);
+    return () => controller.abort();
+  }, []);
   const [sessions, setSessions] = useState<Session[]>([]);
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of

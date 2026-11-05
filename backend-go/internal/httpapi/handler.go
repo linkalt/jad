@@ -357,6 +357,15 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleCatalogFiles(w, r, segments)
 		return
 	}
+	if len(segments) == 2 && segments[0] == "api" && segments[1] == "server" {
+		if !h.authorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="jad"`)
+			writeJSONError(w, &StatusError{Code: http.StatusUnauthorized, Message: "API token required"})
+			return
+		}
+		h.handleServerInfo(w, r)
+		return
+	}
 	if len(segments) < 2 || segments[0] != "api" || segments[1] != "sessions" {
 		writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "not found"})
 		return

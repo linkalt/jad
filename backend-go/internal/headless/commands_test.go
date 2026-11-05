@@ -425,6 +425,13 @@ func TestCustomCommandsSendTheirFilledText(t *testing.T) {
 	if err != nil || result.Command != "plan" || stub.runInput(t, "/api/sessions/demo/run") != "/deploy now" {
 		t.Fatalf("plan with an unknown word: %+v %v", result, err)
 	}
+	// A word not found while the library could not list its commands is refused with the
+	// reason, not sent as a prompt: it may be a command of the broken folder.
+	stub.answers["GET /api/library"] = routeAnswer{200, `{"prompts":[],"templates":[],"skills":[],"commands":[],"commands_error":"library directory .agent/commands is not a directory"}`}
+	if _, err := runner.Run(context.Background(), Request{Session: "demo", Input: "/deploy now", Commands: true}); err == nil || !strings.Contains(err.Error(), "is not a directory") || !strings.Contains(err.Error(), "--no-commands") {
+		t.Fatalf("unknown word with a broken command folder: %v", err)
+	}
+	stub.answers["GET /api/library"] = routeAnswer{200, `{"prompts":[],"templates":[],"skills":[],"commands":[{"id":"c1","kind":"command","command":"git:commit","name":"commit"}]}`}
 	// A refused expansion is the server's message.
 	stub.answers["POST /api/library/command/c1/expand"] = routeAnswer{422, `{"error":"the command's text is empty"}`}
 	if _, err := runner.Run(context.Background(), Request{Session: "demo", Input: "/git:commit", Commands: true}); err == nil || !strings.Contains(err.Error(), "the command's text is empty") {

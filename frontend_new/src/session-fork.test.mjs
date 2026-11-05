@@ -95,3 +95,15 @@ test('the transcript and the row menu hide fork and Duplicate where the server r
   assert.match(app, /canDuplicate=\{canDuplicateRow\}/);
   assert.match(menu, /canDuplicate\?\.\(target\) === false \? null :/);
 });
+
+test('the server fork name limit replaces the config copy, and a bad value is ignored', async () => {
+  const {forkProfileName, forkNameProblem, setForkProfileNameMax} = await import('./session-fork.ts');
+  const {default: appConfig} = await import('./config.json', {with: {type: 'json'}});
+  setForkProfileNameMax(20);
+  const name = forkProfileName('dev/' + 'b'.repeat(300), '-fork-', 1);
+  assert.equal(name.length, 20);
+  assert.match(forkNameProblem(name + 'x', 'profile'), /At most 20/);
+  for (const bad of [0, -1, 2.5, Number.NaN]) setForkProfileNameMax(bad);
+  assert.equal(forkProfileName('dev/' + 'b'.repeat(300), '-fork-', 1).length, 20);
+  setForkProfileNameMax(appConfig.fork_profile_name_max);
+});

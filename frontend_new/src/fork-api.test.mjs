@@ -48,3 +48,17 @@ test('forkSession forks into a new profile of the same session, with a title and
   await forkSession('local:demo', {session: 'local:copy', state: 'none'});
   assert.deepEqual(JSON.parse(requests[2].init.body), {session: 'local:copy', state: 'none'});
 });
+
+test('fetchServerInfo reads the fork name limit and refuses a malformed answer', async () => {
+  const {fetchServerInfo} = await import('./api.ts');
+  requests.length = 0;
+  reply = () => new Response(JSON.stringify({fork_name_max_bytes: 120}), {status: 200});
+  assert.deepEqual(await fetchServerInfo(), {forkNameMaxBytes: 120});
+  assert.match(requests[0].url, /\/server$/);
+  for (const body of [{}, {fork_name_max_bytes: '120'}, {fork_name_max_bytes: 0}, {fork_name_max_bytes: 1.5}]) {
+    reply = () => new Response(JSON.stringify(body), {status: 200});
+    await assert.rejects(fetchServerInfo(), /invalid server info/);
+  }
+  reply = () => new Response(JSON.stringify({error: 'not found'}), {status: 404});
+  await assert.rejects(fetchServerInfo(), /not found/);
+});
