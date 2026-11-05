@@ -433,12 +433,12 @@ func normalizeTriggerNotifier(name string, raw json.RawMessage, path string) (Tr
 	notifier.On = append([]string(nil), defaultTriggerNotifyOn...)
 	if rawOn, exists := fields["on"]; exists && string(rawOn) != "null" {
 		if err := json.Unmarshal(rawOn, &notifier.On); err != nil || len(notifier.On) == 0 {
-			return TriggerNotifier{}, fmt.Errorf("%s.on must be a non-empty array of statuses (%s)", prefix, strings.Join(triggerNotifyOnValues, ", "))
+			return TriggerNotifier{}, fmt.Errorf("%s.on must be a non-empty array of statuses (%s) and %s", prefix, strings.Join(TriggerNotifyStatuses, ", "), TriggerNotifyStopHooksSkipped)
 		}
 		seen := map[string]bool{}
 		for _, status := range notifier.On {
 			if !containsString(triggerNotifyOnValues, status) || seen[status] {
-				return TriggerNotifier{}, fmt.Errorf("%s.on: %q is not a status or is listed twice (%s)", prefix, status, strings.Join(triggerNotifyOnValues, ", "))
+				return TriggerNotifier{}, fmt.Errorf("%s.on: %q is not a status or %s, or is listed twice (statuses: %s)", prefix, status, TriggerNotifyStopHooksSkipped, strings.Join(TriggerNotifyStatuses, ", "))
 			}
 			seen[status] = true
 		}

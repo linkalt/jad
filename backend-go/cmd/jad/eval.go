@@ -94,12 +94,7 @@ func runEvalCommand(args []string, streams commandStreams) error {
 		return &exitError{code: exitFailed, err: fmt.Errorf("write the report: %w", err)}
 	}
 	summary := report.Summary
-	skipped := ""
-	if summary.StopHooksSkipped > 0 {
-		skipped = fmt.Sprintf(", %d with stop hooks not run at a cap", summary.StopHooksSkipped)
-	}
-	_, _ = fmt.Fprintf(streams.stderr, "%s: %d/%d passed (%.0f%%), %d failed, %d errors, %d input + %d output tokens%s\n",
-		report.Suite, summary.Passed, summary.Total, summary.PassRate*100, summary.Failed, summary.Errors, summary.InputTokens, summary.OutputTokens, skipped)
+	_, _ = io.WriteString(streams.stderr, evalSummaryLine(report)+"\n")
 	switch {
 	case report.Interrupted:
 		return &exitError{code: exitInterrupted}
@@ -107,4 +102,16 @@ func runEvalCommand(args []string, streams commandStreams) error {
 		return &exitError{code: exitFailed}
 	}
 	return nil
+}
+
+// evalSummaryLine is the line jad eval ends with on stderr: the pass count, the failures and
+// errors, the tokens and, when some attempt's stop hooks were not run at a cap, how many.
+func evalSummaryLine(report evalrun.Report) string {
+	summary := report.Summary
+	line := fmt.Sprintf("%s: %d/%d passed (%.0f%%), %d failed, %d errors, %d input + %d output tokens",
+		report.Suite, summary.Passed, summary.Total, summary.PassRate*100, summary.Failed, summary.Errors, summary.InputTokens, summary.OutputTokens)
+	if summary.StopHooksSkipped > 0 {
+		line += fmt.Sprintf(", %d with stop hooks not run at a cap", summary.StopHooksSkipped)
+	}
+	return line
 }
