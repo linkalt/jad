@@ -331,3 +331,47 @@ func TestRunIDsDifferWithinOneSecond(t *testing.T) {
 		t.Fatalf("run ids %q and %q, summaries %+v %+v", first.RunID, second.RunID, first.Summary, second.Summary)
 	}
 }
+
+// Stop hooks skipped at a cap do not change an outcome (the checks decide it), but the
+// progress line and the summary say so.
+func TestRunCountsAttemptsWhoseStopHooksWereSkipped(t *testing.T) {
+	dir := t.TempDir()
+	suite := writeSuite(t, dir, map[string]any{
+		"schema_version": 1, "name": "s", "keep_workspaces": "never",
+		"cases": []any{
+			map[string]any{"name": "capped", "prompt": "capped", "checks": []string{"true"}},
+			map[string]any{"name": "plain", "prompt": "plain", "checks": []string{"true"}},
+		},
+	})
+	skipped := "[stop hooks] not run: it used 7 tokens, which reached the max_run_tokens limit of 5."
+	runner := &fakeRunner{root: dir, act: func(_ string, request headless.Request) headless.Result {
+		if request.Input == "capped" {
+			return headless.Result{Status: headless.StatusCompleted, StopHooksSkipped: skipped}
+		}
+		return headless.Result{Status: headless.StatusCompleted}
+	}}
+	var progress strings.Builder
+	report, err := Run(context.Background(), suite, Options{Runner: runner, Roots: []Root{{ID: "r", Directory: dir}}, Progress: &progress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.Passed != 2 || report.Summary.StopHooksSkipped != 1 {
+		t.Fatalf("summary = %+v", report.Summary)
+	}
+	lines := strings.Split(strings.TrimSpace(progress.String()), "\n")
+	var capped, plain string
+	for _, line := range lines {
+		if strings.Contains(line, "capped#") {
+			capped = line
+		} else if strings.Contains(line, "plain#") {
+			plain = line
+		}
+	}
+	if !strings.HasSuffix(capped, " "+skipped) || strings.Contains(plain, "[stop hooks]") {
+		t.Fatalf("progress = %q", lines)
+	}
+	encoded, _ := json.Marshal(report.Summary)
+	if !strings.Contains(string(encoded), `"stop_hooks_skipped":1`) {
+		t.Fatalf("summary json = %s", encoded)
+	}
+}

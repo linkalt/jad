@@ -118,11 +118,12 @@ func newNotifiers(settings []sessionfs.TriggerNotifier, environment map[string]s
 	return notifiers, nil
 }
 
-// pendingNotifications lists the entry's notifiers that report status. m.mu need not be held.
-func (m *Manager) pendingNotifications(entry sessionfs.TriggerEntry, status string) []Notification {
+// pendingNotifications lists the entry's notifiers that report record (its status, or its
+// skipped stop commands). m.mu need not be held.
+func (m *Manager) pendingNotifications(entry sessionfs.TriggerEntry, record Record) []Notification {
 	var pending []Notification
 	for _, name := range entry.Notify {
-		if target := m.notifiers[name]; target != nil && target.settings.Wants(status) {
+		if target := m.notifiers[name]; target != nil && target.settings.Wants(record.Status, record.StopHooksSkipped != "") {
 			pending = append(pending, Notification{Notifier: name, Status: NotifyPending})
 		}
 	}

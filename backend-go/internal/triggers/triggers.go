@@ -224,7 +224,7 @@ func (m *Manager) Fire(name, source string, payload []byte) (Record, error) {
 	}
 	if previous := m.running[name]; previous != nil {
 		record.Status, record.EndedAt, record.Error = StatusSkipped, now.UTC(), "run "+previous.ID+" has not ended"
-		record.Notifications = m.pendingNotifications(entry, record.Status)
+		record.Notifications = m.pendingNotifications(entry, record)
 		m.remember(record)
 		// The previous run is still counted in m.wg, so adding to it here is safe.
 		m.notify(record, "")
@@ -260,7 +260,7 @@ func (m *Manager) run(entry sessionfs.TriggerEntry, record Record, input string)
 		record.Status, record.Error, record.TurnID, record.CostUSD, record.DurationMS = result.Status, result.Error, result.TurnID, result.CostUSD, result.DurationMS
 		record.StopHooksSkipped = result.StopHooksSkipped
 	}
-	record.Notifications = m.pendingNotifications(entry, record.Status)
+	record.Notifications = m.pendingNotifications(entry, record)
 	m.mu.Lock()
 	delete(m.running, entry.Name)
 	m.remember(record)

@@ -92,6 +92,9 @@ type Summary struct {
 	// CostUSD adds up the cost of the attempts whose runs were priced (model file pricing);
 	// absent when none was.
 	CostUSD *float64 `json:"cost_usd,omitempty"`
+	// StopHooksSkipped counts the attempts whose profile stop hooks were not run because the
+	// run reached a cap. It does not change an outcome: the case's checks decide that.
+	StopHooksSkipped int `json:"stop_hooks_skipped,omitempty"`
 }
 
 // Attempt is one run of one case.
@@ -495,6 +498,9 @@ func summarize(results []Attempt) Summary {
 		default:
 			summary.Errors++
 		}
+		if result.Run != nil && result.Run.StopHooksSkipped != "" {
+			summary.StopHooksSkipped++
+		}
 		if result.Run != nil && result.Run.CostUSD != nil {
 			total := *result.Run.CostUSD
 			if summary.CostUSD != nil {
@@ -527,6 +533,9 @@ func writeProgress(w io.Writer, result Attempt) {
 	line := fmt.Sprintf("%-5s %s#%d (%.1fs)", label, result.Case, result.Attempt, float64(result.DurationMS)/1000)
 	if result.Reason != "" {
 		line += " " + result.Reason
+	}
+	if result.Run != nil && result.Run.StopHooksSkipped != "" {
+		line += " " + result.Run.StopHooksSkipped
 	}
 	_, _ = fmt.Fprintln(w, line)
 }

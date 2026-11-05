@@ -124,7 +124,7 @@ func TestTriggerSchemaAgreesWithTheLoader(t *testing.T) {
 
 func TestTriggerNotifySettings(t *testing.T) {
 	settings, err := normalizeTriggers(json.RawMessage(`{"notify":{
-		"phone":{"url":"https://ntfy.example/jad","format":"text","headers":{"title":"jad"},"on":["failed","skipped"],"answer_bytes":200},
+		"phone":{"url":"https://ntfy.example/jad","format":"text","headers":{"title":"jad"},"on":["failed","skipped","stop_hooks_skipped"],"answer_bytes":200},
 		"ops":{"url_env":"OPS_HOOK","headers_env":{"authorization":"OPS_TOKEN"},"timeout_ms":500,"retries":0,"retry_delay_ms":0}},
 		"entries":{"ci":{"session":"s","prompt":"p","schedule":"@daily","notify":["phone","ops"]}}}`), "s")
 	if err != nil {
@@ -135,11 +135,11 @@ func TestTriggerNotifySettings(t *testing.T) {
 	}
 	ops, phone := settings.Notifiers[0], settings.Notifiers[1]
 	if ops.URLEnv != "OPS_HOOK" || ops.URL != "" || ops.Format != TriggerNotifyFormatJSON || ops.HeadersEnv["Authorization"] != "OPS_TOKEN" || ops.TimeoutMS != 500 || ops.Retries != 0 || ops.RetryDelayMS != 0 || ops.AnswerBytes != 0 ||
-		strings.Join(ops.On, ",") != "completed,failed,timed_out,aborted,refused" || ops.Wants("skipped") || !ops.Wants("completed") {
+		strings.Join(ops.On, ",") != "completed,failed,timed_out,aborted,refused" || ops.Wants("skipped", false) || !ops.Wants("completed", false) || ops.Wants("skipped", true) {
 		t.Fatalf("ops = %+v", ops)
 	}
 	if phone.URL != "https://ntfy.example/jad" || phone.Format != TriggerNotifyFormatText || phone.Headers["Title"] != "jad" || phone.AnswerBytes != 200 || phone.TimeoutMS != 10000 || phone.Retries != 2 || phone.RetryDelayMS != 2000 ||
-		!phone.Wants("skipped") || phone.Wants("completed") {
+		!phone.Wants("skipped", false) || phone.Wants("completed", false) || !phone.Wants("completed", true) {
 		t.Fatalf("phone = %+v", phone)
 	}
 	if notify := settings.Entries[0].Notify; strings.Join(notify, ",") != "phone,ops" {
@@ -211,6 +211,7 @@ func TestTriggerNotifySchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"notify":{"a":{"url":"https://x","headers_env":{"X-A":"a b"}}}}`, false},
 		{`{"notify":{"a":{"url":"https://x","on":[]}}}`, false},
 		{`{"notify":{"a":{"url":"https://x","on":["done"]}}}`, false},
+		{`{"notify":{"a":{"url":"https://x","on":["failed","stop_hooks_skipped"]}}}`, true},
 		{`{"notify":{"a":{"url":"https://x","on":["failed","failed"]}}}`, false},
 		{`{"notify":{"a":{"url":"https://x","timeout_ms":120001}}}`, false},
 		{`{"notify":{"a":{"url":"https://x","retries":-1}}}`, false},

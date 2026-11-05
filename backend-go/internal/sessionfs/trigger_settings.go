@@ -55,9 +55,17 @@ const (
 	TriggerNotifyFormatSlack = "slack"
 )
 
-// TriggerNotifyStatuses are the statuses a trigger run can end with, the values of a
-// notifier's on list.
+// TriggerNotifyStatuses are the statuses a trigger run can end with, values of a notifier's
+// on list.
 var TriggerNotifyStatuses = []string{"completed", "failed", "timed_out", "aborted", "refused", "skipped"}
+
+// TriggerNotifyStopHooksSkipped is the on value that reports a run whose stop commands were
+// not run because it reached a cap, whatever its status: such a run ends completed, so a
+// notifier that reports failures only would not hear of it.
+const TriggerNotifyStopHooksSkipped = "stop_hooks_skipped"
+
+// triggerNotifyOnValues are the values a notifier's on list takes.
+var triggerNotifyOnValues = append(append([]string(nil), TriggerNotifyStatuses...), TriggerNotifyStopHooksSkipped)
 
 // defaultTriggerNotifyOn leaves out skipped: a schedule that outruns its runs would send
 // one every firing.
@@ -123,7 +131,7 @@ type TriggerNotifier struct {
 	// that holds its value (a token). Both are keyed by canonical header name.
 	Headers    map[string]string
 	HeadersEnv map[string]string
-	// On lists the statuses that are reported.
+	// On lists the statuses that are reported, and TriggerNotifyStopHooksSkipped.
 	On []string
 	// TimeoutMS bounds one attempt; Retries more attempts follow a failed one, RetryDelayMS apart.
 	TimeoutMS    int64
@@ -133,9 +141,10 @@ type TriggerNotifier struct {
 	AnswerBytes int64
 }
 
-// Wants reports whether the notifier reports a run that ended with status.
-func (n TriggerNotifier) Wants(status string) bool {
-	return containsString(n.On, status)
+// Wants reports whether the notifier reports a run that ended with status; stopHooksSkipped
+// is true when the run's stop commands were not run because it reached a cap.
+func (n TriggerNotifier) Wants(status string, stopHooksSkipped bool) bool {
+	return containsString(n.On, status) || (stopHooksSkipped && containsString(n.On, TriggerNotifyStopHooksSkipped))
 }
 
 // TriggerEntry is one trigger: the run it starts and what starts it.
@@ -424,12 +433,12 @@ func normalizeTriggerNotifier(name string, raw json.RawMessage, path string) (Tr
 	notifier.On = append([]string(nil), defaultTriggerNotifyOn...)
 	if rawOn, exists := fields["on"]; exists && string(rawOn) != "null" {
 		if err := json.Unmarshal(rawOn, &notifier.On); err != nil || len(notifier.On) == 0 {
-			return TriggerNotifier{}, fmt.Errorf("%s.on must be a non-empty array of statuses (%s)", prefix, strings.Join(TriggerNotifyStatuses, ", "))
+			return TriggerNotifier{}, fmt.Errorf("%s.on must be a non-empty array of statuses (%s)", prefix, strings.Join(triggerNotifyOnValues, ", "))
 		}
 		seen := map[string]bool{}
 		for _, status := range notifier.On {
-			if !containsString(TriggerNotifyStatuses, status) || seen[status] {
-				return TriggerNotifier{}, fmt.Errorf("%s.on: %q is not a status or is listed twice (%s)", prefix, status, strings.Join(TriggerNotifyStatuses, ", "))
+			if !containsString(triggerNotifyOnValues, status) || seen[status] {
+				return TriggerNotifier{}, fmt.Errorf("%s.on: %q is not a status or is listed twice (%s)", prefix, status, strings.Join(triggerNotifyOnValues, ", "))
 			}
 			seen[status] = true
 		}

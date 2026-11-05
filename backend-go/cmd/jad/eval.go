@@ -94,8 +94,12 @@ func runEvalCommand(args []string, streams commandStreams) error {
 		return &exitError{code: exitFailed, err: fmt.Errorf("write the report: %w", err)}
 	}
 	summary := report.Summary
-	_, _ = fmt.Fprintf(streams.stderr, "%s: %d/%d passed (%.0f%%), %d failed, %d errors, %d input + %d output tokens\n",
-		report.Suite, summary.Passed, summary.Total, summary.PassRate*100, summary.Failed, summary.Errors, summary.InputTokens, summary.OutputTokens)
+	skipped := ""
+	if summary.StopHooksSkipped > 0 {
+		skipped = fmt.Sprintf(", %d with stop hooks not run at a cap", summary.StopHooksSkipped)
+	}
+	_, _ = fmt.Fprintf(streams.stderr, "%s: %d/%d passed (%.0f%%), %d failed, %d errors, %d input + %d output tokens%s\n",
+		report.Suite, summary.Passed, summary.Total, summary.PassRate*100, summary.Failed, summary.Errors, summary.InputTokens, summary.OutputTokens, skipped)
 	switch {
 	case report.Interrupted:
 		return &exitError{code: exitInterrupted}

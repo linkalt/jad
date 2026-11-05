@@ -391,3 +391,31 @@ func TestSkippedStopHooksReachTheRecordAndTheNotifications(t *testing.T) {
 		t.Fatalf("template = %q, %v", rendered, err)
 	}
 }
+
+func TestFailuresOnlyNotifierHearsOfSkippedStopHooksWhenItAsks(t *testing.T) {
+	asked, failuresOnly := newNotifySink(t), newNotifySink(t)
+	watch := testNotifier("watch", asked.server.URL)
+	watch.On = []string{"failed", sessionfs.TriggerNotifyStopHooksSkipped}
+	quiet := testNotifier("quiet", failuresOnly.server.URL)
+	quiet.On = []string{"failed"}
+	runner := newFakeRunner()
+	runner.result = headless.Result{Status: headless.StatusCompleted, TurnID: "t1", StopHooksSkipped: "[stop hooks] not run: it used 7 tokens, which reached the max_run_tokens limit of 5."}
+	entry := webhookEntry()
+	entry.Notify = []string{"quiet", "watch"}
+	manager := notifyManager(t, runner, []sessionfs.TriggerNotifier{quiet, watch}, nil, entry)
+	handler := manager.Wrap(http.NotFoundHandler())
+	body := `{"x":1}`
+	if response := post(handler, "/api/triggers/ci", body, sign("s3cret", body)); response.Code != http.StatusAccepted {
+		t.Fatalf("webhook: %d %s", response.Code, response.Body)
+	}
+	close(runner.release)
+	if run := waitNotified(t, handler); len(run.Notifications) != 1 || run.Notifications[0].Notifier != "watch" {
+		t.Fatalf("notifications = %+v", run.Notifications)
+	}
+	if _, bodies := asked.received(); len(bodies) != 1 {
+		t.Fatalf("watch got %d", len(bodies))
+	}
+	if _, bodies := failuresOnly.received(); len(bodies) != 0 {
+		t.Fatalf("quiet got %q", bodies)
+	}
+}
