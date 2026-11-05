@@ -86,7 +86,7 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
 func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, manager ProcessManager, taskStore *TaskStore, memoryStore *MemoryStore, fetchStore *FetchStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
-	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeApplyPatch == nil && config.NativeNotebook == nil && config.NativeLSP == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.NativeWebSearch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
+	if config.NativeRead == nil && config.NativeWrite == nil && config.NativeEdit == nil && config.NativeApplyPatch == nil && config.NativeNotebook == nil && config.NativeLSP == nil && config.NativeGrep == nil && config.NativeBash == nil && config.NativeExec == nil && config.NativeGlob == nil && config.NativeReadImage == nil && config.NativeProcess == nil && config.NativeTask == nil && config.NativeMemory == nil && config.NativeFetch == nil && config.ExtensionWebSearch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -345,8 +345,10 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 				return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s is configured but native.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
 			}
 		}
-		if config.ExtensionDecideSystemone != nil {
-			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.decide_systemone is configured but extension.decide_systemone is missing from tool_definition_paths", config.SettingPath)}
+		for _, name := range sessionfs.ExtensionToolNames() {
+			if extensionToolConfigured(config, name) {
+				return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.extension.%s is configured but extension.%s is missing from tool_definition_paths", config.SettingPath, name, name)}
+			}
 		}
 	}
 	definitions, err := loadDefinitions(config.ToolDefinitionPaths)
@@ -558,18 +560,6 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	if config.NativeWebSearch != nil {
-		definition, err := requireNativeDefinition(config, definitions, "web_search", webSearchToolID, webSearchInputSchema)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		tool, err := NewWebSearchTool(*config.NativeWebSearch)
-		if err != nil {
-			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
-		}
-		tool.Definition = definition
-		loaded = append(loaded, tool)
-	}
 	if config.NativeRequestDraft != nil {
 		definition, err := requireNativeDefinition(config, definitions, "request_draft", requestDraftToolID, requestDraftInputSchema)
 		if err != nil {
@@ -619,6 +609,19 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, manager 
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
+	if config.ExtensionWebSearch != nil {
+		definition, err := requireDefinition(config, definitions, "extension", "web_search", extension.WebSearchToolID, extension.WebSearchInputSchema)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		tool, err := extension.NewWebSearchTool(*config.ExtensionWebSearch)
+		if err != nil {
+			return nil, nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+		}
+		tool.Definition = definition
+		loaded = append(loaded, tool)
+	}
+	loaded = withProjectInstructionsAll(loaded, config.ProjectInstructions)
 	// Each native tool is gated and then hooked once, here. A child catalog is built from this gated list
 	// (childPool), so a child gets the owner's gate, and a lazy tool is refused to it until the owner's set has loaded it.
 	if lazy != nil {
@@ -666,8 +669,6 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeMemory != nil
 	case "fetch":
 		return config.NativeFetch != nil
-	case "web_search":
-		return config.NativeWebSearch != nil
 	case "request_draft":
 		return config.NativeRequestDraft != nil
 	case "skill":
@@ -686,6 +687,18 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeToolSmith != nil
 	case "load_tool":
 		return config.NativeLoadTool != nil
+	default:
+		return false
+	}
+}
+
+// extensionToolConfigured reports whether tools.extension configures the named tool.
+func extensionToolConfigured(config sessionfs.SessionConfig, name string) bool {
+	switch name {
+	case "decide_systemone":
+		return config.ExtensionDecideSystemone != nil
+	case "web_search":
+		return config.ExtensionWebSearch != nil
 	default:
 		return false
 	}

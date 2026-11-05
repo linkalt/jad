@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func loadWebSearch(t *testing.T, raw string) (*NativeWebSearchSettings, error) {
+func loadWebSearch(t *testing.T, raw string) (*ExtensionWebSearchSettings, error) {
 	t.Helper()
-	return normalizeNativeWebSearchSettings(map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{"web_search":` + raw + `}}`)}, "setting.json")
+	return normalizeExtensionWebSearchSettings(map[string]json.RawMessage{"tools": json.RawMessage(`{"extension":{"web_search":` + raw + `}}`)}, "setting.json")
 }
 
 func TestWebSearchSettingsDefaultsPerProvider(t *testing.T) {
@@ -18,23 +18,23 @@ func TestWebSearchSettingsDefaultsPerProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := NativeWebSearchSettings{
-		Provider: "brave", BaseURL: defaultNativeWebSearchBraveBaseURL, APIKeyEnv: "BRAVE_SEARCH_API_KEY",
+	want := ExtensionWebSearchSettings{
+		Provider: "brave", BaseURL: defaultExtensionWebSearchBraveBaseURL, APIKeyEnv: "BRAVE_SEARCH_API_KEY",
 		DefaultResults: 5, MaxResults: 10, TimeoutMS: 15000, MaxResponseBytes: 2_000_000, MaxSnippetChars: 500, MaxQueryChars: 400,
-		UserAgent: defaultNativeWebSearchUserAgent, AllowedDomains: []string{}, BlockedDomains: []string{},
+		UserAgent: defaultExtensionWebSearchUserAgent, AllowedDomains: []string{}, BlockedDomains: []string{},
 	}
 	if !reflect.DeepEqual(*brave, want) {
 		t.Fatalf("brave = %+v\nwant %+v", *brave, want)
 	}
 	tavily, err := loadWebSearch(t, `{"provider":"tavily","max_results":3}`)
-	if err != nil || tavily.BaseURL != defaultNativeWebSearchTavilyBaseURL || tavily.APIKeyEnv != "TAVILY_API_KEY" || tavily.DefaultResults != 3 {
+	if err != nil || tavily.BaseURL != defaultExtensionWebSearchTavilyBaseURL || tavily.APIKeyEnv != "TAVILY_API_KEY" || tavily.DefaultResults != 3 {
 		t.Fatalf("tavily = %+v, %v (default_results follows a smaller max_results)", tavily, err)
 	}
 	searx, err := loadWebSearch(t, `{"provider":"searxng","base_url":"http://127.0.0.1:8888/search","allowed_domains":["WWW.Go.Dev","go.dev"],"blocked_domains":null}`)
 	if err != nil || searx.APIKeyEnv != "" || !reflect.DeepEqual(searx.AllowedDomains, []string{"go.dev"}) || len(searx.BlockedDomains) != 0 {
 		t.Fatalf("searxng = %+v, %v", searx, err)
 	}
-	none, err := normalizeNativeWebSearchSettings(map[string]json.RawMessage{"tools": json.RawMessage(`{"native":{}}`)}, "setting.json")
+	none, err := normalizeExtensionWebSearchSettings(map[string]json.RawMessage{"tools": json.RawMessage(`{"extension":{}}`)}, "setting.json")
 	if err != nil || none != nil {
 		t.Fatalf("absent web_search = %+v, %v, want nil", none, err)
 	}
@@ -97,11 +97,11 @@ func TestWebSearchSettingsSchemaMatchesTheLoader(t *testing.T) {
 	}
 	walk(schema)
 	if found == nil {
-		t.Fatal("setting.schema.json has no tools.native.web_search")
+		t.Fatal("setting.schema.json has no tools.extension.web_search")
 	}
 	properties := found["properties"].(map[string]any)
-	if len(properties) != len(nativeWebSearchKeys) {
-		t.Fatalf("schema keys = %d, loader keys = %v", len(properties), nativeWebSearchKeys)
+	if len(properties) != len(extensionWebSearchKeys) {
+		t.Fatalf("schema keys = %d, loader keys = %v", len(properties), extensionWebSearchKeys)
 	}
 	brave, err := loadWebSearch(t, `{"provider":"brave"}`)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestWebSearchSettingsSchemaMatchesTheLoader(t *testing.T) {
 		"max_response_bytes": brave.MaxResponseBytes, "max_snippet_chars": brave.MaxSnippetChars, "max_query_chars": brave.MaxQueryChars,
 		"user_agent": brave.UserAgent,
 	}
-	for _, key := range nativeWebSearchKeys {
+	for _, key := range extensionWebSearchKeys {
 		field, ok := properties[key].(map[string]any)
 		if !ok {
 			t.Errorf("schema has no web_search.%s", key)
@@ -128,9 +128,9 @@ func TestWebSearchSettingsSchemaMatchesTheLoader(t *testing.T) {
 		}
 	}
 	bounds := map[string][2]float64{
-		"max_results": {1, float64(maxNativeWebSearchMaxResults)}, "default_results": {1, float64(maxNativeWebSearchMaxResults)},
-		"timeout_ms": {1, float64(maxNativeWebSearchTimeoutMS)}, "max_response_bytes": {1024, float64(maxNativeWebSearchResponseBytes)},
-		"max_snippet_chars": {0, float64(maxNativeWebSearchSnippetChars)}, "max_query_chars": {1, float64(maxNativeWebSearchMaxQueryChars)},
+		"max_results": {1, float64(maxExtensionWebSearchMaxResults)}, "default_results": {1, float64(maxExtensionWebSearchMaxResults)},
+		"timeout_ms": {1, float64(maxExtensionWebSearchTimeoutMS)}, "max_response_bytes": {1024, float64(maxExtensionWebSearchResponseBytes)},
+		"max_snippet_chars": {0, float64(maxExtensionWebSearchSnippetChars)}, "max_query_chars": {1, float64(maxExtensionWebSearchMaxQueryChars)},
 	}
 	for key, bound := range bounds {
 		field := properties[key].(map[string]any)

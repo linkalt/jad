@@ -108,6 +108,11 @@ type Pending =
   | {kind: 'row-delete'; id: string; etag: string}
   | null;
 
+/** The ID a duplicate of `id` proposes: `<category>/<name>-copy`, or the ID with `-copy`. */
+export function duplicateId(id: string): string {
+  return `${id}${appConfig.catalog_duplicate_suffix}`;
+}
+
 type Notice = {kind: 'error' | 'success'; title: string; message: string};
 
 const NO_PROBLEMS: DocumentProblem[] = [];
@@ -306,6 +311,19 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setNotice(null);
     setDraft({mode: 'new', id: ''});
   }, [view.template]);
+
+  /**
+   * Duplicate: a new file whose text is the open file's (as edited), with an ID proposed
+   * from the open one that the user names before Create. Nothing is written until then.
+   */
+  const startDuplicate = (): void => {
+    if (draft.mode !== 'existing') return;
+    loadToken.current += 1;
+    setNewId(duplicateId(draft.id));
+    setTab('editor');
+    setNotice(null);
+    setDraft({mode: 'new', id: ''});
+  };
 
   const changeKind = (target: CatalogKind): void => {
     loadToken.current += 1;
@@ -664,6 +682,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                     <>
                       <Button label="Delete" variant="destructive" isDisabled={isBusy} onClick={() => setPending({kind: 'delete'})} />
                       <Button label="Reload" variant="ghost" isDisabled={isBusy} onClick={reloadCurrent} />
+                      <Button label="Duplicate" variant="ghost" isDisabled={isBusy} onClick={startDuplicate} tooltip={`A new ${view.noun} with this text; name it, then Create`} />
                     </>
                   )}
                 </HStack>

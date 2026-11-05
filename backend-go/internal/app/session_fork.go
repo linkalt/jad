@@ -35,6 +35,14 @@ func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, r
 	if err != nil {
 		return httpapi.ForkResult{}, mapSessionError(err)
 	}
+	if request.Profile != "" {
+		result, err := r.forkIntoProfile(ctx, source, profile, request)
+		if err == nil {
+			// The reference as the client wrote it, so it can open the new profile's view.
+			result.Session = reference
+		}
+		return result, err
+	}
 	target, err := sessionfs.Resolve(r.roots, request.Session)
 	if err != nil {
 		return httpapi.ForkResult{}, mapSessionError(err)
@@ -80,7 +88,7 @@ func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, r
 	if _, _, err := r.WriteSessionConfig(ctx, target.Reference, sessionFile.Data, "", "*"); err != nil {
 		return httpapi.ForkResult{}, err
 	}
-	result, err := r.writeFork(target, config, lines, turns)
+	result, err := r.writeFork(target, config.Profile, config, lines, turns)
 	if err != nil {
 		// The new session file goes again, so a failed fork leaves no half session.
 		_ = os.Remove(target.File)
@@ -94,6 +102,9 @@ func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, r
 // them without a cursor; otherwise those before the turn that starts at the cursor, and
 // that turn too with KeepTurn.
 func (r *Resolver) forkLines(ctx context.Context, config sessionfs.SessionConfig, request httpapi.ForkRequest) ([][]byte, int, error) {
+	if request.State == httpapi.ForkStateNone {
+		return nil, 0, nil
+	}
 	shared, release, err := r.sharedStore(config)
 	if err != nil {
 		return nil, 0, err
@@ -183,10 +194,11 @@ func messageTurnCursor(ctx context.Context, shared *sharedSession, index transcr
 	return 0, &httpapi.StatusError{Code: http.StatusNotFound, Message: "message not found in the transcript; a message of the compacted history cannot be a fork point"}
 }
 
-// writeFork writes the new session's transcript, its history block and the images the two
-// refer to. The new session must not have a transcript for the profile yet.
-func (r *Resolver) writeFork(target sessionfs.Location, source sessionfs.SessionConfig, lines [][]byte, turns int) (httpapi.ForkResult, error) {
-	config, err := sessionfs.LoadSessionSettings(target, source.Profile, "")
+// writeFork writes the transcript of profile in the target session, its history block and
+// the images the two refer to. The target must not have a transcript for the profile yet.
+// The history block comes along only with a transcript: an empty fork starts with none.
+func (r *Resolver) writeFork(target sessionfs.Location, profile string, source sessionfs.SessionConfig, lines [][]byte, turns int) (httpapi.ForkResult, error) {
+	config, err := sessionfs.LoadSessionSettings(target, profile, "")
 	if err != nil {
 		return httpapi.ForkResult{}, mapSessionError(err)
 	}
@@ -204,7 +216,7 @@ func (r *Resolver) writeFork(target sessionfs.Location, source sessionfs.Session
 	if err := writeLinesAtomic(config.MessagesPath, lines); err != nil {
 		return httpapi.ForkResult{}, fmt.Errorf("write the fork's transcript: %w", err)
 	}
-	if backup := source.StoragePaths.MessagesBackup; backup != "" && config.StoragePaths.MessagesBackup != "" && filepath.Clean(backup) != filepath.Clean(config.StoragePaths.MessagesBackup) {
+	if backup := source.StoragePaths.MessagesBackup; len(lines) > 0 && backup != "" && config.StoragePaths.MessagesBackup != "" && filepath.Clean(backup) != filepath.Clean(config.StoragePaths.MessagesBackup) {
 		data, err := os.ReadFile(backup)
 		switch {
 		case err == nil:

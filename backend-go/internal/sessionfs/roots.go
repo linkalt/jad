@@ -112,6 +112,8 @@ type ServerSettings struct {
 	RemoteAPI RemoteAPISettings
 	// Tracing is server.tracing; see TracingSettings.
 	Tracing TracingSettings
+	// Metrics is server.metrics; see MetricsSettings.
+	Metrics MetricsSettings
 	// Triggers is server.triggers; see TriggerSettings.
 	Triggers TriggerSettings
 }
@@ -213,6 +215,7 @@ func Defaults() ServerSettings {
 		RunContentMaxIndexSegments: serverconfig.DefaultRunContentMaxIndexSegments,
 		AllowedOrigins:             []string{},
 		Tracing:                    defaultTracingSettings(),
+		Metrics:                    DefaultMetricsSettings(),
 		Triggers:                   defaultTriggerSettings(),
 	}
 }
@@ -778,6 +781,11 @@ func normalizeServerSettings(raw json.RawMessage, path, base string) (ServerSett
 		return ServerSettings{}, err
 	}
 	settings.Tracing = tracing
+	metrics, err := normalizeMetrics(fields["metrics"], path)
+	if err != nil {
+		return ServerSettings{}, err
+	}
+	settings.Metrics = metrics
 	triggers, err := normalizeTriggers(fields["triggers"], path)
 	if err != nil {
 		return ServerSettings{}, err

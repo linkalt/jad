@@ -32,7 +32,7 @@ var layoutSettingKeys = map[string]struct{}{
 	"provider_retry": {}, "provider_stream": {}, "provider_network": {}, "openai_oauth": {}, "max_run_tokens": {}, "max_run_cost_usd": {}, "max_run_duration_ms": {}, "model_fallback": {}, "checkpoint": {}, "plan_mode": {},
 	"hooks": {}, "image_resize": {}, "image_store": {}, "persistence": {}, "front_compaction": {},
 	"compaction": {}, "http_debug": {}, "cwd": {}, "env_file": {}, "tool_storage_dir": {},
-	"session_files": {}, "sandbox": {}, "budget": {},
+	"session_files": {}, "sandbox": {}, "budget": {}, "project_instructions": {},
 }
 
 // layoutSessionFile is <sessions root>/<id>.json.

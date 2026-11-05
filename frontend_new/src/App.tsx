@@ -8,7 +8,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, type ForkTarget, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
@@ -38,7 +38,9 @@ import {type DraftDecision} from './draft-answer';
 import {EMPTY_HISTORY_BLOCKS, type HistoryBlock, type HistoryBlocks, forgetHistoryBlock, forgetHistoryBlocks, historyBlockFor, historyEtagFromHeader, putHistoryBlock} from './history-blocks';
 import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput, userMessageImages} from './image-attachments';
-import {forkSessionRef} from './session-fork';
+import {forkProfileName, forkSessionRef, sessionIdOf, sessionRefInRootOf} from './session-fork';
+import {ForkDialog, type ForkDialogAnswer, type ForkDialogRequest} from './components/ForkDialog';
+import type {RowMenuTarget} from './components/RowContextMenu';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
 import {type LeftPanelId, leftPanelAfterToggle} from './left-panel';
 import {applyPart, applyPartDelta} from './messagePatch';
@@ -2033,45 +2035,144 @@ function App({
     setPendingForkView(null);
     activateView(pendingForkView);
   }, [activateView, listRows, pendingForkView]);
-  const forkTargetsRef = useRef(new Map<string, {sessionRef: string; profile: string | undefined; title: string}>());
+  const forkTargetsRef = useRef(new Map<string, {sessionRef: string; profile: string | undefined; effectiveProfile: string | undefined; title: string; profileNames?: Record<string, string>}>());
   const forkHandlersRef = useRef(new Map<string, (message: MessageRecord, keepTurn: boolean) => void>());
+  // The fork or duplicate the dialog asks a name for: what to copy and where it came from.
+  type PendingFork = {
+    request: ForkDialogRequest;
+    sessionRef: string;
+    profile: string | undefined;
+    sourceTitle: string;
+    paneKey: string;
+    message?: MessageRecord;
+    keepTurn?: boolean;
+  };
+  const [pendingFork, setPendingFork] = useState<PendingFork | null>(null);
+  const [forkBusy, setForkBusy] = useState(false);
   // keepTurn false forks before a user message and puts its text in the new draft; true
-  // forks after the message's turn, with an empty draft.
-  const forkFromMessage = useCallback(async (paneKey: string, message: MessageRecord, keepTurn: boolean) => {
+  // forks after the message's turn, with an empty draft. The fork goes into a new profile of
+  // the same session, named in the dialog.
+  const forkFromMessage = useCallback((paneKey: string, message: MessageRecord, keepTurn: boolean) => {
     const target = forkTargetsRef.current.get(paneKey);
     if (target === undefined) return;
-    const newRef = forkSessionRef(target.sessionRef, appConfig.fork_session_suffix, Date.now());
-    try {
-      const result = await forkSession(target.sessionRef, {session: newRef, messageId: message.id, keepTurn}, target.profile);
-      const nextKey = viewKey(result.session, target.profile === undefined ? undefined : result.profile);
-      const text = keepTurn ? '' : userMessageImages(message).text;
-      if (text !== '') pendingComposerTextRef.current.set(nextKey, text);
-      setPendingForkView(nextKey);
-      refreshSessionsRef.current?.();
-      recordNotification({
-        sessionId: nextKey,
-        sessionTitle: result.session,
-        kind: 'info',
-        title: 'Conversation forked',
-        message: keepTurn
-          ? `${result.session} holds the ${result.turns} turn(s) through the end of that turn.`
-          : `${result.session} holds the ${result.turns} turn(s) before the message; its text is in the draft.`,
-      });
-    } catch (error) {
+    if (target.effectiveProfile === undefined) {
       recordNotification({
         sessionId: paneKey,
         sessionTitle: target.title,
         kind: 'error',
         title: 'Could not fork the conversation',
+        message: 'The session has not said which profile this pane shows yet; open the profile from the list and fork again.',
+      });
+      return;
+    }
+    const slash = target.effectiveProfile.indexOf('/');
+    setPendingFork({
+      request: {
+        mode: 'fork',
+        kind: 'profile',
+        sourceLabel: profileLabel(target.effectiveProfile, target.profileNames),
+        defaultName: forkProfileName(target.effectiveProfile, appConfig.fork_session_suffix, Date.now()),
+        ...(slash < 0 ? {} : {category: target.effectiveProfile.slice(0, slash)}),
+        detail: keepTurn ? 'it keeps the conversation through the end of this turn' : 'it keeps the conversation before this message, whose text goes in its draft',
+      },
+      sessionRef: target.sessionRef,
+      profile: target.effectiveProfile,
+      sourceTitle: target.title,
+      paneKey,
+      message,
+      keepTurn,
+    });
+  }, [recordNotification]);
+  /** Opens the dialog that duplicates a session or profile row. */
+  const duplicateRow = useCallback((rowTarget: RowMenuTarget) => {
+    if (rowTarget.sessionRef === undefined) return;
+    const session = sessions.find(candidate => (candidate.sessionRef ?? candidate.id) === rowTarget.sessionRef);
+    const rowProfile = rowTarget.kind === 'profile' ? profileOfViewKey(rowTarget.id) : undefined;
+    const profile = rowProfile ?? session?.activeProfile ?? session?.defaultProfile;
+    if (rowTarget.kind === 'profile') {
+      if (profile === undefined) return;
+      const slash = profile.indexOf('/');
+      setPendingFork({
+        request: {
+          mode: 'duplicate',
+          kind: 'profile',
+          sourceLabel: rowTarget.label,
+          defaultName: forkProfileName(profile, appConfig.fork_session_suffix, Date.now()),
+          ...(slash < 0 ? {} : {category: profile.slice(0, slash)}),
+        },
+        sessionRef: rowTarget.sessionRef,
+        profile,
+        sourceTitle: rowTarget.label,
+        paneKey: rowTarget.id,
+      });
+      return;
+    }
+    setPendingFork({
+      request: {
+        mode: 'duplicate',
+        kind: 'session',
+        sourceLabel: rowTarget.label,
+        defaultName: sessionIdOf(forkSessionRef(rowTarget.sessionRef, appConfig.fork_session_suffix, Date.now())),
+      },
+      sessionRef: rowTarget.sessionRef,
+      profile,
+      sourceTitle: rowTarget.label,
+      paneKey: rowTarget.id,
+    });
+  }, [sessions]);
+  const submitFork = useCallback(async (answer: ForkDialogAnswer) => {
+    const pending = pendingFork;
+    if (pending === null) return;
+    setForkBusy(true);
+    const {request, message, keepTurn} = pending;
+    try {
+      const target: ForkTarget = request.kind === 'profile'
+        ? {profile: answer.name, ...(answer.title.trim() === '' ? {} : {title: answer.title})}
+        : {session: sessionRefInRootOf(pending.sessionRef, answer.name)};
+      const result = await forkSession(
+        pending.sessionRef,
+        {
+          ...target,
+          ...(answer.copyState ? {} : {state: 'none' as const}),
+          ...(message === undefined ? {} : {messageId: message.id, keepTurn}),
+        },
+        pending.profile,
+      );
+      const nextKey = viewKey(result.session, result.profile);
+      const text = message !== undefined && keepTurn === false ? userMessageImages(message).text : '';
+      if (text !== '') pendingComposerTextRef.current.set(nextKey, text);
+      setPendingFork(null);
+      setPendingForkView(nextKey);
+      refreshSessionsRef.current?.();
+      const where = request.kind === 'profile' ? `Profile ${result.profile}` : `Session ${result.session}`;
+      recordNotification({
+        sessionId: nextKey,
+        sessionTitle: request.kind === 'profile' ? pending.sourceTitle : result.session,
+        kind: 'info',
+        title: request.mode === 'fork' ? 'Conversation forked' : `${request.kind === 'profile' ? 'Profile' : 'Session'} duplicated`,
+        message: message === undefined
+          ? `${where} holds ${answer.copyState ? `the ${result.turns} turn(s) of the conversation` : 'an empty conversation'}.`
+          : keepTurn
+            ? `${where} holds the ${result.turns} turn(s) through the end of that turn.`
+            : `${where} holds the ${result.turns} turn(s) before the message; its text is in the draft.`,
+      });
+    } catch (error) {
+      recordNotification({
+        sessionId: pending.paneKey,
+        sessionTitle: pending.sourceTitle,
+        kind: 'error',
+        title: request.mode === 'fork' ? 'Could not fork the conversation' : `Could not duplicate the ${request.kind}`,
         message: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      setForkBusy(false);
     }
-  }, [recordNotification]);
+  }, [pendingFork, recordNotification]);
   const forkHandlerFor = useCallback((paneKey: string) => {
     let handler = forkHandlersRef.current.get(paneKey);
     if (handler === undefined) {
       handler = (message: MessageRecord, keepTurn: boolean) => {
-        void forkFromMessage(paneKey, message, keepTurn);
+        forkFromMessage(paneKey, message, keepTurn);
       };
       forkHandlersRef.current.set(paneKey, handler);
     }
@@ -3541,6 +3642,7 @@ function App({
           onOpenPane={openViewInPane}
           canOpenPane={canOpenAnotherPane}
           paneLimit={paneLimit}
+          onDuplicate={duplicateRow}
           paneCount={panes.keys.length}
           openLeftPanel={leftPanel}
           onSelectLeftPanel={selectLeftPanel}
@@ -3709,7 +3811,13 @@ function App({
                         onLoadFull={loadFullMessage}
                         onForkMessage={(() => {
                           if (!pane.isLive || pane.isRunning || pane.session === undefined || pane.sessionRef === undefined) return undefined;
-                          forkTargetsRef.current.set(paneViewKey, {sessionRef: pane.sessionRef, profile: pane.profile, title: pane.label});
+                          forkTargetsRef.current.set(paneViewKey, {
+                            sessionRef: pane.sessionRef,
+                            profile: pane.profile,
+                            effectiveProfile: pane.profile ?? pane.session.activeProfile ?? pane.session.defaultProfile,
+                            title: pane.label,
+                            ...(pane.session.profileNames === undefined ? {} : {profileNames: pane.session.profileNames}),
+                          });
                           return forkHandlerFor(paneViewKey);
                         })()}
                         onLoadOlderTurns={() => loadOlderMessages(pane.session, paneViewKey)}
@@ -3842,6 +3950,14 @@ function App({
           </Suspense>
         </LazyLoadBoundary>
       )}
+      <ForkDialog
+        request={pendingFork?.request ?? null}
+        isBusy={forkBusy}
+        onCancel={() => {
+          if (!forkBusy) setPendingFork(null);
+        }}
+        onSubmit={answer => void submitFork(answer)}
+      />
       <TokenRequestDialog />
     </AppShell>
   );

@@ -36,3 +36,15 @@ test('forkSession sends keep_turn true for a fork after an answer', async () => 
   await forkSession('local:demo', {session: 'local:demo-fork-2', messageId: 'resp_1', keepTurn: true});
   assert.deepEqual(JSON.parse(requests[0].init.body), {session: 'local:demo-fork-2', message_id: 'resp_1', keep_turn: true});
 });
+
+test('forkSession forks into a new profile of the same session, with a title and no conversation', async () => {
+  requests.length = 0;
+  reply = () => new Response(JSON.stringify({session: 'local:demo', profile: 'dev/coder-try', turns: 1}), {status: 201});
+  const result = await forkSession('local:demo', {profile: 'coder-try', title: ' Coder (try) ', messageId: 'session-user-o3', keepTurn: false}, 'dev/coder');
+  assert.deepEqual(result, {session: 'local:demo', profile: 'dev/coder-try', turns: 1});
+  assert.deepEqual(JSON.parse(requests[0].init.body), {profile: 'coder-try', title: 'Coder (try)', message_id: 'session-user-o3', keep_turn: false});
+  await forkSession('local:demo', {profile: 'coder-blank', title: '  ', state: 'none'}, 'dev/coder');
+  assert.deepEqual(JSON.parse(requests[1].init.body), {profile: 'coder-blank', state: 'none'});
+  await forkSession('local:demo', {session: 'local:copy', state: 'none'});
+  assert.deepEqual(JSON.parse(requests[2].init.body), {session: 'local:copy', state: 'none'});
+});

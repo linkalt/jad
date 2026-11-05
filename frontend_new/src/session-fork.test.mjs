@@ -31,3 +31,35 @@ test('a fork after an answer names the user message that started its turn', asyn
   assert.equal(forkPointMessage(compacted, compacted[1], true), compacted[1]);
   assert.equal(forkPointMessage([messages[1]], messages[1], true), messages[1]);
 });
+
+test('a profile fork proposes a name in the same category and checks the names it is given', async () => {
+  const {forkProfileName, forkNameProblem, sessionRefInRootOf, sessionIdOf} = await import('./session-fork.ts');
+  assert.equal(forkProfileName('dev/coder', '-fork-', 36), 'coder-fork-10');
+  assert.equal(forkProfileName('coder', '-fork-', 0), 'coder-fork-0');
+  const long = forkProfileName('dev/' + 'b'.repeat(300), '-fork-', 1);
+  assert.equal(long.length, 200);
+  assert.equal(forkNameProblem(long, 'profile'), null);
+  assert.equal(forkNameProblem('coder-try', 'profile'), null);
+  assert.match(forkNameProblem('', 'profile'), /Enter a profile name/);
+  assert.match(forkNameProblem('../x', 'session'), /Letters, digits/);
+  assert.match(forkNameProblem('-x', 'profile'), /starting with a letter or digit/);
+  assert.match(forkNameProblem('a'.repeat(129), 'session'), /At most 128/);
+  assert.equal(sessionRefInRootOf('local:demo', 'copy'), 'local:copy');
+  assert.equal(sessionRefInRootOf('demo', 'copy'), 'copy');
+  assert.equal(sessionIdOf('local:demo-fork-1'), 'demo-fork-1');
+});
+
+test('the fork buttons open the name dialog and fork into a profile; the row menu duplicates', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const app = await readFile(new URL('./App.tsx', import.meta.url), 'utf8');
+  const menu = await readFile(new URL('./components/RowContextMenu.tsx', import.meta.url), 'utf8');
+  const editor = await readFile(new URL('./components/CatalogEditorDialog.tsx', import.meta.url), 'utf8');
+  assert.match(app, /<ForkDialog\b/);
+  assert.match(app, /setPendingFork\(\{\s*request: \{\s*mode: 'fork',\s*kind: 'profile'/);
+  assert.match(app, /\{profile: answer\.name/);
+  assert.match(app, /onDuplicate=\{duplicateRow\}/);
+  assert.ok(!/forkSession\(target\.sessionRef, \{session: newRef/.test(app), 'a message fork no longer makes a new session');
+  assert.match(menu, /<Tooltip content="Duplicate" placement="end">/);
+  assert.match(menu, /target\.kind === 'category' \|\| onDuplicate === undefined \? null/);
+  assert.match(editor, /<Button label="Duplicate"/);
+});

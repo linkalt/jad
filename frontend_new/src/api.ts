@@ -1011,17 +1011,24 @@ export interface SessionForkResult {
   turns: number;
 }
 
+/** Where a fork goes: a new session, or a new profile (a name in the source profile's category) of the same session. */
+export type ForkTarget = {session: string; profile?: undefined; title?: undefined} | {profile: string; title?: string; session?: undefined};
+
 /**
- * Copies the profile's conversation into a new session. With `messageId` the copy ends at the
- * turn that holds that message: before it when `keepTurn` is false, so the new session can ask
- * that turn's question again. The new session must not exist yet (412 otherwise).
+ * Copies the profile's conversation into a new session, or with `profile` into a new profile
+ * of the same session (a copy of the source profile's file, named `title`). With `messageId`
+ * the copy ends at the turn that holds that message: before it when `keepTurn` is false, so
+ * the fork can ask that turn's question again. `state: 'none'` copies no conversation (a
+ * duplicate of the settings only). The new session or profile must not exist yet (412).
  */
 export async function forkSession(
   sessionId: string,
-  options: {session: string; messageId?: string; keepTurn?: boolean},
+  options: ForkTarget & {state?: 'copy' | 'none'; messageId?: string; keepTurn?: boolean},
   profile?: string,
 ): Promise<SessionForkResult> {
-  const body: Record<string, unknown> = {session: options.session};
+  const body: Record<string, unknown> = options.profile !== undefined ? {profile: options.profile} : {session: options.session};
+  if (options.profile !== undefined && options.title !== undefined && options.title.trim() !== '') body.title = options.title.trim();
+  if (options.state !== undefined) body.state = options.state;
   if (options.messageId !== undefined) {
     body.message_id = options.messageId;
     if (options.keepTurn !== undefined) body.keep_turn = options.keepTurn;

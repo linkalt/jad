@@ -2,8 +2,8 @@
   "schema_version": 1,
   "tools": [
     {
-      "id": "native.web_search",
-      "source": "native",
+      "id": "extension.web_search",
+      "source": "extension",
       "name": "web_search",
       "description": "Search the web and get result titles, URLs and snippets. Use fetch to read a result.",
       "inputSchema": {

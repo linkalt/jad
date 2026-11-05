@@ -47,6 +47,7 @@ export function SessionNavigation({
   onOpenPane,
   canOpenPane,
   paneLimit,
+  onDuplicate,
   paneCount,
   openLeftPanel,
   onSelectLeftPanel,
@@ -78,6 +79,8 @@ export function SessionNavigation({
   canOpenPane: boolean;
   /** How many panes the configuration allows, for the menu's tooltip. */
   paneLimit: number;
+  /** Duplicates a session or profile row (the row menu's Duplicate). */
+  onDuplicate?: (target: RowMenuTarget) => void;
   /** How many conversations are on screen right now, for the footer's count. */
   paneCount: number;
   openLeftPanel: LeftPanelId | null;
@@ -311,6 +314,7 @@ export function SessionNavigation({
                   onOpenPane={onOpenPane}
                   canOpenPane={canOpenPane}
                   paneLimit={paneLimit}
+                  onDuplicate={onDuplicate}
                   onRowContextMenu={openRowMenu}
                   rowMenuTarget={rowMenuTarget}
                   rowMenuAnchorRef={rowMenuAnchorRef}
@@ -331,6 +335,7 @@ export function SessionNavigation({
         onOpenPane={onOpenPane}
         canOpenPane={canOpenPane}
         paneLimit={paneLimit}
+        onDuplicate={onDuplicate}
       />
     </SideNav>
   );

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,8 +13,20 @@ import (
 
 // ForkRequest is the body of POST /api/sessions/<ref>/fork.
 type ForkRequest struct {
-	// Session is the new session's reference; it must not exist yet.
+	// Session is the new session's reference; it must not exist yet. Exactly one of
+	// Session and Profile is set.
 	Session string `json:"session"`
+	// Profile forks into a new profile of the same session instead: the name of a new
+	// profile file in the source profile's category, which must not exist yet. The new
+	// profile is a copy of the source profile's file and is added to the session's scope
+	// when the scope does not already hold it.
+	Profile string `json:"profile,omitempty"`
+	// Title is the display name of the new profile; empty keeps Profile as its name.
+	Title string `json:"title,omitempty"`
+	// State is "copy" (default) to copy the transcript up to the fork point, or "none"
+	// for a new session or profile with an empty conversation (a duplicate of the
+	// settings only).
+	State string `json:"state,omitempty"`
 	// MessageID names a message of the session snapshot; the fork point is the turn that
 	// holds it. Cursor names the turn by its cursor instead. With neither, the whole
 	// transcript is copied.
@@ -31,6 +44,35 @@ type ForkResult struct {
 	Turns   int    `json:"turns"`
 	Bytes   int64  `json:"bytes"`
 	Images  int    `json:"images"`
+}
+
+// The fork states: copy the transcript up to the fork point, or start empty.
+const (
+	ForkStateCopy = "copy"
+	ForkStateNone = "none"
+)
+
+// maxForkTitleBytes bounds the display name of a forked profile.
+const maxForkTitleBytes = 200
+
+// invalidProfileNameMessage checks the name of a new profile file: the catalog's identifier
+// rule (letters, digits, '-', '_' and '.', starting with a letter or digit).
+func invalidProfileNameMessage(name string) string {
+	if name == "" {
+		return "must name the new profile"
+	}
+	if len(name) > maxForkTitleBytes {
+		return fmt.Sprintf("must be at most %d bytes", maxForkTitleBytes)
+	}
+	for index, character := range name {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z', character >= '0' && character <= '9':
+		case (character == '-' || character == '_' || character == '.') && index > 0:
+		default:
+			return "may only hold letters, digits, '-', '_' and '.', and must start with a letter or digit"
+		}
+	}
+	return ""
 }
 
 // ProfileFork is implemented by a resolver that can fork a session profile.
@@ -67,11 +109,15 @@ func (h *Handler) handleSessionFork(w http.ResponseWriter, r *http.Request, refe
 	writeJSON(w, http.StatusCreated, result)
 }
 
-// parseForkRequest reads {"session", "cursor"?, "keep_turn"?}; keep_turn defaults to true.
+// parseForkRequest reads {"session" or "profile", "title"?, "state"?, "message_id"? or
+// "cursor"?, "keep_turn"?}; keep_turn defaults to true and state to copy.
 func parseForkRequest(body []byte) (ForkRequest, error) {
 	refuse := func(message string) error { return &StatusError{Code: http.StatusBadRequest, Message: message} }
 	var raw struct {
 		Session   *string `json:"session"`
+		Profile   *string `json:"profile"`
+		Title     *string `json:"title"`
+		State     *string `json:"state"`
 		MessageID *string `json:"message_id"`
 		Cursor    *int64  `json:"cursor"`
 		KeepTurn  *bool   `json:"keep_turn"`
@@ -79,13 +125,44 @@ func parseForkRequest(body []byte) (ForkRequest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil || decoder.More() {
-		return ForkRequest{}, refuse(`the body must be {"session": <new session>, "message_id"?: <message id> or "cursor"?: <turn cursor>, "keep_turn"?: <boolean>}`)
+		return ForkRequest{}, refuse(`the body must be {"session": <new session> or "profile": <new profile name>, "title"?: <profile display name>, "state"?: "copy"|"none", "message_id"?: <message id> or "cursor"?: <turn cursor>, "keep_turn"?: <boolean>}`)
 	}
-	if raw.Session == nil || strings.TrimSpace(*raw.Session) == "" {
-		return ForkRequest{}, refuse("session must name the new session")
+	request := ForkRequest{State: ForkStateCopy, KeepTurn: true}
+	switch {
+	case raw.Session != nil && raw.Profile != nil:
+		return ForkRequest{}, refuse("give session or profile, not both")
+	case raw.Profile != nil:
+		name := *raw.Profile
+		if message := invalidProfileNameMessage(name); message != "" {
+			return ForkRequest{}, refuse("profile: " + message)
+		}
+		request.Profile = name
+	case raw.Session == nil || strings.TrimSpace(*raw.Session) == "":
+		return ForkRequest{}, refuse("session must name the new session (or profile a new profile of this session)")
+	default:
+		if message := invalidSessionReferenceMessage(*raw.Session); message != "" {
+			return ForkRequest{}, refuse("session: " + message)
+		}
+		request.Session = *raw.Session
 	}
-	if message := invalidSessionReferenceMessage(*raw.Session); message != "" {
-		return ForkRequest{}, refuse("session: " + message)
+	if raw.Title != nil {
+		if raw.Profile == nil {
+			return ForkRequest{}, refuse("title names a new profile; it needs profile")
+		}
+		title := strings.TrimSpace(*raw.Title)
+		if title == "" || len(title) > maxForkTitleBytes || strings.ContainsAny(title, "\r\n") {
+			return ForkRequest{}, refuse(fmt.Sprintf("title must be one line of 1 to %d bytes", maxForkTitleBytes))
+		}
+		request.Title = title
+	}
+	if raw.State != nil {
+		if *raw.State != ForkStateCopy && *raw.State != ForkStateNone {
+			return ForkRequest{}, refuse(`state must be "copy" or "none"`)
+		}
+		request.State = *raw.State
+	}
+	if request.State == ForkStateNone && (raw.MessageID != nil || raw.Cursor != nil) {
+		return ForkRequest{}, refuse(`state "none" copies no transcript, so it takes no message_id or cursor`)
 	}
 	if raw.Cursor != nil && *raw.Cursor < 0 {
 		return ForkRequest{}, refuse("cursor must not be negative")
@@ -99,7 +176,7 @@ func parseForkRequest(body []byte) (ForkRequest, error) {
 	if raw.KeepTurn != nil && raw.MessageID == nil && raw.Cursor == nil {
 		return ForkRequest{}, refuse("keep_turn needs message_id or cursor")
 	}
-	request := ForkRequest{Session: *raw.Session, Cursor: raw.Cursor, KeepTurn: true}
+	request.Cursor = raw.Cursor
 	if raw.MessageID != nil {
 		request.MessageID = *raw.MessageID
 	}

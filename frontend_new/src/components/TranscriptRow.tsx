@@ -159,7 +159,7 @@ export const TranscriptRow = memo(
                     {onFork !== undefined && isActiveTranscriptUserMessage(message) ? (
                       <IconButton
                         label={appConfig.fork_message_label}
-                        tooltip={`${appConfig.fork_message_label}: a new session with the conversation before this message`}
+                        tooltip={`${appConfig.fork_message_label}: a new profile of this session with the conversation before this message`}
                         icon={<Icon icon={ForkIcon} size="xsm" color="secondary" />}
                         variant="ghost"
                         size="sm"

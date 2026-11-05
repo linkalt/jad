@@ -52,6 +52,8 @@ type Config struct {
 	RemoteAPI sessionfs.RemoteAPISettings
 	// Tracing is server.tracing.
 	Tracing sessionfs.TracingSettings
+	// Metrics is server.metrics.
+	Metrics sessionfs.MetricsSettings
 	// Triggers is server.triggers; the server runs them, "jad run" and "jad eval" do not.
 	Triggers           sessionfs.TriggerSettings
 	HTTP               httpapi.Config
@@ -109,6 +111,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
 		Tracing:                    loaded.Server.Tracing,
+		Metrics:                    loaded.Server.Metrics,
 		Triggers:                   loaded.Server.Triggers,
 		MaxLeafCalls:               loaded.Server.MaxLeafCalls,
 		HTTP: httpapi.Config{

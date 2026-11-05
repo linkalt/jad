@@ -244,6 +244,20 @@
           "default": [],
           "description": "Exact browser origins permitted to call the API; configure the frontend dev-server origin when using its proxy. The server also requires JAD_API_TOKEN in the environment."
         },
+        "metrics": {
+          "type": "object",
+          "description": "Go backend only. OpenTelemetry metrics of runs, model requests and tool calls, pushed over OTLP/HTTP (JSON) every export_interval_ms by the server, `jad run` and `jad eval`, cumulative: jad.runs (by jad.run.status and jad.run.source), jad.run.duration, jad.runs.active, gen_ai.client.operation.duration and gen_ai.client.token.usage (by gen_ai.request.model, and gen_ai.token.type for tokens), jad.tool.calls (by gen_ai.tool.name and jad.tool.status, the tool result's status) and jad.tool.duration. Attributes are model and tool names and outcomes only: never session, profile or turn ids, prompts, answers, tool arguments or output. Headers come from OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_METRICS_HEADERS. Off by default; a change applies after a restart.",
+          "properties": {
+            "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
+            "endpoint": {"type": "string", "format": "uri", "description": "OTLP/HTTP base URL; metrics go to <endpoint>/v1/metrics. Absent: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (used as is), else OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318."},
+            "service_name": {"type": "string", "minLength": 1, "default": "jad", "description": "service.name of the exported resource."},
+            "export_interval_ms": {"type": "integer", "minimum": 1000, "maximum": 3600000, "default": 60000, "description": "How often the values are pushed. The last values are also pushed when the process stops."},
+            "export_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 10000, "description": "Longest wait for one push, and for the last push at exit."},
+            "duration_buckets_s": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "number", "exclusiveMinimum": 0}, "default": [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92], "description": "Histogram bucket boundaries of the duration metrics, in seconds, increasing. The default is the one the GenAI conventions advise."},
+            "token_buckets": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "number", "exclusiveMinimum": 0}, "default": [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864], "description": "Histogram bucket boundaries of gen_ai.client.token.usage, increasing."}
+          },
+          "additionalProperties": false
+        },
         "tracing": {
           "type": "object",
           "description": "Go backend only. OpenTelemetry spans for every run (jad.run), model request (chat <model>) and tool call (execute_tool <name>), exported over OTLP/HTTP (protobuf) by the server, `jad run` and `jad eval`. Attributes follow the OpenTelemetry GenAI conventions (gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.tool.name, ...) plus jad.session, jad.profile, jad.turn_id and jad.round. Spans never carry prompts, answers, tool arguments, tool output or error text. Headers (for example an API key of a hosted collector) come from OTEL_EXPORTER_OTLP_HEADERS. Off by default; a change applies after a restart.",

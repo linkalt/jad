@@ -270,8 +270,15 @@ func headlessService(logLevel string, stderr io.Writer) (app.Config, *headless.R
 		closeLog.Close()
 		return app.Config{}, nil, nil, err
 	}
+	shutdownMetrics, err := tracing.SetupMetrics(config.Metrics, logger)
+	if err != nil {
+		_ = tracing.Shutdown(shutdownTracing, config.Tracing)
+		closeLog.Close()
+		return app.Config{}, nil, nil, err
+	}
 	service, runner, err := app.NewHeadless(config)
 	if err != nil {
+		_ = tracing.ShutdownMetrics(shutdownMetrics, config.Metrics)
 		_ = tracing.Shutdown(shutdownTracing, config.Tracing)
 		closeLog.Close()
 		return app.Config{}, nil, nil, fmt.Errorf("initialize Go backend: %w", err)
@@ -281,6 +288,9 @@ func headlessService(logLevel string, stderr io.Writer) (app.Config, *headless.R
 		service.Close()
 		// Language servers the lsp tool started outlive catalogs; they end with the command.
 		native.ShutdownLanguageServers()
+		if err := tracing.ShutdownMetrics(shutdownMetrics, config.Metrics); err != nil {
+			logger.Warn("metrics shutdown failed", "error", err)
+		}
 		if err := tracing.Shutdown(shutdownTracing, config.Tracing); err != nil {
 			logger.Warn("tracing shutdown failed", "error", err)
 		}

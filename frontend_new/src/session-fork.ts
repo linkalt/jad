@@ -1,7 +1,7 @@
 /**
  * @file session-fork.ts
- * @input A session reference and the time of the fork
- * @output The reference of the new session a fork creates
+ * @input A session reference or profile id and the time of the fork
+ * @output The name of the new session or profile a fork creates, and its check
  * @position Shared by the transcript's fork button and its tests
  */
 
@@ -39,4 +39,42 @@ export function forkPointMessage<M extends {id: string; sender: string}>(message
     if (candidate.sender === 'user') return LIVE_USER_MESSAGE_ID.test(candidate.id) ? candidate : message;
   }
   return message;
+}
+
+/** The longest profile name the server accepts for a fork. */
+const MAX_PROFILE_NAME = 200;
+
+/** A catalog identifier: letters, digits, '-', '_' and '.', starting with a letter or digit. */
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The name a fork of profile `sourceProfile` (`<category>/<name>`) proposes for the new
+ * profile: the source name with the suffix and a base-36 stamp of `now`, in the same category.
+ */
+export function forkProfileName(sourceProfile: string, suffix: string, now: number): string {
+  const slash = sourceProfile.indexOf('/');
+  const name = slash < 0 ? sourceProfile : sourceProfile.slice(slash + 1);
+  const tail = `${suffix}${Math.max(0, Math.floor(now)).toString(36)}`;
+  return `${name.slice(0, Math.max(1, MAX_PROFILE_NAME - tail.length))}${tail}`;
+}
+
+/** Why `name` cannot name a new profile or session, or null when it can. */
+export function forkNameProblem(name: string, kind: 'profile' | 'session'): string | null {
+  const limit = kind === 'profile' ? MAX_PROFILE_NAME : MAX_SESSION_ID;
+  if (name === '') return `Enter a ${kind} name.`;
+  if (name.length > limit) return `At most ${limit} characters.`;
+  if (!IDENTIFIER.test(name)) return 'Letters, digits, - _ and . only, starting with a letter or digit.';
+  return null;
+}
+
+/** The session reference `name` makes in the root of `sourceRef`. */
+export function sessionRefInRootOf(sourceRef: string, name: string): string {
+  const colon = sourceRef.indexOf(':');
+  return colon < 0 ? name : `${sourceRef.slice(0, colon + 1)}${name}`;
+}
+
+/** The session id of a reference, without its root. */
+export function sessionIdOf(sessionRef: string): string {
+  const colon = sessionRef.indexOf(':');
+  return colon < 0 ? sessionRef : sessionRef.slice(colon + 1);
 }

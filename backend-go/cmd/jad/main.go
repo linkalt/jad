@@ -121,6 +121,16 @@ func run() error {
 			logger.Warn("tracing shutdown failed", slog.Any("error", err))
 		}
 	}()
+	shutdownMetrics, err := tracing.SetupMetrics(config.Metrics, logger)
+	if err != nil {
+		return err
+	}
+	// Like tracing: deferred before the service, so the last values include every run.
+	defer func() {
+		if err := tracing.ShutdownMetrics(shutdownMetrics, config.Metrics); err != nil {
+			logger.Warn("metrics shutdown failed", slog.Any("error", err))
+		}
+	}()
 	service, err := app.NewService(config)
 	if err != nil {
 		return fmt.Errorf("initialize Go backend: %w", err)

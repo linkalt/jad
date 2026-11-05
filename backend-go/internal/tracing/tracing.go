@@ -119,6 +119,18 @@ func tracer() trace.Tracer { return otel.Tracer(instrumentationName) }
 // StartRun starts the span of one run of a session profile. source names who started it
 // (empty for the web client).
 func StartRun(ctx context.Context, session, profile, turnID, source string) (context.Context, trace.Span) {
+	ctx, span := startRunSpan(ctx, session, profile, turnID, source)
+	span = withMetrics(span, func(recorded *metricSpan) {
+		recorded.source = source
+		if recorded.source == "" {
+			recorded.source = "web"
+		}
+	})
+	recordRunStart(span)
+	return ctx, span
+}
+
+func startRunSpan(ctx context.Context, session, profile, turnID, source string) (context.Context, trace.Span) {
 	if !installed.Load() {
 		return ctx, inactive
 	}
@@ -134,6 +146,7 @@ func StartRun(ctx context.Context, session, profile, turnID, source string) (con
 
 // EndRun ends a run span with the run's final status: completed, failed or aborted.
 func EndRun(span trace.Span, status string, err error) {
+	recordRunEnd(span, status)
 	if span.IsRecording() {
 		span.SetAttributes(attribute.String("jad.run.status", status))
 		switch {
@@ -150,6 +163,11 @@ func EndRun(span trace.Span, status string, err error) {
 
 // StartModelRequest starts the span of one model request (one round of a run).
 func StartModelRequest(ctx context.Context, model string, round int) (context.Context, trace.Span) {
+	ctx, span := startModelRequestSpan(ctx, model, round)
+	return ctx, withMetrics(span, func(recorded *metricSpan) { recorded.model = model })
+}
+
+func startModelRequestSpan(ctx context.Context, model string, round int) (context.Context, trace.Span) {
 	if !installed.Load() {
 		return ctx, inactive
 	}
@@ -167,6 +185,7 @@ func StartModelRequest(ctx context.Context, model string, round int) (context.Co
 // EndModelRequest ends a model request span. event is the terminal Responses event of the
 // request (response.completed); its id, model and usage are recorded.
 func EndModelRequest(span trace.Span, event json.RawMessage, err error) {
+	recordModelRequest(span, event, err)
 	if span.IsRecording() {
 		if err != nil {
 			setError(span, err, "model request failed")
@@ -225,7 +244,7 @@ func responseAttributes(event json.RawMessage) []attribute.KeyValue {
 // StartToolCall starts the span of one tool call. call is the function_call item; only
 // its name and call id are read.
 func StartToolCall(ctx context.Context, call json.RawMessage) (context.Context, trace.Span) {
-	if !installed.Load() {
+	if !installed.Load() && meter.Load() == nil {
 		return ctx, inactive
 	}
 	var item struct {
@@ -233,19 +252,28 @@ func StartToolCall(ctx context.Context, call json.RawMessage) (context.Context, 
 		CallID string `json:"call_id"`
 	}
 	_ = json.Unmarshal(call, &item)
+	ctx, span := startToolCallSpan(ctx, item.Name, item.CallID)
+	return ctx, withMetrics(span, func(recorded *metricSpan) { recorded.tool = item.Name })
+}
+
+func startToolCallSpan(ctx context.Context, tool, callID string) (context.Context, trace.Span) {
+	if !installed.Load() {
+		return ctx, inactive
+	}
 	name := "execute_tool"
-	if item.Name != "" {
-		name += " " + item.Name
+	if tool != "" {
+		name += " " + tool
 	}
 	return tracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"),
-		attribute.String("gen_ai.tool.name", item.Name),
-		attribute.String("gen_ai.tool.call.id", item.CallID),
+		attribute.String("gen_ai.tool.name", tool),
+		attribute.String("gen_ai.tool.call.id", callID),
 	))
 }
 
 // EndToolCall ends a tool call span with the size of the output item.
 func EndToolCall(span trace.Span, output json.RawMessage, err error) {
+	recordToolCall(span, output, err)
 	if span.IsRecording() {
 		span.SetAttributes(attribute.Int("jad.tool.output_bytes", len(output)))
 		if err != nil {
@@ -258,18 +286,22 @@ func EndToolCall(span trace.Span, output json.RawMessage, err error) {
 // setError marks a span failed. The error text is not recorded when it may hold provider
 // or tool detail; only its kind is, as the client-safe description of a failed run is.
 func setError(span trace.Span, err error, description string) {
-	kind := "error"
+	span.SetAttributes(attribute.String("error.type", errorKind(err)))
+	span.SetStatus(codes.Error, description)
+}
+
+// errorKind is the error.type of err: canceled, deadline_exceeded or the Go type.
+func errorKind(err error) string {
 	switch {
 	case err == nil:
+		return "error"
 	case errors.Is(err, context.Canceled):
-		kind = "canceled"
+		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
-		kind = "deadline_exceeded"
+		return "deadline_exceeded"
 	default:
-		kind = fmt.Sprintf("%T", err)
+		return fmt.Sprintf("%T", err)
 	}
-	span.SetAttributes(attribute.String("error.type", kind))
-	span.SetStatus(codes.Error, description)
 }
 
 // Shutdown calls shutdown with a deadline of settings.export_timeout_ms, so a collector that

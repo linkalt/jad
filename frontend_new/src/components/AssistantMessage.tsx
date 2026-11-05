@@ -183,7 +183,7 @@ export function AssistantMessage({
                 {onForkAfter !== undefined ? (
                   <IconButton
                     label={appConfig.fork_after_message_label}
-                    tooltip={`${appConfig.fork_after_message_label}: a new session with the conversation through the end of this turn`}
+                    tooltip={`${appConfig.fork_after_message_label}: a new profile of this session with the conversation through the end of this turn`}
                     icon={<Icon icon={ForkIcon} size="xsm" color="secondary" />}
                     variant="ghost"
                     size="sm"

@@ -1,4 +1,4 @@
-package native
+package extension
 
 import (
 	"bytes"
@@ -19,12 +19,13 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-const webSearchToolID = "native.web_search"
+// WebSearchToolID is the id of the web search tool definition.
+const WebSearchToolID = "extension.web_search"
 
 // braveMaxCount is the most results the Brave web search API returns for one request.
 const braveMaxCount = 20
 
-var webSearchInputSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"What to search the web for."},"max_results":{"type":"integer","minimum":1,"description":"How many results to return; the setting's max_results caps it."},"allowed_domains":{"type":"array","items":{"type":"string","minLength":1},"description":"Only return results from these domains (and their subdomains)."},"blocked_domains":{"type":"array","items":{"type":"string","minLength":1},"description":"Never return results from these domains."}},"required":["query"],"additionalProperties":false}`)
+var WebSearchInputSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"description":"What to search the web for."},"max_results":{"type":"integer","minimum":1,"description":"How many results to return; the setting's max_results caps it."},"allowed_domains":{"type":"array","items":{"type":"string","minLength":1},"description":"Only return results from these domains (and their subdomains)."},"blocked_domains":{"type":"array","items":{"type":"string","minLength":1},"description":"Never return results from these domains."}},"required":["query"],"additionalProperties":false}`)
 
 // webSearchResult is one search hit as the tool shows it.
 type webSearchResult struct {
@@ -41,25 +42,25 @@ type webSearchQuery struct {
 	Blocked []string
 }
 
-// NewWebSearchTool constructs native.web_search: it sends the query to the configured
+// NewWebSearchTool constructs extension.web_search: it sends the query to the configured
 // search API and returns titles, URLs and snippets. The key is read from the environment
 // on each call.
-func NewWebSearchTool(settings sessionfs.NativeWebSearchSettings) (tools.Tool, error) {
+func NewWebSearchTool(settings sessionfs.ExtensionWebSearchSettings) (tools.Tool, error) {
 	return newWebSearchTool(settings, os.Getenv, &http.Client{})
 }
 
-func newWebSearchTool(settings sessionfs.NativeWebSearchSettings, environment func(string) string, client *http.Client) (tools.Tool, error) {
-	validator, err := tools.CompileSchema(webSearchInputSchema)
+func newWebSearchTool(settings sessionfs.ExtensionWebSearchSettings, environment func(string) string, client *http.Client) (tools.Tool, error) {
+	validator, err := tools.CompileSchema(WebSearchInputSchema)
 	if err != nil {
-		return tools.Tool{}, fmt.Errorf("compile native web_search schema: %w", err)
+		return tools.Tool{}, fmt.Errorf("compile extension web_search schema: %w", err)
 	}
 	return tools.Tool{
 		Definition: tools.Definition{
-			ID:          webSearchToolID,
-			Source:      "native",
+			ID:          WebSearchToolID,
+			Source:      "extension",
 			Name:        "web_search",
 			Description: "Search the web and get result titles, URLs and snippets. Use fetch to read a result.",
-			InputSchema: append(json.RawMessage(nil), webSearchInputSchema...),
+			InputSchema: append(json.RawMessage(nil), WebSearchInputSchema...),
 		},
 		Validator:        validator,
 		ReadOnly:         true,
@@ -71,7 +72,7 @@ func newWebSearchTool(settings sessionfs.NativeWebSearchSettings, environment fu
 	}, nil
 }
 
-func executeWebSearch(ctx context.Context, arguments map[string]any, settings sessionfs.NativeWebSearchSettings, environment func(string) string, client *http.Client, callID string) string {
+func executeWebSearch(ctx context.Context, arguments map[string]any, settings sessionfs.ExtensionWebSearchSettings, environment func(string) string, client *http.Client, callID string) string {
 	query, problem := parseWebSearchArguments(arguments, settings)
 	if problem != "" {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_input", problem)
@@ -80,7 +81,7 @@ func executeWebSearch(ctx context.Context, arguments map[string]any, settings se
 	if settings.APIKeyEnv != "" {
 		key = strings.TrimSpace(environment(settings.APIKeyEnv))
 		if key == "" && settings.Provider != sessionfs.WebSearchProviderSearXNG {
-			return tools.ExecutionError(callID, tools.StatusError, "api_key_missing", "Environment variable "+settings.APIKeyEnv+" is not set (tools.native.web_search.api_key_env)")
+			return tools.ExecutionError(callID, tools.StatusError, "api_key_missing", "Environment variable "+settings.APIKeyEnv+" is not set (tools.extension.web_search.api_key_env)")
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutMS)*time.Millisecond)
@@ -94,7 +95,7 @@ func executeWebSearch(ctx context.Context, arguments map[string]any, settings se
 	response, err := client.Do(request)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return tools.ExecutionError(callID, tools.StatusError, "search_timeout", fmt.Sprintf("The search did not answer within %d ms (tools.native.web_search.timeout_ms)", settings.TimeoutMS))
+			return tools.ExecutionError(callID, tools.StatusError, "search_timeout", fmt.Sprintf("The search did not answer within %d ms (tools.extension.web_search.timeout_ms)", settings.TimeoutMS))
 		}
 		if ctx.Err() != nil {
 			return tools.ExecutionError(callID, tools.StatusError, "search_cancelled", "The search was cancelled")
@@ -111,7 +112,7 @@ func executeWebSearch(ctx context.Context, arguments map[string]any, settings se
 			tools.Information{Key: "response", Value: webSearchCut(strings.TrimSpace(string(body)), 500)})
 	}
 	if int64(len(body)) > settings.MaxResponseBytes {
-		return tools.ExecutionError(callID, tools.StatusError, "response_too_large", fmt.Sprintf("The search response is larger than %d bytes (tools.native.web_search.max_response_bytes)", settings.MaxResponseBytes))
+		return tools.ExecutionError(callID, tools.StatusError, "response_too_large", fmt.Sprintf("The search response is larger than %d bytes (tools.extension.web_search.max_response_bytes)", settings.MaxResponseBytes))
 	}
 	results, err := decodeWebSearchResults(settings.Provider, body)
 	if err != nil {
@@ -137,7 +138,7 @@ func executeWebSearch(ctx context.Context, arguments map[string]any, settings se
 	return rendered
 }
 
-func parseWebSearchArguments(arguments map[string]any, settings sessionfs.NativeWebSearchSettings) (webSearchQuery, string) {
+func parseWebSearchArguments(arguments map[string]any, settings sessionfs.ExtensionWebSearchSettings) (webSearchQuery, string) {
 	query := webSearchQuery{Count: int(settings.DefaultResults)}
 	text, _ := arguments["query"].(string)
 	query.Text = strings.Join(strings.Fields(text), " ")
@@ -145,10 +146,10 @@ func parseWebSearchArguments(arguments map[string]any, settings sessionfs.Native
 		return query, "query must not be blank"
 	}
 	if utf8.RuneCountInString(query.Text) > int(settings.MaxQueryChars) {
-		return query, fmt.Sprintf("query is longer than %d characters (tools.native.web_search.max_query_chars)", settings.MaxQueryChars)
+		return query, fmt.Sprintf("query is longer than %d characters (tools.extension.web_search.max_query_chars)", settings.MaxQueryChars)
 	}
 	if value, exists := arguments["max_results"]; exists {
-		count, ok := safeInteger(value)
+		count, ok := tools.SafeInteger(value)
 		if !ok || count < 1 {
 			return query, "max_results must be a positive integer"
 		}
@@ -203,7 +204,7 @@ func webSearchDomainArgument(value any) ([]string, bool) {
 }
 
 // webSearchRequest builds the provider's HTTP request.
-func webSearchRequest(ctx context.Context, settings sessionfs.NativeWebSearchSettings, query webSearchQuery, key string) (*http.Request, error) {
+func webSearchRequest(ctx context.Context, settings sessionfs.ExtensionWebSearchSettings, query webSearchQuery, key string) (*http.Request, error) {
 	switch settings.Provider {
 	case sessionfs.WebSearchProviderTavily:
 		body, err := json.Marshal(map[string]any{

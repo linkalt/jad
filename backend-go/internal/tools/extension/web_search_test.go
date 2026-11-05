@@ -1,4 +1,4 @@
-package native
+package extension
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-var sampleWebSearchManifest = filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "web_search.json")
+var sampleWebSearchManifest = filepath.Join("..", "..", "..", "..", "sample", "tools", "extension", "web_search.json")
 
 type recordedSearch struct {
 	method string
@@ -45,15 +45,15 @@ func searchServer(t *testing.T, status int, answer string) (*httptest.Server, fu
 	}
 }
 
-func webSearchSettings(provider, baseURL string) sessionfs.NativeWebSearchSettings {
-	return sessionfs.NativeWebSearchSettings{
+func webSearchSettings(provider, baseURL string) sessionfs.ExtensionWebSearchSettings {
+	return sessionfs.ExtensionWebSearchSettings{
 		Provider: provider, BaseURL: baseURL, APIKeyEnv: "SEARCH_KEY", DefaultResults: 2, MaxResults: 3,
 		TimeoutMS: 5000, MaxResponseBytes: 1 << 20, MaxSnippetChars: 40, MaxQueryChars: 100, UserAgent: "test-agent",
 		AllowedDomains: []string{}, BlockedDomains: []string{},
 	}
 }
 
-func callWebSearch(t *testing.T, settings sessionfs.NativeWebSearchSettings, environment map[string]string, arguments map[string]any) string {
+func callWebSearch(t *testing.T, settings sessionfs.ExtensionWebSearchSettings, environment map[string]string, arguments map[string]any) string {
 	t.Helper()
 	tool, err := newWebSearchTool(settings, func(name string) string { return environment[name] }, &http.Client{})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestWebSearchReportsErrorsAsToolResults(t *testing.T) {
 	big, _ := searchServer(t, http.StatusOK, `{"results":[{"title":"`+strings.Repeat("x", 2000)+`","url":"https://a.example"}]}`)
 	cases := []struct {
 		name      string
-		settings  sessionfs.NativeWebSearchSettings
+		settings  sessionfs.ExtensionWebSearchSettings
 		env       map[string]string
 		arguments map[string]any
 		want      []string
@@ -148,7 +148,7 @@ func TestWebSearchReportsErrorsAsToolResults(t *testing.T) {
 		{"bad domain", webSearchSettings(sessionfs.WebSearchProviderBrave, failing.URL), map[string]string{"SEARCH_KEY": "k"}, map[string]any{"query": "q", "blocked_domains": []any{"not a domain"}}, []string{"invalid_input", "blocked_domains"}},
 		{"http error", webSearchSettings(sessionfs.WebSearchProviderBrave, failing.URL), map[string]string{"SEARCH_KEY": "k"}, map[string]any{"query": "q"}, []string{"search_failed", "HTTP 429", "rate limited"}},
 		{"not json", webSearchSettings(sessionfs.WebSearchProviderTavily, garbled.URL), map[string]string{"SEARCH_KEY": "k"}, map[string]any{"query": "q"}, []string{"search_failed", "could not be read"}},
-		{"too large", func() sessionfs.NativeWebSearchSettings {
+		{"too large", func() sessionfs.ExtensionWebSearchSettings {
 			s := webSearchSettings(sessionfs.WebSearchProviderTavily, big.URL)
 			s.MaxResponseBytes = 1024
 			return s
@@ -172,28 +172,5 @@ func TestWebSearchCallCannotWidenTheAllowedDomains(t *testing.T) {
 	output := callWebSearch(t, settings, map[string]string{"SEARCH_KEY": "k"}, map[string]any{"query": "q", "allowed_domains": []any{"evil.example"}})
 	if !strings.Contains(output, "invalid_input") || !strings.Contains(output, "go.dev") {
 		t.Fatalf("output:\n%s", output)
-	}
-}
-
-func TestWebSearchSampleManifestMatchesTheCode(t *testing.T) {
-	root := t.TempDir()
-	settings := webSearchSettings(sessionfs.WebSearchProviderBrave, "https://api.example/search")
-	catalog, err := BuildCatalog(sessionfs.SessionConfig{
-		SettingPath: filepath.Join(root, "setting.json"), ToolDefinitionPaths: []string{sampleWebSearchManifest},
-		NativeWebSearch: &settings,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	definitions := catalog.Definitions()
-	if len(definitions) != 1 || definitions[0].Name != "web_search" {
-		t.Fatalf("definitions = %+v", definitions)
-	}
-	tool, err := NewWebSearchTool(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !tool.ReadOnly || !tool.LeafBudget || definitions[0].Description != tool.Definition.Description {
-		t.Fatalf("tool flags or description differ: read-only %t leaf %t %q", tool.ReadOnly, tool.LeafBudget, definitions[0].Description)
 	}
 }

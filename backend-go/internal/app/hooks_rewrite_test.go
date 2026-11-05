@@ -55,8 +55,10 @@ func answerRecorder(t *testing.T) (*httptest.Server, func() []string) {
 // startEmptyService starts a service over a session with no transcript yet.
 func startEmptyService(t *testing.T, settings map[string]any, provider *httptest.Server) (*httptest.Server, string) {
 	t.Helper()
+	cwd, _ := settings["cwd"].(string)
 	spec := layouttest.Spec{
 		SessionID: "one",
+		CWD:       cwd,
 		Settings:  settings,
 		Server:    map[string]any{"max_body_bytes": 4096, "sse_max_buffered_bytes": 4096},
 		Models:    map[string]map[string]any{"openai/default": {"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
@@ -153,5 +155,30 @@ func TestNotificationHooksFireWhenAToolAsksTheUser(t *testing.T) {
 			t.Fatal("the notification command did not run")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestProjectInstructionsReachTheModelPrompt(t *testing.T) {
+	provider, requests := answerRecorder(t)
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("ALWAYS RUN THE LINTER"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// startEmptyService passes cwd to the fixture as the session's own working directory.
+	api, messagesPath := startEmptyService(t, map[string]any{"cwd": cwd, "project_instructions": map[string]any{"enabled": true}}, provider)
+	runAndRead(t, api, `{"input":"hello"}`)
+	sent := requests()
+	if len(sent) != 1 || !strings.Contains(sent[0], "ALWAYS RUN THE LINTER") || !strings.Contains(sent[0], "# Project instructions: ") {
+		t.Fatalf("request = %v", sent)
+	}
+	transcript, err := os.ReadFile(messagesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(transcript), "ALWAYS RUN THE LINTER") {
+		t.Fatalf("the prompt text reached messages.jsonl: %s", transcript)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -189,7 +190,7 @@ type SessionConfig struct {
 	NativeReadImage          *NativeReadImageSettings
 	NativeNotebook           *NativeNotebookSettings
 	NativeLSP                *NativeLSPSettings
-	NativeWebSearch          *NativeWebSearchSettings
+	ExtensionWebSearch       *ExtensionWebSearchSettings
 	NativeProcess            *NativeProcessSettings
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
@@ -248,6 +249,8 @@ type SessionConfig struct {
 	Sandbox *SandboxSettings
 	// Budget caps what all the runs of the session use, in total and per day.
 	Budget BudgetSettings
+	// ProjectInstructions finds instruction files such as AGENTS.md by name; off by default.
+	ProjectInstructions ProjectInstructionsSettings
 	// MaxRunCostUSD is the most US dollars one run may cost, from the models' pricing,
 	// before it starts another provider round; zero means no cap.
 	MaxRunCostUSD float64
@@ -274,6 +277,9 @@ type SessionConfig struct {
 	Model                 Model
 	// PromptDocuments are the absolute paths of the files read into Model.PromptText.
 	PromptDocuments []string
+	// ProjectInstructionFiles are the instruction files project_instructions found at
+	// and above cwd and added to Model.PromptText after the prompt documents.
+	ProjectInstructionFiles []string
 }
 
 // LoadSessionSettings reads and validates a catalog-layout session (session.json plus the
@@ -416,6 +422,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	projectInstructions, err := normalizeProjectInstructions(setting["project_instructions"], settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	if err := rejectRemovedApproval(setting, "setting", settingPath); err != nil {
 		return SessionConfig{}, err
 	}
@@ -511,7 +521,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeWebSearch, err := normalizeNativeWebSearchSettings(setting, settingPath)
+	extensionWebSearch, err := normalizeExtensionWebSearchSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -628,6 +638,13 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	instructionText, instructionFiles, err := discoverProjectInstructions(projectInstructions, cwd, promptDocuments, settingPath)
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	if instructionText != "" {
+		promptText = strings.Join(slices.DeleteFunc([]string{promptText, instructionText}, func(text string) bool { return text == "" }), "\n\n")
+	}
 
 	modelPathValue := "model.json"
 	modelDefault := ""
@@ -724,7 +741,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeReadImage:          nativeReadImage,
 		NativeNotebook:           nativeNotebook,
 		NativeLSP:                nativeLSP,
-		NativeWebSearch:          nativeWebSearch,
+		ExtensionWebSearch:       extensionWebSearch,
 		NativeProcess:            nativeProcess,
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
@@ -756,6 +773,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
 		Budget:                   budget,
+		ProjectInstructions:      projectInstructions,
 		MaxRunCostUSD:            maxRunCost,
 		MaxRunDurationMS:         maxRunDuration,
 		Checkpoint:               checkpoint,
@@ -772,8 +790,9 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		// The model file is read by WithModel, so a settings-only caller is not
 		// affected by a missing or malformed model.json. Only the prompt, which
 		// comes from the settings, is filled in here.
-		Model:           Model{PromptRole: promptRole, PromptText: promptText},
-		PromptDocuments: promptDocuments,
+		Model:                   Model{PromptRole: promptRole, PromptText: promptText},
+		PromptDocuments:         promptDocuments,
+		ProjectInstructionFiles: instructionFiles,
 	}, nil
 }
 

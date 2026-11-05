@@ -23,8 +23,9 @@ export type RowMenuTarget = {
  * A row's `onContextMenu` anchors it to that row and it opens beside the row
  * (`placement="end"`, `alignment="start"`, so its top aligns with the row
  * label), showing the same icon-only vertical stack as the bottom More menu —
- * New, Edit, Delete from top to bottom, each with an `end` tooltip. The buttons
- * only dismiss the menu; no row action is wired yet. A profile row gets Edit
+ * New, Duplicate, Edit, Delete from top to bottom, each with an `end` tooltip.
+ * Duplicate (session and profile rows) opens the dialog that names the copy;
+ * New, Edit and Delete only dismiss the menu, no action is wired for them yet. A profile row gets Edit
  * and Delete only: a profile is created from the catalog, not from a row, so
  * New there would have nothing to create.
  *
@@ -48,6 +49,7 @@ export function RowContextMenu({
   onOpenPane,
   canOpenPane,
   paneLimit,
+  onDuplicate,
 }: {
   target: RowMenuTarget | null;
   anchorRef: RefObject<HTMLElement | null>;
@@ -59,6 +61,8 @@ export function RowContextMenu({
   canOpenPane: boolean;
   /** How many panes the configuration allows, for the tooltip. */
   paneLimit: number;
+  /** Duplicates a session or profile row; a dialog asks the new name and what to copy. */
+  onDuplicate?: (target: RowMenuTarget) => void;
 }) {
   const menuRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -150,6 +154,20 @@ export function RowContextMenu({
                 variant="ghost"
                 size="sm"
                 onClick={dismiss}
+              />
+            </Tooltip>
+          )}
+          {target.kind === 'category' || onDuplicate === undefined ? null : (
+            <Tooltip content="Duplicate" placement="end">
+              <IconButton
+                label={`Duplicate ${target.label}`}
+                icon={<Icon icon="copy" size="sm" />}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  dismiss();
+                  onDuplicate(target);
+                }}
               />
             </Tooltip>
           )}
