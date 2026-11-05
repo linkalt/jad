@@ -445,7 +445,10 @@ func (m *Manager) firstDelivery(name string, signature []byte, stamp time.Time) 
 	if stamp.After(from) {
 		from = stamp
 	}
-	expires := from.Add(time.Duration(m.settings.ReplayWindowMS) * time.Millisecond)
+	// One millisecond more than the window: signedContent compares the timestamp's age in
+	// whole milliseconds, so it accepts a timestamp until just under a millisecond past
+	// the window, and the record must still be there then.
+	expires := from.Add(time.Duration(m.settings.ReplayWindowMS)*time.Millisecond + time.Millisecond)
 	key = name + "\x00" + string(signature)
 	m.mu.Lock()
 	defer m.mu.Unlock()

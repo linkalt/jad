@@ -147,22 +147,23 @@ func (m *Manager) clientOptions(serverID string, limit int) *mcpSDK.ClientOption
 // request: every subscribe is sent first and the acknowledgements are awaited together, so
 // a server that never acknowledges costs one timeout_ms, not one per subscription. A
 // subscription the server refuses or does not acknowledge in time is dropped.
+//
+// The list is read and the failures are dropped inside the request, under the connection's
+// call lock that subscribe also takes, so a subscribe or unsubscribe made meanwhile is
+// neither undone nor told it holds a subscription that is then dropped. When the request
+// cannot be made (the connection closed already), the list is kept for the next
+// connection, which makes the subscriptions again.
 func (m *Manager) resubscribe(ctx context.Context, current *connection) {
-	uris := m.events.subscriptions(current.serverID)
-	if len(uris) == 0 {
+	if len(m.events.subscriptions(current.serverID)) == 0 {
 		return
 	}
-	var failed []string
-	err := current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
-		failed = m.subscribeAllAcknowledged(ctx, current.serverID, session, uris)
+	_ = current.request(ctx, func(ctx context.Context, session *mcpSDK.ClientSession) error {
+		uris := m.events.subscriptions(current.serverID)
+		for _, uri := range m.subscribeAllAcknowledged(ctx, current.serverID, session, uris) {
+			m.events.setSubscribed(current.serverID, uri, false)
+		}
 		return nil
 	})
-	if err != nil {
-		failed = uris
-	}
-	for _, uri := range failed {
-		m.events.setSubscribed(current.serverID, uri, false)
-	}
 }
 
 // ResourceEvents are the change notifications kept after seq, oldest first, the newest Seq

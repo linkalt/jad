@@ -238,6 +238,56 @@ func TestResubscribeWaitsForTheAcknowledgementsTogether(t *testing.T) {
 	}
 }
 
+// An unsubscribe that takes the connection's call lock while a resubscribe waits for it is
+// not undone: the resubscribe reads its list under the lock, so it does not make the
+// subscription again behind the record's back (which would also make the next subscribe a
+// local no-op of the SDK that never gets its acknowledgement).
+func TestResubscribeDoesNotUndoAnUnsubscribeMadeMeanwhile(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "watch.json")
+	config, _ := json.Marshal(map[string]any{
+		"transport":           map[string]any{"type": "stdio", "command": mustExecutable(t), "args": []string{"-test.run=^TestMCPWatchFixtureProcess$"}, "cwd": directory, "env": map[string]string{watchFixtureEnvironment: "1"}},
+		"timeout_ms":          1_000,
+		"resource_events_max": 10,
+	})
+	if err := os.WriteFile(configPath, config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers := []sessionfs.MCPServerReference{{ID: "docs", ConfigPath: configPath, Enabled: true, Resources: true}}
+	manager := NewManager(currentEnvironment())
+	defer manager.Close()
+	if _, err := manager.LoadTools(context.Background(), servers, directory); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	current := manager.connections["docs"]
+	manager.mu.Unlock()
+	if current == nil {
+		t.Fatal("no connection")
+	}
+	// The record a reconnect carries over from the old connection; this session holds nothing.
+	manager.events.setSubscribed("docs", "docs://plan", true)
+	current.callMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.resubscribe(context.Background(), current)
+	}()
+	// Give the resubscribe time to reach the lock; were it to read its list before, the
+	// unsubscribe below would be undone.
+	time.Sleep(200 * time.Millisecond)
+	// What an unsubscribe that took the lock first leaves: no record.
+	manager.events.setSubscribed("docs", "docs://plan", false)
+	current.callMu.Unlock()
+	<-done
+	if manager.events.isSubscribed("docs", "docs://plan") {
+		t.Fatal("the resubscribe brought the unsubscribed resource back into the record")
+	}
+	if err := manager.SubscribeUserResource(context.Background(), servers, directory, "docs", "docs://plan", true); err != nil {
+		t.Fatalf("subscribe after the resubscribe: %v", err)
+	}
+}
+
 // Two subscribes to one resource at the same time both succeed at once and leave the
 // subscription working: the second must not send a listen the SDK drops, then withdraw the
 // first one's when its acknowledgement never comes.

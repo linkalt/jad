@@ -13,9 +13,9 @@ import (
 	"jad/backend-go/internal/transcript"
 )
 
-// A round a stop hook adds is not started once max_run_tokens is reached: the run returns
-// the cap, and the hook is not even run, so its side effects do not happen for a round
-// that could not start.
+// A round a stop hook adds is not started once max_run_tokens is reached: the hook is not
+// even run, so its side effects do not happen for a round that could not start, and the
+// run ends as it would without a hook (its final answer stands; no cap error).
 func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 	streamer := &multiRoundStreamer{rounds: [][]responses.Event{tokenRound(0, 0, seventyTokens), tokenRound(1, 0, seventyTokens)}}
 	store, journal, _ := newTestStore(t, transcript.ResponseMetadataMinimal)
@@ -29,9 +29,8 @@ func TestStopHookRoundIsNotStartedOverTheTokenCap(t *testing.T) {
 		StopMaxContinues: 3,
 		OnStop:           func(context.Context, string, string, int) (string, error) { hookRuns++; return "keep going", nil },
 	})
-	var limit *RunTokenLimitError
-	if !errors.As(err, &limit) {
-		t.Fatalf("Run() error = %v, want the run token cap", err)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the run to end as without a stop hook", err)
 	}
 	if hookRuns != 0 {
 		t.Fatalf("the stop hook ran %d times with the cap reached, want 0", hookRuns)

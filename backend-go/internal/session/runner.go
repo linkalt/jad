@@ -611,13 +611,11 @@ func (r *Runner) Run(ctx context.Context, input json.RawMessage, options RunOpti
 		if !done {
 			continue
 		}
-		if !run.declined && !options.Steer.hasPending() && run.stopContinues < options.StopMaxContinues && options.OnStop != nil {
-			// The round a stop hook may add is a provider round like a tool round: with a
-			// cap reached it could not start, so the hook (a command, which may have side
-			// effects) is not run and the run fails with the cap.
-			if _, err := runLimit(run.usedTokens, run.meter, run.options); err != nil {
-				return run.result, err
-			}
+		// The round a stop hook may add is a provider round like a tool round: with a cap
+		// reached it could not start, so the hook (a command, which may have side effects)
+		// is not run, and the run ends as it would without a hook.
+		_, capped := runLimit(run.usedTokens, run.meter, run.options)
+		if capped == nil && !run.declined && !options.Steer.hasPending() && run.stopContinues < options.StopMaxContinues && options.OnStop != nil {
 			message, err := options.OnStop(run.ctx, run.result.TurnID, finalAnswerText(run.result.Event), run.stopContinues)
 			if err != nil {
 				return run.result, err

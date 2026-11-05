@@ -147,7 +147,8 @@ func TestDeliveredSignaturesExpire(t *testing.T) {
 	for index := range 5 {
 		manager.firstDelivery("ci", []byte{byte(index)}, time.Time{})
 	}
-	clock.advance(1001 * time.Millisecond)
+	// The window and the millisecond a record outlives it, and one more.
+	clock.advance(1002 * time.Millisecond)
 	manager.firstDelivery("ci", []byte{9}, time.Time{})
 	if len(manager.delivered) != 1 || len(manager.expiries) != 1 {
 		t.Fatalf("delivered holds %d signatures and %d expiries, want 1", len(manager.delivered), len(manager.expiries))
@@ -174,7 +175,8 @@ func TestReplayRecordIsBounded(t *testing.T) {
 	if _, first, full := manager.firstDelivery("ci", []byte{0}, time.Time{}); first || full {
 		t.Fatalf("a repeat with the record full: first %v full %v, want a repeat", first, full)
 	}
-	clock.advance(1001 * time.Millisecond)
+	// The window and the millisecond a record outlives it, and one more.
+	clock.advance(1002 * time.Millisecond)
 	if _, first, full := manager.firstDelivery("ci", []byte{9}, time.Time{}); !first || full {
 		t.Fatalf("after the records expired: first %v full %v", first, full)
 	}
@@ -245,6 +247,26 @@ func TestWebhookTimestampAheadCannotBeReplayed(t *testing.T) {
 	clock.advance(2 * time.Second)
 	if code := deliver(t, handler, "{}", captured); code != http.StatusUnauthorized {
 		t.Fatalf("replay after the timestamp's window = %d, want 401", code)
+	}
+}
+
+// A replay just past the window, inside the millisecond the timestamp's age still counts
+// as the window, finds the record: it is kept one millisecond longer than the window.
+func TestWebhookReplayInTheWindowsLastMillisecondIsRefused(t *testing.T) {
+	handler, clock := replayManager(t, 300_000, "X-Jad-Timestamp")
+	stamp := strconv.FormatInt(clock.Now().Add(200*time.Second).Unix(), 10)
+	captured := map[string]string{"X-Jad-Timestamp": stamp, "X-Hub-Signature-256": sign("s3cret", stamp+".{}")}
+	if code := deliver(t, handler, "{}", captured); code != http.StatusAccepted {
+		t.Fatalf("first delivery = %d", code)
+	}
+	// 200 s to the timestamp, the 300 s window, and half a millisecond.
+	clock.advance(500*time.Second + 500*time.Microsecond)
+	if code := deliver(t, handler, "{}", captured); code != http.StatusConflict {
+		t.Fatalf("replay half a millisecond past the window = %d, want 409", code)
+	}
+	clock.advance(time.Millisecond)
+	if code := deliver(t, handler, "{}", captured); code != http.StatusUnauthorized {
+		t.Fatalf("replay past the timestamp's window = %d, want 401", code)
 	}
 }
 
