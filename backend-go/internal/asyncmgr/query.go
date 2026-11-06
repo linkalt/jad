@@ -71,6 +71,7 @@ func stateMatches(r *row, state string) bool {
 // List returns one page. It works on the in-memory rows only (bounded by keep_finished
 // plus the live and unread handles) and opens no file.
 func (m *Manager) List(q ListQuery) (ListResult, error) {
+	m.endDeadForeign()
 	switch q.State {
 	case "", "active", "all", "done", "failed", "stopped", "lost", "timed_out":
 	default:
@@ -146,6 +147,7 @@ func (m *Manager) List(q ListQuery) (ListResult, error) {
 // summary comes from its driver (Detailer) when it has one, cut to status_summary_max_bytes and
 // to the response budget.
 func (m *Manager) Status(owner, id string) (Entry, error) {
+	m.endDeadForeign()
 	m.mu.Lock()
 	r := m.rows[id]
 	if r == nil || r.owner != owner {
@@ -186,6 +188,7 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 // entry consumes that handle's unread signal. If the driver has not reported by then the
 // entry is still live and the stop is in progress.
 func (m *Manager) Stop(ctx context.Context, owner, id, reason string) (Entry, error) {
+	m.endDeadForeign()
 	m.mu.Lock()
 	r := m.rows[id]
 	if r == nil || r.owner != owner {

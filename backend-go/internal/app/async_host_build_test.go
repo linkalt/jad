@@ -94,3 +94,61 @@ func TestResolverClosesAsyncHostsTogether(t *testing.T) {
 		t.Fatalf("Close took %v for three hosts that each wait 800ms; want them closed together", took)
 	}
 }
+
+// A host whose open ends after the resolver closed is closed by its builder, and Close waits
+// for that close: the host's last writes (the end of its handles, its final index) do not
+// outlive Resolver.Close.
+func TestResolverCloseWaitsForAHostBuiltAfterIt(t *testing.T) {
+	resolver, workspace := newBuildTestResolver(t)
+	cfg := asyncmgr.DefaultConfig()
+	cfg.StopWaitMs = 400
+	opened := make(chan *native.AsyncHost, 1)
+	release := make(chan struct{})
+	resolver.openAsyncHost = func(dir string, cfg asyncmgr.Config, logger *slog.Logger) (*native.AsyncHost, error) {
+		host, err := native.NewAsyncHost(dir, cfg, logger)
+		if err != nil {
+			return nil, err
+		}
+		// A handle that never reports holds the host's Close for its stop wait.
+		if err := host.Manager().AddDriver(silentDriver{}); err != nil {
+			return nil, err
+		}
+		if err := host.Manager().Register(asyncmgr.Registration{ID: "slow", Owner: "s1", Kind: "silent", Label: "slow"}); err != nil {
+			return nil, err
+		}
+		opened <- host
+		<-release
+		return host, nil
+	}
+	results := make(chan error, 1)
+	go func() {
+		_, err := resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(workspace, "late")), Config: cfg})
+		results <- err
+	}()
+	host := receive(t, "the open to start", opened)
+	closed := make(chan struct{})
+	go func() {
+		resolver.Close()
+		close(closed)
+	}()
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		resolver.mu.Lock()
+		isClosed := resolver.closed
+		resolver.mu.Unlock()
+		if isClosed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the resolver did not close")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	receive(t, "Resolver.Close to return", closed)
+	if entry, err := host.Manager().Status("s1", "slow"); err != nil || entry.State != asyncmgr.StateLost {
+		t.Fatalf("handle when Resolver.Close returned = %+v, %v; want lost: the host was still closing", entry, err)
+	}
+	if err := receive(t, "the AsyncHost result", results); err == nil {
+		t.Fatal("a host opened after Close was handed out")
+	}
+}

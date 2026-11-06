@@ -121,6 +121,11 @@ type Manager struct {
 	closed     bool
 	watchers   map[int]watcher
 	watchSeq   int
+	// foreign holds the live handles that another live server owned at Open, with that
+	// server; foreignN is its size, read without mu, so the calls that check those servers
+	// (endDeadForeign) cost nothing when there are none.
+	foreign  map[string]ServerID
+	foreignN atomic.Int32
 }
 
 // Open creates or recovers the manager in opts.Dir. Handles recorded as running by an
@@ -142,7 +147,7 @@ func Open(opts Options) (*Manager, error) {
 	m := &Manager{
 		opts: opts, cfg: opts.Config, dir: opts.Dir,
 		rows: map[string]*row{}, owners: map[string]*ownerStats{},
-		drivers: map[Kind]Driver{}, changed: make(chan struct{}),
+		drivers: map[Kind]Driver{}, changed: make(chan struct{}), foreign: map[string]ServerID{},
 	}
 	if err := m.recover(); err != nil {
 		return nil, err
@@ -269,6 +274,7 @@ func (m *Manager) notifyLocked() {
 // ErrCapacity) when the owner or the server is at its live-handle cap; terminal and unread
 // handles never count.
 func (m *Manager) Register(reg Registration) error {
+	m.endDeadForeign()
 	if !idPattern.MatchString(reg.ID) || reg.ID == indexName {
 		return fmt.Errorf("%w: %q", ErrInvalidID, reg.ID)
 	}

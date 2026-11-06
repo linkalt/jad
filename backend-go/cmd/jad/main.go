@@ -93,11 +93,20 @@ func runCheckCommand(stdout io.Writer) error {
 	return nil
 }
 
+// notifyShutdown returns a context that is done at the first interrupt or SIGTERM. The
+// signal handlers are reset then, so a second signal ends the process at once: the shutdown
+// that follows may wait for the async handles up to their longest stop.
+func notifyShutdown() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
+}
+
 func run() error {
 	if len(os.Args) > 1 {
 		return runCommand(os.Args[1:], os.Stdout)
 	}
-	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	shutdownSignal, stopSignals := notifyShutdown()
 	defer stopSignals()
 
 	config, err := app.LoadConfig(sessionfs.LoadOptions{})

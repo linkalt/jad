@@ -67,7 +67,11 @@ func (m *Manager) recover() error {
 			}
 			continue
 		}
-		if r == nil || m.foreignLive(rec) {
+		if r == nil {
+			continue
+		}
+		if m.foreignLive(rec) {
+			m.foreign[rec.ID] = *rec.Server
 			continue
 		}
 		rec.State, rec.OK, rec.Reason = StateLost, false, ReasonRestarted
@@ -84,8 +88,47 @@ func (m *Manager) recover() error {
 	}
 	work.merge(m.pruneLocked(now))
 	m.applyWork(work, false)
+	m.foreignN.Store(int32(len(m.foreign)))
 	m.flushIndexNow()
 	return nil
+}
+
+// endDeadForeign ends as lost (ReasonRestarted, unread) the handles kept live at Open for
+// another server that has stopped since: that server can no longer report them, so they
+// would show running and count against the caps until this server restarts. It runs at the
+// start of the calls that read or add handles, checks each such server once, outside the
+// locks, and costs nothing when no foreign handle is live.
+func (m *Manager) endDeadForeign() {
+	if m.foreignN.Load() == 0 || m.opts.ServerAlive == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	byServer := map[ServerID][]string{}
+	for id, server := range m.foreign {
+		r := m.rows[id]
+		if r == nil || r.state.Terminal() {
+			delete(m.foreign, id)
+			continue
+		}
+		if !r.finishing {
+			byServer[server] = append(byServer[server], id)
+		}
+	}
+	m.foreignN.Store(int32(len(m.foreign)))
+	m.mu.Unlock()
+	for server, ids := range byServer {
+		if m.opts.ServerAlive(server) {
+			continue
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonRestarted})
+		}
+	}
 }
 
 // adopt adds a row built from a record found without an index entry.

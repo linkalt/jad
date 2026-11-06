@@ -746,11 +746,13 @@ func (r *Resolver) finishAsyncHost(key string, done chan struct{}, config native
 			published = host
 		}
 		r.mu.Unlock()
-		close(done)
+		// Closed before done is: Resolver.Close waits for done, so the host's last file
+		// writes (its final index) do not outlive it.
 		if host != nil && closed {
 			host.Close()
 			published, err = nil, errors.New("resolver is closed")
 		}
+		close(done)
 	}()
 	host, err = r.openAsyncHost(key, config.Config, r.logger)
 	return nil, err
@@ -816,10 +818,11 @@ func (r *Resolver) finishSubagentBuild(storageKey string, build *subagentBuild, 
 			published = manager
 		}
 		r.mu.Unlock()
-		close(build.done)
+		// Closed before done is, so the manager's close does not outlive Resolver.Close.
 		if manager != nil && closed {
 			_ = manager.Close()
 		}
+		close(build.done)
 	}()
 	if config.NativeSubagent.PersistRuns {
 		manager = r.newPersistentSubagentManager(native.SubagentManagerOptions{

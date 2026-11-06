@@ -1,12 +1,14 @@
 package asyncmgr
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -410,6 +412,43 @@ func TestCloseEndsAnUnreportedHandleAsLost(t *testing.T) {
 	}
 	if got := f.m.Counts("s1"); got.Active != 0 {
 		t.Fatalf("live count after restart = %+v", got)
+	}
+}
+
+// A handle kept live at Open for another server ends as lost once that server stops: it can
+// no longer report it, so left running it would show live and hold the owner's cap until
+// this server restarts.
+func TestAForeignHandleEndsAsLostWhenItsServerStops(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.MaxHandles = 1 })
+	f.start(t, "s1", "theirs")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	if e, err := f.m.Status("s1", "theirs"); err != nil || e.State != StateRunning {
+		t.Fatalf("foreign handle while its server runs = %+v, %v", e, err)
+	}
+	if err := f.m.Register(Registration{ID: "mine", Owner: "s1", Kind: "fake"}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Register at the cap = %v, want a capacity error", err)
+	}
+
+	theirsAlive.Store(false)
+	e, err := f.m.Status("s1", "theirs")
+	if err != nil || e.State != StateLost || e.Reason != ReasonRestarted {
+		t.Fatalf("foreign handle after its server stopped = %+v, %v", e, err)
+	}
+	if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateLost || !rec.Unread {
+		t.Fatalf("foreign record after its server stopped = %+v, %v", rec, err)
+	}
+	if got := f.m.Counts("s1"); got.Active != 0 {
+		t.Fatalf("live count after its server stopped = %+v", got)
+	}
+	f.start(t, "s1", "mine")
+	res, _ := f.m.Wait(background, "s1", []string{"theirs"}, 0)
+	if len(res.Signals) != 1 || res.Signals[0].State != StateLost {
+		t.Fatalf("signals = %+v, want the lost foreign handle", res.Signals)
 	}
 }
 

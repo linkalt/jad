@@ -25,6 +25,7 @@ type WaitResult struct {
 // with wait <= 0, it returns at once. A cancelled ctx returns ctx.Err() and consumes
 // nothing.
 func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait time.Duration) (WaitResult, error) {
+	m.endDeadForeign()
 	var scope map[string]struct{}
 	var unknown error
 	m.commit(false, func() pruneWork {
