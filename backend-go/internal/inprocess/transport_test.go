@@ -123,3 +123,21 @@ func TestTransportHandlerWithoutAWriteAnswers200(t *testing.T) {
 		t.Fatalf("response = %d %q", response.StatusCode, data)
 	}
 }
+
+// cancelledWithoutDone reports a cancelled context but never closes Done, so RoundTrip
+// wakes on the handler's status alone and then sees the cancel: both are ready at once.
+type cancelledWithoutDone struct{ context.Context }
+
+func (cancelledWithoutDone) Done() <-chan struct{} { return nil }
+func (cancelledWithoutDone) Err() error            { return context.Canceled }
+
+func TestTransportCancelledWhileTheHandlerPanicsKeepsBoth(t *testing.T) {
+	transport := &Transport{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})}
+	request, _ := http.NewRequestWithContext(cancelledWithoutDone{context.Background()}, http.MethodGet, "http://model.invalid/", nil)
+	_, err := transport.RoundTrip(request)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, errHandlerPanicked) || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %v, want the cancel and the panic", err)
+	}
+}

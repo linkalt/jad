@@ -83,6 +83,18 @@ func (m *Manager) writeRecordUnless(rec Record, skip func() bool) error {
 	return writeFileAtomic(m.recordPath(rec.ID), append(data, '\n'))
 }
 
+// writeRecordIOLocked is writeRecord for a caller that holds ioMu.
+func (m *Manager) writeRecordIOLocked(rec Record) error {
+	if m.ioClosed {
+		return nil
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(m.recordPath(rec.ID), append(data, '\n'))
+}
+
 func (m *Manager) readRecord(id string) (Record, error) {
 	data, err := os.ReadFile(m.recordPath(id))
 	if err != nil {
@@ -127,6 +139,11 @@ func (m *Manager) updateRecord(id string, change func(*Record)) {
 func (m *Manager) removeRecord(id string) {
 	m.ioMu.Lock()
 	defer m.ioMu.Unlock()
+	m.removeRecordIOLocked(id)
+}
+
+// removeRecordIOLocked is removeRecord for a caller that holds ioMu.
+func (m *Manager) removeRecordIOLocked(id string) {
 	if m.ioClosed {
 		return
 	}

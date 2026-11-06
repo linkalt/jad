@@ -545,13 +545,16 @@ func requireNativeDefinition(config sessionfs.SessionConfig, definitions map[str
 }
 
 // requireExecDefinition is requireNativeDefinition for exec. A definition file may also hold
-// the schema exec had before read_only; the model is then shown the current one, so a file
-// copied from an older version still loads and read_only is offered all the same.
+// the schema exec had before read_only, or the one whose read_only text did not say a session
+// may ignore it; the model is then shown the current one, so a file copied from an older
+// version still loads and read_only is offered and described all the same.
 func requireExecDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition) (tools.Definition, error) {
 	if definition, exists := definitions[execToolID]; exists && definition.Name == "exec" && definition.Source == "native" {
-		if matches, err := sameJSON(definition.InputSchema, execInputSchemaBeforeReadOnly); err == nil && matches {
-			definition.InputSchema = append(json.RawMessage(nil), execInputSchema...)
-			return definition, nil
+		for _, older := range []json.RawMessage{execInputSchemaBeforeReadOnly, execInputSchemaPromiseOnly} {
+			if matches, err := sameJSON(definition.InputSchema, older); err == nil && matches {
+				definition.InputSchema = append(json.RawMessage(nil), execInputSchema...)
+				return definition, nil
+			}
 		}
 	}
 	return requireNativeDefinition(config, definitions, "exec", execToolID, execInputSchema)

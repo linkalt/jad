@@ -43,7 +43,7 @@ var execInputSchema = json.RawMessage(`{
     "input":{"description":"Any JSON value, written to the program's standard input as one line of JSON. Without input, stdin is empty."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."},
-    "read_only":{"type":"boolean","description":"Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files."}
+    "read_only":{"type":"boolean","description":"Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files, and a session may be set to ignore it: the call then runs in order and plan mode refuses it."}
   },
   "additionalProperties":false
 }`)
@@ -54,6 +54,14 @@ const execReadOnlyProperty = "read_only"
 // execInputSchemaBeforeReadOnly is the schema exec had before read_only, which a tool
 // definition file written then still holds (see requireExecDefinition).
 var execInputSchemaBeforeReadOnly = schemaWithoutProperty(execInputSchema, execReadOnlyProperty)
+
+// execReadOnlyPromiseText is read_only's description before it said that a session may
+// ignore read_only (tools.native.exec.read_only_calls "sandboxed" with no sandbox).
+const execReadOnlyPromiseText = "Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files."
+
+// execInputSchemaPromiseOnly is the schema with that description, which a tool definition
+// file written then still holds (see requireExecDefinition).
+var execInputSchemaPromiseOnly = schemaWithPropertyDescription(execInputSchema, execReadOnlyProperty, execReadOnlyPromiseText)
 
 const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved helpers per language. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call; a plain command is lang bash with the command as code. Code calls the saved helpers of its own language through fn (fn.<name>(...) in python, node, ts, deno, ruby and lua; fn->name(...) in perl; $fn->name(...) in php; fn$name(...) in r; found when the call is made, so a helper the program just wrote works) or by a bare command name (bash); the listing shows exactly what to type and which member runs. php code is a file, so it starts with <?php. Helpers may also import each other. Another language's helper is run as a subprocess from the directory in $JAD_FUNCTIONS_DIR. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
@@ -138,6 +146,29 @@ func schemaWithoutProperty(schema json.RawMessage, name string) json.RawMessage 
 	fields["properties"] = encoded
 	if encoded, err = json.Marshal(fields); err != nil {
 		panic(fmt.Sprintf("schemaWithoutProperty: %v", err))
+	}
+	return encoded
+}
+
+// schemaWithPropertyDescription returns schema, a JSON object schema, with the named
+// property's description replaced. It panics like schemaWithoutProperty.
+func schemaWithPropertyDescription(schema json.RawMessage, name, description string) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &fields); err != nil {
+		panic(fmt.Sprintf("schemaWithPropertyDescription: %v", err))
+	}
+	var properties map[string]map[string]any
+	if err := json.Unmarshal(fields["properties"], &properties); err != nil || properties[name] == nil {
+		panic(fmt.Sprintf("schemaWithPropertyDescription: properties.%s: %v", name, err))
+	}
+	properties[name]["description"] = description
+	encoded, err := json.Marshal(properties)
+	if err != nil {
+		panic(fmt.Sprintf("schemaWithPropertyDescription: %v", err))
+	}
+	fields["properties"] = encoded
+	if encoded, err = json.Marshal(fields); err != nil {
+		panic(fmt.Sprintf("schemaWithPropertyDescription: %v", err))
 	}
 	return encoded
 }

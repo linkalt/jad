@@ -31,7 +31,7 @@ Why not `git stash create` or a commit in the user's repo: it needs a git repo, 
 
 ## 4. Behaviour
 
-1. **When:** lazily, immediately before the first call of a run to a mutating tool (`write`, `edit`, `bash`, `process`, and any MCP tool unless configured otherwise). A read-only run costs nothing.
+1. **When:** lazily, immediately before the first call of a run that can change files: any `exec` call, a call whose tool says it may change files (`MayChangeFiles`: a sub-agent that may write, `profile_message`, an `async` stop), and any MCP tool unless `include_mcp_tools` is off. A call plan mode refuses takes none. A read-only run costs nothing.
 2. **One checkpoint per run** (per `turn`). Subsequent mutating calls in the same run do not snapshot again.
 3. **At run end** a second snapshot records the end state (see safe restore below).
 4. **Restore** (user-initiated only, never by the model):

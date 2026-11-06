@@ -35,6 +35,9 @@ type fakeDriver struct {
 
 	mu    sync.Mutex
 	stops []string
+	// ending (guarded by mu) is set by the end-of-test close: every stop then reports at
+	// once, so that close does not wait StopWait for the handles a test left live.
+	ending bool
 }
 
 func (d *fakeDriver) Kind() Kind { return d.kind }
@@ -42,8 +45,9 @@ func (d *fakeDriver) Kind() Kind { return d.kind }
 func (d *fakeDriver) Stop(id, reason string) {
 	d.mu.Lock()
 	d.stops = append(d.stops, id+":"+reason)
+	ending := d.ending
 	d.mu.Unlock()
-	if d.autoComplete {
+	if d.autoComplete || ending {
 		_, _ = d.m.Complete(id, Result{State: StateStopped, Reason: reason})
 	}
 }
@@ -74,16 +78,25 @@ func newFixture(t *testing.T, mutate func(*Config)) *fixture {
 	return f
 }
 
-// open (re)opens the manager on the same directory, as a restart does.
+// open (re)opens the manager on the same directory, as a restart does. Every manager it
+// opens is closed when the test ends (Close is idempotent), so no delayed index write
+// lands in the folder while t.TempDir removes it.
 func (f *fixture) open(t *testing.T) {
 	t.Helper()
 	m, err := Open(f.opts)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	driver := &fakeDriver{kind: "fake", m: m}
+	t.Cleanup(func() {
+		driver.mu.Lock()
+		driver.ending = true
+		driver.mu.Unlock()
+		m.Close()
+	})
 	f.m = m
-	f.driver = &fakeDriver{kind: "fake", m: m}
-	if err := m.AddDriver(f.driver); err != nil {
+	f.driver = driver
+	if err := m.AddDriver(driver); err != nil {
 		t.Fatal(err)
 	}
 }

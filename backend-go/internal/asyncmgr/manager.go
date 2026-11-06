@@ -85,8 +85,8 @@ type Manager struct {
 	// Nil in production.
 	beforeWaitTimeout func()
 	// beforeCompleteCommit is a test-only hook. It runs in Complete after the result record
-	// is written and before the end is committed under the lock, with no lock held. Nil in
-	// production.
+	// is written and before the end is committed under mu, with ioMu held (so it must not
+	// write files itself). Nil in production.
 	beforeCompleteCommit func(id string)
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
@@ -422,7 +422,11 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec.Bytes = res.Bytes
 	rec.EndedAt = now
 	rec.Unread = after == endKeep
-	if err := m.writeRecord(rec); err != nil {
+	// ioMu is held from the result write until the record matches the end that is
+	// committed below, so Close, which shuts file writes under ioMu, cannot fall between
+	// them and leave the record of a reset or deleted handle unread on disk.
+	m.ioMu.Lock()
+	if err := m.writeRecordIOLocked(rec); err != nil {
 		m.opts.Logger.Warn("async result record not saved; the signal is kept in memory only", "handle", id, "error", err)
 	}
 	if m.beforeCompleteCommit != nil {
@@ -433,12 +437,11 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	var work pruneWork
 	// A reset or delete that came while the record was written raised r.after (cancel does
 	// that for a finishing row too); its end wins over the one read above.
+	late := false
 	if r.after > after {
 		after = r.after
 		rec.Unread = false
-		if after == endRead {
-			work.flips = append(work.flips, flip{id: r.id})
-		}
+		late = true
 	}
 	m.mutateLocked(r, func(r *row) {
 		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, after == endKeep, false
@@ -449,13 +452,22 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 		r.rec = nil
 	}
 	if after == endRemove {
-		work.removes = append(work.removes, r.id)
 		m.forgetLocked(r)
 	}
 	work.merge(m.enforceUnreadLocked(r.owner))
 	work.merge(m.pruneLocked(now))
 	m.notifyLocked()
 	m.mu.Unlock()
+	switch {
+	case after == endRemove:
+		m.removeRecordIOLocked(id)
+	case late:
+		// rec is what was just written, now read.
+		if err := m.writeRecordIOLocked(rec); err != nil {
+			m.opts.Logger.Warn("async record not updated", "handle", id, "error", err)
+		}
+	}
+	m.ioMu.Unlock()
 
 	m.applyWork(work, true)
 	m.mu.Lock()

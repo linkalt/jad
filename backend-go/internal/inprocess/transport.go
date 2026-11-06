@@ -57,8 +57,16 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	case <-request.Context().Done():
 	}
 	// A handler that returns because the request was cancelled sends its status as it
-	// ends, so both cases can be ready at once; the cancel wins, whichever was picked.
+	// ends, so both cases can be ready at once; the cancel wins, whichever was picked. A
+	// handler that panicked before its status keeps its panic in the error too.
 	if err := request.Context().Err(); err != nil {
+		select {
+		case <-w.ready:
+			if w.err != nil {
+				err = fmt.Errorf("%w; %w", err, w.err)
+			}
+		default:
+		}
 		cancel()
 		_ = reader.CloseWithError(err)
 		return nil, err

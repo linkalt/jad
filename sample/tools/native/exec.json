@@ -41,7 +41,7 @@
      },
      "read_only": {
       "type": "boolean",
-      "description": "Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files."
+      "description": "Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files, and a session may be set to ignore it: the call then runs in order and plan mode refuses it."
      }
     },
     "additionalProperties": false

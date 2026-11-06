@@ -5,7 +5,33 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
+
+// duringCommit runs action (a reset, delete or close) on its own goroutine from inside
+// Complete, between its result write and its commit, where Complete holds ioMu. It
+// returns once ready reports true, and a channel closed when action has returned.
+func duringCommit(action func(), ready func() bool) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		action()
+	}()
+	for !ready() {
+		time.Sleep(time.Millisecond)
+	}
+	return done
+}
+
+// finishingAfter reports the end action a reset or delete set on the finishing row id.
+func (f *fixture) finishingAfter(id string) endAction {
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if r := f.m.rows[id]; r != nil {
+		return r.after
+	}
+	return endKeep
+}
 
 func TestResetOwnerStopsItsLiveHandlesAndTheirEndIsBornRead(t *testing.T) {
 	f := newFixture(t, nil)
@@ -95,13 +121,17 @@ func TestDeleteOwnersWithPrefixStopsLiveRemovesFinishedAndSparesOthers(t *testin
 func TestDeleteWhileAHandleIsFinishingRemovesIt(t *testing.T) {
 	f := newFixture(t, nil)
 	f.start(t, "sess|a", "fin")
+	var deleted <-chan struct{}
 	f.m.beforeCompleteCommit = func(string) {
 		f.m.beforeCompleteCommit = nil
-		if n := f.m.DeleteOwnersWithPrefix("sess|", "session_delete"); n != 0 {
-			t.Errorf("delete asked %d to stop, want 0: the handle is already ending", n)
-		}
+		deleted = duringCommit(func() {
+			if n := f.m.DeleteOwnersWithPrefix("sess|", "session_delete"); n != 0 {
+				t.Errorf("delete asked %d to stop, want 0: the handle is already ending", n)
+			}
+		}, func() bool { return f.finishingAfter("fin") == endRemove })
 	}
 	f.finish(t, "fin", Result{})
+	<-deleted
 	if _, err := f.m.Status("sess|a", "fin"); err == nil {
 		t.Fatal("the finishing handle of the deleted session is still known")
 	}
@@ -121,11 +151,14 @@ func TestDeleteWhileAHandleIsFinishingRemovesIt(t *testing.T) {
 func TestResetWhileAHandleIsFinishingMakesItsEndRead(t *testing.T) {
 	f := newFixture(t, nil)
 	f.start(t, "s1", "fin")
+	var reset <-chan struct{}
 	f.m.beforeCompleteCommit = func(string) {
 		f.m.beforeCompleteCommit = nil
-		f.m.ResetOwner("s1", "session_reset")
+		reset = duringCommit(func() { f.m.ResetOwner("s1", "session_reset") },
+			func() bool { return f.finishingAfter("fin") == endRead })
 	}
 	f.finish(t, "fin", Result{})
+	<-reset
 	if res, _ := f.m.Wait(background, "s1", nil, 0); len(res.Signals) != 0 {
 		t.Fatalf("a reset left the finishing handle's signal: %+v", res.Signals)
 	}
@@ -138,5 +171,52 @@ func TestResetWhileAHandleIsFinishingMakesItsEndRead(t *testing.T) {
 	}
 	if rec.Unread || rec.State != StateDone {
 		t.Fatalf("record on disk = unread %v state %s, want read and done", rec.Unread, rec.State)
+	}
+}
+
+// A shutdown that comes while the end of a reset or deleted handle is being recorded does
+// not leave its record unread on disk, where the next start would queue it again. Close does
+// not wait for the write here (StopWait 0), so only the file lock keeps it out.
+func TestCloseWhileAResetOrDeletedHandleEndsLeavesNoUnreadRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action func(*Manager)
+		want   endAction
+	}{
+		{"reset", func(m *Manager) { m.ResetOwner("s1", "session_reset") }, endRead},
+		{"delete", func(m *Manager) { m.DeleteOwnersWithPrefix("s1", "session_delete") }, endRemove},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.opts.StopWait = 0
+			f.open(t)
+			f.start(t, "s1", "fin")
+			var acted, closed <-chan struct{}
+			f.m.beforeCompleteCommit = func(string) {
+				f.m.beforeCompleteCommit = nil
+				acted = duringCommit(func() { tc.action(f.m) },
+					func() bool { return f.finishingAfter("fin") == tc.want })
+				closed = duringCommit(f.m.Close, f.m.indexClosed.Load)
+				// Close blocks on the file lock Complete holds; without it, it ends here.
+				select {
+				case <-closed:
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			f.finish(t, "fin", Result{})
+			<-acted
+			<-closed
+			rec, err := f.m.readRecord("fin")
+			switch tc.want {
+			case endRead:
+				if err != nil || rec.Unread || rec.State != StateDone {
+					t.Fatalf("record on disk = unread %v state %s (%v), want read and done", rec.Unread, rec.State, err)
+				}
+			case endRemove:
+				if _, err := os.Stat(filepath.Join(f.dir, "fin.json")); !os.IsNotExist(err) {
+					t.Fatalf("the deleted handle's record is still on disk (%v)", err)
+				}
+			}
+		})
 	}
 }

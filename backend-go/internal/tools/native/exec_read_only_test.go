@@ -283,3 +283,23 @@ func TestExecReadOnlyCallsSandboxedNeedsAnEnforcingSandbox(t *testing.T) {
 		}
 	}
 }
+
+// A definition file whose read_only text predates "a session may be set to ignore it" still
+// loads, and the model is shown the current text.
+func TestExecDefinitionFileWithThePromiseOnlyTextStillLoads(t *testing.T) {
+	config := sessionfs.SessionConfig{SettingPath: "/s/setting.json"}
+	if matches, _ := sameJSON(execInputSchemaPromiseOnly, execInputSchema); matches {
+		t.Fatal("the previous schema equals the current one")
+	}
+	if !strings.Contains(string(execInputSchemaPromiseOnly), "read_only is your promise not to change files.\"") {
+		t.Fatalf("previous schema = %s", execInputSchemaPromiseOnly)
+	}
+	old := tools.Definition{ID: execToolID, Source: "native", Name: "exec", Description: "mine", InputSchema: execInputSchemaPromiseOnly}
+	definition, err := requireExecDefinition(config, map[string]tools.Definition{execToolID: old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches, _ := sameJSON(definition.InputSchema, execInputSchema); !matches || !strings.Contains(string(definition.InputSchema), "may be set to ignore it") {
+		t.Fatalf("definition schema = %s", definition.InputSchema)
+	}
+}
