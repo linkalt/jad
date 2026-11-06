@@ -74,8 +74,9 @@ func TestRunPlanMode(t *testing.T) {
 	if err != nil || json.Unmarshal([]byte(stdout), &result) != nil || !result.Plan || result.Text != "plan" {
 		t.Fatalf("--plan: %q %q %v", stdout, stderr, err)
 	}
+	// exec stays in plan mode: it runs only its read_only calls there.
 	tools, lastInput := last()
-	if strings.Join(tools, ",") != "read_image,task" {
+	if strings.Join(tools, ",") != "exec,read_image,task" {
 		t.Fatalf("plan-mode tools = %v", tools)
 	}
 	if !strings.Contains(lastInput, `"role":"developer"`) || !strings.Contains(lastInput, "PLAN-ONLY") {
@@ -86,7 +87,7 @@ func TestRunPlanMode(t *testing.T) {
 	if err != nil || stdout != "plan\n" {
 		t.Fatalf("/plan: %q %v", stdout, err)
 	}
-	if tools, lastInput = last(); strings.Join(tools, ",") != "read_image,task" || !strings.Contains(lastInput, "PLAN-ONLY") {
+	if tools, lastInput = last(); strings.Join(tools, ",") != "exec,read_image,task" || !strings.Contains(lastInput, "PLAN-ONLY") {
 		t.Fatalf("/plan request: %v %s", tools, lastInput)
 	}
 

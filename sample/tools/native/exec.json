@@ -38,6 +38,10 @@
       "type": "integer",
       "minimum": 0,
       "description": "Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."
+     },
+     "read_only": {
+      "type": "boolean",
+      "description": "Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files."
      }
     },
     "additionalProperties": false

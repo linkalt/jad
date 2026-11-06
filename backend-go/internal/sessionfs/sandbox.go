@@ -75,9 +75,10 @@ type SandboxSettings struct {
 	NetworkAllow  []string
 	ProxyPort     int64
 	WritablePaths []string
-	// PlanWritablePaths replace WritablePaths for the calls of a plan-mode run (backend
-	// bwrap), so a tool kept in plan mode cannot change the project even if it was wrongly
-	// marked read-only or an allow entry kept it.
+	// PlanWritablePaths replace WritablePaths for the calls of a plan-mode run and for an
+	// exec call with read_only (backend bwrap or seatbelt), so a tool kept in plan mode, or a
+	// call that says it only reads, cannot change the project even if it was wrongly marked
+	// read-only or an allow entry kept it.
 	PlanWritablePaths []string
 	HidePaths         []string
 	Command           []string

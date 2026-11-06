@@ -53,7 +53,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation", "read_only"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -214,6 +214,11 @@ type NativeSubagentAgent struct {
 	// of their own, and empty otherwise. It is left out of JSON when empty, so the
 	// fingerprint of an agent without it is what it was before the key existed.
 	Isolation string `json:",omitempty"`
+	// ReadOnly makes every exec call of the agent a read_only one, so exec does not make it
+	// an agent that changes files: it is scheduled like a reader and may run as a handle.
+	// Under a sandbox its exec calls cannot write the project; without one it is the
+	// agent's promise. Left out of JSON when false, like Isolation.
+	ReadOnly bool `json:",omitempty"`
 }
 
 // Agent returns the configured agent with the given name.
@@ -539,10 +544,32 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if agent.StateContext, _, err = optionalSubagentBool(fields, "state_context", settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
+	if agent.ReadOnly, err = subagentReadOnly(fields, agent, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
+	}
 	if agent.Isolation, err = subagentIsolation(fields, agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	return agent, nil
+}
+
+// subagentReadOnly reads an agent's read_only key; absent or null is false. It only changes
+// exec, so an agent with it must list exec and no other tool that changes files.
+func subagentReadOnly(fields map[string]json.RawMessage, agent NativeSubagentAgent, settingPath, section string) (bool, error) {
+	readOnly, _, err := optionalSubagentBool(fields, "read_only", settingPath, section)
+	if err != nil || !readOnly {
+		return false, err
+	}
+	changers := agent.ChangeTools()
+	if !containsString(changers, "exec") {
+		return false, configError("%s: %s.read_only only makes exec calls read-only, and tools does not list exec", settingPath, section)
+	}
+	for _, name := range changers {
+		if name != "exec" {
+			return false, configError("%s: %s.read_only does not cover %s, which changes files or starts runs that may; remove it from tools, or remove read_only", settingPath, section, name)
+		}
+	}
+	return true, nil
 }
 
 // loadSubagentPrompt reads the agent's prompt_documents the way the session reads its
@@ -658,10 +685,14 @@ func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, secti
 }
 
 // ChangeTools returns the tools of the agent's list that can change files or run code,
-// in list order. An agent without a tools list has none: it gets read-only tools only.
+// in list order. An agent without a tools list has none: it gets read-only tools only. A
+// read_only agent's exec is not one: its every call is read_only.
 func (a NativeSubagentAgent) ChangeTools() []string {
 	var names []string
 	for _, name := range a.Tools {
+		if a.ReadOnly && name == "exec" {
+			continue
+		}
 		if containsString(SubagentChangeTools, name) {
 			names = append(names, name)
 		}

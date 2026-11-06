@@ -11,7 +11,8 @@
   },
   "settings": {
     "hooks": {
-      "enabled": true
+      "enabled": true,
+      "shell_changes": "scan"
     }
   }
 }

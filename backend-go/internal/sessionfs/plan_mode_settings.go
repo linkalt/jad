@@ -7,7 +7,7 @@ import (
 
 const (
 	// DefaultPlanModeInstructions is the message a plan-mode run sends after the history.
-	DefaultPlanModeInstructions = "Plan mode is on for this turn. Study the task with the tools you have, which only read, then answer with a plan: the goal, what you would change and where, the steps in order, the risks, and how you would check the result. Do not start the work: the tools that change files or run commands are not available in this turn. The person reads the plan and starts the work with their next message."
+	DefaultPlanModeInstructions = "Plan mode is on for this turn. Study the task with the tools you have, which only read (exec runs only calls with read_only true), then answer with a plan: the goal, what you would change and where, the steps in order, the risks, and how you would check the result. Do not start the work: tools and calls that change files are not available in this turn. The person reads the plan and starts the work with their next message."
 	// DefaultPlanModeExecutePrompt is the user message of a run that carries out a plan
 	// (execute_plan: true, jad run --execute-plan, the web client's Execute plan button).
 	DefaultPlanModeExecutePrompt = "Carry out the plan above, step by step. Check the result as the plan says."

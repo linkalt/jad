@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "description": "Code search. Use it to find files and symbols and report paths and line numbers; it is told not to change files, but exec could.",
+  "description": "Code search. Use it to find files and symbols and report paths and line numbers; every exec call it makes is read_only.",
   "tools": ["exec"],
+  "read_only": true,
   "max_tool_rounds": 30,
   "timeout_ms": 600000
 }

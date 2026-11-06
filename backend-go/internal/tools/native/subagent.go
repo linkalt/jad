@@ -317,6 +317,9 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			}
 			return tools.Tool{}, err
 		}
+		if agent.ReadOnly {
+			childTools = withReadOnlyExec(childTools)
+		}
 		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs}
 		if len(mcpIDs) == 0 {
 			catalog, err := tools.NewCatalog(childTools)
@@ -603,6 +606,42 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 // subagentChildTools picks the native tools one agent may use from the enabled
 // read-only ones, and returns separately the MCP tool IDs its list names. An agent
 // without a tools list gets every native read-only tool and no MCP tool.
+// withReadOnlyExec returns the child tools of a read_only agent: its exec sets read_only on
+// every call, whatever the model sent, so each call counts as one that changes no file and
+// runs in the plan-mode sandbox when there is a sandbox. The other tools are unchanged.
+func withReadOnlyExec(childTools []tools.Tool) []tools.Tool {
+	wrapped := append([]tools.Tool(nil), childTools...)
+	for index, tool := range wrapped {
+		if tool.Definition.ID != execToolID {
+			continue
+		}
+		normalize, execute := tool.NormalizeArguments, tool.Execute
+		tool.NormalizeArguments = func(arguments map[string]any) map[string]any {
+			if normalize != nil {
+				arguments = normalize(arguments)
+			}
+			return forcedReadOnly(arguments)
+		}
+		if execute != nil {
+			tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+				return execute(ctx, forcedReadOnly(arguments), execution)
+			}
+		}
+		wrapped[index] = tool
+	}
+	return wrapped
+}
+
+// forcedReadOnly returns a copy of arguments with read_only true.
+func forcedReadOnly(arguments map[string]any) map[string]any {
+	forced := make(map[string]any, len(arguments)+1)
+	for key, value := range arguments {
+		forced[key] = value
+	}
+	forced[execReadOnlyProperty] = true
+	return forced
+}
+
 func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool) ([]tools.Tool, []string, error) {
 
 	available := make([]string, 0, len(readOnly)+len(changers))
@@ -613,10 +652,10 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 	}
 	sort.Strings(available)
 	const kind = "native tool"
-	// async, tool_smith, subagent, profile_message and load_tool are opt-in: a child gets them only when its tools list names them.
+	// async, exec, tool_smith, subagent, profile_message and load_tool are opt-in: a child gets them only when its tools list names them.
 	chosen := make([]tools.Tool, 0, len(readOnly))
 	for _, tool := range readOnly {
-		if tool.Definition.ID != asyncToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID && tool.Definition.ID != loadToolID {
+		if tool.Definition.ID != asyncToolID && tool.Definition.ID != execToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID && tool.Definition.ID != loadToolID {
 			chosen = append(chosen, tool)
 		}
 	}

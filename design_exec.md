@@ -22,13 +22,15 @@ No native bridge: a script cannot call JAD tools (read/grep/glob). There is no s
       "input":   {"description":"Any JSON value, written to stdin as one line of JSON."},
       "filters": {"type":"array","items":{"type":"string"},"description":"Listing only: ..."},
       "cwd":     {"type":"string","minLength":1},
-      "block_ms":{"type":"integer","minimum":0}
+      "block_ms":{"type":"integer","minimum":0},
+      "read_only":{"type":"boolean","description":"The call changes no file."}
     },"additionalProperties":false}
 
 - `code` present: run. `code` absent: list the helpers (`filters` optional). `lang`, `input` with a listing is invalid_input.
 - A plain command is `{"lang":"bash","code":"git status"}`. There is no argv form.
 - Refused with the replacement named (RejectedProperties): `function` -> "exec has no function mode; call a saved helper from code (see the list from a call with no parameters)"; `argv` -> "exec has no argv; use code with lang (a command is lang bash, code \"git status\")"; `args` -> "exec has no args; pass data as input (JSON on stdin)"; `timeout_ms` -> "exec has no timeout_ms; the timeout is configured (tools.native.exec.timeout_ms)". Older near-miss names keep their hints, except `command`, which is folded into `code` as an alias (equal values accepted, different values refused).
 - `filters` together with `code` stays conflicting_input.
+- `read_only: true` says the call changes no file. exec is `ReadOnly` with a per-call `MayChangeFiles` (a call with `code` and without `read_only`), so read-only calls of one response may run at the same time and plan mode keeps exec, refusing the other calls. Under a bwrap or seatbelt sandbox a read-only call runs with `sandbox.plan_writable_paths`, as a plan-mode call does; without one it is the model's promise. An agent with `read_only: true` sets it on every exec call (see `backend-go/DECISIONS.md`).
 
 ### timeout_ms interpretation
 

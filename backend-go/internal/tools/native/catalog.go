@@ -344,7 +344,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 	var loaded []tools.Tool
 	toolSmithNested := &ToolSmithNested{}
 	if config.NativeExec != nil {
-		definition, err := requireNativeDefinition(config, definitions, "exec", execToolID, execInputSchema)
+		definition, err := requireExecDefinition(config, definitions)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -542,6 +542,19 @@ func extensionToolConfigured(config sessionfs.SessionConfig, name string) bool {
 
 func requireNativeDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage) (tools.Definition, error) {
 	return requireDefinition(config, definitions, "native", name, id, schema)
+}
+
+// requireExecDefinition is requireNativeDefinition for exec. A definition file may also hold
+// the schema exec had before read_only; the model is then shown the current one, so a file
+// copied from an older version still loads and read_only is offered all the same.
+func requireExecDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition) (tools.Definition, error) {
+	if definition, exists := definitions[execToolID]; exists && definition.Name == "exec" && definition.Source == "native" {
+		if matches, err := sameJSON(definition.InputSchema, execInputSchemaBeforeReadOnly); err == nil && matches {
+			definition.InputSchema = append(json.RawMessage(nil), execInputSchema...)
+			return definition, nil
+		}
+	}
+	return requireNativeDefinition(config, definitions, "exec", execToolID, execInputSchema)
 }
 
 // requireModelChoiceDefinition is requireNativeDefinition for a tool with a model_choice
