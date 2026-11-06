@@ -344,9 +344,6 @@ func normalizeNativeExecLangs(raw json.RawMessage, path string) ([]string, map[s
 	return names, langs, nil
 }
 
-// normalizeNativeExecDefaultLang resolves the language a call without `lang` runs to its
-// table name, so a later lookup cannot miss. An alias is accepted; a name the table does
-// not know is refused at load time instead of failing every call.
 // normalizeNativeExecReadOnlyCalls reads read_only_calls; absent or null is trusted.
 func normalizeNativeExecReadOnlyCalls(fields map[string]json.RawMessage, path string) (string, error) {
 	raw, present := nullableField(fields, "read_only_calls")
@@ -379,6 +376,9 @@ func checkReadOnlyAgentsHonored(subagents *NativeSubagentSettings, execFor func(
 	return nil
 }
 
+// normalizeNativeExecDefaultLang resolves the language a call without `lang` runs to its
+// table name, so a later lookup cannot miss. An alias is accepted; a name the table does
+// not know is refused at load time instead of failing every call.
 func normalizeNativeExecDefaultLang(fields map[string]json.RawMessage, names []string, langs map[string]NativeExecLang, path string) (string, error) {
 	wanted := defaultNativeExecLang
 	if raw, present := nullableField(fields, "default_lang"); present {

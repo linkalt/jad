@@ -197,13 +197,14 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		}
 		return err
 	}
-	// The session's own agents were checked against its exec when it loaded; these take exec
-	// from their toolset.
+	// Checked here, for the session's agents only: an agent's exec is its toolset's or the
+	// session's. The load of a toolset above would also check the agents that toolset
+	// defines, which are dropped, so loadSessionSettingsFrom does not check.
 	return checkReadOnlyAgentsHonored(config.NativeSubagent, func(agent NativeSubagentAgent) *NativeExecSettings {
 		if key := agent.ToolsetKey(); key != "" {
 			return config.AgentToolsets[key].NativeExec
 		}
-		return nil
+		return config.NativeExec
 	}, c.sessionPath)
 }
 

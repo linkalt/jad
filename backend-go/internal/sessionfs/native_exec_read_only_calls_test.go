@@ -94,3 +94,14 @@ func TestReadOnlyAgentIsRefusedWhereReadOnlyIsNotHonored(t *testing.T) {
 		}
 	}
 }
+
+// The agents a toolset itself defines are dropped when an agent uses that toolset, so they
+// are not checked: only the session's own agents are.
+func TestReadOnlyCheckSkipsTheAgentsOfAnAgentsToolset(t *testing.T) {
+	_, err := loadToolsetSession(t, toolsetSpec(map[string]any{"toolset": "extra/search"}), map[string]string{
+		"extra/search": `{"native":{"exec":{"read_only_calls":"sandboxed"},"async":{},"subagent":{"agents":{"nested":{"tools":["exec"],"read_only":true}}}}}`,
+	})
+	if err != nil {
+		t.Fatalf("a dropped toolset agent refused the session: %v", err)
+	}
+}
