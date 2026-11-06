@@ -436,23 +436,14 @@ func TestCallChangesWorkspace(t *testing.T) {
 		mcp    bool
 		want   bool
 	}{
-		{"write", call("write", map[string]any{}), "native", true, true},
-		{"edit", call("edit", map[string]any{}), "native", true, true},
-		{"bash", call("bash", map[string]any{}), "native", true, true},
 		{"exec runs a program that can change files", call("exec", map[string]any{"lang": "bash", "code": "x"}), "native", true, true},
-		{"process start", call("process", map[string]any{"command": "x"}), "native", true, true},
-		{"process without a command", call("process", map[string]any{"block_ms": 1}), "native", true, false},
-		{"process with a blank command starts nothing", call("process", map[string]any{"command": "  "}), "native", true, false},
-		{"read", call("read", map[string]any{}), "native", true, false},
-		{"grep", call("grep", map[string]any{}), "native", true, false},
-		{"notebook edit", call("notebook", map[string]any{"action": "edit", "path": "a.ipynb"}), "native", true, true},
-		{"notebook insert", call("notebook", map[string]any{"action": "insert", "path": "a.ipynb"}), "native", true, true},
-		{"notebook delete", call("notebook", map[string]any{"action": "delete", "path": "a.ipynb"}), "native", true, true},
-		{"notebook read", call("notebook", map[string]any{"action": "read", "path": "a.ipynb"}), "native", true, false},
-		{"notebook with bad arguments", json.RawMessage(`{"name":"notebook","arguments":"{bad"}`), "native", true, false},
+		{"a read_only exec call still runs a program", call("exec", map[string]any{"code": "ls", "read_only": true}), "native", true, true},
+		// The tools exec replaced are refused by the loader; their names mean nothing here.
+		{"write is not a tool any more", call("write", map[string]any{}), "native", true, false},
+		{"process is not a tool any more", call("process", map[string]any{"command": "x"}), "native", true, false},
+		{"another native tool", call("lsp", map[string]any{}), "native", true, false},
 		{"mcp counted", call("srv_tool", map[string]any{}), "mcp", true, true},
 		{"mcp not counted", call("srv_tool", map[string]any{}), "mcp", false, false},
-		{"process with bad arguments", json.RawMessage(`{"name":"process","arguments":"{bad"}`), "native", true, false},
 		{"not JSON", json.RawMessage(`nope`), "native", true, false},
 	}
 	for _, tc := range cases {

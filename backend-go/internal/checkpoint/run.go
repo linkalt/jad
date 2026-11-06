@@ -3,52 +3,24 @@ package checkpoint
 import (
 	"context"
 	"encoding/json"
-	"strings"
 )
 
 // CallChangesWorkspace reports whether a call can change files or start something
 // that can; reads never take a checkpoint. source is the tool's source ("native"
-// or "mcp"; empty for an unknown name). A process call changes things only when
-// it carries a command; waiting for or stopping an earlier one starts nothing.
+// or "mcp"; empty for an unknown name). Every exec call counts, a read_only one too:
+// a checkpoint is the undo of a run, so it is taken whenever a program runs. The calls
+// a tool itself says may change files are counted by Catalog.CallMayChangeFiles.
 func CallChangesWorkspace(call json.RawMessage, source string, includeMCPTools bool) bool {
 	if source == "mcp" {
 		return includeMCPTools
 	}
 	var fields struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name string `json:"name"`
 	}
 	if json.Unmarshal(call, &fields) != nil {
 		return false
 	}
-	switch fields.Name {
-	case "write", "edit", "apply_patch", "bash", "exec":
-		return true
-	case "notebook":
-		// Every action but read changes the notebook file.
-		var text string
-		if json.Unmarshal(fields.Arguments, &text) != nil {
-			return false
-		}
-		var args map[string]any
-		if json.Unmarshal([]byte(text), &args) != nil || args == nil {
-			return false
-		}
-		action, _ := args["action"].(string)
-		return action != "read"
-	case "process":
-		var text string
-		if json.Unmarshal(fields.Arguments, &text) != nil {
-			return false
-		}
-		var args map[string]any
-		if json.Unmarshal([]byte(text), &args) != nil || args == nil {
-			return false
-		}
-		command, _ := args["command"].(string)
-		return strings.TrimSpace(command) != ""
-	}
-	return false
+	return fields.Name == "exec"
 }
 
 // Run is the checkpoint of one run: taken at most once, closed once. It is not

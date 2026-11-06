@@ -89,3 +89,54 @@ func TestDeleteOwnersWithPrefixStopsLiveRemovesFinishedAndSparesOthers(t *testin
 		}
 	}
 }
+
+// A handle whose end is being recorded when its session is deleted is removed with the
+// session: its signal must not stay behind under the deleted owner.
+func TestDeleteWhileAHandleIsFinishingRemovesIt(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "sess|a", "fin")
+	f.m.beforeCompleteCommit = func(string) {
+		f.m.beforeCompleteCommit = nil
+		if n := f.m.DeleteOwnersWithPrefix("sess|", "session_delete"); n != 0 {
+			t.Errorf("delete asked %d to stop, want 0: the handle is already ending", n)
+		}
+	}
+	f.finish(t, "fin", Result{})
+	if _, err := f.m.Status("sess|a", "fin"); err == nil {
+		t.Fatal("the finishing handle of the deleted session is still known")
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "fin.json")); err == nil {
+		t.Fatal("its record is still on disk")
+	}
+	if c := f.m.Counts("sess|a"); c.Total != 0 || c.Unread != 0 {
+		t.Fatalf("counts of the deleted session = %+v", c)
+	}
+	if got := f.driver.stopped(); len(got) != 0 {
+		t.Fatalf("stops = %v, want none", got)
+	}
+}
+
+// The same for a reset: the end of a handle that was finishing during it is born read, in
+// memory and in its record.
+func TestResetWhileAHandleIsFinishingMakesItsEndRead(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "fin")
+	f.m.beforeCompleteCommit = func(string) {
+		f.m.beforeCompleteCommit = nil
+		f.m.ResetOwner("s1", "session_reset")
+	}
+	f.finish(t, "fin", Result{})
+	if res, _ := f.m.Wait(background, "s1", nil, 0); len(res.Signals) != 0 {
+		t.Fatalf("a reset left the finishing handle's signal: %+v", res.Signals)
+	}
+	if c := f.m.Counts("s1"); c.Unread != 0 {
+		t.Fatalf("unread after reset = %d", c.Unread)
+	}
+	rec, err := f.m.readRecord("fin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Unread || rec.State != StateDone {
+		t.Fatalf("record on disk = unread %v state %s, want read and done", rec.Unread, rec.State)
+	}
+}

@@ -84,6 +84,10 @@ type Manager struct {
 	// timer fires and before the context and the ready signals are checked, with no lock held.
 	// Nil in production.
 	beforeWaitTimeout func()
+	// beforeCompleteCommit is a test-only hook. It runs in Complete after the result record
+	// is written and before the end is committed under the lock, with no lock held. Nil in
+	// production.
+	beforeCompleteCommit func(id string)
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool
@@ -421,8 +425,21 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	if err := m.writeRecord(rec); err != nil {
 		m.opts.Logger.Warn("async result record not saved; the signal is kept in memory only", "handle", id, "error", err)
 	}
+	if m.beforeCompleteCommit != nil {
+		m.beforeCompleteCommit(id)
+	}
 
 	m.mu.Lock()
+	var work pruneWork
+	// A reset or delete that came while the record was written raised r.after (cancel does
+	// that for a finishing row too); its end wins over the one read above.
+	if r.after > after {
+		after = r.after
+		rec.Unread = false
+		if after == endRead {
+			work.flips = append(work.flips, flip{id: r.id})
+		}
+	}
 	m.mutateLocked(r, func(r *row) {
 		r.state, r.ok, r.changed, r.unread, r.finishing = rec.State, rec.OK, now, after == endKeep, false
 		r.progress = nil
@@ -431,7 +448,6 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	if after != endKeep {
 		r.rec = nil
 	}
-	var work pruneWork
 	if after == endRemove {
 		work.removes = append(work.removes, r.id)
 		m.forgetLocked(r)
@@ -497,15 +513,22 @@ func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) 
 	var targets []target
 	m.mu.Lock()
 	for _, r := range m.rows {
-		if !r.state.Terminal() && !r.finishing && match(r) {
-			if d := m.drivers[r.kind]; d != nil {
-				// The strongest end wins (endKeep < endRead < endRemove): a later cancel must
-				// not undo a reset's born-read end or a delete's removal.
-				if after > r.after {
-					r.after = after
-				}
-				targets = append(targets, target{d, r.id})
-			}
+		if r.state.Terminal() || !match(r) {
+			continue
+		}
+		d := m.drivers[r.kind]
+		if d == nil && !r.finishing {
+			continue
+		}
+		// The strongest end wins (endKeep < endRead < endRemove): a later cancel must
+		// not undo a reset's born-read end or a delete's removal. A finishing row is not
+		// stopped again, but Complete reads its end action once more before it commits,
+		// so a reset or delete that arrives meanwhile still applies to it.
+		if after > r.after {
+			r.after = after
+		}
+		if !r.finishing {
+			targets = append(targets, target{d, r.id})
 		}
 	}
 	m.mu.Unlock()
