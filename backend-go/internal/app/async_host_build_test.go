@@ -70,29 +70,62 @@ type silentDriver struct{}
 func (silentDriver) Kind() asyncmgr.Kind { return "silent" }
 func (silentDriver) Stop(string, string) {}
 
+// gateDriver holds every stop until release is closed and reports each one on stopping, so a
+// test can tell which hosts are closing at the same time without measuring time.
+type gateDriver struct {
+	stopping chan<- string
+	release  <-chan struct{}
+}
+
+func (gateDriver) Kind() asyncmgr.Kind { return "gate" }
+func (d gateDriver) Stop(id, _ string) {
+	d.stopping <- id
+	<-d.release
+}
+
 // The async hosts of a resolver are independent folders, so Close closes them together:
-// a shutdown waits for the slowest host, not for the sum of their stop waits.
+// a shutdown waits for the slowest host, not for the sum of their stop waits. Each host's
+// stop is held until all three have started, which only a concurrent Close reaches.
 func TestResolverClosesAsyncHostsTogether(t *testing.T) {
 	resolver, workspace := newBuildTestResolver(t)
 	cfg := asyncmgr.DefaultConfig()
-	cfg.StopWaitMs = 800
-	for _, name := range []string{"one", "two", "three"} {
+	cfg.StopWaitMs = 100
+	names := []string{"one", "two", "three"}
+	stopping := make(chan string, len(names))
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	for _, name := range names {
 		host, err := resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(workspace, name)), Config: cfg})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := host.Manager().AddDriver(silentDriver{}); err != nil {
+		if err := host.Manager().AddDriver(gateDriver{stopping: stopping, release: release}); err != nil {
 			t.Fatal(err)
 		}
-		if err := host.Manager().Register(asyncmgr.Registration{ID: name, Owner: "s1", Kind: "silent", Label: name}); err != nil {
+		if err := host.Manager().Register(asyncmgr.Registration{ID: name, Owner: "s1", Kind: "gate", Label: name}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	began := time.Now()
-	resolver.Close()
-	if took := time.Since(began); took > 1600*time.Millisecond {
-		t.Fatalf("Close took %v for three hosts that each wait 800ms; want them closed together", took)
+	closed := make(chan struct{})
+	go func() {
+		resolver.Close()
+		close(closed)
+	}()
+	seen := map[string]bool{}
+	for range names {
+		seen[receive(t, "every host to start its stop before any is released", stopping)] = true
 	}
+	if len(seen) != len(names) {
+		t.Fatalf("stopped handles = %v, want one per host", seen)
+	}
+	close(release)
+	receive(t, "Resolver.Close to return", closed)
 }
 
 // A host whose open ends after the resolver closed is closed by its builder, and Close waits

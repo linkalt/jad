@@ -136,7 +136,7 @@
           "minimum": 0,
           "maximum": 300000,
           "default": 10000,
-          "description": "Go backend only. How long the server waits for in-flight requests to finish after SIGINT or SIGTERM, once active runs are cancelled. When it runs out, the remaining connections are closed and the server exits. 0 waits without a limit."
+          "description": "Go backend only. How long the server waits for in-flight requests to finish after SIGINT or SIGTERM, once active runs are cancelled. When it runs out, the remaining connections are closed and the server exits. 0 waits without a limit. It does not limit the stop of async handles before it, which can take the longest shell kill grace plus kill deadline and drain; a second SIGINT or SIGTERM ends that wait."
         },
         "session_delete_stop_wait_ms": {
           "type": "integer",

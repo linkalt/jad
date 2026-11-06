@@ -67,7 +67,8 @@ type ServerSettings struct {
 	// requests; zero disables the limit.
 	IdleTimeout time.Duration
 	// ShutdownTimeout is how long shutdown waits for in-flight requests before it
-	// closes their connections; zero waits without a limit.
+	// closes their connections; zero waits without a limit. It does not cover the async
+	// handles' stop that runs before it, which the stop wait and shell kill settings bound.
 	ShutdownTimeout time.Duration
 	// SessionDeleteStopWait is how long deleting a session waits for its stopped runs to end
 	// before it gives up with a conflict; zero does not wait.

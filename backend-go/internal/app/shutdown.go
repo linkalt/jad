@@ -9,7 +9,8 @@ import (
 
 // ShutdownHTTPServer stops server from taking new connections and waits for in-flight
 // requests, at most Config.ShutdownTimeout (zero waits without a limit). When the time runs
-// out the remaining connections are closed and forced is true; that is not an error.
+// out the remaining connections are closed and forced is true; that is not an error. The
+// async handles' stop (service.Close, before this) is not part of this limit.
 func (c Config) ShutdownHTTPServer(server *http.Server, logger *slog.Logger) (forced bool, err error) {
 	ctx := context.Background()
 	if c.ShutdownTimeout > 0 {
