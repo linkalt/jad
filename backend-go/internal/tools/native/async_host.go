@@ -81,8 +81,9 @@ func (h *AsyncHost) Manager() *asyncmgr.Manager { return h.manager }
 // Config is the validated configuration of the manager.
 func (h *AsyncHost) Config() asyncmgr.Config { return h.manager.Config() }
 
-// Close stops every live handle (reason server_shutdown) and closes the manager, which ends
-// a handle that has still not reported as lost. The manager waits for the longer of its stop
+// Close stops every live handle of this server (reason server_shutdown) and closes the
+// manager, which ends a handle that has still not reported as lost; a handle another live
+// server owns in the same folder is neither stopped nor waited for. The manager waits for the longer of its stop
 // wait and the longest stop of a live shell run, so a child that is killed only when its
 // kill grace ends still records its stop; then Close waits for the shell-run goroutines.
 func (h *AsyncHost) Close() {
