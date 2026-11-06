@@ -186,7 +186,9 @@ func (m *Manager) Status(owner, id string) (Entry, error) {
 // Stop asks the driver to stop a live handle and waits up to StopWait for it to report.
 // It is idempotent: an ended handle returns its terminal entry. Returning a terminal
 // entry consumes that handle's unread signal. If the driver has not reported by then the
-// entry is still live and the stop is in progress.
+// entry is still live and the stop is in progress. A live handle another running server
+// owns is refused at once (ErrForeignHandle): no driver here knows its run, so a stop would
+// only wait out StopWait.
 func (m *Manager) Stop(ctx context.Context, owner, id, reason string) (Entry, error) {
 	m.endDeadForeign()
 	m.mu.Lock()
@@ -197,6 +199,10 @@ func (m *Manager) Stop(ctx context.Context, owner, id, reason string) (Entry, er
 	}
 	driver := m.drivers[r.kind]
 	live := !r.state.Terminal()
+	if server, foreign := m.foreign[id]; foreign && live {
+		m.mu.Unlock()
+		return Entry{}, fmt.Errorf("%w: %q (pid %d)", ErrForeignHandle, id, server.PID)
+	}
 	m.mu.Unlock()
 
 	if live && driver != nil {

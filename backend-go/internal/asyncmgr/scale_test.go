@@ -549,6 +549,73 @@ func TestAForeignHandlesRecordedEndKeepsAResetOrDelete(t *testing.T) {
 	}
 }
 
+// A record this server cannot read once its server stopped (a newer build may have rewritten
+// it) drops the row, as recover does, and is left as it is: it is not overwritten with lost
+// from the row Open read. A delete this server asked for meanwhile still removes it.
+func TestAForeignHandlesUnreadableRecordIsDroppedNotOverwritten(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "newer")
+	f.start(t, "s2", "deleted")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	f.m.DeleteOwnersWithPrefix("s2", "deleted")
+	body := []byte(`{"version":99,"id":"newer"}` + "\n")
+	for _, id := range []string{"newer", "deleted"} {
+		if err := os.WriteFile(f.m.recordPath(id), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	theirsAlive.Store(false)
+
+	if _, err := f.m.Status("s1", "newer"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("unreadable handle after its server stopped: %v, want unknown", err)
+	}
+	if got, err := os.ReadFile(f.m.recordPath("newer")); err != nil || string(got) != string(body) {
+		t.Fatalf("unreadable record after its server stopped = %q, %v; want it left as it was", got, err)
+	}
+	if _, err := f.m.Status("s2", "deleted"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("deleted unreadable handle: %v, want unknown", err)
+	}
+	if _, err := os.Stat(f.m.recordPath("deleted")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted unreadable record: %v, want removed", err)
+	}
+	if got := f.m.Counts("s1"); got.Active != 0 {
+		t.Fatalf("live count after its server stopped = %+v", got)
+	}
+}
+
+// Stop of a live handle another running server owns is refused at once: no driver here knows
+// its run, so it would wait out the stop wait and report the stop as still in progress.
+func TestStopRefusesALiveForeignServersHandle(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "theirs")
+	f.abandon()
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.opts.StopWait = 10 * time.Second
+	f.open(t)
+	began := time.Now()
+	if _, err := f.m.Stop(background, "s1", "theirs", "stopped"); !errors.Is(err, ErrForeignHandle) || !strings.Contains(err.Error(), "pid 100") {
+		t.Fatalf("Stop of a live foreign handle = %v, want ErrForeignHandle naming pid 100", err)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("Stop took %v; want it refused at once", took)
+	}
+	if got := f.driver.stopped(); len(got) != 0 {
+		t.Fatalf("stops = %v, want none", got)
+	}
+	if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateRunning {
+		t.Fatalf("foreign record after a refused Stop = %+v, %v", rec, err)
+	}
+	if _, err := f.m.Stop(background, "s2", "theirs", "stopped"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("Stop by another owner = %v, want unknown", err)
+	}
+}
+
 // Close ends only this server's handles: one that another live server owns stays running.
 func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
 	f := newFixture(t, nil)

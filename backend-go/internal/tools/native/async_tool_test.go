@@ -223,6 +223,52 @@ func TestAsyncToolStopStatusAndList(t *testing.T) {
 	}
 }
 
+// noopDriver knows no run, like a production driver asked about another server's handle.
+type noopDriver struct{}
+
+func (noopDriver) Kind() asyncmgr.Kind { return "fake" }
+func (noopDriver) Stop(string, string) {}
+
+// A stop of a handle another running server owns in the same folder is refused at once with
+// handle_foreign, instead of waiting out the stop wait and reporting it still running.
+func TestAsyncToolStopRefusesAnotherServersHandle(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".async")
+	theirs, err := asyncmgr.Open(asyncmgr.Options{Dir: dir, Config: asyncmgr.DefaultConfig(), Server: asyncmgr.ServerID{PID: 100, Start: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(theirs.Close)
+	if err := theirs.AddDriver(noopDriver{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := theirs.Register(asyncmgr.Registration{ID: "theirs", Owner: "s1", Kind: "fake", Label: "their job"}); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := asyncmgr.Open(asyncmgr.Options{
+		Dir: dir, Config: asyncmgr.DefaultConfig(), Server: asyncmgr.ServerID{PID: 200, Start: 2},
+		ServerAlive: func(id asyncmgr.ServerID) bool { return id.PID == 100 }, StopWait: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mine.Close)
+	if err := mine.AddDriver(noopDriver{}); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := NewAsyncTool(&AsyncHost{manager: mine, dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now()
+	out := callAsync(t, tool, "s1", map[string]any{"action": "stop", "id": "theirs"})
+	if !strings.Contains(out, "handle_foreign") {
+		t.Fatalf("stop of another server's handle = %s, want handle_foreign", out)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("stop took %v; want it refused at once", took)
+	}
+}
+
 func TestAsyncToolRejectsFieldsOfOtherActions(t *testing.T) {
 	tool, _, _ := newAsyncToolFixture(t)
 	for name, arguments := range map[string]map[string]any{

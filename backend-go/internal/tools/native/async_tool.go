@@ -258,6 +258,9 @@ func executeAsync(ctx context.Context, host *AsyncHost, arguments map[string]any
 	if errors.Is(err, asyncmgr.ErrUnknownHandle) {
 		return asyncUnknownHandle(callID, err), nil
 	}
+	if errors.Is(err, asyncmgr.ErrForeignHandle) {
+		return tools.ExecutionError(callID, tools.StatusBlocked, "handle_foreign", "The work runs in another backend server that shares this tool storage; only that server can stop it", tools.Information{Key: "id", Value: id}), nil
+	}
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "async_"+action+"_failed", err.Error()), nil
 	}

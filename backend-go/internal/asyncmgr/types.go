@@ -64,6 +64,9 @@ var (
 	ErrInvalidCursor = errors.New("invalid cursor")
 	ErrNoDriver      = errors.New("no driver registered for kind")
 	ErrInvalidResult = errors.New("result state must be terminal")
+	// ErrForeignHandle refuses a stop of a live handle that another running server owns:
+	// only that server's drivers know the run, so this one cannot stop it.
+	ErrForeignHandle = errors.New("handle runs in another backend server")
 
 	// ErrCapacity matches every *CapacityError (errors.Is).
 	ErrCapacity = errors.New("async_capacity_reached")

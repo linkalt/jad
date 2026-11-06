@@ -137,15 +137,20 @@ func (m *Manager) endDeadForeign() {
 // endForeign ends one handle of a stopped server. Its record is read again first: that
 // server may have ended the handle itself before it stopped (a result, a stop at its
 // shutdown, a delete), while this server's row still holds what Open read. Only a record
-// still live, or unreadable, is ended as lost, as the next start would; a terminal record
-// is taken as it is, and a missing one drops the row. A reset or delete this server asked
-// for meanwhile (r.after) still applies.
+// still live is ended as lost, as the next start would; a terminal record is taken as it
+// is, and a missing one drops the row. An unreadable one (a newer build's version, say) also
+// drops the row, as recover does, and is left as it is rather than overwritten from the
+// stale row. A reset or delete this server asked for meanwhile (r.after) still applies.
 func (m *Manager) endForeign(id string) {
 	rec, err := m.readRecord(id)
 	missing := errors.Is(err, fs.ErrNotExist)
-	if !missing && (err != nil || !rec.State.Terminal()) {
+	unreadable := err != nil && !missing
+	if err == nil && !rec.State.Terminal() {
 		_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonRestarted})
 		return
+	}
+	if unreadable {
+		m.opts.Logger.Warn("async record of a stopped server unreadable; dropped", "handle", id, "error", err)
 	}
 	var w pruneWork
 	changed := false
@@ -153,9 +158,9 @@ func (m *Manager) endForeign(id string) {
 	m.mu.Lock()
 	if r := m.rows[id]; r != nil && !m.closed && !r.state.Terminal() && !r.finishing {
 		changed = true
-		if missing || r.after == endRemove {
+		if missing || unreadable || r.after == endRemove {
 			m.forgetLocked(r)
-			if !missing {
+			if !missing && r.after == endRemove {
 				w.removes = append(w.removes, id)
 			}
 		} else {
