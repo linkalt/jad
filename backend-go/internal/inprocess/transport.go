@@ -50,9 +50,11 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				// The handler's own context: the request's cancel and a closed body both end it,
+				// and RoundTrip cancels it only once the abort below has closed ready.
 				logging.Or(t.Logger).Error("in-process handler panicked", slog.Any("panic", recovered),
 					slog.String("method", request.Method), slog.String("path", request.URL.Path),
-					slog.Bool("cancelled", request.Context().Err() != nil), slog.String("stack", string(debug.Stack())))
+					slog.Bool("cancelled", ctx.Err() != nil), slog.String("stack", string(debug.Stack())))
 				w.abort(fmt.Errorf("%w: %v", errHandlerPanicked, recovered))
 			}
 			w.finish()

@@ -170,6 +170,31 @@ func TestTransportLogsAPanicAfterTheCancel(t *testing.T) {
 	}
 }
 
+// Closing the body cancels the handler too: a panic that follows is logged as cancelled.
+func TestTransportLogsAPanicAfterTheBodyIsClosedAsCancelled(t *testing.T) {
+	logged := make(chan slog.Record, 1)
+	client := &http.Client{Transport: &Transport{Logger: slog.New(recordSink{logged}), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		<-r.Context().Done()
+		panic("after the close")
+	})}}
+	response, err := client.Get("http://model.invalid/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	select {
+	case record := <-logged:
+		attrs := map[string]string{}
+		record.Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.String(); return true })
+		if attrs["panic"] != "after the close" || attrs["cancelled"] != "true" {
+			t.Fatalf("logged %q %v", record.Message, attrs)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was not logged")
+	}
+}
+
 // recordSink is a slog handler that sends every record to a channel.
 type recordSink struct{ records chan<- slog.Record }
 
