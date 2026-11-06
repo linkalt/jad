@@ -48,9 +48,6 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 
 	var timer *time.Timer
 	var timeout <-chan time.Time
-	// dropped sums the counts of signals lost to the unread cap that a pass taking only
-	// signals another server already delivered took before looking again.
-	dropped := 0
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -73,16 +70,15 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 		}
 		result, flips := m.popLocked(owner, scope)
 		if len(result.Signals) > 0 || wait <= 0 || result.Pending == 0 {
-			if s := m.owners[owner]; s != nil && (len(result.Signals) > 0 || result.Pending == 0) {
-				dropped += m.takeDroppedLocked(owner, s)
-			}
 			m.mu.Unlock()
 			if m.deliverIOLocked(&result, flips) {
 				// Every popped signal was delivered by another server already: look again
 				// for the next ones, or wait.
 				continue
 			}
-			result.Dropped = dropped
+			if len(result.Signals) > 0 || result.Pending == 0 {
+				result.Dropped = m.takeDropped(owner)
+			}
 			return result, nil
 		}
 		changed := m.changed
@@ -107,12 +103,9 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 					return WaitResult{}, err
 				}
 				result, flips = m.popLocked(owner, scope)
-				if s := m.owners[owner]; s != nil {
-					dropped += m.takeDroppedLocked(owner, s)
-				}
 				m.mu.Unlock()
 				if !m.deliverIOLocked(&result, flips) {
-					result.Dropped = dropped
+					result.Dropped = m.takeDropped(owner)
 					return result, nil
 				}
 			}
@@ -122,9 +115,17 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 	}
 }
 
-// takeDroppedLocked reports the dropped count once and clears it. An owner with no rows
-// left has nothing to keep its entry for, so the entry goes with the count.
-func (m *Manager) takeDroppedLocked(owner string, s *ownerStats) int {
+// takeDropped reports the owner's dropped count once and clears it. An owner with no rows
+// left has nothing to keep its entry for, so the entry goes with the count. A wait takes the
+// count only once it returns a result: a pass whose signals were all left out
+// (deliverIOLocked) may still end in a cancellation or a close, which must not lose it.
+func (m *Manager) takeDropped(owner string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.owners[owner]
+	if s == nil {
+		return 0
+	}
 	dropped := s.dropped
 	s.dropped = 0
 	if s.total == 0 {

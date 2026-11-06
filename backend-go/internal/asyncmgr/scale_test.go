@@ -1,6 +1,7 @@
 package asyncmgr
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -674,6 +675,46 @@ func TestASignalAnotherServerDeliveredIsNotDeliveredAgain(t *testing.T) {
 	}
 	if res, _ := first.Wait(background, "s1", nil, 0); len(res.Signals) != 1 || res.Signals[0].ID != "live" {
 		t.Fatalf("wait after live ended = %+v", res.Signals)
+	}
+}
+
+// A wait whose ready signals were all delivered by another server goes on waiting; when it
+// then ends without a result (cancelled), the dropped count it would have reported is kept
+// for the next report instead of being lost.
+func TestAWaitThatSkipsADeliveredSignalKeepsTheDroppedCount(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "live")
+	f.start(t, "s1", "elsewhere")
+	f.finish(t, "elsewhere", Result{})
+	rec, err := f.m.readRecord("elsewhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Unread = false
+	if err := f.m.writeRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	f.m.mu.Lock()
+	f.m.owners["s1"].dropped = 2
+	f.m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(background, 100*time.Millisecond)
+	defer cancel()
+	if res, err := f.m.Wait(ctx, "s1", nil, 10*time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait = %+v, %v; want the deadline", res, err)
+	}
+	list, err := f.m.List(ListQuery{Owner: "s1"})
+	if err != nil || list.Dropped != 2 {
+		t.Fatalf("list after the cancelled wait = dropped %d, %v; want 2", list.Dropped, err)
+	}
+	if ok, err := f.m.Complete("live", Result{State: StateDone, OK: true}); err != nil || !ok {
+		t.Fatalf("Complete(live) = %v, %v", ok, err)
+	}
+	if res, _ := f.m.Wait(background, "s1", nil, 0); len(res.Signals) != 1 || res.Dropped != 2 {
+		t.Fatalf("next wait = %+v; want live and dropped 2", res)
+	}
+	if res, _ := f.m.Wait(background, "s1", nil, 0); res.Dropped != 0 {
+		t.Fatalf("the count was reported twice: %+v", res)
 	}
 }
 
