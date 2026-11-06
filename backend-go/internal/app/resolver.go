@@ -1137,10 +1137,14 @@ func (r *Resolver) Close() {
 	for _, manager := range subagentManagers {
 		_ = manager.Close()
 	}
-	// Sub-agents first: they report their end to the async manager.
+	// Sub-agents first: they report their end to the async manager. The hosts are separate
+	// folders and each may wait up to its longest stop, so they close together: shutdown
+	// waits for the slowest host, not for the sum.
+	var closing sync.WaitGroup
 	for _, host := range asyncHosts {
-		host.Close()
+		closing.Go(host.Close)
 	}
+	closing.Wait()
 	for _, manager := range mcpManagers {
 		_ = manager.Close()
 	}

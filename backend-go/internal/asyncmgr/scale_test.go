@@ -428,6 +428,35 @@ func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
 	}
 }
 
+// Close stops and waits for only this server's handles: one that another live server owns
+// never reports to this one, so it gets no Stop and does not hold Close for the whole stop
+// wait.
+func TestCloseDoesNotWaitForALiveForeignServersHandle(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "theirs")
+	f.abandon()
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.opts.StopWait = 10 * time.Second
+	f.open(t)
+	f.start(t, "s1", "mine")
+	f.finish(t, "mine", Result{})
+	began := time.Now()
+	f.m.CloseWithin(20 * time.Second)
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("Close took %v with only a foreign handle left live", took)
+	}
+	if got := f.driver.stopped(); len(got) != 0 {
+		t.Fatalf("stops = %v, want none: the live handle is another server's", got)
+	}
+	if rec, err := f.m.readRecord("mine"); err != nil || rec.State != StateDone {
+		t.Fatalf("own record after Close = %+v, %v", rec, err)
+	}
+	if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateRunning {
+		t.Fatalf("foreign record after Close = %+v, %v", rec, err)
+	}
+}
+
 // A Complete that claimed its handle before Close's stop wait ran out has its result on disk,
 // and in the final index, once Close returns: Close waits for it instead of shutting the
 // folder under it and leaving the record running.

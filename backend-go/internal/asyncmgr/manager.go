@@ -642,11 +642,11 @@ func (m *Manager) countsLocked(owner string) Counts {
 	return Counts{}
 }
 
-// Close asks every live handle to stop (reason ReasonShutdown), waits up to StopWait for
-// the drivers to report, wakes waiters with ErrClosed and writes the index. A handle of
-// this server that has not reported by then ends as lost (ReasonShutdown), unread, so no
-// record is left running; a later report of its driver is ignored. Handles another live
-// server owns are left as they are.
+// Close asks every live handle of this server to stop (reason ReasonShutdown), waits up to
+// StopWait for the drivers to report, wakes waiters with ErrClosed and writes the index. A
+// handle of this server that has not reported by then ends as lost (ReasonShutdown),
+// unread, so no record is left running; a later report of its driver is ignored. Handles
+// another live server owns are left as they are: they get no Stop and are not waited for.
 func (m *Manager) Close() { m.CloseWithin(0) }
 
 // CloseWithin is Close for a caller that knows some drivers need longer than StopWait to
@@ -664,28 +664,34 @@ func (m *Manager) CloseWithin(longest time.Duration) {
 		return
 	}
 	m.closed = true
-	for _, r := range m.rows {
-		if !r.state.Terminal() && !r.finishing {
-			if d := m.drivers[r.kind]; d != nil {
-				targets = append(targets, target{d, r.id})
-			}
+	// Only this server's handles are stopped and waited for: a handle another live server
+	// owns is never reported to this one, and waiting for it would hold Close for the whole
+	// stop wait.
+	own := m.ownLiveLocked()
+	for _, id := range own {
+		if d := m.drivers[m.rows[id].kind]; d != nil {
+			targets = append(targets, target{d, id})
 		}
 	}
 	m.notifyLocked()
 	m.mu.Unlock()
-	sort.Slice(targets, func(i, j int) bool { return targets[i].id < targets[j].id })
 	for _, t := range targets {
 		t.driver.Stop(t.id, ReasonShutdown)
 	}
 	m.mu.Lock()
 	writing := m.completing > 0
 	m.mu.Unlock()
-	if wait := max(m.opts.StopWait, longest); wait > 0 && (len(targets) > 0 || writing) {
+	if wait := max(m.opts.StopWait, longest); wait > 0 && (len(own) > 0 || writing) {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		for {
 			m.mu.Lock()
-			live, ch := m.liveTotal+m.completing, m.changed
+			live, ch := m.completing, m.changed
+			for _, id := range own {
+				if r := m.rows[id]; r != nil && !r.state.Terminal() {
+					live++
+				}
+			}
 			m.mu.Unlock()
 			if live == 0 {
 				break
@@ -746,6 +752,11 @@ func (m *Manager) shutFiles() {
 func (m *Manager) unreportedOwnLive() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.ownLiveLocked()
+}
+
+// ownLiveLocked is unreportedOwnLive for a caller that holds mu.
+func (m *Manager) ownLiveLocked() []string {
 	var ids []string
 	for _, r := range m.rows {
 		if r.state.Terminal() || r.finishing || r.rec == nil {

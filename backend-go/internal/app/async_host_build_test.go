@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/tools/native"
@@ -60,5 +61,36 @@ func TestAsyncHostOpenDoesNotBlockResolver(t *testing.T) {
 	}
 	if got := slowOpens.Load(); got != 1 {
 		t.Fatalf("the directory was opened %d times, want 1", got)
+	}
+}
+
+// silentDriver never reports a stop, so Close waits its whole stop wait for each handle.
+type silentDriver struct{}
+
+func (silentDriver) Kind() asyncmgr.Kind { return "silent" }
+func (silentDriver) Stop(string, string) {}
+
+// The async hosts of a resolver are independent folders, so Close closes them together:
+// a shutdown waits for the slowest host, not for the sum of their stop waits.
+func TestResolverClosesAsyncHostsTogether(t *testing.T) {
+	resolver, workspace := newBuildTestResolver(t)
+	cfg := asyncmgr.DefaultConfig()
+	cfg.StopWaitMs = 800
+	for _, name := range []string{"one", "two", "three"} {
+		host, err := resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(workspace, name)), Config: cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := host.Manager().AddDriver(silentDriver{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := host.Manager().Register(asyncmgr.Registration{ID: name, Owner: "s1", Kind: "silent", Label: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	began := time.Now()
+	resolver.Close()
+	if took := time.Since(began); took > 1600*time.Millisecond {
+		t.Fatalf("Close took %v for three hosts that each wait 800ms; want them closed together", took)
 	}
 }
