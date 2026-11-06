@@ -103,6 +103,16 @@ func (m *Manager) recover() error {
 // the snapshots included) and in the background check (peerCheck), checks each such
 // server once, outside the locks, and costs nothing when no foreign handle is live.
 func (m *Manager) endDeadForeign() {
+	m.checkForeign(false)
+}
+
+// checkForeign is endDeadForeign; with readLive it also reads again the records of the
+// handles of a server still running and takes an end that server recorded since Open
+// (endForeign with alive): it reports its own handles' ends only to itself, so without the
+// read they would show running here, hold the caps and waits, and refuse a stop until it
+// stops. Only the background check reads them, one record per such handle each
+// peer_check_ms; the calls that read or add handles do not pay for it.
+func (m *Manager) checkForeign(readLive bool) {
 	if m.foreignN.Load() == 0 || m.opts.ServerAlive == nil {
 		return
 	}
@@ -120,12 +130,13 @@ func (m *Manager) endDeadForeign() {
 	}
 	m.mu.Unlock()
 	for server, ids := range byServer {
-		if m.opts.ServerAlive(server) {
+		alive := m.opts.ServerAlive(server)
+		if alive && !readLive {
 			continue
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			m.endForeign(id)
+			m.endForeign(id, alive)
 		}
 	}
 }
@@ -155,8 +166,9 @@ func (m *Manager) armPeerCheckLocked() {
 	m.peerTimer = time.AfterFunc(time.Duration(m.cfg.PeerCheckMs)*time.Millisecond, m.peerCheck)
 }
 
-// peerCheck is one background check: it ends the handles of the servers that stopped and
-// schedules the next check while handles of a live one remain.
+// peerCheck is one background check: it ends the handles of the servers that stopped, takes
+// the ends a running one recorded (checkForeign) and schedules the next check while handles
+// of a running one remain.
 func (m *Manager) peerCheck() {
 	defer m.peerChecks.Done()
 	m.mu.Lock()
@@ -166,7 +178,7 @@ func (m *Manager) peerCheck() {
 	if closed {
 		return
 	}
-	m.endDeadForeign()
+	m.checkForeign(true)
 	m.mu.Lock()
 	m.armPeerCheckLocked()
 	m.mu.Unlock()
@@ -179,10 +191,15 @@ func (m *Manager) peerCheck() {
 // is, and a missing one drops the row. An unreadable one (a newer build's version, say) also
 // drops the row, as recover does, and is left as it is rather than overwritten from the
 // stale row. A reset or delete this server asked for meanwhile (r.after) still applies.
-func (m *Manager) endForeign(id string) {
+// With alive the server still runs: only an end it recorded (a terminal or missing record)
+// is taken, and a live or unreadable record leaves the row as it is, still that server's.
+func (m *Manager) endForeign(id string, alive bool) {
 	rec, err := m.readRecord(id)
 	missing := errors.Is(err, fs.ErrNotExist)
 	unreadable := err != nil && !missing
+	if alive && (unreadable || (err == nil && !rec.State.Terminal())) {
+		return
+	}
 	if err == nil && !rec.State.Terminal() {
 		_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonRestarted})
 		return

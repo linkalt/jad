@@ -44,8 +44,9 @@ type Config struct {
 	IndexFlushMs int64 `json:"index_flush_ms"`
 	// PeerCheckMs is how often, while handles of another running server that shares the
 	// folder are kept live, the manager checks whether that server still runs, so a dead
-	// one's handles end without waiting for a call (0 = only when a call reads or adds
-	// handles).
+	// one's handles end without waiting for a call, and while it runs reads those handles'
+	// records again to take an end it recorded (0 = only when a call reads or adds handles,
+	// and then only whether that server stopped).
 	PeerCheckMs int64 `json:"peer_check_ms"`
 	// LatestBytes is the most new output a "latest" block shows per stream (and the longest
 	// preview line of an agent's activity); LatestLines the most activity lines of one block;

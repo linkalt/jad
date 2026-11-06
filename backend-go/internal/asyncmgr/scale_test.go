@@ -787,6 +787,87 @@ func TestAWaitInProgressSeesAPeerStop(t *testing.T) {
 	})
 }
 
+// With peer_check_ms set, the ends a still running server records for its handles reach this
+// server without waiting for that server to stop: a result wakes a wait in progress, a result
+// it already read is taken read, a removed record drops the row. A record still live, or one
+// this server cannot read, stays that server's and is left running and untouched.
+func TestAPeerCheckTakesTheEndsARunningPeerRecorded(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.PeerCheckMs = 10 })
+	for _, id := range []string{"done", "read", "gone", "live", "newer"} {
+		f.start(t, "s1", id)
+	}
+	f.abandon()
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.open(t)
+
+	type outcome struct {
+		res WaitResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := f.m.Wait(background, "s1", []string{"done"}, 10*time.Second)
+		done <- outcome{res, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	// What the running server writes: a result, a result it already read, a delete, and a
+	// record a newer build wrote.
+	for id, unread := range map[string]bool{"done": true, "read": false} {
+		rec, err := f.m.readRecord(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.State, rec.OK, rec.Summary, rec.Unread, rec.EndedAt = StateDone, true, "their result", unread, time.Now()
+		if err := f.m.writeRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(f.m.recordPath("gone")); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"version":99,"id":"newer"}` + "\n")
+	if err := os.WriteFile(f.m.recordPath("newer"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the wait did not see the end the running peer recorded")
+	}
+	if got.err != nil || len(got.res.Signals) != 1 || got.res.Signals[0].ID != "done" || got.res.Signals[0].State != StateDone {
+		t.Fatalf("wait = %+v, %v; want their done", got.res, got.err)
+	}
+	poll(t, "the read result of the running peer to be taken", func() bool {
+		e, err := f.m.Status("s1", "read")
+		return err == nil && e.State == StateDone
+	})
+	poll(t, "the removed record of the running peer to drop its row", func() bool {
+		_, err := f.m.Status("s1", "gone")
+		return errors.Is(err, ErrUnknownHandle)
+	})
+	for _, id := range []string{"live", "newer"} {
+		if e, err := f.m.Status("s1", id); err != nil || e.State != StateRunning {
+			t.Fatalf("%s while its server runs = %+v, %v; want running", id, e, err)
+		}
+	}
+	if got, err := os.ReadFile(f.m.recordPath("newer")); err != nil || string(got) != string(body) {
+		t.Fatalf("unreadable record of a running peer = %q, %v; want it left as it was", got, err)
+	}
+	if rec, err := f.m.readRecord("live"); err != nil || rec.State != StateRunning {
+		t.Fatalf("live record of a running peer = %+v, %v; want it left running", rec, err)
+	}
+	if c := f.m.Counts("s1"); c.Active != 2 {
+		t.Fatalf("live count = %+v, want the two handles still the peer's", c)
+	}
+	if res, _ := f.m.Wait(background, "s1", []string{"read"}, 0); len(res.Signals) != 0 {
+		t.Fatalf("signals of a result the peer read = %+v, want none", res.Signals)
+	}
+}
+
 // Close stops a scheduled peer check: a server that stops after it does not get its handle
 // ended by the closed manager.
 func TestClosedManagerRunsNoPeerCheck(t *testing.T) {
