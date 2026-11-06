@@ -538,7 +538,7 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 	httpClient := providerHTTPClient(config, r.logger)
 	baseURL := config.Model.BaseURL
 	if translator := providerTranslator(config, httpClient, r.logger); translator != nil {
-		httpClient = &http.Client{Transport: &inprocess.Transport{Handler: translator}}
+		httpClient = &http.Client{Transport: &inprocess.Transport{Handler: translator, Logger: r.logger}}
 		baseURL = inProcessBaseURL
 	}
 	retry := providerRetryConfig(config.ProviderRetry, r.logger)

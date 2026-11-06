@@ -208,7 +208,8 @@ func TestCompleteAfterCloseDoesNotWriteTheFolder(t *testing.T) {
 	f.m.Close()
 	f.open(t)
 	f.start(t, "o", "a")
-	f.m.Close()
+	// Close would end "a" itself; a Complete that comes once the folder is shut is the case.
+	f.abandon()
 	before := dirSnapshot(t, f.dir)
 	if ok, err := f.m.Complete("a", Result{State: StateDone, OK: true}); err != nil || !ok {
 		t.Fatalf("Complete after Close = %v, %v", ok, err)

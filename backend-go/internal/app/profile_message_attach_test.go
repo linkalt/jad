@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"testing"
@@ -63,3 +64,35 @@ func TestProfileMessageNonQueuedLeavesNoGoroutinesAfterCompletion(t *testing.T) 
 		t.Fatalf("goroutines %d -> %d after 10 non-queued messages\n%s", before, after, buffer[:runtime.Stack(buffer, true)])
 	}
 }
+
+// A non-queued message ends only once its target run has released the transcript, so a
+// message sent right after it finds the target free. The run's Done closes before that
+// release; a logger that pauses on the run's last log line, which comes in between, holds
+// the gap open.
+func TestProfileMessageEndsOnlyOnceTheTargetIsFree(t *testing.T) {
+	f := newLayoutFixtureWithBudget(t, nil, nil, func(config *Config) {
+		config.HTTP.Logger = slog.New(pauseOnMessage{message: "run finished", pause: 100 * time.Millisecond})
+	})
+	messenger := profileMessenger{resolver: f.service.resolver}
+	for i := range 3 {
+		if _, err := messenger.Message(callerContext(t, f, context.Background()), profileMessageOwner, "review/reviewer", "hi", 0, false); err != nil {
+			t.Fatalf("message %d: %v", i+1, err)
+		}
+	}
+}
+
+// pauseOnMessage is a slog handler that drops every record and sleeps on the named message.
+type pauseOnMessage struct {
+	message string
+	pause   time.Duration
+}
+
+func (h pauseOnMessage) Enabled(context.Context, slog.Level) bool { return true }
+func (h pauseOnMessage) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == h.message {
+		time.Sleep(h.pause)
+	}
+	return nil
+}
+func (h pauseOnMessage) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h pauseOnMessage) WithGroup(string) slog.Handler      { return h }

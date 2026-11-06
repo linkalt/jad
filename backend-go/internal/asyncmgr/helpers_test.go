@@ -101,6 +101,18 @@ func (f *fixture) open(t *testing.T) {
 	}
 }
 
+// abandon leaves the manager the way a killed server, or one still running elsewhere,
+// leaves the folder: the index is written and later writes stop, but live handles are not
+// ended, so their records stay running. Close after it does nothing.
+func (f *fixture) abandon() {
+	m := f.m
+	m.mu.Lock()
+	m.closed = true
+	m.notifyLocked()
+	m.mu.Unlock()
+	m.shutFiles()
+}
+
 func (f *fixture) start(t *testing.T, owner, id string) {
 	t.Helper()
 	if err := f.m.Register(Registration{ID: id, Owner: owner, Kind: "fake", Label: "job " + id}); err != nil {

@@ -56,7 +56,8 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 
 // newLayoutFixtureWithBudget is newLayoutFixtureWithServer with the budget of leaf tool calls
 // the service's runs share. Nil keeps the process budget; a test passes a budget of one.
-func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *tools.LeafBudget) *layoutFixture {
+// configure, when given, changes the loaded config before the service is built.
+func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *tools.LeafBudget, configure ...func(*Config)) *layoutFixture {
 	t.Helper()
 	f := &layoutFixture{root: t.TempDir(), cwd: t.TempDir(), server: server}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +156,9 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
+	}
+	for _, change := range configure {
+		change(&config)
 	}
 	service, err := newServiceForLayout(config, budget)
 	if err != nil {

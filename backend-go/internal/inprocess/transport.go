@@ -11,8 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"sync"
+
+	"jad/backend-go/internal/logging"
 )
 
 // Transport is an http.RoundTripper that answers every request with Handler. The
@@ -20,6 +24,9 @@ import (
 // closing the body cancels the handler's request context.
 type Transport struct {
 	Handler http.Handler
+	// Logger records every handler panic with its stack: a panic after the request was
+	// cancelled reaches no caller, and the error a caller gets has no stack. Nil discards.
+	Logger *slog.Logger
 }
 
 // errHandlerPanicked ends a stream whose handler panicked.
@@ -43,6 +50,9 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				logging.Or(t.Logger).Error("in-process handler panicked", slog.Any("panic", recovered),
+					slog.String("method", request.Method), slog.String("path", request.URL.Path),
+					slog.Bool("cancelled", request.Context().Err() != nil), slog.String("stack", string(debug.Stack())))
 				w.abort(fmt.Errorf("%w: %v", errHandlerPanicked, recovered))
 			}
 			w.finish()
@@ -58,7 +68,8 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	// A handler that returns because the request was cancelled sends its status as it
 	// ends, so both cases can be ready at once; the cancel wins, whichever was picked. A
-	// handler that panicked before its status keeps its panic in the error too.
+	// handler that panicked before its status keeps its panic in the error too; one that panics
+	// later is only logged.
 	if err := request.Context().Err(); err != nil {
 		select {
 		case <-w.ready:

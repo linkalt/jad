@@ -213,6 +213,9 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 				run.lastText.Store(text)
 			}
 		},
+		// The run's Done closes before httpapi releases the target's transcript; the message
+		// ends only once it is released, so a message sent right after it finds the target free.
+		OnEnd: func(*httpapi.ProfileRun) { run.releaseOnce.Do(func() { close(run.released) }) },
 	}
 }
 
@@ -306,6 +309,9 @@ type profileMessageRun struct {
 	startedC chan struct{}
 	doneC    chan struct{}
 	began    time.Time
+	// released closes when the attached target run has ended and released the transcript.
+	released    chan struct{}
+	releaseOnce sync.Once
 
 	lastText atomic.Value
 
@@ -321,7 +327,7 @@ type profileMessageRun struct {
 }
 
 func newProfileMessageRun(plan *profileMessagePlan) *profileMessageRun {
-	r := &profileMessageRun{plan: plan, startedC: make(chan struct{}), doneC: make(chan struct{}), began: time.Now()}
+	r := &profileMessageRun{plan: plan, startedC: make(chan struct{}), doneC: make(chan struct{}), released: make(chan struct{}), began: time.Now()}
 	if plan.timeout > 0 {
 		r.ctx, r.cancel = context.WithTimeout(context.Background(), plan.timeout)
 	} else {
@@ -496,7 +502,8 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 		run.Stop()
 	}
 	// This goroutine is the message's one watch once it is attached: it stops the target run
-	// when the message's context ends, and records the outcome once the run has ended.
+	// when the message's context ends, and records the outcome once the run has ended and
+	// released the target's transcript (OnEnd, which follows Done).
 	go func() {
 		select {
 		case <-run.Done():
@@ -504,6 +511,7 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 			run.Stop()
 			<-run.Done()
 		}
+		<-r.released
 		r.finish(r.conclude(run))
 	}()
 }

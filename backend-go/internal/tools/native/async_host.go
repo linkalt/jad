@@ -82,7 +82,7 @@ func (h *AsyncHost) Manager() *asyncmgr.Manager { return h.manager }
 func (h *AsyncHost) Config() asyncmgr.Config { return h.manager.Config() }
 
 // Close stops every live handle (reason server_shutdown), waits for the runs it stopped to
-// finish, and closes the manager.
+// finish, and closes the manager, which ends a handle that has still not reported as lost.
 func (h *AsyncHost) Close() {
 	h.mu.Lock()
 	if h.closed {

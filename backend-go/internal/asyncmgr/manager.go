@@ -622,8 +622,10 @@ func (m *Manager) countsLocked(owner string) Counts {
 }
 
 // Close asks every live handle to stop (reason ReasonShutdown), waits up to StopWait for
-// the drivers to report, wakes waiters with ErrClosed and writes the index. Handles that
-// have not reported by then stay running in their record and are lost at the next start.
+// the drivers to report, wakes waiters with ErrClosed and writes the index. A handle of
+// this server that has not reported by then ends as lost (ReasonShutdown), unread, so no
+// record is left running; a later report of its driver is ignored. Handles another live
+// server owns are left as they are.
 func (m *Manager) Close() {
 	type target struct {
 		driver Driver
@@ -670,6 +672,17 @@ func (m *Manager) Close() {
 			break
 		}
 	}
+	// Left running in its record, such a handle would be lost only at the next start, and a
+	// server that starts while this process is still alive would take it for this one's
+	// and keep it live. A handle being finished is skipped: its result is on its way.
+	for _, id := range m.unreportedOwnLive() {
+		_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonShutdown})
+	}
+	m.shutFiles()
+}
+
+// shutFiles writes the final index and then stops every later write to the folder.
+func (m *Manager) shutFiles() {
 	m.indexClosed.Store(true)
 	m.flushMu.Lock()
 	if m.flushTimer != nil {
@@ -684,6 +697,25 @@ func (m *Manager) Close() {
 	m.ioMu.Lock()
 	m.ioClosed = true
 	m.ioMu.Unlock()
+}
+
+// unreportedOwnLive lists, sorted, the live handles this server registered that are not
+// being finished.
+func (m *Manager) unreportedOwnLive() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for _, r := range m.rows {
+		if r.state.Terminal() || r.finishing || r.rec == nil {
+			continue
+		}
+		if r.rec.Server != nil && *r.rec.Server != m.opts.Server {
+			continue
+		}
+		ids = append(ids, r.id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func sortedRows(set map[string]*row) []*row {

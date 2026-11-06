@@ -349,7 +349,7 @@ func TestRestartMarksRunningLostAndQueuesSignal(t *testing.T) {
 	f.finish(t, "fin", Result{Summary: "kept", Ref: "/r"})
 	f.finish(t, "read", Result{})
 	_, _ = f.m.Wait(background, "s1", []string{"read"}, 0)
-	f.m.Close()
+	f.abandon()
 
 	f.opts.Server = ServerID{PID: 200, Start: 2}
 	f.open(t)
@@ -374,12 +374,57 @@ func TestRestartMarksRunningLostAndQueuesSignal(t *testing.T) {
 func TestRestartLeavesALiveForeignServersHandlesAlone(t *testing.T) {
 	f := newFixture(t, nil)
 	f.start(t, "s1", "theirs")
-	f.m.Close()
+	// Server 100 is still running: it has not closed its manager.
+	f.abandon()
 	f.opts.Server = ServerID{PID: 200, Start: 2}
 	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
 	f.open(t)
 	if e, err := f.m.Status("s1", "theirs"); err != nil || e.State != StateRunning {
 		t.Fatalf("foreign live handle = %+v, %v", e, err)
+	}
+}
+
+// A handle whose driver does not report within StopWait ends at Close as lost, unread, so
+// its record is not left running: the next server shows its signal even while this process
+// is still alive, and a late report of the driver is ignored.
+func TestCloseEndsAnUnreportedHandleAsLost(t *testing.T) {
+	f := newFixture(t, nil)
+	f.opts.StopWait = 0
+	f.m.Close()
+	f.open(t)
+	f.start(t, "s1", "slow")
+	f.m.Close()
+	if ok, err := f.m.Complete("slow", Result{State: StateDone, OK: true}); err != nil || ok {
+		t.Fatalf("late report after Close = %v, %v; want ignored", ok, err)
+	}
+	rec, err := f.m.readRecord("slow")
+	if err != nil || rec.State != StateLost || rec.Reason != ReasonShutdown || !rec.Unread || rec.EndedAt.IsZero() {
+		t.Fatalf("record after Close = %+v, %v", rec, err)
+	}
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.open(t)
+	res, _ := f.m.Wait(background, "s1", nil, 0)
+	if len(res.Signals) != 1 || res.Signals[0].State != StateLost || res.Signals[0].Reason != ReasonShutdown {
+		t.Fatalf("signals after restart = %+v", res.Signals)
+	}
+	if got := f.m.Counts("s1"); got.Active != 0 {
+		t.Fatalf("live count after restart = %+v", got)
+	}
+}
+
+// Close ends only this server's handles: one that another live server owns stays running.
+func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "theirs")
+	f.abandon()
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.opts.StopWait = 0
+	f.open(t)
+	f.m.Close()
+	if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateRunning {
+		t.Fatalf("foreign record after Close = %+v, %v", rec, err)
 	}
 }
 
