@@ -48,6 +48,9 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 
 	var timer *time.Timer
 	var timeout <-chan time.Time
+	// dropped sums the counts of signals lost to the unread cap that a pass taking only
+	// signals another server already delivered took before looking again.
+	dropped := 0
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -71,10 +74,15 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 		result, flips := m.popLocked(owner, scope)
 		if len(result.Signals) > 0 || wait <= 0 || result.Pending == 0 {
 			if s := m.owners[owner]; s != nil && (len(result.Signals) > 0 || result.Pending == 0) {
-				result.Dropped = m.takeDroppedLocked(owner, s)
+				dropped += m.takeDroppedLocked(owner, s)
 			}
 			m.mu.Unlock()
-			m.deliverIOLocked(flips)
+			if m.deliverIOLocked(&result, flips) {
+				// Every popped signal was delivered by another server already: look again
+				// for the next ones, or wait.
+				continue
+			}
+			result.Dropped = dropped
 			return result, nil
 		}
 		changed := m.changed
@@ -90,20 +98,24 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 			if m.beforeWaitTimeout != nil {
 				m.beforeWaitTimeout()
 			}
-			m.ioMu.Lock()
-			m.mu.Lock()
-			if err := ctx.Err(); err != nil {
+			for {
+				m.ioMu.Lock()
+				m.mu.Lock()
+				if err := ctx.Err(); err != nil {
+					m.mu.Unlock()
+					m.ioMu.Unlock()
+					return WaitResult{}, err
+				}
+				result, flips = m.popLocked(owner, scope)
+				if s := m.owners[owner]; s != nil {
+					dropped += m.takeDroppedLocked(owner, s)
+				}
 				m.mu.Unlock()
-				m.ioMu.Unlock()
-				return WaitResult{}, err
+				if !m.deliverIOLocked(&result, flips) {
+					result.Dropped = dropped
+					return result, nil
+				}
 			}
-			result, flips = m.popLocked(owner, scope)
-			if s := m.owners[owner]; s != nil {
-				result.Dropped = m.takeDroppedLocked(owner, s)
-			}
-			m.mu.Unlock()
-			m.deliverIOLocked(flips)
-			return result, nil
 		case <-ctx.Done():
 			return WaitResult{}, ctx.Err()
 		}
@@ -122,17 +134,40 @@ func (m *Manager) takeDroppedLocked(owner string, s *ownerStats) int {
 }
 
 // deliverIOLocked marks the popped signals read on disk, releases ioMu and rewrites the
-// index when anything was marked.
-func (m *Manager) deliverIOLocked(flips []flip) {
-	w := pruneWork{flips: flips}
+// index when anything was marked. flips[i] is the read mark of result.Signals[i] (popLocked).
+// A signal whose record already ended read on disk is taken out of result: another server
+// sharing the folder loaded the same unread signal (at its start, or when it ended a
+// stopped peer's handle) and delivered it, or dropped it to its unread cap, since this one
+// loaded it. Its mark here is already cleared in memory and needs no write. The check reuses
+// the read the mark does; two servers delivering the same signal at the same moment can
+// both still return it. It reports whether result had signals and none is left.
+func (m *Manager) deliverIOLocked(result *WaitResult, flips []flip) bool {
 	if m.beforeCommitWrite != nil {
 		m.beforeCommitWrite()
 	}
-	m.applyWorkIOLocked(w)
+	popped := len(result.Signals)
+	kept := result.Signals[:0]
+	for i, f := range flips {
+		fresh := true
+		m.updateRecordIfIOLocked(f.id, func(rec *Record) bool {
+			// A live record means its result write failed: the in-memory end stands.
+			if rec.State.Terminal() && !rec.Unread {
+				fresh = false
+				return false
+			}
+			rec.Unread = false
+			return true
+		})
+		if fresh {
+			kept = append(kept, result.Signals[i])
+		}
+	}
+	result.Signals = kept
 	m.ioMu.Unlock()
-	if !w.empty() {
+	if len(flips) > 0 {
 		m.writeIndex()
 	}
+	return popped > 0 && len(kept) == 0
 }
 
 // popLocked takes the ready signals of owner (inside scope when scope is set) within the

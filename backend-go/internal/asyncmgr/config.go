@@ -42,6 +42,11 @@ type Config struct {
 	// IndexFlushMs delays index.json rewrites so a burst of state changes costs one
 	// write (0 = write at every change). Record files are always written at once.
 	IndexFlushMs int64 `json:"index_flush_ms"`
+	// PeerCheckMs is how often, while handles of another running server that shares the
+	// folder are kept live, the manager checks whether that server still runs, so a dead
+	// one's handles end without waiting for a call (0 = only when a call reads or adds
+	// handles).
+	PeerCheckMs int64 `json:"peer_check_ms"`
 	// LatestBytes is the most new output a "latest" block shows per stream (and the longest
 	// preview line of an agent's activity); LatestLines the most activity lines of one block;
 	// LatestTotalBytes the most block text one wait, list or status response adds;
@@ -70,7 +75,7 @@ func DefaultConfig() Config {
 		WaitMaxSignals: 10, ListDefaultLimit: 10, ListMaxLimit: 50,
 		SummaryMaxBytes: 512, StatusSummaryBytes: 4096, ResponseMaxBytes: 8192,
 		KeepFinished: 200, RetentionDays: 14, UnreadMax: 100, UnreadTTLDays: 7,
-		StopWaitMs: 2_000, SSEMaxIDs: 10, IndexFlushMs: 150,
+		StopWaitMs: 2_000, SSEMaxIDs: 10, IndexFlushMs: 150, PeerCheckMs: 5_000,
 		LatestBytes: 500, LatestLines: 3, LatestTotalBytes: 2000, LatestValueBytes: 80, LatestScanMaxBytes: 8 << 20,
 	}
 }
@@ -96,8 +101,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be at least 1", field.name)
 		}
 	}
-	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 || c.StopWaitMs < 0 {
-		return fmt.Errorf("retention_days, unread_ttl_days and stop_wait_ms must not be negative")
+	if c.RetentionDays < 0 || c.UnreadTTLDays < 0 || c.StopWaitMs < 0 || c.PeerCheckMs < 0 {
+		return fmt.Errorf("retention_days, unread_ttl_days, stop_wait_ms and peer_check_ms must not be negative")
 	}
 	if c.IndexFlushMs < 0 || c.IndexFlushMs > MaxIndexFlushMs {
 		return fmt.Errorf("index_flush_ms must be between 0 and %d", MaxIndexFlushMs)

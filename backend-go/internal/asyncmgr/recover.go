@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"sort"
+	"time"
 )
 
 // recover loads the index and the records that are live or unread. Terminal read
@@ -97,10 +98,10 @@ func (m *Manager) recover() error {
 
 // endDeadForeign ends the handles kept live at Open for another server that has stopped
 // since, with the end that server recorded or else as lost (endForeign): it can no longer
-// report them here, so they
-// would show running and count against the caps until this server restarts. It runs at the
-// start of the calls that read or add handles, checks each such server once, outside the
-// locks, and costs nothing when no foreign handle is live.
+// report them here, so they would show running and count against the caps until this
+// server restarts. It runs at the start of the calls that read or add handles (Counts and
+// the snapshots included) and in the background check (peerCheck), checks each such
+// server once, outside the locks, and costs nothing when no foreign handle is live.
 func (m *Manager) endDeadForeign() {
 	if m.foreignN.Load() == 0 || m.opts.ServerAlive == nil {
 		return
@@ -110,18 +111,13 @@ func (m *Manager) endDeadForeign() {
 		m.mu.Unlock()
 		return
 	}
+	m.pruneForeignLocked()
 	byServer := map[ServerID][]string{}
 	for id, server := range m.foreign {
-		r := m.rows[id]
-		if r == nil || r.state.Terminal() {
-			delete(m.foreign, id)
-			continue
-		}
-		if !r.finishing {
+		if !m.rows[id].finishing {
 			byServer[server] = append(byServer[server], id)
 		}
 	}
-	m.foreignN.Store(int32(len(m.foreign)))
 	m.mu.Unlock()
 	for server, ids := range byServer {
 		if m.opts.ServerAlive(server) {
@@ -132,6 +128,48 @@ func (m *Manager) endDeadForeign() {
 			m.endForeign(id)
 		}
 	}
+}
+
+// pruneForeignLocked forgets the foreign handles that ended or are gone.
+func (m *Manager) pruneForeignLocked() {
+	for id := range m.foreign {
+		if r := m.rows[id]; r == nil || r.state.Terminal() {
+			delete(m.foreign, id)
+		}
+	}
+	m.foreignN.Store(int32(len(m.foreign)))
+}
+
+// armPeerCheckLocked schedules the next background check of the servers whose handles are
+// kept live (peer_check_ms), when there are any and none is scheduled, so a dead one's
+// handles end even while no call reads them: a wait in progress is woken by their end and
+// a watcher (the run stream's counts) is told. Called with mu held.
+func (m *Manager) armPeerCheckLocked() {
+	if m.closed || m.peerTimer != nil || m.cfg.PeerCheckMs <= 0 || m.opts.ServerAlive == nil {
+		return
+	}
+	if m.pruneForeignLocked(); len(m.foreign) == 0 {
+		return
+	}
+	m.peerChecks.Add(1)
+	m.peerTimer = time.AfterFunc(time.Duration(m.cfg.PeerCheckMs)*time.Millisecond, m.peerCheck)
+}
+
+// peerCheck is one background check: it ends the handles of the servers that stopped and
+// schedules the next check while handles of a live one remain.
+func (m *Manager) peerCheck() {
+	defer m.peerChecks.Done()
+	m.mu.Lock()
+	m.peerTimer = nil
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		return
+	}
+	m.endDeadForeign()
+	m.mu.Lock()
+	m.armPeerCheckLocked()
+	m.mu.Unlock()
 }
 
 // endForeign ends one handle of a stopped server. Its record is read again first: that
@@ -171,6 +209,7 @@ func (m *Manager) endForeign(id string) {
 			}
 			m.mutateLocked(r, func(r *row) {
 				r.state, r.ok, r.changed, r.unread, r.progress = rec.State, rec.OK, ended, unread, nil
+				r.overflow = r.overflow || rec.Overflow
 			})
 			r.rec = nil
 			if unread {

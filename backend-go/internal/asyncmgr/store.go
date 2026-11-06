@@ -114,6 +114,15 @@ func (m *Manager) readRecord(id string) (Record, error) {
 // missing or unreadable file is skipped (the in-memory row stays authoritative until the
 // next start).
 func (m *Manager) updateRecordIOLocked(id string, change func(*Record)) {
+	m.updateRecordIfIOLocked(id, func(rec *Record) bool {
+		change(rec)
+		return true
+	})
+}
+
+// updateRecordIfIOLocked is updateRecordIOLocked for a change that may decide, from the
+// record as it is on disk, to leave it unchanged (change returns false: nothing is written).
+func (m *Manager) updateRecordIfIOLocked(id string, change func(*Record) bool) {
 	if m.ioClosed {
 		return
 	}
@@ -125,7 +134,9 @@ func (m *Manager) updateRecordIOLocked(id string, change func(*Record)) {
 	if json.Unmarshal(data, &rec) != nil || rec.ID != id {
 		return
 	}
-	change(&rec)
+	if !change(&rec) {
+		return
+	}
 	out, err := json.Marshal(rec)
 	if err != nil {
 		return

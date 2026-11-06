@@ -126,6 +126,11 @@ type Manager struct {
 	// (endDeadForeign) cost nothing when there are none.
 	foreign  map[string]ServerID
 	foreignN atomic.Int32
+	// peerTimer (guarded by mu) is the pending check of those servers (peer_check_ms), nil
+	// when none is scheduled; peerChecks counts the scheduled and running checks, which
+	// Close waits for before it writes the final index.
+	peerTimer  *time.Timer
+	peerChecks sync.WaitGroup
 }
 
 // Open creates or recovers the manager in opts.Dir. Handles recorded as running by an
@@ -152,6 +157,9 @@ func Open(opts Options) (*Manager, error) {
 	if err := m.recover(); err != nil {
 		return nil, err
 	}
+	m.mu.Lock()
+	m.armPeerCheckLocked()
+	m.mu.Unlock()
 	return m, nil
 }
 
@@ -598,6 +606,7 @@ func (m *Manager) DropUnread(owner string) int {
 
 // Counts returns the cheap header numbers of one owner.
 func (m *Manager) Counts(owner string) Counts {
+	m.endDeadForeign()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.countsLocked(owner)
@@ -626,6 +635,7 @@ type LiveID struct {
 
 // SnapshotLive is Snapshot with the change time of each id.
 func (m *Manager) SnapshotLive(owner string) (Counts, []LiveID) {
+	m.endDeadForeign()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := m.countsLocked(owner)
@@ -670,6 +680,10 @@ func (m *Manager) CloseWithin(longest time.Duration) {
 		return
 	}
 	m.closed = true
+	if m.peerTimer != nil && m.peerTimer.Stop() {
+		m.peerChecks.Done()
+	}
+	m.peerTimer = nil
 	// Only this server's handles are stopped and waited for: a handle another live server
 	// owns is never reported to this one, and waiting for it would hold Close for the whole
 	// stop wait.
@@ -728,6 +742,9 @@ func (m *Manager) CloseWithin(longest time.Duration) {
 		m.mu.Lock()
 	}
 	m.mu.Unlock()
+	// A peer check that was already running may still end a dead server's handle; its
+	// files go in before the final index.
+	m.peerChecks.Wait()
 	m.shutFiles()
 }
 

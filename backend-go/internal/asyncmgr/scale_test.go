@@ -616,6 +616,216 @@ func TestStopRefusesALiveForeignServersHandle(t *testing.T) {
 	}
 }
 
+// Two servers sharing a folder both load an unread signal that was on disk when the later
+// one started. Once one of them delivered it (its record is read on disk), the other does
+// not deliver it again, in either direction, and a wait whose only ready signals were
+// delivered elsewhere goes on waiting instead of returning them.
+func TestASignalAnotherServerDeliveredIsNotDeliveredAgain(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "one")
+	f.start(t, "s1", "two")
+	f.start(t, "s1", "live")
+	f.finish(t, "one", Result{})
+	f.finish(t, "two", Result{})
+	first := f.m
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 }
+	f.open(t)
+	second := f.m
+
+	if res, _ := second.Wait(background, "s1", []string{"one"}, 0); len(res.Signals) != 1 || res.Signals[0].ID != "one" {
+		t.Fatalf("later server's wait = %+v, want one", res.Signals)
+	}
+	started := time.Now()
+	res, err := first.Wait(background, "s1", nil, 100*time.Millisecond)
+	if err != nil || len(res.Signals) != 1 || res.Signals[0].ID != "two" {
+		t.Fatalf("earlier server's wait = %+v, %v; want only two", res.Signals, err)
+	}
+	if res, _ := second.Wait(background, "s1", []string{"two"}, 0); len(res.Signals) != 0 {
+		t.Fatalf("later server's wait after the earlier one delivered two = %+v, want none", res.Signals)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("the waits took %v", elapsed)
+	}
+
+	// Only a signal another server delivered is ready (its record says read): the wait goes
+	// on waiting for the live handle instead of returning it.
+	f.m = first
+	f.start(t, "s1", "three")
+	f.finish(t, "three", Result{})
+	f.m = second
+	rec, err := first.readRecord("three")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Unread = false
+	if err := first.writeRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	res, err = first.Wait(background, "s1", nil, 100*time.Millisecond)
+	if err != nil || len(res.Signals) != 0 || res.Pending != 1 {
+		t.Fatalf("wait with only a signal read elsewhere = %+v, %v; want a timeout with live pending", res, err)
+	}
+	if got := first.Counts("s1"); got.Unread != 0 {
+		t.Fatalf("unread after the wait = %+v", got)
+	}
+	if ok, err := first.Complete("live", Result{State: StateDone, OK: true}); err != nil || !ok {
+		t.Fatalf("Complete(live) = %v, %v", ok, err)
+	}
+	if res, _ := first.Wait(background, "s1", nil, 0); len(res.Signals) != 1 || res.Signals[0].ID != "live" {
+		t.Fatalf("wait after live ended = %+v", res.Signals)
+	}
+}
+
+// With peer_check_ms set, a wait in progress learns that the server owning the handle it
+// waits on stopped, without another call: the handle ends and the wait returns its signal,
+// and a watcher of the owner is told. After Close no check runs.
+func TestAWaitInProgressSeesAPeerStop(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.PeerCheckMs = 10 })
+	f.start(t, "s1", "theirs")
+	f.start(t, "s2", "other")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	told := make(chan struct{}, 1)
+	cancel := f.m.Watch("s1", func() {
+		select {
+		case told <- struct{}{}:
+		default:
+		}
+	})
+	defer cancel()
+
+	type outcome struct {
+		res WaitResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := f.m.Wait(background, "s1", nil, 10*time.Second)
+		done <- outcome{res, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case got := <-done:
+		t.Fatalf("wait returned while the peer runs: %+v", got)
+	default:
+	}
+	started := time.Now()
+	theirsAlive.Store(false)
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the wait did not see the peer stop")
+	}
+	if got.err != nil || len(got.res.Signals) != 1 || got.res.Signals[0].ID != "theirs" || got.res.Signals[0].State != StateLost {
+		t.Fatalf("wait = %+v, %v; want theirs lost", got.res, got.err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("the wait took %v after the peer stopped", elapsed)
+	}
+	select {
+	case <-told:
+	default:
+		t.Fatal("the watcher was not told")
+	}
+
+	// The second handle of that server ended in the same check; a closed manager checks no more.
+	poll(t, "the other handle of the stopped peer to end", func() bool {
+		rec, err := f.m.readRecord("other")
+		return err == nil && rec.State == StateLost
+	})
+	poll(t, "no peer check left scheduled with no foreign handle", func() bool {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		return f.m.peerTimer == nil
+	})
+}
+
+// Close stops a scheduled peer check: a server that stops after it does not get its handle
+// ended by the closed manager.
+func TestClosedManagerRunsNoPeerCheck(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.PeerCheckMs = 10 })
+	f.start(t, "s1", "theirs")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	f.m.Close()
+	theirsAlive.Store(false)
+	time.Sleep(100 * time.Millisecond)
+	if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateRunning {
+		t.Fatalf("record after a closed manager's peer stopped = %+v, %v; want it left running", rec, err)
+	}
+}
+
+// The counts and snapshots a run stream reads check the servers whose handles are kept live,
+// as list and status do, so a header does not show a stopped peer's handle running.
+func TestCountsAndSnapshotEndAStoppedPeersHandle(t *testing.T) {
+	for _, read := range []struct {
+		name string
+		live func(m *Manager) int
+	}{
+		{"Counts", func(m *Manager) int { return m.Counts("s1").Active }},
+		{"SnapshotLive", func(m *Manager) int { c, _ := m.SnapshotLive("s1"); return c.Active }},
+	} {
+		t.Run(read.name, func(t *testing.T) {
+			f := newFixture(t, func(c *Config) { c.PeerCheckMs = 0 })
+			f.start(t, "s1", "theirs")
+			f.abandon()
+			var theirsAlive atomic.Bool
+			theirsAlive.Store(true)
+			f.opts.Server = ServerID{PID: 200, Start: 2}
+			f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+			f.open(t)
+			if got := read.live(f.m); got != 1 {
+				t.Fatalf("live while the peer runs = %d", got)
+			}
+			theirsAlive.Store(false)
+			if got := read.live(f.m); got != 0 {
+				t.Fatalf("live after the peer stopped = %d, want 0", got)
+			}
+			if rec, err := f.m.readRecord("theirs"); err != nil || rec.State != StateLost {
+				t.Fatalf("record after the peer stopped = %+v, %v", rec, err)
+			}
+		})
+	}
+}
+
+// A peer that dropped its handle's signal to its unread cap before it stopped wrote the
+// overflow mark; the end this server takes from that record keeps it in the index.
+func TestAForeignHandleKeepsTheOverflowMarkItsServerRecorded(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.IndexFlushMs = 0 })
+	f.start(t, "s1", "dropped")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	rec, err := f.m.readRecord("dropped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.State, rec.OK, rec.Unread, rec.Overflow, rec.EndedAt = StateDone, true, false, true, time.Now()
+	if err := f.m.writeRecord(rec); err != nil {
+		t.Fatal(err)
+	}
+	theirsAlive.Store(false)
+	if e, err := f.m.Status("s1", "dropped"); err != nil || e.State != StateDone {
+		t.Fatalf("handle after its server stopped = %+v, %v", e, err)
+	}
+	if row, ok := indexRowOf(t, f, "dropped"); !ok || row.Overflow != true || row.Unread {
+		t.Fatalf("index row = %+v, %v; want overflow kept and read", row, ok)
+	}
+}
+
 // Close ends only this server's handles: one that another live server owns stays running.
 func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
 	f := newFixture(t, nil)
