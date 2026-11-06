@@ -302,7 +302,7 @@ No PID is signalled after restart (PID reuse rule, `design_process.md` section 2
 
 ### 9.7 Shutdown policy
 
-No supervisor, so shutdown ends all handles (order and grace as `resolver.go:825-875`: sub-agents first, then processes). They become `stopped` with reason `server_shutdown` and their signals are queued for the next start. A handle whose driver does not report within the stop wait is ended by the manager's close as `lost` with reason `server_shutdown`, so no record is left `running`; a later report of its driver is ignored. A hard crash yields `lost` with reason `backend_restarted`, at the next start.
+No supervisor, so shutdown ends all handles (order and grace as `resolver.go:825-875`: sub-agents first, then processes). They become `stopped` with reason `server_shutdown` and their signals are queued for the next start. The wait is the longer of the stop wait and the longest stop of a live exec or tool_smith child (kill grace, kill deadline and drain), so a child killed at the end of its grace still ends `stopped`. A handle whose driver does not report within it is ended by the manager's close as `lost` with reason `server_shutdown`, so no record is left `running`; a later report of its driver is ignored. A result already being written is waited for, and every change of memory and files (a reset's read marks, a delivery, a delete) is on disk before the close writes its final index and shuts file writes. A hard crash yields `lost` with reason `backend_restarted`, at the next start.
 
 ## 10. Concurrency, locking and goroutines
 

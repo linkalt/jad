@@ -32,7 +32,9 @@ type Config struct {
 	UnreadMax     int64 `json:"unread_max"`
 	UnreadTTLDays int64 `json:"unread_ttl_days"`
 	// StopWaitMs is how long a stop, and a shutdown, waits for a driver to report the
-	// end of the handles it was told to stop (0 = do not wait).
+	// end of the handles it was told to stop (0 = do not wait). A shutdown waits at least
+	// the longest stop of a running exec or tool_smith child (its kill grace, kill deadline
+	// and output drain), so a child killed at the end of its grace still records its stop.
 	StopWaitMs int64 `json:"stop_wait_ms"`
 	// SSEMaxIDs bounds the active handle ids a run stream's async_state event carries
 	// (0 = counts only).

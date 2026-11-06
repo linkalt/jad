@@ -3,7 +3,6 @@ package native
 import (
 	"context"
 	"regexp"
-	"time"
 
 	"jad/backend-go/internal/asyncmgr"
 )
@@ -28,7 +27,7 @@ func startToolSmithAsync(ctx context.Context, host *AsyncHost, script toolSmithS
 	execution.RequestInteraction = nil
 	execution.OnInteractionResolved = nil
 	script.execution = execution
-	return startShellAsync(ctx, host, toolSmithAsync, time.Duration(script.settings.Child.KillGraceMs)*time.Millisecond, execution, shellLabel(toolSmithAsync, script.body), blockMs, func(runCtx context.Context) shellRunResult {
+	return startShellAsync(ctx, host, toolSmithAsync, shellStopBound(script.settings.Child), execution, shellLabel(toolSmithAsync, script.body), blockMs, func(runCtx context.Context) shellRunResult {
 		return runToolSmithScript(runCtx, script)
 	})
 }

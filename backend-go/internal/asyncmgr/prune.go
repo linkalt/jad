@@ -36,10 +36,21 @@ func (w *pruneWork) merge(o pruneWork) {
 func (w pruneWork) empty() bool { return len(w.flips) == 0 && len(w.removes) == 0 }
 
 // applyWork does the file work and, when anything changed or index is true, rewrites the
-// index. It must be called without m.mu held.
+// index. It must be called without m.mu or m.ioMu held.
 func (m *Manager) applyWork(w pruneWork, index bool) {
+	m.ioMu.Lock()
+	m.applyWorkIOLocked(w)
+	m.ioMu.Unlock()
+	if index || !w.empty() {
+		m.writeIndex()
+	}
+}
+
+// applyWorkIOLocked does the record work of w for a caller that holds ioMu (not mu); the
+// caller rewrites the index once it has released ioMu.
+func (m *Manager) applyWorkIOLocked(w pruneWork) {
 	for _, f := range w.flips {
-		m.updateRecord(f.id, func(rec *Record) {
+		m.updateRecordIOLocked(f.id, func(rec *Record) {
 			rec.Unread = false
 			if f.overflow {
 				rec.Overflow = true
@@ -47,8 +58,24 @@ func (m *Manager) applyWork(w pruneWork, index bool) {
 		})
 	}
 	for _, id := range w.removes {
-		m.removeRecord(id)
+		m.removeRecordIOLocked(id)
 	}
+}
+
+// commit makes an in-memory change and writes its files under ioMu, which Close takes to
+// write the final index and shut file writes: a change is then either on disk and in that
+// index, or not made before Close. change runs with mu held and returns the file work.
+// The index is rewritten afterwards when index is true or the change had file work.
+func (m *Manager) commit(index bool, change func() pruneWork) {
+	m.ioMu.Lock()
+	m.mu.Lock()
+	w := change()
+	m.mu.Unlock()
+	if m.beforeCommitWrite != nil {
+		m.beforeCommitWrite()
+	}
+	m.applyWorkIOLocked(w)
+	m.ioMu.Unlock()
 	if index || !w.empty() {
 		m.writeIndex()
 	}
@@ -162,8 +189,5 @@ func (m *Manager) recomputeExpiryLocked() {
 
 // Prune applies the retention rules now.
 func (m *Manager) Prune() {
-	m.mu.Lock()
-	work := m.pruneLocked(m.opts.Now())
-	m.mu.Unlock()
-	m.applyWork(work, false)
+	m.commit(false, func() pruneWork { return m.pruneLocked(m.opts.Now()) })
 }

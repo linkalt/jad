@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -304,6 +305,16 @@ func TestAsyncHostCloseWaitsForAStubbornRun(t *testing.T) {
 	if entry, err := host.Manager().Status("s1", id); err == nil && entry.State == asyncmgr.StateRunning {
 		t.Fatalf("the run is still live after Close: %+v", entry)
 	}
+	// The child ends only when its kill grace is over, past the stop wait: Close waits for
+	// it, so the handle ends as the stop it was, on disk too, not as lost.
+	reopened, err := NewAsyncHost(filepath.Join(root, ".async"), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, err := reopened.Manager().Status("s1", id); err != nil || entry.State != asyncmgr.StateStopped || entry.Reason != asyncmgr.ReasonShutdown {
+		t.Fatalf("the stopped run after a restart = %+v, %v; want stopped by the shutdown", entry, err)
+	}
+	reopened.Close()
 	// A run that would start after Close is refused: it would be registered without anyone
 	// to complete it.
 	late, err := execTool.Execute(context.Background(), execTool.NormalizeArguments(decoded), tools.ExecutionContext{CallID: "exec", WorkspaceRoot: root, SessionDir: root, SessionKey: "s1"})
@@ -312,5 +323,21 @@ func TestAsyncHostCloseWaitsForAStubbornRun(t *testing.T) {
 	}
 	if !strings.Contains(late, "spawn_failed") || !strings.Contains(late, "shutting down") {
 		t.Fatalf("a run started after Close was not refused:\n%s", late)
+	}
+}
+
+// A stopped child may take its kill grace, then the kill deadline or the output drain; the
+// child's own defaults stand in for a zero deadline or drain, as bash_child applies them.
+func TestShellStopBoundAddsTheGraceDeadlineAndDrain(t *testing.T) {
+	for _, tc := range []struct {
+		settings sessionfs.NativeBashSettings
+		want     time.Duration
+	}{
+		{sessionfs.NativeBashSettings{KillGraceMs: 1_000, KillDeadlineMs: 300, DrainAfterExitMs: 200}, 1_500 * time.Millisecond},
+		{sessionfs.NativeBashSettings{KillGraceMs: 1_000}, time.Second + bashKillDeadline + bashDrainAfterExit},
+	} {
+		if got := shellStopBound(tc.settings); got != tc.want {
+			t.Fatalf("shellStopBound(%+v) = %s, want %s", tc.settings, got, tc.want)
+		}
 	}
 }

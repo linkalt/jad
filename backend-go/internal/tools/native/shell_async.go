@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -52,9 +53,9 @@ type shellRun struct {
 	start  time.Time
 	label  string
 
-	// grace is how long the stop of this run may take before the child is killed; it
-	// bounds the wait of AsyncHost.Close for the goroutine that finishes the run.
-	grace time.Duration
+	// stopBound is how long the stop of this run may take (shellStopBound); it bounds the
+	// wait of AsyncHost.Close for the run to report its stop and for its goroutine.
+	stopBound time.Duration
 }
 
 func (r *shellRun) stopWith(reason string) {
@@ -150,10 +151,25 @@ func (h *AsyncHost) sweepShellResults(spec shellAsyncSpec) {
 	}
 }
 
+// shellStopBound is how long a stopped child may take to end: SIGTERM, the kill grace, then
+// SIGKILL and at most the kill deadline, or the drain of its output after it exited (the
+// child's own defaults stand in for a zero deadline or drain).
+func shellStopBound(settings sessionfs.NativeBashSettings) time.Duration {
+	deadline := time.Duration(settings.KillDeadlineMs) * time.Millisecond
+	if deadline <= 0 {
+		deadline = bashKillDeadline
+	}
+	drain := time.Duration(settings.DrainAfterExitMs) * time.Millisecond
+	if drain <= 0 {
+		drain = bashDrainAfterExit
+	}
+	return time.Duration(settings.KillGraceMs)*time.Millisecond + deadline + drain
+}
+
 // startShellAsync runs the child as a handle of the async manager and blocks up to blockMs
 // for it. run gets a context of its own: only a stop, the child's timeout or the end of the
 // server ends it, never the end of the call.
-func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, killGrace time.Duration, execution tools.ExecutionContext, label string, blockMs *int64, run func(context.Context) shellRunResult) (string, error) {
+func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, stopBound time.Duration, execution tools.ExecutionContext, label string, blockMs *int64, run func(context.Context) shellRunResult) (string, error) {
 	callID := execution.CallID
 	owner, _ := handleOwner(execution)
 	random := make([]byte, 4)
@@ -168,7 +184,7 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	watch := newOutputWatch()
 	runCtx = withOutputWatch(runCtx, watch)
-	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch, grace: killGrace}
+	handle := &shellRun{id: id, cancel: cancel, done: make(chan struct{}), start: time.Now(), label: label, watch: watch, stopBound: stopBound}
 	// The run is recorded before it is registered: Close refuses the runs that come later,
 	// and a registration made after Close would leave a handle nothing ever completes.
 	if !host.adoptShellRun(handle) {

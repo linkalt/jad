@@ -249,13 +249,11 @@ func (m *Manager) MarkRead(owner, id string) {
 }
 
 func (m *Manager) consume(id string) {
-	m.mu.Lock()
-	r := m.rows[id]
-	if r == nil || !r.unread {
-		m.mu.Unlock()
-		return
-	}
-	f := m.markReadLocked(r, false)
-	m.mu.Unlock()
-	m.applyWork(pruneWork{flips: []flip{f}}, false)
+	m.commit(false, func() pruneWork {
+		r := m.rows[id]
+		if r == nil || !r.unread {
+			return pruneWork{}
+		}
+		return pruneWork{flips: []flip{m.markReadLocked(r, false)}}
+	})
 }

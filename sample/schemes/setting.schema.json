@@ -2039,7 +2039,7 @@
                 "latest_value_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 80, "description": "Longest argument value shown in an activity line of a latest block. Not above latest_bytes."},
                 "latest_scan_max_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 8388608, "description": "Largest transcript a latest block will read to describe an agent's activity; a larger one shows only its path."},
                 "sse_max_ids": {"type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "Most live handle ids the run stream's async_state event carries next to the counts. 0 sends counts only."},
-                "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait."},
+                "stop_wait_ms": {"type": "integer", "minimum": 0, "maximum": 21600000, "default": 2000, "description": "How long an async stop and a shutdown wait for the work to report that it ended. 0 does not wait. A shutdown waits at least as long as the longest stop of a running exec or tool_smith command (kill_grace_ms + kill_deadline_ms + drain_after_exit_ms)."},
                 "unread_ttl_days": {"type": "integer", "minimum": 0, "maximum": 100000, "default": 7, "description": "Undelivered signals older than this many days expire. 0 keeps them until the record is pruned."}
               },
               "additionalProperties": false

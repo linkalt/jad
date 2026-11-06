@@ -26,21 +26,24 @@ type WaitResult struct {
 // nothing.
 func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait time.Duration) (WaitResult, error) {
 	var scope map[string]struct{}
-	m.mu.Lock()
-	if len(ids) > 0 {
-		scope = make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			r := m.rows[id]
-			if r == nil || r.owner != owner {
-				m.mu.Unlock()
-				return WaitResult{}, fmt.Errorf("%w: %q", ErrUnknownHandle, id)
+	var unknown error
+	m.commit(false, func() pruneWork {
+		if len(ids) > 0 {
+			scope = make(map[string]struct{}, len(ids))
+			for _, id := range ids {
+				r := m.rows[id]
+				if r == nil || r.owner != owner {
+					unknown = fmt.Errorf("%w: %q", ErrUnknownHandle, id)
+					return pruneWork{}
+				}
+				scope[id] = struct{}{}
 			}
-			scope[id] = struct{}{}
 		}
+		return m.pruneLocked(m.opts.Now())
+	})
+	if unknown != nil {
+		return WaitResult{}, unknown
 	}
-	work := m.pruneLocked(m.opts.Now())
-	m.mu.Unlock()
-	m.applyWork(work, false)
 
 	var timer *time.Timer
 	var timeout <-chan time.Time
@@ -49,14 +52,19 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 			timer.Stop()
 		}
 	}()
+	// A delivery holds ioMu from the pop until the signals are marked read on disk, so Close
+	// cannot shut the folder between them and deliver them again after a restart.
 	for {
+		m.ioMu.Lock()
 		m.mu.Lock()
 		if err := ctx.Err(); err != nil {
 			m.mu.Unlock()
+			m.ioMu.Unlock()
 			return WaitResult{}, err
 		}
 		if m.closed {
 			m.mu.Unlock()
+			m.ioMu.Unlock()
 			return WaitResult{}, ErrClosed
 		}
 		result, flips := m.popLocked(owner, scope)
@@ -65,11 +73,12 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 				result.Dropped = m.takeDroppedLocked(owner, s)
 			}
 			m.mu.Unlock()
-			m.applyWork(pruneWork{flips: flips}, false)
+			m.deliverIOLocked(flips)
 			return result, nil
 		}
 		changed := m.changed
 		m.mu.Unlock()
+		m.ioMu.Unlock()
 		if timer == nil {
 			timer = time.NewTimer(wait)
 			timeout = timer.C
@@ -80,9 +89,11 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 			if m.beforeWaitTimeout != nil {
 				m.beforeWaitTimeout()
 			}
+			m.ioMu.Lock()
 			m.mu.Lock()
 			if err := ctx.Err(); err != nil {
 				m.mu.Unlock()
+				m.ioMu.Unlock()
 				return WaitResult{}, err
 			}
 			result, flips = m.popLocked(owner, scope)
@@ -90,7 +101,7 @@ func (m *Manager) Wait(ctx context.Context, owner string, ids []string, wait tim
 				result.Dropped = m.takeDroppedLocked(owner, s)
 			}
 			m.mu.Unlock()
-			m.applyWork(pruneWork{flips: flips}, false)
+			m.deliverIOLocked(flips)
 			return result, nil
 		case <-ctx.Done():
 			return WaitResult{}, ctx.Err()
@@ -107,6 +118,20 @@ func (m *Manager) takeDroppedLocked(owner string, s *ownerStats) int {
 		delete(m.owners, owner)
 	}
 	return dropped
+}
+
+// deliverIOLocked marks the popped signals read on disk, releases ioMu and rewrites the
+// index when anything was marked.
+func (m *Manager) deliverIOLocked(flips []flip) {
+	w := pruneWork{flips: flips}
+	if m.beforeCommitWrite != nil {
+		m.beforeCommitWrite()
+	}
+	m.applyWorkIOLocked(w)
+	m.ioMu.Unlock()
+	if !w.empty() {
+		m.writeIndex()
+	}
 }
 
 // popLocked takes the ready signals of owner (inside scope when scope is set) within the

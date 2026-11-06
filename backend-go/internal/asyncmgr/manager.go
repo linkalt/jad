@@ -71,8 +71,10 @@ type Manager struct {
 	cfg  Config
 	dir  string
 
-	// ioMu serializes file writes. Lock order: ioMu, then mu. Nothing takes ioMu while
-	// holding mu.
+	// ioMu serializes file writes. Lock order: indexMu, ioMu, then mu. Nothing takes ioMu
+	// while holding mu, and nothing takes indexMu (other than with TryLock) while holding
+	// ioMu. A change whose files must match it (commit, Complete, Register) holds ioMu from
+	// the in-memory change until its files are written.
 	ioMu sync.Mutex
 	// ioClosed (guarded by ioMu) is set by Close once the final index is written; later
 	// record, removal and index writes are skipped so nothing touches the folder after Close.
@@ -88,6 +90,13 @@ type Manager struct {
 	// is written and before the end is committed under mu, with ioMu held (so it must not
 	// write files itself). Nil in production.
 	beforeCompleteCommit func(id string)
+	// beforeCompleteWrite is a test-only hook. It runs in Complete after the handle is
+	// claimed and before ioMu is taken, with no lock held. Nil in production.
+	beforeCompleteWrite func(id string)
+	// beforeCommitWrite is a test-only hook. It runs in commit and in a Wait delivery after
+	// the in-memory change and before its files are written, with ioMu held (so it must not
+	// write files). Nil in production.
+	beforeCommitWrite func()
 	// indexMu and indexDirty coalesce index.json rewrites (see writeIndex).
 	indexMu    sync.Mutex
 	indexDirty atomic.Bool
@@ -278,36 +287,42 @@ func (m *Manager) Register(reg Registration) error {
 		rec.Server = &server
 	}
 
+	// ioMu is held from the row's creation until its record is written, so the final index
+	// of Close never lists a handle without a record, and the record of a handle Close ended
+	// cannot be overwritten by its running record.
+	m.ioMu.Lock()
 	m.mu.Lock()
+	refuse := func(err error) error {
+		m.mu.Unlock()
+		m.ioMu.Unlock()
+		return err
+	}
 	switch {
 	case m.closed:
-		m.mu.Unlock()
-		return ErrClosed
+		return refuse(ErrClosed)
 	case m.drivers[reg.Kind] == nil:
-		m.mu.Unlock()
-		return fmt.Errorf("%w %q", ErrNoDriver, reg.Kind)
+		return refuse(fmt.Errorf("%w %q", ErrNoDriver, reg.Kind))
 	case m.rows[reg.ID] != nil:
-		m.mu.Unlock()
-		return fmt.Errorf("%w: %q", ErrDuplicate, reg.ID)
+		return refuse(fmt.Errorf("%w: %q", ErrDuplicate, reg.ID))
 	}
 	if s := m.owners[reg.Owner]; s != nil && int64(len(s.live)) >= m.cfg.MaxHandles {
-		live := len(s.live)
-		m.mu.Unlock()
-		return &CapacityError{Scope: "owner", Limit: m.cfg.MaxHandles, Live: int64(live)}
+		return refuse(&CapacityError{Scope: "owner", Limit: m.cfg.MaxHandles, Live: int64(len(s.live))})
 	}
 	if int64(m.liveTotal) >= m.cfg.MaxHandlesTotal {
-		live := m.liveTotal
-		m.mu.Unlock()
-		return &CapacityError{Scope: "total", Limit: m.cfg.MaxHandlesTotal, Live: int64(live)}
+		return refuse(&CapacityError{Scope: "total", Limit: m.cfg.MaxHandlesTotal, Live: int64(m.liveTotal)})
 	}
 	r := &row{id: reg.ID, owner: reg.Owner, kind: reg.Kind, state: state, label: label, started: now, changed: now, rec: &rec}
 	m.addRowLocked(r)
 	m.mu.Unlock()
 
-	if err := m.writeRecord(rec); err != nil {
+	err := m.writeRecordIOLocked(rec)
+	if err != nil {
 		m.mu.Lock()
 		m.forgetLocked(r)
 		m.mu.Unlock()
+	}
+	m.ioMu.Unlock()
+	if err != nil {
 		return fmt.Errorf("save async record: %w", err)
 	}
 	m.writeIndex()
@@ -402,6 +417,9 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec := *r.rec
 	after := r.after
 	m.mu.Unlock()
+	if m.beforeCompleteWrite != nil {
+		m.beforeCompleteWrite(id)
+	}
 
 	rec.State = res.State
 	rec.OK = res.OK && res.State == StateDone
@@ -467,9 +485,10 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 			m.opts.Logger.Warn("async record not updated", "handle", id, "error", err)
 		}
 	}
+	m.applyWorkIOLocked(work)
 	m.ioMu.Unlock()
 
-	m.applyWork(work, true)
+	m.writeIndex()
 	m.mu.Lock()
 	m.completing--
 	m.notifyLocked()
@@ -504,16 +523,16 @@ func (m *Manager) ResetOwner(owner, reason string) int {
 func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
 	match := func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }
 	n := m.cancel(match, reason, endRemove)
-	var work pruneWork
-	m.mu.Lock()
-	for _, r := range sortedRows(m.rows) {
-		if r.state.Terminal() && !r.finishing && match(r) {
-			work.removes = append(work.removes, r.id)
-			m.forgetLocked(r)
+	m.commit(false, func() pruneWork {
+		var work pruneWork
+		for _, r := range sortedRows(m.rows) {
+			if r.state.Terminal() && !r.finishing && match(r) {
+				work.removes = append(work.removes, r.id)
+				m.forgetLocked(r)
+			}
 		}
-	}
-	m.mu.Unlock()
-	m.applyWork(work, false)
+		return work
+	})
 	return n
 }
 
@@ -554,19 +573,21 @@ func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) 
 // DropUnread marks every unread signal of owner as read (a user reset: the history that
 // gave them meaning is gone). The results stay readable until pruned.
 func (m *Manager) DropUnread(owner string) int {
-	var work pruneWork
-	m.mu.Lock()
-	if s := m.owners[owner]; s != nil {
-		for _, r := range sortedRows(s.unread) {
-			m.mutateLocked(r, func(r *row) { r.unread = false })
-			r.rec = nil
-			work.flips = append(work.flips, flip{id: r.id})
+	n := 0
+	m.commit(false, func() pruneWork {
+		var work pruneWork
+		if s := m.owners[owner]; s != nil {
+			for _, r := range sortedRows(s.unread) {
+				m.mutateLocked(r, func(r *row) { r.unread = false })
+				r.rec = nil
+				work.flips = append(work.flips, flip{id: r.id})
+			}
+			s.dropped = 0
 		}
-		s.dropped = 0
-	}
-	m.mu.Unlock()
-	m.applyWork(work, false)
-	return len(work.flips)
+		n = len(work.flips)
+		return work
+	})
+	return n
 }
 
 // Counts returns the cheap header numbers of one owner.
@@ -626,7 +647,12 @@ func (m *Manager) countsLocked(owner string) Counts {
 // this server that has not reported by then ends as lost (ReasonShutdown), unread, so no
 // record is left running; a later report of its driver is ignored. Handles another live
 // server owns are left as they are.
-func (m *Manager) Close() {
+func (m *Manager) Close() { m.CloseWithin(0) }
+
+// CloseWithin is Close for a caller that knows some drivers need longer than StopWait to
+// report a stop (a child killed only when its kill grace ends): it waits up to the longer of
+// StopWait and longest.
+func (m *Manager) CloseWithin(longest time.Duration) {
 	type target struct {
 		driver Driver
 		id     string
@@ -654,8 +680,8 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	writing := m.completing > 0
 	m.mu.Unlock()
-	if m.opts.StopWait > 0 && (len(targets) > 0 || writing) {
-		timer := time.NewTimer(m.opts.StopWait)
+	if wait := max(m.opts.StopWait, longest); wait > 0 && (len(targets) > 0 || writing) {
+		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		for {
 			m.mu.Lock()
@@ -678,10 +704,25 @@ func (m *Manager) Close() {
 	for _, id := range m.unreportedOwnLive() {
 		_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonShutdown})
 	}
+	// A Complete that claimed its handle before the wait ran out has only its own files left
+	// to write, no driver work, so it is waited for however long: shut first, its result
+	// would be dropped and its record left running. No Complete can claim a handle of this
+	// server after the loop above.
+	m.mu.Lock()
+	for m.completing > 0 {
+		ch := m.changed
+		m.mu.Unlock()
+		<-ch
+		m.mu.Lock()
+	}
+	m.mu.Unlock()
 	m.shutFiles()
 }
 
-// shutFiles writes the final index and then stops every later write to the folder.
+// shutFiles writes the final index and then stops every later write to the folder. The
+// index is read and written under ioMu, which every change holds until its files are
+// written (commit, Complete, Register), so it lists each change whose files are on disk and
+// none whose files are not.
 func (m *Manager) shutFiles() {
 	m.indexClosed.Store(true)
 	m.flushMu.Lock()
@@ -690,13 +731,14 @@ func (m *Manager) shutFiles() {
 		m.flushTimer = nil
 	}
 	m.flushMu.Unlock()
-	m.flushIndexNow()
-	// A concurrent writer may own the coalesced write; wait for it, then shut the folder.
+	// A concurrent writer may own the coalesced write; wait for it. Later writers fail
+	// TryLock while it is held, and find the folder shut once it is released.
 	m.indexMu.Lock()
-	m.indexMu.Unlock()
 	m.ioMu.Lock()
+	m.flushIndexIOLocked()
 	m.ioClosed = true
 	m.ioMu.Unlock()
+	m.indexMu.Unlock()
 }
 
 // unreportedOwnLive lists, sorted, the live handles this server registered that are not

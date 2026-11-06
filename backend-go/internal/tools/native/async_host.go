@@ -81,8 +81,10 @@ func (h *AsyncHost) Manager() *asyncmgr.Manager { return h.manager }
 // Config is the validated configuration of the manager.
 func (h *AsyncHost) Config() asyncmgr.Config { return h.manager.Config() }
 
-// Close stops every live handle (reason server_shutdown), waits for the runs it stopped to
-// finish, and closes the manager, which ends a handle that has still not reported as lost.
+// Close stops every live handle (reason server_shutdown) and closes the manager, which ends
+// a handle that has still not reported as lost. The manager waits for the longer of its stop
+// wait and the longest stop of a live shell run, so a child that is killed only when its
+// kill grace ends still records its stop; then Close waits for the shell-run goroutines.
 func (h *AsyncHost) Close() {
 	h.mu.Lock()
 	if h.closed {
@@ -90,16 +92,20 @@ func (h *AsyncHost) Close() {
 		return
 	}
 	h.closed = true
+	var longest time.Duration
+	for _, run := range h.shellRuns {
+		longest = max(longest, run.stopBound)
+	}
 	h.mu.Unlock()
-	h.manager.Close()
+	h.manager.CloseWithin(longest)
 	h.waitShellRuns()
 }
 
 // waitShellRuns waits for the shell-run goroutines the stop above just released the
-// children of. Each run is bounded by its own kill grace: the stop sends SIGTERM and kills
-// the group when the grace ends, so the goroutine writes its result and completes the
-// handle within that grace, and a shutdown that waited past it would hang on a child that
-// cannot be killed.
+// children of. Each run is bounded by its stop bound (shellStopBound): the stop sends
+// SIGTERM, kills the group when the grace ends and gives up on the child after the kill
+// deadline, so the goroutine writes its result and completes the handle within it, and a
+// shutdown that waited past it would hang on a child that cannot be killed.
 func (h *AsyncHost) waitShellRuns() {
 	h.mu.Lock()
 	runs := make([]*shellRun, 0, len(h.shellRuns))
@@ -108,10 +114,10 @@ func (h *AsyncHost) waitShellRuns() {
 	}
 	h.mu.Unlock()
 	for _, run := range runs {
-		if run.grace <= 0 {
+		if run.stopBound <= 0 {
 			continue
 		}
-		timer := time.NewTimer(run.grace)
+		timer := time.NewTimer(run.stopBound)
 		select {
 		case <-run.done:
 		case <-timer.C:

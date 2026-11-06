@@ -23,6 +23,13 @@ func duringCommit(action func(), ready func() bool) <-chan struct{} {
 	return done
 }
 
+// closing reports that Close has started.
+func (f *fixture) closing() bool {
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	return f.m.closed
+}
+
 // finishingAfter reports the end action a reset or delete set on the finishing row id.
 func (f *fixture) finishingAfter(id string) endAction {
 	f.m.mu.Lock()
@@ -196,8 +203,9 @@ func TestCloseWhileAResetOrDeletedHandleEndsLeavesNoUnreadRecord(t *testing.T) {
 				f.m.beforeCompleteCommit = nil
 				acted = duringCommit(func() { tc.action(f.m) },
 					func() bool { return f.finishingAfter("fin") == tc.want })
-				closed = duringCommit(f.m.Close, f.m.indexClosed.Load)
-				// Close blocks on the file lock Complete holds; without it, it ends here.
+				closed = duringCommit(f.m.Close, f.closing)
+				// Close waits for this Complete and for the file lock it holds; without them,
+				// it ends here.
 				select {
 				case <-closed:
 				case <-time.After(100 * time.Millisecond):
@@ -212,9 +220,17 @@ func TestCloseWhileAResetOrDeletedHandleEndsLeavesNoUnreadRecord(t *testing.T) {
 				if err != nil || rec.Unread || rec.State != StateDone {
 					t.Fatalf("record on disk = unread %v state %s (%v), want read and done", rec.Unread, rec.State, err)
 				}
+				if row, ok := indexRowOf(t, f, "fin"); !ok || row.Unread || row.State != StateDone {
+					t.Fatalf("final index row = %+v (present %v), want read and done", row, ok)
+				}
 			case endRemove:
 				if _, err := os.Stat(filepath.Join(f.dir, "fin.json")); !os.IsNotExist(err) {
 					t.Fatalf("the deleted handle's record is still on disk (%v)", err)
+				}
+				// The final index is written after this Complete, so it no longer lists the
+				// handle and the next start has no stale row to drop.
+				if row, ok := indexRowOf(t, f, "fin"); ok {
+					t.Fatalf("the final index still lists the deleted handle: %+v", row)
 				}
 			}
 		})

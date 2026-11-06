@@ -354,7 +354,7 @@ func executeNativeExecAsync(
 	if value, ok := safeInteger(arguments["block_ms"]); ok {
 		blockMs = &value
 	}
-	return startShellAsync(ctx, host, execAsync, time.Duration(settings.Child.KillGraceMs)*time.Millisecond, execution, plan.label, blockMs, run)
+	return startShellAsync(ctx, host, execAsync, shellStopBound(settings.Child), execution, plan.label, blockMs, run)
 }
 
 // execPlan is one validated call: what to label, how to name the program in errors, and how

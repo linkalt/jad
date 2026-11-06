@@ -428,6 +428,133 @@ func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
 	}
 }
 
+// A Complete that claimed its handle before Close's stop wait ran out has its result on disk,
+// and in the final index, once Close returns: Close waits for it instead of shutting the
+// folder under it and leaving the record running.
+func TestCloseWaitsForACompleteThatClaimedItsHandle(t *testing.T) {
+	f := newFixture(t, nil)
+	f.opts.StopWait = 20 * time.Millisecond
+	f.m.Close()
+	f.open(t)
+	f.start(t, "s1", "late")
+	claimed, release := make(chan struct{}), make(chan struct{})
+	f.m.beforeCompleteWrite = func(string) {
+		close(claimed)
+		<-release
+	}
+	completed := make(chan bool, 1)
+	go func() {
+		ok, _ := f.m.Complete("late", Result{State: StateDone, OK: true, Summary: "the result"})
+		completed <- ok
+	}()
+	<-claimed
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		f.m.Close()
+	}()
+	// Long past the stop wait: a Close that does not wait for the claimed Complete is done.
+	select {
+	case <-closed:
+	case <-time.After(10 * f.opts.StopWait):
+	}
+	close(release)
+	<-closed
+	if !<-completed {
+		t.Fatal("the claimed Complete did not win")
+	}
+	rec, err := f.m.readRecord("late")
+	if err != nil || rec.State != StateDone || rec.Summary != "the result" || !rec.Unread {
+		t.Fatalf("record after Close = %+v, %v; want the reported result, unread", rec, err)
+	}
+	if row, ok := indexRowOf(t, f, "late"); !ok || row.State != StateDone || !row.Unread {
+		t.Fatalf("index row after Close = %+v (present %v)", row, ok)
+	}
+}
+
+// A change that marks signals read or removes records holds the file lock until its files
+// are written, so a Close that comes in between finds it on disk and in the final index;
+// before, the change could land only in memory and the signal came back after a restart.
+func TestCloseDuringAChangeFindsItOnDisk(t *testing.T) {
+	unread := func(f *fixture) (present, unread bool) {
+		f.m.mu.Lock()
+		defer f.m.mu.Unlock()
+		r := f.m.rows["fin"]
+		return r != nil, r != nil && r.unread
+	}
+	read := func(f *fixture) bool { present, u := unread(f); return present && !u }
+	gone := func(f *fixture) bool { present, _ := unread(f); return !present }
+	for _, tc := range []struct {
+		name    string
+		action  func(*Manager)
+		changed func(*fixture) bool
+		removed bool
+	}{
+		{"drop unread", func(m *Manager) { m.DropUnread("s1") }, read, false},
+		{"mark read", func(m *Manager) { m.MarkRead("s1", "fin") }, read, false},
+		{"wait delivery", func(m *Manager) { _, _ = m.Wait(background, "s1", nil, 0) }, read, false},
+		{"delete", func(m *Manager) { m.DeleteOwnersWithPrefix("s1", "session_delete") }, gone, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			f.start(t, "s1", "fin")
+			f.finish(t, "fin", Result{})
+			var closed chan struct{}
+			f.m.beforeCommitWrite = func() {
+				if closed != nil || !tc.changed(f) {
+					return
+				}
+				closed = make(chan struct{})
+				go func() {
+					defer close(closed)
+					f.m.Close()
+				}()
+				// Close blocks on the file lock this change holds; without it, it ends here.
+				select {
+				case <-closed:
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			tc.action(f.m)
+			if closed == nil {
+				t.Fatal("the change never reached its file writes")
+			}
+			<-closed
+			row, inIndex := indexRowOf(t, f, "fin")
+			if tc.removed {
+				if _, err := os.Stat(filepath.Join(f.dir, "fin.json")); !os.IsNotExist(err) {
+					t.Fatalf("the removed record is still on disk (%v)", err)
+				}
+				if inIndex {
+					t.Fatalf("the final index still lists the removed handle: %+v", row)
+				}
+				return
+			}
+			if rec, err := f.m.readRecord("fin"); err != nil || rec.Unread {
+				t.Fatalf("record on disk = %+v, %v; want read", rec, err)
+			}
+			if !inIndex || row.Unread {
+				t.Fatalf("index row = %+v (present %v); want read", row, inIndex)
+			}
+		})
+	}
+}
+
+// indexRowOf reads id's row from index.json as written on disk.
+func indexRowOf(t *testing.T, f *fixture, id string) (indexRow, bool) {
+	t.Helper()
+	rows, ok := f.m.readIndex()
+	if !ok {
+		t.Fatal("index.json is missing or unreadable")
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, true
+		}
+	}
+	return indexRow{}, false
+}
+
 func TestRestartWithCorruptOrMissingIndexRebuilds(t *testing.T) {
 	for name, damage := range map[string]func(string){
 		"missing": func(p string) { _ = os.Remove(p) },

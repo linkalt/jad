@@ -110,11 +110,10 @@ func (m *Manager) readRecord(id string) (Record, error) {
 	return rec, nil
 }
 
-// updateRecord rewrites one record in place; a missing or unreadable file is skipped
-// (the in-memory row stays authoritative until the next start).
-func (m *Manager) updateRecord(id string, change func(*Record)) {
-	m.ioMu.Lock()
-	defer m.ioMu.Unlock()
+// updateRecordIOLocked rewrites one record in place for a caller that holds ioMu; a
+// missing or unreadable file is skipped (the in-memory row stays authoritative until the
+// next start).
+func (m *Manager) updateRecordIOLocked(id string, change func(*Record)) {
 	if m.ioClosed {
 		return
 	}
@@ -136,13 +135,7 @@ func (m *Manager) updateRecord(id string, change func(*Record)) {
 	}
 }
 
-func (m *Manager) removeRecord(id string) {
-	m.ioMu.Lock()
-	defer m.ioMu.Unlock()
-	m.removeRecordIOLocked(id)
-}
-
-// removeRecordIOLocked is removeRecord for a caller that holds ioMu.
+// removeRecordIOLocked removes one record for a caller that holds ioMu.
 func (m *Manager) removeRecordIOLocked(id string) {
 	if m.ioClosed {
 		return
@@ -199,6 +192,25 @@ func (m *Manager) flushIndexNow() {
 }
 
 func (m *Manager) flushIndex() {
+	body, ok := m.indexBody()
+	if !ok {
+		return
+	}
+	m.ioMu.Lock()
+	m.writeIndexBodyIOLocked(body)
+	m.ioMu.Unlock()
+}
+
+// flushIndexIOLocked reads the rows and writes the index for a caller that holds ioMu
+// (Close's final index), so no change can fall between the read and the write.
+func (m *Manager) flushIndexIOLocked() {
+	if body, ok := m.indexBody(); ok {
+		m.writeIndexBodyIOLocked(body)
+	}
+}
+
+// indexBody is the content of index.json for the current rows.
+func (m *Manager) indexBody() ([]byte, bool) {
 	m.mu.Lock()
 	rows := make([]indexRow, 0, len(m.rows))
 	for _, r := range m.rows {
@@ -208,20 +220,20 @@ func (m *Manager) flushIndex() {
 	sortIndexRows(rows)
 	raw, err := json.Marshal(rows)
 	if err != nil {
-		return
+		return nil, false
 	}
 	body, err := json.Marshal(indexFileBody{Version: indexVersion, Sum: checksum(raw), Rows: raw})
 	if err != nil {
-		return
+		return nil, false
 	}
-	m.ioMu.Lock()
+	return append(body, '\n'), true
+}
+
+func (m *Manager) writeIndexBodyIOLocked(body []byte) {
 	if m.ioClosed {
-		m.ioMu.Unlock()
 		return
 	}
-	err = writeFileAtomic(filepath.Join(m.dir, indexFile), append(body, '\n'))
-	m.ioMu.Unlock()
-	if err != nil {
+	if err := writeFileAtomic(filepath.Join(m.dir, indexFile), body); err != nil {
 		m.opts.Logger.Warn("async index not saved; it is rebuilt at the next start", "error", err)
 	}
 }
