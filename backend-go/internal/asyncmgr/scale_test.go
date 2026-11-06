@@ -452,6 +452,103 @@ func TestAForeignHandleEndsAsLostWhenItsServerStops(t *testing.T) {
 	}
 }
 
+// A foreign server that ended its handle itself before it stopped wrote the end to the
+// record; this server's row still holds what Open read. The end on disk is taken, not
+// overwritten with lost, and a record the other server removed drops the row.
+func TestAForeignHandleKeepsTheEndItsServerWrote(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "done")
+	f.start(t, "s1", "read")
+	f.start(t, "s1", "gone")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+
+	// What the other server writes before it stops: a result, a result already read, a delete.
+	for id, unread := range map[string]bool{"done": true, "read": false} {
+		rec, err := f.m.readRecord(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.State, rec.OK, rec.Summary, rec.Unread, rec.EndedAt = StateDone, true, "their result", unread, time.Now()
+		if err := f.m.writeRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(f.m.recordPath("gone")); err != nil {
+		t.Fatal(err)
+	}
+	theirsAlive.Store(false)
+
+	for _, id := range []string{"done", "read"} {
+		if e, err := f.m.Status("s1", id); err != nil || e.State != StateDone {
+			t.Fatalf("%s after its server stopped = %+v, %v; want the done it recorded", id, e, err)
+		}
+		if rec, err := f.m.readRecord(id); err != nil || rec.State != StateDone || rec.Summary != "their result" {
+			t.Fatalf("%s record after its server stopped = %+v, %v; want it kept", id, rec, err)
+		}
+	}
+	if _, err := f.m.Status("s1", "gone"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("removed handle after its server stopped: %v, want unknown", err)
+	}
+	if _, err := os.Stat(f.m.recordPath("gone")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed record was written again: %v", err)
+	}
+	if got := f.m.Counts("s1"); got.Active != 0 {
+		t.Fatalf("live count after its server stopped = %+v", got)
+	}
+	res, _ := f.m.Wait(background, "s1", []string{"done", "read"}, 0)
+	if len(res.Signals) != 1 || res.Signals[0].ID != "done" || res.Signals[0].State != StateDone {
+		t.Fatalf("signals = %+v, want only the unread result", res.Signals)
+	}
+}
+
+// A reset or delete this server asked for while another server owned the handle still
+// applies to the end that server recorded: a reset's end is born read, a delete's is removed.
+func TestAForeignHandlesRecordedEndKeepsAResetOrDelete(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "s1", "reset")
+	f.start(t, "s2", "deleted")
+	f.abandon()
+	var theirsAlive atomic.Bool
+	theirsAlive.Store(true)
+	f.opts.Server = ServerID{PID: 200, Start: 2}
+	f.opts.ServerAlive = func(id ServerID) bool { return id.PID == 100 && theirsAlive.Load() }
+	f.open(t)
+	f.m.ResetOwner("s1", "reset")
+	f.m.DeleteOwnersWithPrefix("s2", "deleted")
+	for _, id := range []string{"reset", "deleted"} {
+		rec, err := f.m.readRecord(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.State, rec.OK, rec.Unread, rec.EndedAt = StateDone, true, true, time.Now()
+		if err := f.m.writeRecord(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	theirsAlive.Store(false)
+
+	if e, err := f.m.Status("s1", "reset"); err != nil || e.State != StateDone {
+		t.Fatalf("reset handle after its server stopped = %+v, %v", e, err)
+	}
+	if rec, err := f.m.readRecord("reset"); err != nil || rec.State != StateDone || rec.Unread {
+		t.Fatalf("reset record = %+v, %v; want done and read", rec, err)
+	}
+	if res, _ := f.m.Wait(background, "s1", []string{"reset"}, 0); len(res.Signals) != 0 {
+		t.Fatalf("signals after a reset = %+v, want none", res.Signals)
+	}
+	if _, err := f.m.Status("s2", "deleted"); !errors.Is(err, ErrUnknownHandle) {
+		t.Fatalf("deleted handle after its server stopped: %v, want unknown", err)
+	}
+	if _, err := os.Stat(f.m.recordPath("deleted")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted handle's record: %v, want removed", err)
+	}
+}
+
 // Close ends only this server's handles: one that another live server owns stays running.
 func TestCloseLeavesALiveForeignServersHandleRunning(t *testing.T) {
 	f := newFixture(t, nil)

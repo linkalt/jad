@@ -1,6 +1,8 @@
 package asyncmgr
 
 import (
+	"errors"
+	"io/fs"
 	"sort"
 )
 
@@ -93,8 +95,9 @@ func (m *Manager) recover() error {
 	return nil
 }
 
-// endDeadForeign ends as lost (ReasonRestarted, unread) the handles kept live at Open for
-// another server that has stopped since: that server can no longer report them, so they
+// endDeadForeign ends the handles kept live at Open for another server that has stopped
+// since, with the end that server recorded or else as lost (endForeign): it can no longer
+// report them here, so they
 // would show running and count against the caps until this server restarts. It runs at the
 // start of the calls that read or add handles, checks each such server once, outside the
 // locks, and costs nothing when no foreign handle is live.
@@ -126,8 +129,60 @@ func (m *Manager) endDeadForeign() {
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonRestarted})
+			m.endForeign(id)
 		}
+	}
+}
+
+// endForeign ends one handle of a stopped server. Its record is read again first: that
+// server may have ended the handle itself before it stopped (a result, a stop at its
+// shutdown, a delete), while this server's row still holds what Open read. Only a record
+// still live, or unreadable, is ended as lost, as the next start would; a terminal record
+// is taken as it is, and a missing one drops the row. A reset or delete this server asked
+// for meanwhile (r.after) still applies.
+func (m *Manager) endForeign(id string) {
+	rec, err := m.readRecord(id)
+	missing := errors.Is(err, fs.ErrNotExist)
+	if !missing && (err != nil || !rec.State.Terminal()) {
+		_, _ = m.Complete(id, Result{State: StateLost, Reason: ReasonRestarted})
+		return
+	}
+	var w pruneWork
+	changed := false
+	m.ioMu.Lock()
+	m.mu.Lock()
+	if r := m.rows[id]; r != nil && !m.closed && !r.state.Terminal() && !r.finishing {
+		changed = true
+		if missing || r.after == endRemove {
+			m.forgetLocked(r)
+			if !missing {
+				w.removes = append(w.removes, id)
+			}
+		} else {
+			unread := rec.Unread && r.after == endKeep
+			ended := rec.EndedAt
+			if ended.IsZero() {
+				ended = m.opts.Now()
+			}
+			m.mutateLocked(r, func(r *row) {
+				r.state, r.ok, r.changed, r.unread, r.progress = rec.State, rec.OK, ended, unread, nil
+			})
+			r.rec = nil
+			if unread {
+				r.rec = &rec
+			} else if rec.Unread {
+				w.flips = append(w.flips, flip{id: id})
+			}
+			w.merge(m.enforceUnreadLocked(r.owner))
+		}
+		w.merge(m.pruneLocked(m.opts.Now()))
+		m.notifyLocked()
+	}
+	m.mu.Unlock()
+	m.applyWorkIOLocked(w)
+	m.ioMu.Unlock()
+	if changed {
+		m.writeIndex()
 	}
 }
 
