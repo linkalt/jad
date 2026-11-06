@@ -603,9 +603,6 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 	})
 }
 
-// subagentChildTools picks the native tools one agent may use from the enabled
-// read-only ones, and returns separately the MCP tool IDs its list names. An agent
-// without a tools list gets every native read-only tool and no MCP tool.
 // withReadOnlyExec returns the child tools of a read_only agent: its exec sets read_only on
 // every call, whatever the model sent, so each call counts as one that changes no file and
 // runs in the plan-mode sandbox when there is a sandbox. The other tools are unchanged.
@@ -642,6 +639,10 @@ func forcedReadOnly(arguments map[string]any) map[string]any {
 	return forced
 }
 
+// subagentChildTools picks the native tools one agent may use from the enabled ones, and
+// returns separately the MCP tool IDs its list names. An agent without a tools list gets
+// every native read-only tool except the opt-in ones (async, exec, tool_smith, subagent,
+// profile_message, load_tool), and no MCP tool.
 func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool) ([]tools.Tool, []string, error) {
 
 	available := make([]string, 0, len(readOnly)+len(changers))

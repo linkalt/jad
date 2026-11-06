@@ -197,7 +197,14 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		}
 		return err
 	}
-	return nil
+	// The session's own agents were checked against its exec when it loaded; these take exec
+	// from their toolset.
+	return checkReadOnlyAgentsHonored(config.NativeSubagent, func(agent NativeSubagentAgent) *NativeExecSettings {
+		if key := agent.ToolsetKey(); key != "" {
+			return config.AgentToolsets[key].NativeExec
+		}
+		return nil
+	}, c.sessionPath)
 }
 
 // resolveSubagentModels turns an agent's model ID ("<category>/<name>") into the model

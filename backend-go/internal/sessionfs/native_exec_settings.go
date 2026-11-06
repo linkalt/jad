@@ -34,6 +34,14 @@ const (
 	// maxNativeExecStandbyIdleMs stays under the 7-hour age at which a starting backend sweeps
 	// an exec- scratch directory (native staleScratchAge), so a waiting one is never swept.
 	maxNativeExecStandbyIdleMs int64 = 6 * 60 * 60 * 1000
+	// NativeExecReadOnlyCallsTrusted honors an exec call's read_only everywhere: without a
+	// bwrap or seatbelt sandbox it is the model's promise.
+	NativeExecReadOnlyCallsTrusted = "trusted"
+	// NativeExecReadOnlyCallsSandboxed honors read_only only where a bwrap or seatbelt sandbox
+	// keeps the call from writing the project; elsewhere the call counts as one that may
+	// change files.
+	NativeExecReadOnlyCallsSandboxed = "sandboxed"
+	defaultNativeExecReadOnlyCalls   = NativeExecReadOnlyCallsTrusted
 	// defaultNativeExecStandbyMax bounds the waiting interpreters of the whole backend.
 	defaultNativeExecStandbyMax int64 = 8
 	maxNativeExecStandbyMax     int64 = 256
@@ -79,7 +87,7 @@ var (
 	nativeExecOwnKeys = []string{
 		"arg_max_bytes", "code_max_bytes", "default_lang", "function_max_bytes", "functions_dir", "input_max_bytes",
 		"line_aware", "list_header_bytes", "list_max_files", "list_max_results", "result_max_bytes", "runners",
-		"standby_idle_ms", "standby_max", "standby_pool",
+		"read_only_calls", "standby_idle_ms", "standby_max", "standby_pool",
 	}
 	nativeExecKeys     = append(append([]string{}, nativeBashStyleKeys...), nativeExecOwnKeys...)
 	nativeExecLangKeys = []string{"aliases", "argv", "ext", "lib_env", "mode", "standby", "standby_code", "template"}
@@ -157,6 +165,24 @@ type NativeExecSettings struct {
 	StandbyPool   int64
 	StandbyIdleMs int64
 	StandbyMax    int64
+	// ReadOnlyCalls is NativeExecReadOnlyCallsTrusted or NativeExecReadOnlyCallsSandboxed:
+	// where a call's read_only counts (see ReadOnlyHonored).
+	ReadOnlyCalls string
+}
+
+// ReadOnlyEnforced reports whether a read_only call cannot write the project: exec's
+// children start under a bwrap or seatbelt sandbox, whose plan-mode form keeps only
+// sandbox.plan_writable_paths writable.
+func (s NativeExecSettings) ReadOnlyEnforced() bool {
+	sandbox := s.Child.Sandbox
+	return sandbox != nil && (sandbox.Backend == SandboxBackendBwrap || sandbox.Backend == SandboxBackendSeatbelt)
+}
+
+// ReadOnlyHonored reports whether a call's read_only counts: it is scheduled beside other
+// reads, runs in plan mode and keeps a read_only agent from being a writer. It always does
+// with read_only_calls trusted, and only where ReadOnlyEnforced with sandboxed.
+func (s NativeExecSettings) ReadOnlyHonored() bool {
+	return s.ReadOnlyCalls != NativeExecReadOnlyCallsSandboxed || s.ReadOnlyEnforced()
 }
 
 // defaultNativeExecLangs are the interpreters available without configuration. bash and sh
@@ -233,6 +259,9 @@ func normalizeNativeExecSettings(
 		return nil, err
 	}
 	if settings.DefaultLang, err = normalizeNativeExecDefaultLang(fields, settings.LangNames, settings.Langs, settingPath+": "+section+".default_lang"); err != nil {
+		return nil, err
+	}
+	if settings.ReadOnlyCalls, err = normalizeNativeExecReadOnlyCalls(fields, settingPath+": "+section+".read_only_calls"); err != nil {
 		return nil, err
 	}
 	if settings.CodeMaxBytes, err = configuredInteger(fields, "code_max_bytes", defaultNativeExecCodeMax, 1, maxNativeToolBytes, settingPath, section); err != nil {
@@ -318,6 +347,38 @@ func normalizeNativeExecLangs(raw json.RawMessage, path string) ([]string, map[s
 // normalizeNativeExecDefaultLang resolves the language a call without `lang` runs to its
 // table name, so a later lookup cannot miss. An alias is accepted; a name the table does
 // not know is refused at load time instead of failing every call.
+// normalizeNativeExecReadOnlyCalls reads read_only_calls; absent or null is trusted.
+func normalizeNativeExecReadOnlyCalls(fields map[string]json.RawMessage, path string) (string, error) {
+	raw, present := nullableField(fields, "read_only_calls")
+	if !present {
+		return defaultNativeExecReadOnlyCalls, nil
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil || (value != NativeExecReadOnlyCallsTrusted && value != NativeExecReadOnlyCallsSandboxed) {
+		return "", configError("%s must be %q or %q", path, NativeExecReadOnlyCallsTrusted, NativeExecReadOnlyCallsSandboxed)
+	}
+	return value, nil
+}
+
+// checkReadOnlyAgentsHonored refuses a read_only agent whose exec would not honor read_only
+// (read_only_calls sandboxed with no bwrap or seatbelt sandbox on exec): its runs would count
+// as reads while every exec call of it counts as a change. execFor gives the exec settings
+// the agent's tools come from (the session's, or its toolset's); nil means no exec.
+func checkReadOnlyAgentsHonored(subagents *NativeSubagentSettings, execFor func(NativeSubagentAgent) *NativeExecSettings, settingPath string) error {
+	if subagents == nil {
+		return nil
+	}
+	for _, agent := range subagents.Agents {
+		if !agent.ReadOnly {
+			continue
+		}
+		if exec := execFor(agent); exec != nil && !exec.ReadOnlyHonored() {
+			return configError("%s: tools.native.subagent.agents.%s.read_only is not honored: tools.native.exec.read_only_calls is %q and exec runs under no bwrap or seatbelt sandbox; add one, set read_only_calls to %q, or remove read_only", settingPath, agent.Name, NativeExecReadOnlyCallsSandboxed, NativeExecReadOnlyCallsTrusted)
+		}
+	}
+	return nil
+}
+
 func normalizeNativeExecDefaultLang(fields map[string]json.RawMessage, names []string, langs map[string]NativeExecLang, path string) (string, error) {
 	wanted := defaultNativeExecLang
 	if raw, present := nullableField(fields, "default_lang"); present {

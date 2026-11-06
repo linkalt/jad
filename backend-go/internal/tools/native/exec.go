@@ -82,8 +82,10 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *
 		ExampleOperation:   json.RawMessage(`{"code":"echo hello"}`),
 		// ReadOnly lets the calls that change no file (a read_only call, or a helper listing)
 		// share a response and run in plan mode; every other call says so through MayChangeFiles.
-		ReadOnly:       true,
-		MayChangeFiles: execCallMayChangeFiles,
+		ReadOnly: true,
+		MayChangeFiles: func(arguments map[string]any) bool {
+			return execCallMayChangeFiles(arguments, settings.ReadOnlyHonored())
+		},
 		// The configured default language is bound here, where the settings are known.
 		NormalizeArguments: func(arguments map[string]any) map[string]any {
 			return normalizeExecArguments(arguments, settings.DefaultLang)
@@ -111,9 +113,10 @@ func execReadOnlyExecution(arguments map[string]any, execution tools.ExecutionCo
 }
 
 // execCallMayChangeFiles is exec's per-call answer to "can this call change files": a call
-// that runs code can, unless it sets read_only. A call without code only lists helpers.
-func execCallMayChangeFiles(arguments map[string]any) bool {
-	return execGiven(arguments, "code") && !execReadOnly(arguments)
+// that runs code can, unless it sets read_only and honored says read_only counts
+// (tools.native.exec.read_only_calls). A call without code only lists helpers.
+func execCallMayChangeFiles(arguments map[string]any, honored bool) bool {
+	return execGiven(arguments, "code") && !(honored && execReadOnly(arguments))
 }
 
 // schemaWithoutProperty returns schema, a JSON object schema, without the named property.
@@ -459,24 +462,39 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
 		return nil
 	}
-	spawn := func(workDir string) (standbySpawn, error) {
-		if pipe {
-			// The call's own launch: argv, environment and code file path are what a fresh
-			// start of this call would have; only the code file is a named pipe for now.
-			launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
+	spawnFor := func(execution tools.ExecutionContext) func(workDir string) (standbySpawn, error) {
+		return func(workDir string) (standbySpawn, error) {
+			if pipe {
+				// The call's own launch: argv, environment and code file path are what a fresh
+				// start of this call would have; only the code file is a named pipe for now.
+				launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
+				environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
+				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
+			}
+			launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
 			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
-			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
+			files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
+			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
 		}
-		launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
-		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
-		files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
-		return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
 	}
+	spawn := spawnFor(execution)
 	keyed, _ := spawn(standbyKeyDir)
 	key := standbyKey(keyed)
 	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
 	process := execStandby.take(key, idle)
 	execStandby.refill(key, makeExecWorkDir, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	// Under a bwrap or seatbelt sandbox a read_only call starts in the plan-mode sandbox, so
+	// it cannot take a standby a call that may write started. A call outside plan mode also
+	// warms that form, after its own, so the run's read_only calls find one waiting too. A
+	// plan-mode call does not warm the other way: its run makes no other kind of call.
+	if !execution.PlanMode && settings.ReadOnlyEnforced() {
+		readOnly := execution
+		readOnly.PlanMode = true
+		readOnlySpawn := spawnFor(readOnly)
+		if keyed, err := readOnlySpawn(standbyKeyDir); err == nil {
+			execStandby.refill(standbyKey(keyed), makeExecWorkDir, readOnlySpawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+		}
+	}
 	return process
 }
 

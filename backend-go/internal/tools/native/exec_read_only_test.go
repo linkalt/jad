@@ -242,3 +242,44 @@ func TestReadOnlyAgentForcesReadOnlyExecCalls(t *testing.T) {
 		t.Fatal("a writer agent's exec call is no change")
 	}
 }
+
+// With read_only_calls sandboxed, read_only counts only where a bwrap or seatbelt sandbox
+// covers exec: with none, a read_only call is a change, so it runs in order and plan mode
+// refuses it.
+func TestExecReadOnlyCallsSandboxedNeedsAnEnforcingSandbox(t *testing.T) {
+	call := execROCall(`{"code":"ls","read_only":true}`)
+	for name, tc := range map[string]struct {
+		sandbox *sessionfs.SandboxSettings
+		change  bool
+	}{
+		"no sandbox":      {nil, true},
+		"command backend": {&sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendCommand, Command: []string{"env"}}, true},
+		"bwrap":           {bwrapSandbox(), false},
+	} {
+		root := t.TempDir()
+		settings := execTestSettings()
+		settings.Child = bashTestSettings(t, root)
+		settings.Child.Sandbox = tc.sandbox
+		settings.ReadOnlyCalls = sessionfs.NativeExecReadOnlyCallsSandboxed
+		tool, err := NewExecTool(settings, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := tools.NewCatalog([]tools.Tool{tool})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := catalog.ChangesState(call); got != tc.change {
+			t.Errorf("%s: ChangesState = %v, want %v", name, got, tc.change)
+		}
+		if tc.sandbox == nil {
+			plan, err := catalog.PlanMode(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output := runExecCall(t, plan, `{"code":"echo ran","read_only":true}`, root); !strings.Contains(output, "plan_mode") {
+				t.Errorf("%s: plan mode ran a read_only call it cannot enforce:\n%s", name, output)
+			}
+		}
+	}
+}

@@ -88,7 +88,7 @@
     "read_only": {
       "type": "boolean",
       "default": false,
-      "description": "true makes every exec call of the agent a read_only one, whatever the model sends, so exec does not make it an agent that changes files: a call to it needs no checkpoint and may run beside other calls or as an async handle. Under a bwrap or seatbelt sandbox its exec calls get sandbox.plan_writable_paths (by default only the temp folder) and cannot write the project; without a sandbox it is the agent's promise. Needs exec in tools and no other tool that changes files (tool_smith, subagent, profile_message); not with isolation worktree."
+      "description": "true makes every exec call of the agent a read_only one, whatever the model sends, so exec does not make it an agent that changes files: a call to it needs no checkpoint and may run beside other calls or as an async handle. Under a bwrap or seatbelt sandbox its exec calls get sandbox.plan_writable_paths (by default only the temp folder) and cannot write the project; without a sandbox it is the agent's promise, and with tools.native.exec.read_only_calls sandboxed the agent is refused unless such a sandbox covers exec. Needs exec in tools and no other tool that changes files (tool_smith, subagent, profile_message); not with isolation worktree."
     },
     "timeout_ms": {
       "type": "integer",

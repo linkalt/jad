@@ -527,6 +527,15 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	applySandbox(sandbox, nativeExec, nativeToolSmith, &hooks)
+	// An agent with a toolset takes its exec from there; loadAgentToolsets checks those.
+	if err := checkReadOnlyAgentsHonored(nativeSubagent, func(agent NativeSubagentAgent) *NativeExecSettings {
+		if agent.ToolsetKey() != "" {
+			return nil
+		}
+		return nativeExec
+	}, settingPath); err != nil {
+		return SessionConfig{}, err
+	}
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err

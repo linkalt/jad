@@ -139,7 +139,11 @@ type Tool struct {
 	// tool, whose agent may or may not be allowed to write). A true answer makes the
 	// call take the checkpoint and run in order, like a write. Nil means the
 	// ReadOnly flag alone decides.
-	MayChangeFiles     func(arguments map[string]any) bool
+	MayChangeFiles func(arguments map[string]any) bool
+	// PlanGuarded is set by Catalog.PlanMode on a tool whose calls that could change files
+	// are refused before they run (planModeGuard): no call of it changes files, so none
+	// takes the checkpoint.
+	PlanGuarded        bool
 	NormalizeArguments func(map[string]any) map[string]any
 	// RejectedProperties maps an argument name the schema no longer has to the message
 	// shown instead of "must NOT have additional properties".
@@ -379,6 +383,21 @@ func (c *Catalog) CallMayChangeFiles(call json.RawMessage) bool {
 		arguments = tool.NormalizeArguments(arguments)
 	}
 	return tool.MayChangeFiles(arguments)
+}
+
+// IsPlanGuardedCall reports whether a call goes to a tool that plan mode guards (see
+// Tool.PlanGuarded). An unknown name is not guarded.
+func (c *Catalog) IsPlanGuardedCall(call json.RawMessage) bool {
+	if c == nil {
+		return false
+	}
+	var fields struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return false
+	}
+	return c.byName[fields.Name].PlanGuarded
 }
 
 // SourceOf returns where a called tool comes from ("native" or "mcp"), or "" for

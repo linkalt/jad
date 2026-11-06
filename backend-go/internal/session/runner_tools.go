@@ -204,6 +204,12 @@ func roundChangesWorkspace(catalog *tools.Catalog, calls []json.RawMessage, run 
 		}
 	}
 	for _, call := range toRun {
+		// A plan-mode guarded tool runs only its calls that change no file; the others are
+		// refused before they start, so neither kind needs a checkpoint. A tool an allow
+		// entry keeps whole is not guarded and still counts.
+		if catalog.IsPlanGuardedCall(call) {
+			continue
+		}
 		if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) || catalog.CallMayChangeFiles(call) {
 			return true
 		}

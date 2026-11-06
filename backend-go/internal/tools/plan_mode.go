@@ -71,6 +71,7 @@ func planModeCalls(tool Tool) Tool {
 // would are refused before the tool runs.
 func planModeGuard(tool Tool) Tool {
 	mayChange := tool.MayChangeFiles
+	tool.PlanGuarded = true
 	refusal := func(execution ExecutionContext) string {
 		return ExecutionError(execution.CallID, StatusForbidden, PlanModeErrorCode,
 			"Plan mode: this call could change files, so it is not run in this turn. Use a read-only call, or put the change in the plan.")
