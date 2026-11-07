@@ -52,10 +52,12 @@ type codeContextDocument struct {
 	Task          string `json:"task"`
 	// Generation is bumped on every write, so an output and the entries it came from
 	// can be matched.
-	Generation    int64              `json:"generation"`
-	NextID        int64              `json:"next_id"`
-	LastUpdatedBy string             `json:"last_updated_by"`
-	Entries       []codeContextEntry `json:"entries"`
+	Generation    int64  `json:"generation"`
+	NextID        int64  `json:"next_id"`
+	LastUpdatedBy string `json:"last_updated_by"`
+	// Description says what the task is about; it is set by task_description.
+	Description string             `json:"description,omitempty"`
+	Entries     []codeContextEntry `json:"entries"`
 }
 
 type codeContextStoreError struct{ message string }
@@ -190,12 +192,19 @@ type codeContextTaskFile struct {
 // otherTasks lists the task files of the directory except task, most recently written
 // first, at most limit of them.
 func (s codeContextStore) otherTasks(task string, limit int64) ([]codeContextTaskFile, error) {
+	files, _, err := s.tasks(task, limit)
+	return files, err
+}
+
+// tasks lists the task files of the directory except task (none when task is empty),
+// most recently written first, at most limit of them, and how many there are in all.
+func (s codeContextStore) tasks(task string, limit int64) ([]codeContextTaskFile, int, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return nil, &codeContextStoreError{fmt.Sprintf("could not list code_context storage: %v", err)}
+		return nil, 0, &codeContextStoreError{fmt.Sprintf("could not list code_context storage: %v", err)}
 	}
 	var files []codeContextTaskFile
 	for _, entry := range entries {
@@ -215,10 +224,11 @@ func (s codeContextStore) otherTasks(task string, limit int64) ([]codeContextTas
 		}
 		return files[i].task < files[j].task
 	})
+	total := len(files)
 	if int64(len(files)) > limit {
 		files = files[:limit]
 	}
-	return files, nil
+	return files, total, nil
 }
 
 // codeContextState is what a task's calls leave besides its entries: the deliveries a

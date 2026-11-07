@@ -20,6 +20,24 @@ Every call saves the model a repeated read or search:
 
 `code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get` or `list` runs.
 
+## Tasks
+
+A task is one file of entries, named by its key (`T-023`). A call without arguments, or `list` without `task`, lists the tasks of the storage, most recently written first (at most `max_scan_tasks`):
+
+```yaml
+# code_context: 2 tasks; list one with task
+tasks:
+  - task: "T-023"
+    description: |-
+      Make the glob brace cap configurable.
+    entries: 12
+    generation: 31
+    last_updated_by: "executor"
+    updated_at: "2026-11-07T10:42:00Z"
+```
+
+It reads only the task files, not the code, so it shows no staleness; `list` with `task` does. A task's description is set with `task_description` on `read`, `add` or `update`; `update` with only `task_description` sets it alone and may start a task with no entries. `list` and `get` of the task show it.
+
 ## Entries
 
 An entry is one command, `read(path, start, end)`. The path is relative to the cwd, and the range is 1-based and inclusive. Each entry also has:
@@ -63,6 +81,8 @@ code_context({action: "add", task: "T-023", path: "internal/tools/native/glob_ma
 code_context({action: "update", task: "T-023", items: [{id: 1, description: "..."}, {id: 3, start: 40, end: 52}]})
 code_context({action: "read", task: "T-023", items: [{path: "a.go", start: 1, end: 30}, {path: "b.go", start: 5, end: 9}]})
 code_context({action: "clear", task: "T-023"})
+code_context({})                                             // the tasks, with their descriptions
+code_context({action: "update", task: "T-023", task_description: "Make the glob brace cap configurable."})
 ```
 
 - **`read`**: prints lines start..end and saves them. Description and priority are optional; a range saved without a description shows as `undescribed`, and `update` adds one later. Without a description, `read` takes the description of another task's entry of the same path whose saved bytes are the bytes just read. Lines an entry already holds unchanged are printed but not saved again. Reading the exact range of a stale entry refreshes that entry. Beyond `max_entries` the code is printed and not saved.
@@ -111,7 +131,7 @@ A reverted file makes its entries current again. Only the profile that changed t
 | `storage_dir` | `.code_context` | one `<task>.json` per task. A relative path is under the profile's `tool_storage` (else the cwd). An absolute path shares one task between profiles. |
 | `paths` | workspace only | read rules (`read_style`) |
 | `max_entries` | 500 | entries per task |
-| `max_description_chars` | 4000 | |
+| `max_description_chars` | 4000 | an entry's or a task's description |
 | `max_range_lines` | 2000 | lines per entry |
 | `max_file_bytes` | 4 MiB | largest file a range is read from |
 | `max_output_bytes` | 400000 | code blocks of one `get` (about 100K tokens; a ceiling, not a target) |
@@ -120,7 +140,7 @@ A reverted file makes its entries current again. Only the profile that changed t
 | `default_priority` | 6 | priority of a range `read` saves without one |
 | `max_deliveries` | 20 | `since` tokens kept per task, oldest forgotten first |
 | `max_find_results` | 20 | entries one `find` shows |
-| `max_scan_tasks` | 200 | other task files `find` (`all_tasks`) and `read` go through, most recent first |
+| `max_scan_tasks` | 200 | other task files `find` (`all_tasks`) and `read` go through, and tasks a call without `task` lists; most recent first |
 | `max_batch_items` | 50 | items one `read`, `add` or `update` may hold |
 
 The `since` deliveries and the stats are in `<storage_dir>/.state/<task>.json`, apart from the entries. `clear` removes both.

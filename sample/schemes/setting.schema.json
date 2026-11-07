@@ -1777,7 +1777,7 @@
               "properties": {
                 "storage_dir": {"type": "string", "pattern": "\\S", "default": ".code_context", "description": "Directory of the task files (<task>.json). Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; an absolute path is used as-is, which is how profiles share one task's entries."},
                 "max_entries": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 500, "description": "Most entries one task may hold."},
-                "max_description_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000, "description": "Longest description of one entry, in characters."},
+                "max_description_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000, "description": "Longest description of one entry, or of a task (task_description), in characters."},
                 "max_range_lines": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 2000, "description": "Most lines one entry may read."},
                 "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 4194304, "description": "Largest file a range is read from; a larger one is refused on add and shows as stale on get."},
                 "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 400000, "description": "Most bytes of code blocks one get prints (about 100K tokens by default; a ceiling, not a target). Blocks of the highest priority numbers are left out first and listed by id."},
@@ -1786,7 +1786,7 @@
                 "default_priority": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6, "description": "Priority of a range saved by read without one and without a matching entry in another task."},
                 "max_deliveries": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20, "description": "How many get deliveries a task keeps for since; the oldest is forgotten first, and a get naming it prints everything."},
                 "max_find_results": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20, "description": "Most entries one find shows; the rest are counted."},
-                "max_scan_tasks": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most other task files find with all_tasks, and read looking for a description to reuse, go through, most recently written first."},
+                "max_scan_tasks": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most other task files find with all_tasks, and read looking for a description to reuse, go through, and most tasks a call without a task lists; most recently written first."},
                 "max_batch_items": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most items one read, add or update call may hold."}
               },
               "unevaluatedProperties": false

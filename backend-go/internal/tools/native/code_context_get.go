@@ -98,6 +98,7 @@ func renderCodeContextYAML(document codeContextDocument, entries []codeContextEn
 	if document.LastUpdatedBy != "" {
 		fmt.Fprintf(&output, "last_updated_by: %s\n", yamlString(document.LastUpdatedBy))
 	}
+	writeCodeContextYAMLText(&output, "description", document.Description, "")
 	if stats != nil {
 		fmt.Fprintf(&output, "stats:\n  gets: %d\n  code_bytes_printed: %d\n  code_bytes_not_repeated: %d\n  entries_relocated: %d\n  stale_seen: %d\n  reads: %d\n  reads_already_saved: %d\n  finds: %d\n  finds_without_match: %d\n",
 			stats.Gets, stats.CodeBytesPrinted, stats.CodeBytesNotRepeated, stats.EntriesRelocated, stats.StaleSeen, stats.Reads, stats.ReadsAlreadySaved, stats.Finds, stats.FindsWithoutMatch)
@@ -123,14 +124,7 @@ func renderCodeContextYAML(document codeContextDocument, entries []codeContextEn
 		if entry.Description == "" {
 			output.WriteString("    description: \"\"\n    undescribed: true\n")
 		} else {
-			output.WriteString("    description: |-\n")
-			for _, line := range strings.Split(entry.Description, "\n") {
-				if line == "" {
-					output.WriteString("\n")
-					continue
-				}
-				output.WriteString("      " + line + "\n")
-			}
+			writeCodeContextYAMLText(&output, "description", entry.Description, "    ")
 		}
 		fmt.Fprintf(&output, "    updated_by: %s\n    generation: %d\n    file_sha256: %s\n    content_sha256: %s\n",
 			yamlString(entry.UpdatedBy), entry.Generation, entry.FileSHA256, entry.ContentSHA256)
@@ -269,6 +263,7 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 	if leftEntries > 0 {
 		fmt.Fprintf(&output, ", %d left out by max_output_bytes", leftEntries)
 	}
+	output.WriteString(codeContextTaskDescriptionLine(document))
 	fmt.Fprintf(&output, "\ncode bytes: %d printed", printedBytes)
 	if notRepeatedBytes > 0 {
 		fmt.Fprintf(&output, ", %d not printed again", notRepeatedBytes)
@@ -322,7 +317,8 @@ func codeContextOutline(call codeContextCall, reader codeContextReader, store co
 	if len(stale) > 0 {
 		fmt.Fprintf(&output, ", %d stale", len(stale))
 	}
-	output.WriteString("; no code: get it with ids\n")
+	output.WriteString("; no code: get it with ids")
+	output.WriteString(codeContextTaskDescriptionLine(document) + "\n")
 	for _, note := range notes {
 		output.WriteString(note + "\n")
 	}

@@ -25,8 +25,9 @@ const codeContextToolID = "native.code_context"
 var codeContextInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["read","add","update","drop","get","list","find","clear"],"description":"read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML; find searches the saved descriptions and paths; clear deletes the task."},
-    "task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"Task key the entries belong to, for example T-023."},
+    "action":{"type":"string","enum":["read","add","update","drop","get","list","find","clear"],"description":"read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML, or without task the tasks; find searches the saved descriptions and paths; clear deletes the task. A call without arguments lists the tasks."},
+    "task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"Task key the entries belong to, for example T-023. Required except by list, which without it lists the tasks."},
+    "task_description":{"type":"string","minLength":1,"description":"read, add and update: what the task is about, shown when the tasks are listed and by get; update with only task_description sets it."},
     "id":{"type":"integer","minimum":1,"description":"Entry id for update, or for add with from_task."},
     "ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"description":"Entry ids for drop or get; get without ids prints every entry."},
     "path":{"type":"string","minLength":1,"description":"Source file, relative to cwd."},
@@ -50,13 +51,14 @@ var codeContextInputSchema = json.RawMessage(`{
       "from_task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
     },"additionalProperties":false}}
   },
-  "required":["action","task"],
   "additionalProperties":false,
   "allOf":[
+    {"if":{"required":["action"],"properties":{"action":{"not":{"const":"list"}}}},"then":{"required":["task"]}},
+    {"if":{"required":["task_description"]},"then":{"properties":{"action":{"enum":["read","add","update"]}}}},
     {"if":{"required":["items"]},"then":{"properties":{"action":{"enum":["read","add","update"]}}}},
     {"if":{"properties":{"action":{"const":"read"}},"required":["action"],"not":{"required":["items"]}},"then":{"required":["path","start","end"]}},
     {"if":{"properties":{"action":{"const":"add"}},"required":["action"],"not":{"required":["items"]}},"then":{"anyOf":[{"required":["from_task","id"]},{"required":["path","start","end","description","priority"]}]}},
-    {"if":{"properties":{"action":{"const":"update"}},"required":["action"],"not":{"required":["items"]}},"then":{"required":["id"]}},
+    {"if":{"properties":{"action":{"const":"update"}},"required":["action"],"not":{"required":["items"]}},"then":{"anyOf":[{"required":["id"]},{"required":["task_description"]}]}},
     {"if":{"properties":{"action":{"const":"drop"}},"required":["action"]},"then":{"required":["ids"]}},
     {"if":{"properties":{"action":{"const":"find"}},"required":["action"]},"then":{"required":["query"]}}
   ]
@@ -104,6 +106,10 @@ func normalizeCodeContextArguments(arguments map[string]any) map[string]any {
 		if text, ok := normalized[key].(string); ok {
 			normalized[key] = strings.ToLower(text)
 		}
+	}
+	// A call without an action lists: the tasks, or the entries of the task named.
+	if action, _ := normalized["action"].(string); action == "" {
+		normalized["action"] = "list"
 	}
 	if items, ok := normalized["items"].([]any); ok {
 		copied := make([]any, len(items))
@@ -173,7 +179,9 @@ type codeContextCall struct {
 	query       string
 	allTasks    bool
 	fromTask    string
-	has         map[string]bool
+	// taskDescription describes the task itself, not an entry.
+	taskDescription string
+	has             map[string]bool
 }
 
 func parseCodeContextCall(arguments map[string]any) codeContextCall {
@@ -185,6 +193,9 @@ func parseCodeContextCall(arguments map[string]any) codeContextCall {
 	}
 	if text, ok := arguments["description"].(string); ok {
 		call.description, call.has["description"] = normalizeCodeContextDescription(text), true
+	}
+	if text, ok := arguments["task_description"].(string); ok {
+		call.taskDescription, call.has["task_description"] = normalizeCodeContextDescription(text), true
 	}
 	for key, target := range map[string]*string{"since": &call.since, "mode": &call.mode, "query": &call.query, "from_task": &call.fromTask} {
 		if text, ok := arguments[key].(string); ok {
@@ -226,6 +237,30 @@ func executeCodeContext(arguments map[string]any, execution tools.ExecutionConte
 	}
 	reader := codeContextReader{settings: settings, execution: execution}
 	by := codeContextCaller(execution)
+	if call.action == "list" && call.task == "" {
+		return codeContextTasks(store, settings, callID)
+	}
+	note := ""
+	if call.has["task_description"] {
+		document, err := store.mutate(call.task, by, settings.MaxStorageBytes, func(document *codeContextDocument) error {
+			document.Description = call.taskDescription
+			return nil
+		})
+		if err != nil {
+			return codeContextStoreFailure(callID, err)
+		}
+		note = fmt.Sprintf("# code_context task %s, generation %d: task description set\n", call.task, document.Generation)
+		_, hasItems := arguments["items"]
+		if call.action == "update" && !call.has["id"] && !hasItems {
+			return note
+		}
+	}
+	return note + executeCodeContextAction(arguments, call, reader, store, by)
+}
+
+func executeCodeContextAction(arguments map[string]any, call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
+	callID := reader.execution.CallID
+	settings := reader.settings
 	if _, batch := arguments["items"]; batch {
 		return codeContextBatch(arguments, call, reader, store, by)
 	}
@@ -258,11 +293,13 @@ func executeCodeContext(arguments map[string]any, execution tools.ExecutionConte
 // validateCodeContextCall checks what the schema cannot: the task, the description's
 // length, the priorities and from_task. A failure is a rendered tool error.
 func validateCodeContextCall(call codeContextCall, settings sessionfs.NativeCodeContextSettings, callID string) string {
-	if !codeContextTaskPattern.MatchString(call.task) {
+	if !codeContextTaskPattern.MatchString(call.task) && (call.task != "" || call.action != "list") {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_task", "task must be a plain name such as T-023")
 	}
-	if call.has["description"] && (call.description == "" || int64(utf8.RuneCountInString(call.description)) > settings.MaxDescriptionChars) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_description", fmt.Sprintf("description is empty or longer than %d characters", settings.MaxDescriptionChars))
+	for key, text := range map[string]string{"description": call.description, "task_description": call.taskDescription} {
+		if call.has[key] && (text == "" || int64(utf8.RuneCountInString(text)) > settings.MaxDescriptionChars) {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_description", fmt.Sprintf("%s is empty or longer than %d characters", key, settings.MaxDescriptionChars))
+		}
 	}
 	for _, key := range []string{"priority", "max_priority"} {
 		if value := map[string]int64{"priority": call.priority, "max_priority": call.maxPriority}[key]; call.has[key] && (value < 1 || value > 6) {

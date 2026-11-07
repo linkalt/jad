@@ -21,12 +21,17 @@
               "find",
               "clear"
             ],
-            "description": "read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML; find searches the saved descriptions and paths; clear deletes the task."
+            "description": "read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML, or without task the tasks; find searches the saved descriptions and paths; clear deletes the task. A call without arguments lists the tasks."
           },
           "task": {
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-            "description": "Task key the entries belong to, for example T-023."
+            "description": "Task key the entries belong to, for example T-023. Required except by list, which without it lists the tasks."
+          },
+          "task_description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "read, add and update: what the task is about, shown when the tasks are listed and by get; update with only task_description sets it."
           },
           "id": {
             "type": "integer",
@@ -142,12 +147,45 @@
             }
           }
         },
-        "required": [
-          "action",
-          "task"
-        ],
         "additionalProperties": false,
         "allOf": [
+          {
+            "if": {
+              "required": [
+                "action"
+              ],
+              "properties": {
+                "action": {
+                  "not": {
+                    "const": "list"
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "task"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "task_description"
+              ]
+            },
+            "then": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "read",
+                    "add",
+                    "update"
+                  ]
+                }
+              }
+            }
+          },
           {
             "if": {
               "required": [
@@ -243,8 +281,17 @@
               }
             },
             "then": {
-              "required": [
-                "id"
+              "anyOf": [
+                {
+                  "required": [
+                    "id"
+                  ]
+                },
+                {
+                  "required": [
+                    "task_description"
+                  ]
+                }
               ]
             }
           },
