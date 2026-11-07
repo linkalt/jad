@@ -52,6 +52,17 @@ func (f *codeContextFile) lineOffsets() []int {
 	return offsets
 }
 
+// lines is lines start..end of the file, as codeContextLines answers them for any range
+// an entry holds, from the line offsets found once per file, so checking many entries of
+// one file scans it once, not once per entry.
+func (f *codeContextFile) lines(start, end int64) ([]byte, bool) {
+	offsets := f.lineOffsets()
+	if start < 1 || end < start || end > int64(len(offsets)-1) {
+		return nil, false
+	}
+	return f.data[offsets[start-1]:offsets[end]], true
+}
+
 // codeContextChecker reads each distinct file once for all the entries it checks.
 type codeContextChecker struct {
 	reader codeContextReader
@@ -82,7 +93,7 @@ func (c *codeContextChecker) check(entry codeContextEntry) codeContextStatus {
 		unchanged.stale, unchanged.reason = true, file.reason
 		return unchanged
 	}
-	content, _, ok := codeContextLines(file.data, entry.Start, entry.End)
+	content, ok := file.lines(entry.Start, entry.End)
 	if ok && (file.sha256 == entry.FileSHA256 || codeContextSHA256(content) == entry.ContentSHA256) {
 		unchanged.content, unchanged.fileSHA256 = content, file.sha256
 		return unchanged
