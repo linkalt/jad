@@ -16,6 +16,7 @@ Every call saves the model a repeated read or search:
 | `grep` for something already found | `find`, also across tasks |
 | describing the same code again in a new task | `read` reuses a matching description; `add` with `from_task` |
 | printing every line when a map is enough | `mode: "outline"`, `max_priority` |
+| one call per range saved, changed or read | `items` on `read`, `add` and `update`; `ids` on `drop` and `get` |
 
 `code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get` or `list` runs.
 
@@ -57,6 +58,10 @@ code_context({action: "add", task: "T-023", from_task: "T-010", id: 2})  // copy
 code_context({action: "list", task: "T-023"})                // YAML, no code, with stale flags and stats
 code_context({action: "update", task: "T-023", id: 1, start: 36, end: 70})  // id kept; omitted fields kept
 code_context({action: "drop", task: "T-023", ids: [2]})
+code_context({action: "add", task: "T-023", path: "internal/tools/native/glob_match.go", priority: 2, items: [
+              {start: 10, end: 20, description: "..."}, {start: 80, end: 95, description: "...", priority: 1}]})  // several in one call
+code_context({action: "update", task: "T-023", items: [{id: 1, description: "..."}, {id: 3, start: 40, end: 52}]})
+code_context({action: "read", task: "T-023", items: [{path: "a.go", start: 1, end: 30}, {path: "b.go", start: 5, end: 9}]})
 code_context({action: "clear", task: "T-023"})
 ```
 
@@ -65,6 +70,7 @@ code_context({action: "clear", task: "T-023"})
 - **`update`**: re-reads the range, even when only the id is given, and stores the new hashes.
 - **`find`**: matches the query's words, case-insensitive, against each entry's path and description. Entries matching every word are shown; if none does, those matching most. With `all_tasks`, the other tasks of the storage are searched too, and their entries are shown only while their code is unchanged.
 - **Ids**: an id is never reused after `drop`.
+- **`items`**: `read`, `add` and `update` take up to `max_batch_items` operations in one call. Each item takes the fields of a single call, and a field given outside `items` (a shared `path` or `priority`) applies to every item that leaves it out. Items run in order and each is saved on its own, so one that fails is reported on its line and does not stop or undo the others; only when every item fails is the answer a tool error (`all_items_failed`, one line per item). `add` and `update` answer one YAML document of the entries saved, headed by a comment line per item; `read` prints each item's block, and once the call's code reaches `max_output_bytes` the remaining items are saved without printing their code. `drop` and `get` already take `ids`; items that only hold an `id` are taken as those ids.
 
 ## Output
 
@@ -115,6 +121,7 @@ A reverted file makes its entries current again. Only the profile that changed t
 | `max_deliveries` | 20 | `since` tokens kept per task, oldest forgotten first |
 | `max_find_results` | 20 | entries one `find` shows |
 | `max_scan_tasks` | 200 | other task files `find` (`all_tasks`) and `read` go through, most recent first |
+| `max_batch_items` | 50 | items one `read`, `add` or `update` may hold |
 
 The `since` deliveries and the stats are in `<storage_dir>/.state/<task>.json`, apart from the entries. `clear` removes both.
 

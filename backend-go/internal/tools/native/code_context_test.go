@@ -28,6 +28,7 @@ func codeContextTestSettings(storage string) sessionfs.NativeCodeContextSettings
 		MaxDeliveries:       20,
 		MaxFindResults:      20,
 		MaxScanTasks:        200,
+		MaxBatchItems:       50,
 	}
 }
 

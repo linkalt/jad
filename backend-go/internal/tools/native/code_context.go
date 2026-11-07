@@ -39,14 +39,24 @@ var codeContextInputSchema = json.RawMessage(`{
     "max_priority":{"type":"integer","minimum":1,"maximum":6,"description":"get, list and find: only entries of this priority or a lower number."},
     "query":{"type":"string","minLength":1,"description":"find: words to look for in the saved descriptions and paths."},
     "all_tasks":{"type":"boolean","description":"find: also search the other tasks of the storage; their entries are shown only while their code is unchanged."},
-    "from_task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."}
+    "from_task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."},
+    "items":{"type":"array","minItems":1,"description":"read, add and update: several operations in one call, run in order; one that fails does not stop the others. Each item takes the fields a single call takes; a field given outside items (for example path) applies to every item that leaves it out.","items":{"type":"object","properties":{
+      "id":{"type":"integer","minimum":1},
+      "path":{"type":"string","minLength":1},
+      "start":{"type":"integer","minimum":1},
+      "end":{"type":"integer","minimum":1},
+      "description":{"type":"string","minLength":1},
+      "priority":{"type":"integer","minimum":1,"maximum":6},
+      "from_task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
+    },"additionalProperties":false}}
   },
   "required":["action","task"],
   "additionalProperties":false,
   "allOf":[
-    {"if":{"properties":{"action":{"const":"read"}},"required":["action"]},"then":{"required":["path","start","end"]}},
-    {"if":{"properties":{"action":{"const":"add"}},"required":["action"]},"then":{"anyOf":[{"required":["from_task","id"]},{"required":["path","start","end","description","priority"]}]}},
-    {"if":{"properties":{"action":{"const":"update"}},"required":["action"]},"then":{"required":["id"]}},
+    {"if":{"required":["items"]},"then":{"properties":{"action":{"enum":["read","add","update"]}}}},
+    {"if":{"properties":{"action":{"const":"read"}},"required":["action"],"not":{"required":["items"]}},"then":{"required":["path","start","end"]}},
+    {"if":{"properties":{"action":{"const":"add"}},"required":["action"],"not":{"required":["items"]}},"then":{"anyOf":[{"required":["from_task","id"]},{"required":["path","start","end","description","priority"]}]}},
+    {"if":{"properties":{"action":{"const":"update"}},"required":["action"],"not":{"required":["items"]}},"then":{"required":["id"]}},
     {"if":{"properties":{"action":{"const":"drop"}},"required":["action"]},"then":{"required":["ids"]}},
     {"if":{"properties":{"action":{"const":"find"}},"required":["action"]},"then":{"required":["query"]}}
   ]
@@ -95,6 +105,32 @@ func normalizeCodeContextArguments(arguments map[string]any) map[string]any {
 			normalized[key] = strings.ToLower(text)
 		}
 	}
+	if items, ok := normalized["items"].([]any); ok {
+		copied := make([]any, len(items))
+		for index, item := range items {
+			copied[index] = item
+			if fields, ok := item.(map[string]any); ok {
+				trimmed := make(map[string]any, len(fields))
+				for key, value := range fields {
+					if text, ok := value.(string); ok && (key == "path" || key == "from_task") {
+						value = strings.TrimSpace(text)
+					}
+					trimmed[key] = value
+				}
+				copied[index] = trimmed
+			}
+		}
+		normalized["items"] = copied
+		// drop and get take ids: items that only name an id become those ids.
+		if action, _ := normalized["action"].(string); action == "drop" || action == "get" {
+			if ids, only := codeContextItemIDs(copied); only {
+				if _, hasIDs := normalized["ids"]; !hasIDs {
+					normalized["ids"] = ids
+					delete(normalized, "items")
+				}
+			}
+		}
+	}
 	// A single id is accepted where ids is expected.
 	if _, hasIDs := normalized["ids"]; !hasIDs {
 		if action, _ := normalized["action"].(string); action == "drop" || action == "get" {
@@ -105,6 +141,20 @@ func normalizeCodeContextArguments(arguments map[string]any) map[string]any {
 		}
 	}
 	return normalized
+}
+
+// codeContextItemIDs answers the ids of items that each hold only an id.
+func codeContextItemIDs(items []any) ([]any, bool) {
+	ids := make([]any, 0, len(items))
+	for _, item := range items {
+		fields, ok := item.(map[string]any)
+		id, hasID := fields["id"]
+		if !ok || !hasID || len(fields) != 1 {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, len(ids) > 0
 }
 
 // codeContextCall is one call's arguments after validation.
@@ -171,32 +221,19 @@ func codeContextCaller(execution tools.ExecutionContext) string {
 func executeCodeContext(arguments map[string]any, execution tools.ExecutionContext, settings sessionfs.NativeCodeContextSettings, store codeContextStore) string {
 	call := parseCodeContextCall(arguments)
 	callID := execution.CallID
-	if !codeContextTaskPattern.MatchString(call.task) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_task", "task must be a plain name such as T-023")
-	}
-	if call.has["description"] && (call.description == "" || int64(utf8.RuneCountInString(call.description)) > settings.MaxDescriptionChars) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_description", fmt.Sprintf("description is empty or longer than %d characters", settings.MaxDescriptionChars))
-	}
-	for _, key := range []string{"priority", "max_priority"} {
-		if value := map[string]int64{"priority": call.priority, "max_priority": call.maxPriority}[key]; call.has[key] && (value < 1 || value > 6) {
-			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_priority", key+" must be 1 to 6")
-		}
-	}
-	if call.has["from_task"] && (!codeContextTaskPattern.MatchString(call.fromTask) || call.fromTask == call.task) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_from_task", "from_task must name another task")
+	if failure := validateCodeContextCall(call, settings, callID); failure != "" {
+		return failure
 	}
 	reader := codeContextReader{settings: settings, execution: execution}
 	by := codeContextCaller(execution)
+	if _, batch := arguments["items"]; batch {
+		return codeContextBatch(arguments, call, reader, store, by)
+	}
 	switch call.action {
 	case "read":
 		return codeContextReadRange(call, reader, store, by)
-	case "add":
-		if call.has["from_task"] {
-			return codeContextAddFrom(call, reader, store, by)
-		}
-		return codeContextAdd(call, reader, store, by, "")
-	case "update":
-		return codeContextUpdate(call, reader, store, by)
+	case "add", "update":
+		return codeContextSave(call, reader, store, by).render()
 	case "drop":
 		return codeContextDrop(call, callID, store, settings, by)
 	case "get":
@@ -218,6 +255,26 @@ func executeCodeContext(arguments map[string]any, execution tools.ExecutionConte
 	return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_action", "action must be read, add, update, drop, get, list, find or clear")
 }
 
+// validateCodeContextCall checks what the schema cannot: the task, the description's
+// length, the priorities and from_task. A failure is a rendered tool error.
+func validateCodeContextCall(call codeContextCall, settings sessionfs.NativeCodeContextSettings, callID string) string {
+	if !codeContextTaskPattern.MatchString(call.task) {
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_task", "task must be a plain name such as T-023")
+	}
+	if call.has["description"] && (call.description == "" || int64(utf8.RuneCountInString(call.description)) > settings.MaxDescriptionChars) {
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_description", fmt.Sprintf("description is empty or longer than %d characters", settings.MaxDescriptionChars))
+	}
+	for _, key := range []string{"priority", "max_priority"} {
+		if value := map[string]int64{"priority": call.priority, "max_priority": call.maxPriority}[key]; call.has[key] && (value < 1 || value > 6) {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_priority", key+" must be 1 to 6")
+		}
+	}
+	if call.has["from_task"] && (!codeContextTaskPattern.MatchString(call.fromTask) || call.fromTask == call.task) {
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_from_task", "from_task must name another task")
+	}
+	return ""
+}
+
 func codeContextStoreFailure(callID string, err error) string {
 	var storeErr *codeContextStoreError
 	if errors.As(err, &storeErr) {
@@ -235,12 +292,44 @@ type codeContextFailure struct{ text string }
 
 func (f *codeContextFailure) Error() string { return "code_context call refused" }
 
-// codeContextAdd saves call's range; note, when not empty, heads the answer.
-func codeContextAdd(call codeContextCall, reader codeContextReader, store codeContextStore, by, note string) string {
+// codeContextOutcome is what one add or update did: the entry as saved and the task
+// document it was written in, a note for the caller, or a rendered tool error.
+type codeContextOutcome struct {
+	failure  string
+	note     string
+	entry    codeContextEntry
+	document codeContextDocument
+}
+
+func (o codeContextOutcome) render() string {
+	if o.failure != "" {
+		return o.failure
+	}
+	note := ""
+	if o.note != "" {
+		note = "# " + o.note + "\n"
+	}
+	return note + renderCodeContextYAML(o.document, []codeContextEntry{o.entry}, map[int64]codeContextStatus{o.entry.ID: {}}, nil)
+}
+
+// codeContextSave answers add (from a range or, with from_task, from another task's
+// entry) and update.
+func codeContextSave(call codeContextCall, reader codeContextReader, store codeContextStore, by string) codeContextOutcome {
+	switch {
+	case call.action == "update":
+		return codeContextUpdate(call, reader, store, by)
+	case call.has["from_task"]:
+		return codeContextAddFrom(call, reader, store, by)
+	}
+	return codeContextAdd(call, reader, store, by, "")
+}
+
+// codeContextAdd saves call's range; note, when not empty, is the outcome's note.
+func codeContextAdd(call codeContextCall, reader codeContextReader, store codeContextStore, by, note string) codeContextOutcome {
 	callID := reader.execution.CallID
 	read, failure := reader.readRange(call.path, call.start, call.end)
 	if failure != "" {
-		return failure
+		return codeContextOutcome{failure: failure}
 	}
 	var saved codeContextEntry
 	duplicate := false
@@ -266,23 +355,20 @@ func codeContextAdd(call codeContextCall, reader codeContextReader, store codeCo
 	if duplicate {
 		current, loadErr := store.load(call.task)
 		if loadErr != nil {
-			return codeContextStoreFailure(callID, loadErr)
+			return codeContextOutcome{failure: codeContextStoreFailure(callID, loadErr)}
 		}
-		return "# the same range is already saved; nothing was added\n" + renderCodeContextYAML(current, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
+		return codeContextOutcome{note: fmt.Sprintf("the same range is already saved as #%d; nothing was added", saved.ID), entry: saved, document: current}
 	}
 	if err != nil {
-		return codeContextStoreFailure(callID, err)
+		return codeContextOutcome{failure: codeContextStoreFailure(callID, err)}
 	}
-	if note != "" {
-		note = "# " + note + "\n"
-	}
-	return note + renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
+	return codeContextOutcome{note: note, entry: saved, document: document}
 }
 
 // errCodeContextNoChange ends a mutation without writing.
 var errCodeContextNoChange = errors.New("no change")
 
-func codeContextUpdate(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
+func codeContextUpdate(call codeContextCall, reader codeContextReader, store codeContextStore, by string) codeContextOutcome {
 	callID := reader.execution.CallID
 	var saved codeContextEntry
 	document, err := store.mutate(call.task, by, reader.settings.MaxStorageBytes, func(document *codeContextDocument) error {
@@ -324,9 +410,9 @@ func codeContextUpdate(call codeContextCall, reader codeContextReader, store cod
 		return nil
 	})
 	if err != nil {
-		return codeContextStoreFailure(callID, err)
+		return codeContextOutcome{failure: codeContextStoreFailure(callID, err)}
 	}
-	return renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
+	return codeContextOutcome{entry: saved, document: document}
 }
 
 func codeContextDrop(call codeContextCall, callID string, store codeContextStore, settings sessionfs.NativeCodeContextSettings, by string) string {

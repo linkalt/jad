@@ -29,9 +29,11 @@ const (
 	maxNativeCodeContextMaxFindResults      int64 = 1_000
 	defaultNativeCodeContextMaxScanTasks    int64 = 200
 	maxNativeCodeContextMaxScanTasks        int64 = 10_000
+	defaultNativeCodeContextMaxBatchItems   int64 = 50
+	maxNativeCodeContextMaxBatchItems       int64 = 1_000
 )
 
-var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes", "relocate", "default_priority", "max_deliveries", "max_find_results", "max_scan_tasks"}
+var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes", "relocate", "default_priority", "max_deliveries", "max_find_results", "max_scan_tasks", "max_batch_items"}
 
 // NativeCodeContextSettings configure native.code_context: a per-task list of exact
 // source ranges, each with a description, that get reads back as code.
@@ -65,6 +67,8 @@ type NativeCodeContextSettings struct {
 	// MaxScanTasks bounds the other tasks find and read look through, most recently
 	// written first.
 	MaxScanTasks int64
+	// MaxBatchItems bounds the items of one read, add or update.
+	MaxBatchItems int64
 }
 
 func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath, cwd, toolStorageDir string) (*NativeCodeContextSettings, error) {
@@ -115,6 +119,7 @@ func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, glob
 		{"max_deliveries", &settings.MaxDeliveries, defaultNativeCodeContextMaxDeliveries, 1, maxNativeCodeContextMaxDeliveries},
 		{"max_find_results", &settings.MaxFindResults, defaultNativeCodeContextMaxFindResults, 1, maxNativeCodeContextMaxFindResults},
 		{"max_scan_tasks", &settings.MaxScanTasks, defaultNativeCodeContextMaxScanTasks, 1, maxNativeCodeContextMaxScanTasks},
+		{"max_batch_items", &settings.MaxBatchItems, defaultNativeCodeContextMaxBatchItems, 1, maxNativeCodeContextMaxBatchItems},
 	} {
 		if *field.target, err = configuredInteger(fields, field.name, field.fallback, field.min, field.max, settingPath, section); err != nil {
 			return nil, err

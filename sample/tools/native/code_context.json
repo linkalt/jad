@@ -100,6 +100,46 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
             "description": "add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "description": "read, add and update: several operations in one call, run in order; one that fails does not stop the others. Each item takes the fields a single call takes; a field given outside items (for example path) applies to every item that leaves it out.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "start": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 6
+                },
+                "from_task": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -110,6 +150,24 @@
         "allOf": [
           {
             "if": {
+              "required": [
+                "items"
+              ]
+            },
+            "then": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "read",
+                    "add",
+                    "update"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
               "properties": {
                 "action": {
                   "const": "read"
@@ -117,7 +175,12 @@
               },
               "required": [
                 "action"
-              ]
+              ],
+              "not": {
+                "required": [
+                  "items"
+                ]
+              }
             },
             "then": {
               "required": [
@@ -136,7 +199,12 @@
               },
               "required": [
                 "action"
-              ]
+              ],
+              "not": {
+                "required": [
+                  "items"
+                ]
+              }
             },
             "then": {
               "anyOf": [
@@ -167,7 +235,12 @@
               },
               "required": [
                 "action"
-              ]
+              ],
+              "not": {
+                "required": [
+                  "items"
+                ]
+              }
             },
             "then": {
               "required": [

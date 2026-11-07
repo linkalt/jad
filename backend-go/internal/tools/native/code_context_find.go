@@ -16,10 +16,25 @@ import (
 // already holds unchanged are printed but not saved again; the exact range of a stale
 // entry refreshes that entry.
 func codeContextReadRange(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
+	text, _, failure := codeContextReadItem(call, reader, store, by, -1)
+	if failure != "" {
+		return failure
+	}
+	return text
+}
+
+// codeContextReadItem is one read. Its code is printed only when it fits budget bytes
+// (budget < 0: no bound); it answers the text, the code bytes printed and a rendered
+// tool error when nothing was read.
+func codeContextReadItem(call codeContextCall, reader codeContextReader, store codeContextStore, by string, budget int64) (string, int64, string) {
 	callID := reader.execution.CallID
 	read, failure := reader.readRange(call.path, call.start, call.end)
 	if failure != "" {
-		return failure
+		return "", 0, failure
+	}
+	printed := int64(len(read.content))
+	if budget >= 0 && printed > budget {
+		printed = 0
 	}
 	description, priority := call.description, call.priority
 	var details []string
@@ -97,7 +112,7 @@ func codeContextReadRange(call codeContextCall, reader codeContextReader, store 
 		document, err = store.load(call.task)
 	}
 	if err != nil {
-		return codeContextStoreFailure(callID, err)
+		return "", 0, codeContextStoreFailure(callID, err)
 	}
 	if created && borrowed != "" {
 		details = append(details, borrowed)
@@ -107,7 +122,7 @@ func codeContextReadRange(call codeContextCall, reader codeContextReader, store 
 	}
 	stateErr := store.mutateState(call.task, reader.settings.MaxDeliveries, reader.settings.MaxStorageBytes, func(state *codeContextState) {
 		state.Stats.Reads++
-		state.Stats.CodeBytesPrinted += int64(len(read.content))
+		state.Stats.CodeBytesPrinted += printed
 		if alreadySaved {
 			state.Stats.ReadsAlreadySaved++
 		}
@@ -126,8 +141,16 @@ func codeContextReadRange(call codeContextCall, reader codeContextReader, store 
 		fmt.Fprintf(&output, "#%d (priority %d, lines %d-%d, updated by %s)\n", saved.ID, saved.Priority, saved.Start, saved.End, saved.UpdatedBy)
 		output.WriteString(codeContextDescriptionText(saved) + "\n")
 	}
+	if printed == 0 && len(read.content) > 0 {
+		hint := fmt.Sprintf("get it with ids [%d]", saved.ID)
+		if !kept {
+			hint = "read it again in another call"
+		}
+		fmt.Fprintf(&output, "(code not printed: this call reached max_output_bytes; %s)\n", hint)
+		return output.String(), 0, ""
+	}
 	writeCodeContextCode(&output, read.content, codeContextToken())
-	return output.String()
+	return output.String(), printed, ""
 }
 
 // codeContextSource is an entry of another task.
@@ -162,20 +185,20 @@ func borrowCodeContextDescription(store codeContextStore, task string, read code
 // codeContextAddFrom answers add with from_task: the other task's entry is copied once
 // its code is checked unchanged (or found moved), with the caller's description and
 // priority when given.
-func codeContextAddFrom(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
+func codeContextAddFrom(call codeContextCall, reader codeContextReader, store codeContextStore, by string) codeContextOutcome {
 	callID := reader.execution.CallID
 	source, err := store.load(call.fromTask)
 	if err != nil {
-		return codeContextStoreFailure(callID, err)
+		return codeContextOutcome{failure: codeContextStoreFailure(callID, err)}
 	}
 	index := slices.IndexFunc(source.Entries, func(entry codeContextEntry) bool { return entry.ID == call.id })
 	if index < 0 {
-		return tools.ExecutionError(callID, tools.StatusNotFound, "entry_not_found", fmt.Sprintf("task %s has no entry %d", call.fromTask, call.id))
+		return codeContextOutcome{failure: tools.ExecutionError(callID, tools.StatusNotFound, "entry_not_found", fmt.Sprintf("task %s has no entry %d", call.fromTask, call.id))}
 	}
 	entry := source.Entries[index]
 	status := newCodeContextChecker(reader).check(entry)
 	if status.stale {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "stale_source", fmt.Sprintf("entry %d of task %s is stale (%s); read the code and save it with read or add", entry.ID, call.fromTask, status.reason))
+		return codeContextOutcome{failure: tools.ExecutionError(callID, tools.StatusInvalidInput, "stale_source", fmt.Sprintf("entry %d of task %s is stale (%s); read the code and save it with read or add", entry.ID, call.fromTask, status.reason))}
 	}
 	call.path, call.start, call.end = entry.Path, status.start, status.end
 	if !call.has["description"] {
