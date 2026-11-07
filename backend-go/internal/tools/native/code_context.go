@@ -29,10 +29,10 @@ var codeContextInputSchema = json.RawMessage(`{
     "task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"Task key, e.g. T-023."},
     "task_description":{"type":"string","minLength":1,"description":"read, update: what the task is about."},
     "id":{"type":"integer","minimum":1,"description":"update: the entry."},
-    "ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"description":"drop, get: the entries; get without ids prints all."},
-    "path":{"type":"string","minLength":1,"description":"File, relative to cwd. get: only its entries."},
-    "start":{"type":"integer","minimum":1,"description":"First line, 1-based. get: print from this line (with path or ids); default all."},
-    "end":{"type":"integer","minimum":1,"description":"Last line, inclusive. get: print to this line; default all."},
+    "ids":{"type":"array","items":{"anyOf":[{"type":"integer","minimum":1},{"type":"string","pattern":"^[1-9][0-9]*(-[1-9][0-9]*)?$"}]},"minItems":1,"description":"drop, get: entry ids, or ranges of ids such as \"1-20\"; get without ids prints all."},
+    "path":{"type":"string","minLength":1,"description":"File, relative to cwd."},
+    "start":{"type":"integer","minimum":1,"description":"First line, 1-based."},
+    "end":{"type":"integer","minimum":1,"description":"Last line, inclusive."},
     "description":{"type":"string","minLength":1,"description":"What the code does and why it matters for the task; no line numbers."},
     "priority":{"type":"integer","minimum":1,"maximum":6,"description":"1 target, 2 callers/callees, 3 interfaces, 4 data, 5 tests, 6 other. get leaves out high numbers first."},
     "query":{"type":"string","minLength":1,"description":"find: words to look for."},
@@ -119,12 +119,25 @@ func normalizeCodeContextArguments(arguments map[string]any) map[string]any {
 			}
 		}
 	}
-	// A single id is accepted where ids is expected.
+	// A single id, or a single range, is accepted where ids is expected.
 	if _, hasIDs := normalized["ids"]; !hasIDs && (action == "drop" || action == "get") {
 		if id, exists := normalized["id"]; exists {
 			normalized["ids"] = []any{id}
 			delete(normalized, "id")
 		}
+	}
+	if text, ok := normalized["ids"].(string); ok {
+		normalized["ids"] = []any{text}
+	}
+	if ids, ok := normalized["ids"].([]any); ok {
+		copied := make([]any, len(ids))
+		for index, id := range ids {
+			if text, ok := id.(string); ok {
+				id = strings.Join(strings.Fields(text), "")
+			}
+			copied[index] = id
+		}
+		normalized["ids"] = copied
 	}
 	return normalized
 }
@@ -145,10 +158,12 @@ func codeContextItemIDs(items []any) ([]any, bool) {
 
 // codeContextCall is one call's arguments, or one item's with the call's as defaults.
 type codeContextCall struct {
-	action      string
-	task        string
-	id          int64
-	ids         []int64
+	action string
+	task   string
+	id     int64
+	ids    []int64
+	// idRanges are the ranges of ids, first and last included, ids gives as "a-b".
+	idRanges    [][2]int64
 	path        string
 	start, end  int64
 	description string
@@ -197,11 +212,26 @@ func parseCodeContextFields(arguments map[string]any, base *codeContextCall) cod
 		}
 		if items, ok := arguments["ids"].([]any); ok {
 			for _, item := range items {
-				if value, ok := safeInteger(item); ok && !slices.Contains(call.ids, value) {
+				value, ok := safeInteger(item)
+				if text, isText := item.(string); isText {
+					first, last, isRange := strings.Cut(text, "-")
+					if isRange {
+						from, fromErr := strconv.ParseInt(first, 10, 64)
+						to, toErr := strconv.ParseInt(last, 10, 64)
+						if fromErr != nil || toErr != nil {
+							from, to = 0, 0
+						}
+						call.idRanges = append(call.idRanges, [2]int64{from, to})
+						continue
+					}
+					parsed, err := strconv.ParseInt(text, 10, 64)
+					value, ok = parsed, err == nil && parsed > 0
+				}
+				if ok && !slices.Contains(call.ids, value) {
 					call.ids = append(call.ids, value)
 				}
 			}
-			call.has["ids"] = len(call.ids) > 0
+			call.has["ids"] = len(call.ids) > 0 || len(call.idRanges) > 0
 		}
 	}
 	if text, ok := arguments["path"].(string); ok {
@@ -289,10 +319,11 @@ func validateCodeContextCall(call codeContextCall, settings sessionfs.NativeCode
 		return invalid("missing_fields", "find needs query")
 	case call.action == "update" && !call.has["items"] && !call.has["id"] && !call.has["task_description"]:
 		return invalid("missing_fields", "update needs id, items or task_description")
-	case call.action == "get" && (call.has["start"] || call.has["end"]) && !call.has["path"] && !call.has["ids"]:
-		return invalid("missing_fields", "get with start or end needs path or ids")
-	case call.action == "get" && call.has["start"] && call.has["end"] && call.end < call.start:
-		return invalid("invalid_range", "end must be at least start")
+	}
+	for _, span := range call.idRanges {
+		if span[0] < 1 || span[1] < span[0] {
+			return invalid("invalid_range", fmt.Sprintf("the id range %d-%d is not from a smaller id to a larger one", span[0], span[1]))
+		}
 	}
 	if call.has["task_description"] && !validCodeContextDescription(call.taskDescription, settings) {
 		return invalid("invalid_description", fmt.Sprintf("task_description is empty or longer than %d characters", settings.MaxDescriptionChars))
@@ -347,22 +378,19 @@ func (f *codeContextFailure) Error() string { return "code_context call refused"
 var errCodeContextNoChange = errors.New("no change")
 
 func codeContextDrop(call codeContextCall, callID string, store codeContextStore, settings sessionfs.NativeCodeContextSettings, by string) string {
-	var dropped, missing []int64
+	var dropped []int64
+	var missing []string
 	document, err := store.mutate(call.task, by, settings.MaxStorageBytes, func(document *codeContextDocument) error {
 		kept := document.Entries[:0]
 		for _, entry := range document.Entries {
-			if slices.Contains(call.ids, entry.ID) {
+			if call.selects(entry.ID) {
 				dropped = append(dropped, entry.ID)
 				continue
 			}
 			kept = append(kept, entry)
 		}
 		document.Entries = kept
-		for _, id := range call.ids {
-			if !slices.Contains(dropped, id) {
-				missing = append(missing, id)
-			}
-		}
+		missing = call.unmatched(dropped)
 		if len(dropped) == 0 {
 			return errCodeContextNoChange
 		}
@@ -379,10 +407,35 @@ func codeContextDrop(call codeContextCall, callID string, store codeContextStore
 		output.WriteString(": nothing dropped")
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(&output, "; no entry %s", joinCodeContextIDs(missing))
+		fmt.Fprintf(&output, "; no entry %s", strings.Join(missing, ", "))
 	}
 	output.WriteString("\n")
 	return output.String()
+}
+
+// selects reports whether the call's ids or id ranges name id.
+func (c codeContextCall) selects(id int64) bool {
+	if slices.Contains(c.ids, id) {
+		return true
+	}
+	return slices.ContainsFunc(c.idRanges, func(span [2]int64) bool { return span[0] <= id && id <= span[1] })
+}
+
+// unmatched names the ids, and the id ranges, of the call that found holds none of:
+// "9", "30-40".
+func (c codeContextCall) unmatched(found []int64) []string {
+	var missing []string
+	for _, id := range c.ids {
+		if !slices.Contains(found, id) {
+			missing = append(missing, strconv.FormatInt(id, 10))
+		}
+	}
+	for _, span := range c.idRanges {
+		if !slices.ContainsFunc(found, func(id int64) bool { return span[0] <= id && id <= span[1] }) {
+			missing = append(missing, fmt.Sprintf("%d-%d", span[0], span[1]))
+		}
+	}
+	return missing
 }
 
 func joinCodeContextIDs(ids []int64) string {

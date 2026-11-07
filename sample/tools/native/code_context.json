@@ -40,26 +40,34 @@
           "ids": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "minimum": 1
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*(-[1-9][0-9]*)?$"
+                }
+              ]
             },
             "minItems": 1,
-            "description": "drop, get: the entries; get without ids prints all."
+            "description": "drop, get: entry ids, or ranges of ids such as \"1-20\"; get without ids prints all."
           },
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "File, relative to cwd. get: only its entries."
+            "description": "File, relative to cwd."
           },
           "start": {
             "type": "integer",
             "minimum": 1,
-            "description": "First line, 1-based. get: print from this line (with path or ids); default all."
+            "description": "First line, 1-based."
           },
           "end": {
             "type": "integer",
             "minimum": 1,
-            "description": "Last line, inclusive. get: print to this line; default all."
+            "description": "Last line, inclusive."
           },
           "description": {
             "type": "string",
