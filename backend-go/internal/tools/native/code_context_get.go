@@ -3,6 +3,7 @@ package native
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -42,8 +43,9 @@ type codeContextChecked struct {
 	entries   []codeContextEntry
 	statuses  map[int64]codeContextStatus
 	relocated int
-	stale     int
-	note      string
+	// staleIDs are the stale entries' ids, smallest first.
+	staleIDs []int64
+	note     string
 }
 
 // checkCodeContextTask checks the entries, keeps the relocations no other entry
@@ -60,23 +62,44 @@ func checkCodeContextTask(task string, reader codeContextReader, store codeConte
 			checked.relocated++
 		}
 		if status.stale {
-			checked.stale++
+			checked.staleIDs = append(checked.staleIDs, entry.ID)
 		}
 		checked.entries[index] = entry
 	}
+	slices.Sort(checked.staleIDs)
 	return checked
 }
 
-// counts is ", N relocated, M stale" for what the check found.
+// counts is ", N relocated, M stale (#ids)" for what the check found, so the header
+// names the entries to re-read without a list.
 func (c codeContextChecked) counts() string {
 	text := ""
 	if c.relocated > 0 {
 		text += fmt.Sprintf(", %d relocated", c.relocated)
 	}
-	if c.stale > 0 {
-		text += fmt.Sprintf(", %d stale", c.stale)
+	if len(c.staleIDs) > 0 {
+		text += fmt.Sprintf(", %d stale (%s)", len(c.staleIDs), codeContextIDSpans(c.staleIDs))
 	}
 	return text
+}
+
+// codeContextIDSpans names sorted ids as "#3, #7-9": a run of consecutive ids is one
+// span, as ids takes ranges.
+func codeContextIDSpans(ids []int64) string {
+	var parts []string
+	for index := 0; index < len(ids); {
+		last := index
+		for last+1 < len(ids) && ids[last+1] == ids[last]+1 {
+			last++
+		}
+		if last == index {
+			parts = append(parts, fmt.Sprintf("#%d", ids[index]))
+		} else {
+			parts = append(parts, fmt.Sprintf("#%d-%d", ids[index], ids[last]))
+		}
+		index = last + 1
+	}
+	return strings.Join(parts, ", ")
 }
 
 // codeContextList answers list with a task: one line per entry, by priority, checked

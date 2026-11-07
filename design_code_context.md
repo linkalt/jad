@@ -15,7 +15,7 @@ Every call saves the model a repeated read or search:
 | `grep` for something already found | `find` |
 | one call per range saved, changed or read | `items` on `read` and `update`; `ids` on `drop` and `get` |
 
-`code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get`, `list` or `find` runs.
+`code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get`, `list` or `find` runs, and for the files they read, whenever `read` or `update` runs.
 
 ## Tasks
 
@@ -86,7 +86,7 @@ code_context({action: "update", task: "T-023", task_description: "Make the glob 
 Every answer is plain text that starts with one header line. An entry is one line, with its description after two spaces and its later lines indented:
 
 ```
-code_context task T-023, generation 31: 12 entries, 1 relocated, 1 stale
+code_context task T-023, generation 31: 12 entries, 1 relocated, 1 stale (#7)
 task description: Make the glob brace cap configurable.
 #3 p1 internal/tools/native/glob_match.go:34-63  expandGlobBraces caps brace expansion at 64 patterns;
   this is where the cap becomes configurable.
@@ -96,7 +96,7 @@ task description: Make the glob brace cap configurable.
 
 `get` answers:
 
-1. **Header:** the generation, counts of entries shown, relocated, stale and left out, and the task description.
+1. **Header:** the generation, counts of entries shown, relocated, stale and left out, and the task description. The stale count names the stale ids, consecutive ones as one span (`3 stale (#2-3, #7)`); `list` does the same.
 2. **Code blocks:** one block per file region, merging current entries of one file whose ranges overlap or touch. A block shows every entry's line, then the exact code between `--- code <token> ---` and `--- end code <token> ---`. The token is random per call.
 3. **Stale entries:** each entry's line with the reason, but no code. The caller re-reads the code and then updates or drops the entry.
 4. **Left out:** entries over `max_output_bytes`, as `#id p<priority> path:start-end`.
@@ -114,6 +114,8 @@ Otherwise it is stale:
 - the file is gone, cannot be read, or is now over `max_file_bytes`,
 - it has fewer lines than the range, or
 - the range holds other bytes.
+
+`read` and `update` check the task's other entries of the files they just read, from the bytes already read, and end the header with `stale in the files read: #2, #7 (get them with ids for why)`. They read no other file and save no relocation; a moved entry is not reported.
 
 A reverted file makes its entries current again. Only the profile that changed the code fixes a range, with `update`. An entry nobody updates stays in the stale list on every later `get`.
 

@@ -19,8 +19,11 @@ type codeContextResult struct {
 	entry codeContextEntry
 	kept  bool
 	// code is the bytes read, printed when print is set.
-	code    []byte
-	path    string
+	code []byte
+	path string
+	// data is the whole file the item read, at path, so the task's other entries of
+	// that file are checked without reading it again.
+	data    []byte
 	print   bool
 	changed bool
 }
@@ -94,6 +97,9 @@ func codeContextWrite(call codeContextCall, reader codeContextReader, store code
 	case len(items) == 1:
 		parts = append(parts, results[0].summary)
 	}
+	if stale := codeContextStaleInFilesRead(document, results, reader); len(stale) > 0 {
+		parts = append(parts, "stale in the files read: "+codeContextIDSpans(stale)+" (get them with ids for why)")
+	}
 	var output strings.Builder
 	fmt.Fprintf(&output, "code_context task %s, generation %d: %s\n", call.task, document.Generation, strings.Join(parts, "; "))
 	budget := reader.settings.MaxOutputBytes
@@ -109,6 +115,37 @@ func codeContextWrite(call codeContextCall, reader codeContextReader, store code
 		budget -= writeCodeContextResult(&output, result, budget)
 	}
 	return output.String()
+}
+
+// codeContextStaleInFilesRead checks the task's entries of the files the call's items
+// read against the bytes already read, and answers the stale ones' ids, smallest first.
+// No file is read again and no other file is checked; a relocation is not stale, and
+// get, list and find save it.
+func codeContextStaleInFilesRead(document codeContextDocument, results []codeContextResult, reader codeContextReader) []int64 {
+	checker := newCodeContextChecker(reader)
+	for _, result := range results {
+		if result.failure == "" && result.path != "" {
+			if _, read := checker.files[result.path]; !read {
+				checker.files[result.path] = &codeContextFile{data: result.data, sha256: codeContextSHA256(result.data)}
+			}
+		}
+	}
+	var entries []codeContextEntry
+	for _, entry := range document.Entries {
+		if _, read := checker.files[entry.Path]; read {
+			entries = append(entries, entry)
+		}
+	}
+	statuses := checker.checkAll(entries)
+	settleCodeContextRelocations(document, statuses)
+	var stale []int64
+	for _, entry := range entries {
+		if statuses[entry.ID].stale {
+			stale = append(stale, entry.ID)
+		}
+	}
+	slices.Sort(stale)
+	return stale
 }
 
 // writeCodeContextResult writes an item's entry and, for a read that prints, its code
@@ -162,7 +199,7 @@ func applyCodeContextRead(document *codeContextDocument, call codeContextCall, r
 	if failure != "" {
 		return codeContextResult{failure: failure}
 	}
-	result := codeContextResult{code: read.content, path: read.path, print: !call.has["description"], kept: true}
+	result := codeContextResult{code: read.content, path: read.path, data: read.data, print: !call.has["description"], kept: true}
 	holds := func(entry codeContextEntry) bool {
 		content, _, ok := codeContextLines(read.data, entry.Start, entry.End)
 		return ok && codeContextSHA256(content) == entry.ContentSHA256
@@ -254,7 +291,7 @@ func applyCodeContextUpdate(document *codeContextDocument, call codeContextCall,
 	setCodeContextFields(&entry, call)
 	entry.UpdatedBy, entry.UpdatedAt, entry.Generation = by, codeContextTimestamp(), document.Generation
 	document.Entries[index] = entry
-	return codeContextResult{entry: entry, kept: true, changed: true, summary: fmt.Sprintf("#%d updated", entry.ID)}
+	return codeContextResult{entry: entry, path: read.path, data: read.data, kept: true, changed: true, summary: fmt.Sprintf("#%d updated", entry.ID)}
 }
 
 // setCodeContextFields sets the description and priority the call gives.

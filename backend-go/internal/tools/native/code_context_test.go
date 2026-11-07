@@ -173,7 +173,7 @@ func TestCodeContextEntryIsStaleOnlyWhenItsLinesChange(t *testing.T) {
 		!strings.Contains(got, "#1 p1 b.go:6-8 [stale: the file changed and these lines differ from what was saved]  the target\n") {
 		t.Fatalf("a changed range was not reported stale, or its code was printed:\n%s", got)
 	}
-	if listed := f.call(`{"action":"list","task":"T-002"}`); !strings.Contains(listed, "1 entries, 1 stale\n#1 p1 b.go:6-8 [stale: ") {
+	if listed := f.call(`{"action":"list","task":"T-002"}`); !strings.Contains(listed, "1 entries, 1 stale (#1)\n#1 p1 b.go:6-8 [stale: ") {
 		t.Fatalf("list of a stale entry = %s", listed)
 	}
 
