@@ -12,31 +12,23 @@ Every call saves the model a repeated read or search:
 |---|---|
 | reading code, then a second call to save it | `read` prints and saves in one call |
 | re-reading code that only moved | relocation by identical bytes |
-| a second `get` printing what the caller already has | `get` with `since` |
-| `grep` for something already found | `find`, also across tasks |
-| describing the same code again in a new task | `read` reuses a matching description; `add` with `from_task` |
-| printing every line when a map is enough | `mode: "outline"`, `max_priority` |
-| one call per range saved, changed or read | `items` on `read`, `add` and `update`; `ids` on `drop` and `get` |
+| `grep` for something already found | `find` |
+| one call per range saved, changed or read | `items` on `read` and `update`; `ids` on `drop` and `get` |
 
-`code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get` or `list` runs.
+`code_context` is a plain native tool. It has no `subagent` or `profile_message` hook, and nothing runs between profiles: an entry's staleness is checked whenever `get`, `list` or `find` runs.
 
 ## Tasks
 
 A task is one file of entries, named by its key (`T-023`). A call without arguments, or `list` without `task`, lists the tasks of the storage, most recently written first (at most `max_scan_tasks`):
 
-```yaml
-# code_context: 2 tasks; list one with task
-tasks:
-  - task: "T-023"
-    description: |-
-      Make the glob brace cap configurable.
-    entries: 12
-    generation: 31
-    last_updated_by: "executor"
-    updated_at: "2026-11-07T10:42:00Z"
+```
+code_context: 2 tasks, most recently written first; list one with task
+T-023: 12 entries, generation 31, by executor, 2026-11-07T10:42:00Z
+  Make the glob brace cap configurable.
+T-019: 4 entries, generation 6, by reviewer, 2026-11-06T16:03:11Z
 ```
 
-It reads only the task files, not the code, so it shows no staleness; `list` with `task` does. A task's description is set with `task_description` on `read`, `add` or `update`; `update` with only `task_description` sets it alone and may start a task with no entries. `list` and `get` of the task show it.
+It reads only the task files, not the code, so it shows no staleness; `list` with `task` does. A task's description is set with `task_description` on `read` or `update`; `update` with only `task_description` sets it alone and may start a task with no entries. `list` and `get` of the task show it.
 
 ## Entries
 
@@ -44,9 +36,8 @@ An entry is one command, `read(path, start, end)`. The path is relative to the c
 
 - a description,
 - a priority,
-- the SHA-256 of the whole file and of the range's exact bytes,
-- `updated_by`, and
-- the task generation of its last write.
+- the SHA-256 of the whole file and of the range's exact bytes, and
+- `updated_by` and the task generation of its last write (kept in the file, not printed).
 
 A command returns only code: never a match list, symbol table or summary. A grep or symbol hit is discovery evidence. Turn it into the line range it points at before saving.
 
@@ -65,18 +56,15 @@ Priority is a number from 1 to 6, and `get` leaves out the highest numbers first
 
 ```ts
 code_context({action: "read", task: "T-023", path: "internal/tools/native/glob_match.go", start: 34, end: 63})  // prints the code and saves it
-code_context({action: "add", task: "T-023", path: "internal/tools/native/glob_match.go", start: 34, end: 63, priority: 1,
-              description: "expandGlobBraces expands a brace pattern ... so this is where the cap becomes configurable."})
-code_context({action: "get", task: "T-023"})                 // every entry: descriptions and current code, and a since token
-code_context({action: "get", task: "T-023", since: "3fa9c01b2e7d"})  // only what changed since that get
-code_context({action: "get", task: "T-023", mode: "outline", max_priority: 2})  // descriptions and ranges, no code
+code_context({action: "read", task: "T-023", path: "internal/tools/native/glob_match.go", start: 34, end: 63, priority: 1,
+              description: "expandGlobBraces expands a brace pattern ... so this is where the cap becomes configurable."})  // saves, no code printed
+code_context({action: "get", task: "T-023"})                 // every entry: descriptions and current code
 code_context({action: "get", task: "T-023", ids: [4, 7]})
-code_context({action: "find", task: "T-023", query: "glob cap", all_tasks: true})
-code_context({action: "add", task: "T-023", from_task: "T-010", id: 2})  // copy another task's entry
-code_context({action: "list", task: "T-023"})                // YAML, no code, with stale flags and stats
+code_context({action: "find", task: "T-023", query: "glob cap"})
+code_context({action: "list", task: "T-023"})                // one line per entry, no code, with stale and moved notes
 code_context({action: "update", task: "T-023", id: 1, start: 36, end: 70})  // id kept; omitted fields kept
 code_context({action: "drop", task: "T-023", ids: [2]})
-code_context({action: "add", task: "T-023", path: "internal/tools/native/glob_match.go", priority: 2, items: [
+code_context({action: "read", task: "T-023", path: "internal/tools/native/glob_match.go", priority: 2, items: [
               {start: 10, end: 20, description: "..."}, {start: 80, end: 95, description: "...", priority: 1}]})  // several in one call
 code_context({action: "update", task: "T-023", items: [{id: 1, description: "..."}, {id: 3, start: 40, end: 52}]})
 code_context({action: "read", task: "T-023", items: [{path: "a.go", start: 1, end: 30}, {path: "b.go", start: 5, end: 9}]})
@@ -85,34 +73,38 @@ code_context({})                                             // the tasks, with 
 code_context({action: "update", task: "T-023", task_description: "Make the glob brace cap configurable."})
 ```
 
-- **`read`**: prints lines start..end and saves them. Description and priority are optional; a range saved without a description shows as `undescribed`, and `update` adds one later. Without a description, `read` takes the description of another task's entry of the same path whose saved bytes are the bytes just read. Lines an entry already holds unchanged are printed but not saved again. Reading the exact range of a stale entry refreshes that entry. Beyond `max_entries` the code is printed and not saved.
-- **`add`**: adding an identical path and range returns the existing entry. With `from_task` and `id`, it copies that task's entry (range, description and priority, unless given) once its code is checked unchanged or found moved; a stale source is refused.
+- **`read`**: without a description, prints lines start..end and saves them; the entry shows `(no description)` until a `read` with a description or an `update` adds one. Lines an entry already holds unchanged are printed but not saved again. Reading the exact range of a stale entry refreshes that entry. Beyond `max_entries` the code is printed and not saved. With a description the caller has seen the code, so the range is saved, or the entry of that exact range is described, without printing it; beyond `max_entries` that is a `too_many_entries` error.
 - **`update`**: re-reads the range, even when only the id is given, and stores the new hashes.
-- **`find`**: matches the query's words, case-insensitive, against each entry's path and description. Entries matching every word are shown; if none does, those matching most. With `all_tasks`, the other tasks of the storage are searched too, and their entries are shown only while their code is unchanged.
+- **`find`**: matches the query's words, case-insensitive, against each entry's path and description. Entries matching every word are shown; if none does, those matching most. Each is checked against its file.
 - **Ids**: an id is never reused after `drop`.
-- **`items`**: `read`, `add` and `update` take up to `max_batch_items` operations in one call. Each item takes the fields of a single call, and a field given outside `items` (a shared `path` or `priority`) applies to every item that leaves it out. Items run in order and each is saved on its own, so one that fails is reported on its line and does not stop or undo the others; only when every item fails is the answer a tool error (`all_items_failed`, one line per item). `add` and `update` answer one YAML document of the entries saved, headed by a comment line per item; `read` prints each item's block, and once the call's code reaches `max_output_bytes` the remaining items are saved without printing their code. `drop` and `get` already take `ids`; items that only hold an `id` are taken as those ids.
+- **`items`**: `read` and `update` take up to `max_batch_items` operations in one call. Each item takes the fields of a single call, and a field given outside `items` (a shared `path` or `priority`) applies to every item that leaves it out. The items are applied in order in one write of the task file; one that fails is reported on its line and does not stop the others. When every item fails nothing is written and the answer is a tool error (`all_items_failed`, one line per item). `read` prints each item's block, and once the call's code reaches `max_output_bytes` the remaining items are saved without printing their code. `drop` and `get` already take `ids`; items that only hold an `id` are taken as those ids.
+- **Requirements**: the schema holds only types; what an action needs (`drop` needs `ids`, `find` a `query`, `read` a `path`, `start` and `end`, `update` an `id`) is checked by the tool and refused with `missing_fields` or `invalid_field`.
 
 ## Output
 
-`list`, `add` and `update` answer YAML. Each entry shows `id`, `priority`, `stale` (and `stale_reason`), `command`, `description`, `updated_by`, `generation` and the two hashes.
+Every answer is plain text that starts with one header line. An entry is one line, with its description after two spaces and its later lines indented:
 
-`list` also shows the task's stats.
+```
+code_context task T-023, generation 31: 12 entries, 1 relocated, 1 stale
+task description: Make the glob brace cap configurable.
+#3 p1 internal/tools/native/glob_match.go:34-63  expandGlobBraces caps brace expansion at 64 patterns;
+  this is where the cap becomes configurable.
+#5 p2 internal/tools/native/glob_match.go:80-95 [moved from 76-91]  matchGlob calls it once per pattern.
+#7 p5 internal/tools/native/glob_match_test.go:10-40 [stale: the file changed and these lines differ from what was saved]  brace cases
+```
 
-`get` answers plain text in five parts:
+`get` answers:
 
-1. **Header:** the generation; counts of entries shown, unchanged since `since`, relocated, stale and left out; the code bytes printed and not printed again; and a new `since` token.
-2. **Code blocks:** one block per file region, merging current entries of one file whose ranges overlap or touch. A block shows every entry's description, then the exact code between `--- code <token> ---` and `--- end code <token> ---`. The token is random per call.
-3. **Unchanged entries:** with `since`, the entries whose path, code and description are as that get printed them, by id and current range. Code that only moved counts as unchanged.
-4. **Stale entries:** each with its id, path, old range, reason and description, but no code. The caller re-reads the code and then updates or drops the entry.
-5. **Left out:** entries over `max_output_bytes`, by id.
-
-With `mode: "outline"`, `get` prints the header and every entry's range, status and description, and no code.
+1. **Header:** the generation, counts of entries shown, relocated, stale and left out, and the task description.
+2. **Code blocks:** one block per file region, merging current entries of one file whose ranges overlap or touch. A block shows every entry's line, then the exact code between `--- code <token> ---` and `--- end code <token> ---`. The token is random per call.
+3. **Stale entries:** each entry's line with the reason, but no code. The caller re-reads the code and then updates or drops the entry.
+4. **Left out:** entries over `max_output_bytes`, as `#id p<priority> path:start-end`.
 
 ## Staleness
 
 Each distinct file is read once per `get`, `list` or `find`. An entry is current while its lines still hold the bytes it saved; another part of the file may have changed.
 
-When they do not, the tool looks for the saved bytes elsewhere in the file: as many lines, the same length, the same first line and the same SHA-256. If they occur exactly once, the code only moved. The entry is relocated there and `get` and `list` save the move; the output says where it was. If they occur several times, or the new range is one another entry already reads, the entry is stale.
+When they do not, the tool looks for the saved bytes elsewhere in the file: as many lines, the same length, the same first line and the same SHA-256. If they occur exactly once, the code only moved. The entry is relocated there and `get`, `list` and `find` save the move; the output says where it was. If they occur several times, or the new range is one another entry already reads, the entry is stale.
 
 Otherwise it is stale:
 
@@ -135,22 +127,19 @@ A reverted file makes its entries current again. Only the profile that changed t
 | `max_range_lines` | 2000 | lines per entry |
 | `max_file_bytes` | 4 MiB | largest file a range is read from |
 | `max_output_bytes` | 400000 | code blocks of one `get` (about 100K tokens; a ceiling, not a target) |
-| `max_storage_bytes` | 1 MiB | largest task file; also bounds its state file |
+| `max_storage_bytes` | 1 MiB | largest task file |
 | `relocate` | true | move a range to the single place its saved bytes are now |
 | `default_priority` | 6 | priority of a range `read` saves without one |
-| `max_deliveries` | 20 | `since` tokens kept per task, oldest forgotten first |
 | `max_find_results` | 20 | entries one `find` shows |
-| `max_scan_tasks` | 200 | other task files `find` (`all_tasks`) and `read` go through, and tasks a call without `task` lists; most recent first |
-| `max_batch_items` | 50 | items one `read`, `add` or `update` may hold |
-
-The `since` deliveries and the stats are in `<storage_dir>/.state/<task>.json`, apart from the entries. `clear` removes both.
+| `max_scan_tasks` | 200 | tasks a call without `task` lists, most recent first |
+| `max_batch_items` | 50 | items one `read` or `update` may hold |
 
 Writes are atomic, and writes to the same task file are serialized within the process. Separate processes are not coordinated.
 
 ## Workflow it supports
 
-1. **Discovery:** a discovery profile (Code Context) first runs `find` with `all_tasks` and copies entries that still hold. Then it searches the code, `read`s the ranges it needs (saving them as it goes) and describes them in one `update` per entry.
-2. **Executor:** runs `get` (or `mode: "outline"`, then `get` with `ids`), implements, then `update`s the entries for the code it changed and `read`s new dependencies. A second `get` passes `since`.
+1. **Discovery:** a discovery profile (Code Context) runs `find`, searches the code, `read`s the ranges it needs (saving them as it goes) and describes them in one `update` with `items`.
+2. **Executor:** runs `list`, then `get` (all, or `ids`), implements, then `update`s the entries for the code it changed and `read`s new dependencies.
 3. **Reviewer:** `get`s the task. Stale entries show which code changed; it fixes code directly and updates the entries the same way.
 
-The stats in `list` show how much code was printed, how much was not repeated, and how often a `read` hit lines already saved. The tool cannot see reads and greps made with `exec`; measuring those still needs the transcripts.
+How much code the tool printed, and how much reading it saved, is measured from the transcripts: every call and its result are in `messages.jsonl`, and so are the reads and greps made with `exec`, which the tool cannot see.

@@ -8,10 +8,9 @@ import (
 	"strings"
 )
 
-// selectCodeContextEntries picks the entries a call names: those of ids (all without),
-// of maxPriority or a lower number (all without). It answers them by priority, and the
+// selectCodeContextEntries picks the entries of ids (all without), by priority, and the
 // ids that name no entry.
-func selectCodeContextEntries(document codeContextDocument, ids []int64, maxPriority int64) ([]codeContextEntry, []int64) {
+func selectCodeContextEntries(document codeContextDocument, ids []int64) ([]codeContextEntry, []int64) {
 	selected := document.Entries
 	var missing []int64
 	if len(ids) > 0 {
@@ -24,15 +23,6 @@ func selectCodeContextEntries(document codeContextDocument, ids []int64, maxPrio
 			}
 			selected = append(selected, document.Entries[index])
 		}
-	}
-	if maxPriority > 0 {
-		var kept []codeContextEntry
-		for _, entry := range selected {
-			if entry.Priority <= maxPriority {
-				kept = append(kept, entry)
-			}
-		}
-		selected = kept
 	}
 	return sortedCodeContextEntries(selected), missing
 }
@@ -55,6 +45,7 @@ type codeContextChecked struct {
 	entries   []codeContextEntry
 	statuses  map[int64]codeContextStatus
 	relocated int
+	stale     int
 	note      string
 }
 
@@ -66,70 +57,90 @@ func checkCodeContextTask(task string, reader codeContextReader, store codeConte
 	document, _, note := saveCodeContextRelocations(store, task, by, reader.settings.MaxStorageBytes, document, statuses)
 	checked := codeContextChecked{document: document, statuses: statuses, note: note, entries: make([]codeContextEntry, len(selected))}
 	for index, entry := range selected {
-		if status := statuses[entry.ID]; status.relocated {
+		status := statuses[entry.ID]
+		if status.relocated {
 			entry.Start, entry.End = status.start, status.end
 			checked.relocated++
+		}
+		if status.stale {
+			checked.stale++
 		}
 		checked.entries[index] = entry
 	}
 	return checked
 }
 
+// counts is ", N relocated, M stale" for what the check found.
+func (c codeContextChecked) counts() string {
+	text := ""
+	if c.relocated > 0 {
+		text += fmt.Sprintf(", %d relocated", c.relocated)
+	}
+	if c.stale > 0 {
+		text += fmt.Sprintf(", %d stale", c.stale)
+	}
+	return text
+}
+
+// codeContextList answers list with a task: one line per entry, by priority, checked
+// against its file, and its description.
 func codeContextList(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
 	document, err := store.load(call.task)
 	if err != nil {
 		return codeContextStoreFailure(reader.execution.CallID, err)
 	}
-	selected, _ := selectCodeContextEntries(document, nil, call.maxPriority)
+	selected, _ := selectCodeContextEntries(document, nil)
 	checked := checkCodeContextTask(call.task, reader, store, by, document, selected)
-	stats := store.loadState(call.task).Stats
-	output := renderCodeContextYAML(checked.document, checked.entries, checked.statuses, &stats)
-	if checked.note != "" {
-		output = "# " + checked.note + "\n" + output
-	}
-	return output
-}
-
-// renderCodeContextYAML writes the entries as YAML. statuses holds the checked entries;
-// an entry without one is not given a status. stats, when given, is written before them.
-func renderCodeContextYAML(document codeContextDocument, entries []codeContextEntry, statuses map[int64]codeContextStatus, stats *codeContextStats) string {
 	var output strings.Builder
-	fmt.Fprintf(&output, "task: %s\ngeneration: %d\n", yamlString(document.Task), document.Generation)
-	if document.LastUpdatedBy != "" {
-		fmt.Fprintf(&output, "last_updated_by: %s\n", yamlString(document.LastUpdatedBy))
+	fmt.Fprintf(&output, "code_context task %s, generation %d: ", call.task, checked.document.Generation)
+	if len(selected) == 0 {
+		output.WriteString("no entries; save ranges with read")
+	} else {
+		fmt.Fprintf(&output, "%d entries%s", len(selected), checked.counts())
 	}
-	writeCodeContextYAMLText(&output, "description", document.Description, "")
-	if stats != nil {
-		fmt.Fprintf(&output, "stats:\n  gets: %d\n  code_bytes_printed: %d\n  code_bytes_not_repeated: %d\n  entries_relocated: %d\n  stale_seen: %d\n  reads: %d\n  reads_already_saved: %d\n  finds: %d\n  finds_without_match: %d\n",
-			stats.Gets, stats.CodeBytesPrinted, stats.CodeBytesNotRepeated, stats.EntriesRelocated, stats.StaleSeen, stats.Reads, stats.ReadsAlreadySaved, stats.Finds, stats.FindsWithoutMatch)
+	output.WriteString(codeContextTaskDescriptionLine(checked.document) + "\n")
+	if checked.note != "" {
+		output.WriteString(checked.note + "\n")
 	}
-	if len(entries) == 0 {
-		output.WriteString("entries: []\n")
-		return output.String()
-	}
-	output.WriteString("entries:\n")
-	for _, entry := range entries {
-		fmt.Fprintf(&output, "  - id: %d\n    priority: %d\n", entry.ID, entry.Priority)
-		if status, checked := statuses[entry.ID]; checked {
-			if status.stale {
-				fmt.Fprintf(&output, "    stale: true\n    stale_reason: %s\n", yamlString(status.reason))
-			} else {
-				output.WriteString("    stale: false\n")
-			}
-			if status.relocated {
-				fmt.Fprintf(&output, "    moved_from: read(%s, %d, %d)\n", yamlString(entry.Path), status.fromStart, status.fromEnd)
-			}
-		}
-		fmt.Fprintf(&output, "    command: read(%s, %d, %d)\n", yamlString(entry.Path), entry.Start, entry.End)
-		if entry.Description == "" {
-			output.WriteString("    description: \"\"\n    undescribed: true\n")
-		} else {
-			writeCodeContextYAMLText(&output, "description", entry.Description, "    ")
-		}
-		fmt.Fprintf(&output, "    updated_by: %s\n    generation: %d\n    file_sha256: %s\n    content_sha256: %s\n",
-			yamlString(entry.UpdatedBy), entry.Generation, entry.FileSHA256, entry.ContentSHA256)
+	for _, entry := range checked.entries {
+		writeCodeContextEntry(&output, entry, codeContextWhere(entry), codeContextNote(checked.statuses[entry.ID]))
 	}
 	return output.String()
+}
+
+// writeCodeContextEntry writes one entry: "#id p<priority> where [note]", then its
+// description, the first line on the same line and the rest indented below.
+func writeCodeContextEntry(output *strings.Builder, entry codeContextEntry, where, note string) {
+	fmt.Fprintf(output, "#%d p%d %s", entry.ID, entry.Priority, where)
+	if note != "" {
+		output.WriteString(" [" + note + "]")
+	}
+	if entry.Description == "" {
+		output.WriteString("  (no description)\n")
+		return
+	}
+	first, rest, _ := strings.Cut(entry.Description, "\n")
+	output.WriteString("  " + first + "\n")
+	if rest != "" {
+		output.WriteString(indentCodeContext(rest, "  ") + "\n")
+	}
+}
+
+// codeContextWhere is an entry's range as path:start-end.
+func codeContextWhere(entry codeContextEntry) string {
+	return fmt.Sprintf("%s:%d-%d", entry.Path, entry.Start, entry.End)
+}
+
+// codeContextNote says what a check found of an entry: stale and why, or where it moved
+// from; nothing for an entry that is where it was.
+func codeContextNote(status codeContextStatus) string {
+	switch {
+	case status.stale:
+		return "stale: " + status.reason
+	case status.relocated:
+		return fmt.Sprintf("moved from %d-%d", status.fromStart, status.fromEnd)
+	}
+	return ""
 }
 
 // codeContextBlock is the code printed once for one or more current entries of one file
@@ -147,16 +158,17 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 	if err != nil {
 		return codeContextStoreFailure(reader.execution.CallID, err)
 	}
-	selected, missing := selectCodeContextEntries(document, call.ids, call.maxPriority)
+	selected, missing := selectCodeContextEntries(document, call.ids)
 	checked := checkCodeContextTask(call.task, reader, store, by, document, selected)
 	document, statuses := checked.document, checked.statuses
-	var stale, current []codeContextEntry
+	var stale []codeContextEntry
+	byPath := map[string][]codeContextEntry{}
 	for _, entry := range checked.entries {
 		if statuses[entry.ID].stale {
 			stale = append(stale, entry)
 			continue
 		}
-		current = append(current, entry)
+		byPath[entry.Path] = append(byPath[entry.Path], entry)
 	}
 	var notes []string
 	if checked.note != "" {
@@ -166,49 +178,21 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 		notes = append(notes, "no entry "+joinCodeContextIDs(missing))
 	}
 	if len(document.Entries) == 0 {
-		notes = append(notes, "the task has no entries; save ranges with action read or add")
-	}
-	if call.mode == "outline" {
-		return codeContextOutline(call, reader, store, document, checked, stale, notes)
+		notes = append(notes, "the task has no entries; save ranges with read")
 	}
 
-	// Entries the caller holds unchanged since the delivery it names are not printed again.
-	var unchanged []codeContextEntry
-	if call.has["since"] {
-		state := store.loadState(call.task)
-		index := slices.IndexFunc(state.Deliveries, func(delivery codeContextDelivery) bool { return delivery.Token == call.since })
-		if index < 0 {
-			notes = append(notes, "since "+call.since+" is unknown or expired; every entry is printed")
-		} else {
-			held := state.Deliveries[index].Entries
-			var kept []codeContextEntry
-			for _, entry := range current {
-				if fingerprint, exists := held[entry.ID]; exists && fingerprint == codeContextFingerprint(entry) {
-					unchanged = append(unchanged, entry)
-					continue
-				}
-				kept = append(kept, entry)
-			}
-			current = kept
-		}
-	}
-
-	byPath := map[string][]codeContextEntry{}
-	for _, entry := range current {
-		byPath[entry.Path] = append(byPath[entry.Path], entry)
-	}
-	blocks := mergeCodeContextBlocks(byPath, statuses)
 	token := codeContextToken()
 	var shown []string
-	var shownBlocks, left []codeContextBlock
+	var left []codeContextBlock
 	var used int64
 	cutoff := int64(0)
-	for _, block := range blocks {
+	shownEntries, leftEntries := 0, 0
+	for _, block := range mergeCodeContextBlocks(byPath, statuses) {
 		rendered := renderCodeContextBlock(block, statuses, token)
 		if cutoff == 0 || block.priority <= cutoff {
 			if used+int64(len(rendered)) <= reader.settings.MaxOutputBytes {
 				shown = append(shown, rendered)
-				shownBlocks = append(shownBlocks, block)
+				shownEntries += len(block.entries)
 				used += int64(len(rendered))
 				continue
 			}
@@ -217,149 +201,36 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 			}
 		}
 		left = append(left, block)
-	}
-
-	// The since token is apart from the code markers, so knowing one never helps forge the other.
-	sinceToken := codeContextToken()
-	delivered := map[int64]string{}
-	var printedBytes, notRepeatedBytes int64
-	shownEntries, leftEntries := 0, 0
-	for _, block := range shownBlocks {
-		printedBytes += int64(len(block.content))
-		shownEntries += len(block.entries)
-		for _, entry := range block.entries {
-			delivered[entry.ID] = codeContextFingerprint(entry)
-		}
-	}
-	for _, block := range left {
 		leftEntries += len(block.entries)
 	}
-	for _, entry := range unchanged {
-		notRepeatedBytes += int64(len(statuses[entry.ID].content))
-		delivered[entry.ID] = codeContextFingerprint(entry)
-	}
-	stateErr := store.mutateState(call.task, reader.settings.MaxDeliveries, reader.settings.MaxStorageBytes, func(state *codeContextState) {
-		if len(delivered) > 0 {
-			state.Deliveries = append(state.Deliveries, codeContextDelivery{Token: sinceToken, Generation: document.Generation, CreatedAt: codeContextTimestamp(), Entries: delivered})
-		}
-		state.Stats.Gets++
-		state.Stats.CodeBytesPrinted += printedBytes
-		state.Stats.CodeBytesNotRepeated += notRepeatedBytes
-		state.Stats.EntriesRelocated += int64(checked.relocated)
-		state.Stats.StaleSeen += int64(len(stale))
-	})
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "code_context task %s, generation %d: %d entries shown", call.task, document.Generation, shownEntries)
-	if len(unchanged) > 0 {
-		fmt.Fprintf(&output, ", %d unchanged since %s", len(unchanged), call.since)
-	}
-	if checked.relocated > 0 {
-		fmt.Fprintf(&output, ", %d relocated", checked.relocated)
-	}
-	if len(stale) > 0 {
-		fmt.Fprintf(&output, ", %d stale", len(stale))
-	}
+	fmt.Fprintf(&output, "code_context task %s, generation %d: %d entries shown%s", call.task, document.Generation, shownEntries, checked.counts())
 	if leftEntries > 0 {
 		fmt.Fprintf(&output, ", %d left out by max_output_bytes", leftEntries)
 	}
-	output.WriteString(codeContextTaskDescriptionLine(document))
-	fmt.Fprintf(&output, "\ncode bytes: %d printed", printedBytes)
-	if notRepeatedBytes > 0 {
-		fmt.Fprintf(&output, ", %d not printed again", notRepeatedBytes)
-	}
-	output.WriteString("\n")
-	switch {
-	case stateErr != nil:
-		notes = append(notes, "no since token: "+oneLine(stateErr.Error()))
-	case len(delivered) > 0:
-		fmt.Fprintf(&output, "since: %s (pass it to a later get to print only what changed)\n", sinceToken)
-	}
+	output.WriteString(codeContextTaskDescriptionLine(document) + "\n")
 	for _, note := range notes {
 		output.WriteString(note + "\n")
 	}
 	for _, rendered := range shown {
 		output.WriteString("\n" + rendered)
 	}
-	if len(unchanged) > 0 {
-		fmt.Fprintf(&output, "\n=== %d entries unchanged since %s: their code and description are as that get printed them ===\n", len(unchanged), call.since)
-		for _, entry := range unchanged {
-			fmt.Fprintf(&output, "- #%d  %s %d-%d  (priority %d%s)\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority, codeContextMoved(statuses[entry.ID]))
+	if len(stale) > 0 {
+		fmt.Fprintf(&output, "\n=== %d stale entries: their code is not shown. Re-read each range (read of the same range refreshes its entry), then update or drop it ===\n", len(stale))
+		for _, entry := range stale {
+			writeCodeContextEntry(&output, entry, codeContextWhere(entry), codeContextNote(statuses[entry.ID]))
 		}
 	}
-	writeCodeContextStale(&output, stale, statuses)
 	if leftEntries > 0 {
 		output.WriteString("\n=== left out by max_output_bytes: get them with ids ===\n")
 		for _, block := range left {
 			for _, entry := range block.entries {
-				fmt.Fprintf(&output, "- id %d  %s %d-%d  (priority %d)\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority)
+				fmt.Fprintf(&output, "#%d p%d %s\n", entry.ID, entry.Priority, codeContextWhere(entry))
 			}
 		}
 	}
 	return output.String()
-}
-
-// codeContextOutline answers get with mode outline: the descriptions and ranges, no code.
-func codeContextOutline(call codeContextCall, reader codeContextReader, store codeContextStore, document codeContextDocument, checked codeContextChecked, stale []codeContextEntry, notes []string) string {
-	stateErr := store.mutateState(call.task, reader.settings.MaxDeliveries, reader.settings.MaxStorageBytes, func(state *codeContextState) {
-		state.Stats.Gets++
-		state.Stats.EntriesRelocated += int64(checked.relocated)
-		state.Stats.StaleSeen += int64(len(stale))
-	})
-	if stateErr != nil {
-		notes = append(notes, "stats not saved: "+oneLine(stateErr.Error()))
-	}
-	var output strings.Builder
-	fmt.Fprintf(&output, "code_context task %s, generation %d: outline of %d entries", call.task, document.Generation, len(checked.entries))
-	if checked.relocated > 0 {
-		fmt.Fprintf(&output, ", %d relocated", checked.relocated)
-	}
-	if len(stale) > 0 {
-		fmt.Fprintf(&output, ", %d stale", len(stale))
-	}
-	output.WriteString("; no code: get it with ids")
-	output.WriteString(codeContextTaskDescriptionLine(document) + "\n")
-	for _, note := range notes {
-		output.WriteString(note + "\n")
-	}
-	for _, entry := range checked.entries {
-		status := checked.statuses[entry.ID]
-		state := codeContextMoved(status)
-		if status.stale {
-			state = ", stale: " + status.reason
-		}
-		fmt.Fprintf(&output, "\n#%d  %s %d-%d  (priority %d, updated by %s%s)\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority, entry.UpdatedBy, state)
-		output.WriteString(codeContextDescriptionText(entry) + "\n")
-	}
-	return output.String()
-}
-
-func writeCodeContextStale(output *strings.Builder, stale []codeContextEntry, statuses map[int64]codeContextStatus) {
-	if len(stale) == 0 {
-		return
-	}
-	fmt.Fprintf(output, "\n=== %d stale entries: their code is not shown. Re-read the code (action read of the same range refreshes an entry), then update each entry (new start, end and, if the meaning changed, description) or drop it ===\n", len(stale))
-	for _, entry := range stale {
-		fmt.Fprintf(output, "- id %d  %s  (was %d-%d, priority %d): %s\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority, statuses[entry.ID].reason)
-		output.WriteString(codeContextDescriptionText(entry) + "\n")
-	}
-}
-
-// codeContextMoved notes where a relocated entry was.
-func codeContextMoved(status codeContextStatus) string {
-	if !status.relocated {
-		return ""
-	}
-	return fmt.Sprintf(", moved from %d-%d", status.fromStart, status.fromEnd)
-}
-
-// codeContextDescriptionText is an entry's description indented for get, or the hint
-// that it has none yet.
-func codeContextDescriptionText(entry codeContextEntry) string {
-	if entry.Description == "" {
-		return "  (no description yet: add one with update)"
-	}
-	return indentCodeContext(entry.Description, "  ")
 }
 
 // mergeCodeContextBlocks joins the current entries of each file whose ranges overlap or
@@ -444,8 +315,7 @@ func renderCodeContextBlock(block codeContextBlock, statuses map[int64]codeConte
 	var output strings.Builder
 	fmt.Fprintf(&output, "=== %s lines %d-%d ===\n", block.path, block.start, block.end)
 	for _, entry := range block.entries {
-		fmt.Fprintf(&output, "#%d (priority %d, lines %d-%d, updated by %s%s)\n", entry.ID, entry.Priority, entry.Start, entry.End, entry.UpdatedBy, codeContextMoved(statuses[entry.ID]))
-		output.WriteString(codeContextDescriptionText(entry) + "\n")
+		writeCodeContextEntry(&output, entry, fmt.Sprintf("lines %d-%d", entry.Start, entry.End), codeContextNote(statuses[entry.ID]))
 	}
 	writeCodeContextCode(&output, block.content, token)
 	return output.String()

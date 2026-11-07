@@ -23,8 +23,6 @@ const (
 	// defaultNativeCodeContextDefaultPriority is the priority of a range read without one:
 	// secondary, until the caller ranks it.
 	defaultNativeCodeContextDefaultPriority int64 = 6
-	defaultNativeCodeContextMaxDeliveries   int64 = 20
-	maxNativeCodeContextMaxDeliveries       int64 = 1_000
 	defaultNativeCodeContextMaxFindResults  int64 = 20
 	maxNativeCodeContextMaxFindResults      int64 = 1_000
 	defaultNativeCodeContextMaxScanTasks    int64 = 200
@@ -33,7 +31,7 @@ const (
 	maxNativeCodeContextMaxBatchItems       int64 = 1_000
 )
 
-var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes", "relocate", "default_priority", "max_deliveries", "max_find_results", "max_scan_tasks", "max_batch_items"}
+var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes", "relocate", "default_priority", "max_find_results", "max_scan_tasks", "max_batch_items"}
 
 // NativeCodeContextSettings configure native.code_context: a per-task list of exact
 // source ranges, each with a description, that get reads back as code.
@@ -59,15 +57,12 @@ type NativeCodeContextSettings struct {
 	Relocate bool
 	// DefaultPriority is the priority of a range saved by read without one.
 	DefaultPriority int64
-	// MaxDeliveries is how many get deliveries (since tokens) a task keeps; the oldest
-	// is forgotten first.
-	MaxDeliveries int64
 	// MaxFindResults bounds the entries one find returns.
 	MaxFindResults int64
-	// MaxScanTasks bounds the other tasks find and read look through, most recently
-	// written first.
+	// MaxScanTasks bounds the tasks a call without a task lists, most recently written
+	// first.
 	MaxScanTasks int64
-	// MaxBatchItems bounds the items of one read, add or update.
+	// MaxBatchItems bounds the items of one read or update.
 	MaxBatchItems int64
 }
 
@@ -116,7 +111,6 @@ func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, glob
 		{"max_output_bytes", &settings.MaxOutputBytes, defaultNativeCodeContextMaxOutputBytes, 1, maxNativeToolBytes},
 		{"max_storage_bytes", &settings.MaxStorageBytes, defaultNativeCodeContextMaxStorageBytes, 1, maxNativeToolBytes},
 		{"default_priority", &settings.DefaultPriority, defaultNativeCodeContextDefaultPriority, 1, 6},
-		{"max_deliveries", &settings.MaxDeliveries, defaultNativeCodeContextMaxDeliveries, 1, maxNativeCodeContextMaxDeliveries},
 		{"max_find_results", &settings.MaxFindResults, defaultNativeCodeContextMaxFindResults, 1, maxNativeCodeContextMaxFindResults},
 		{"max_scan_tasks", &settings.MaxScanTasks, defaultNativeCodeContextMaxScanTasks, 1, maxNativeCodeContextMaxScanTasks},
 		{"max_batch_items", &settings.MaxBatchItems, defaultNativeCodeContextMaxBatchItems, 1, maxNativeCodeContextMaxBatchItems},

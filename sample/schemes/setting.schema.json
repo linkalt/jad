@@ -1768,7 +1768,7 @@
             },
             "code_context": {
               "type": "object",
-              "description": "Go backend only. Per task, a list of exact source ranges, read(path, start, end), each with a description and the hashes of what was read. read prints a range and saves it; get prints each range's current code (with since, only what changed since an earlier get); find searches the saved descriptions and paths, also of the other tasks. A range whose saved bytes now occur exactly once elsewhere in the file is moved there (relocate); otherwise a range whose lines no longer hold the saved bytes is listed as stale for the caller to re-read and update, never printed as code. The tool never computes a new range from edits. The path rules are its own (read_style): without paths it reaches the workspace only. Needs code_context in tool_definition_paths.",
+              "description": "Go backend only. Per task, a list of exact source ranges, read(path, start, end), each with a description and the hashes of what was read. read prints a range and saves it (with a description, saves it without printing); get prints each range's current code; find searches the task's saved descriptions and paths. A range whose saved bytes now occur exactly once elsewhere in the file is moved there (relocate); otherwise a range whose lines no longer hold the saved bytes is listed as stale for the caller to re-read and update, never printed as code. The tool never computes a new range from edits. The path rules are its own (read_style): without paths it reaches the workspace only. Needs code_context in tool_definition_paths.",
               "allOf": [
                 {
                   "$ref": "#/$defs/read_style"
@@ -1779,15 +1779,14 @@
                 "max_entries": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 500, "description": "Most entries one task may hold."},
                 "max_description_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000, "description": "Longest description of one entry, or of a task (task_description), in characters."},
                 "max_range_lines": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 2000, "description": "Most lines one entry may read."},
-                "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 4194304, "description": "Largest file a range is read from; a larger one is refused on add and shows as stale on get."},
+                "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 4194304, "description": "Largest file a range is read from; a larger one is refused on read and update and shows as stale on get."},
                 "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 400000, "description": "Most bytes of code blocks one get prints (about 100K tokens by default; a ceiling, not a target). Blocks of the highest priority numbers are left out first and listed by id."},
-                "max_storage_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest task file; a write that would exceed it is refused. It also bounds the task's state file (since tokens and stats), whose oldest deliveries are forgotten first."},
+                "max_storage_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest task file; a write that would exceed it is refused."},
                 "relocate": {"type": "boolean", "default": true, "description": "Move a range whose saved bytes are no longer at its lines but occur exactly once elsewhere in the file (as many lines, the same length and SHA-256) to where they are now, and save the move. Off: such a range is stale."},
-                "default_priority": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6, "description": "Priority of a range saved by read without one and without a matching entry in another task."},
-                "max_deliveries": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20, "description": "How many get deliveries a task keeps for since; the oldest is forgotten first, and a get naming it prints everything."},
+                "default_priority": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6, "description": "Priority of a range saved by read without one."},
                 "max_find_results": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20, "description": "Most entries one find shows; the rest are counted."},
-                "max_scan_tasks": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most other task files find with all_tasks, and read looking for a description to reuse, go through, and most tasks a call without a task lists; most recently written first."},
-                "max_batch_items": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most items one read, add or update call may hold."}
+                "max_scan_tasks": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 200, "description": "Most tasks a call without a task lists, most recently written first."},
+                "max_batch_items": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 50, "description": "Most items one read or update call may hold; they are saved in one write."}
               },
               "unevaluatedProperties": false
             },

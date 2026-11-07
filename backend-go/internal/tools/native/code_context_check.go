@@ -2,8 +2,6 @@ package native
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -222,12 +220,4 @@ func saveCodeContextRelocations(store codeContextStore, task, by string, maxByte
 		return document, 0, "the relocated ranges could not be saved (" + oneLine(err.Error()) + "); they are shown where the code is now"
 	}
 	return written, moved, ""
-}
-
-// codeContextFingerprint names what a caller holds of an entry once it was printed: its
-// path, its code and its description. A relocation keeps it, so code that only moved is
-// not printed again.
-func codeContextFingerprint(entry codeContextEntry) string {
-	sum := sha256.Sum256([]byte(entry.Path + "\x00" + entry.ContentSHA256 + "\x00" + entry.Description))
-	return hex.EncodeToString(sum[:8])
 }

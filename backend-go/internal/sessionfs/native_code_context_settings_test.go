@@ -32,7 +32,6 @@ func TestNormalizeNativeCodeContextSettingsDefaultsAndOverrides(t *testing.T) {
 		MaxStorageBytes:     defaultNativeCodeContextMaxStorageBytes,
 		Relocate:            true,
 		DefaultPriority:     defaultNativeCodeContextDefaultPriority,
-		MaxDeliveries:       defaultNativeCodeContextMaxDeliveries,
 		MaxFindResults:      defaultNativeCodeContextMaxFindResults,
 		MaxScanTasks:        defaultNativeCodeContextMaxScanTasks,
 		MaxBatchItems:       defaultNativeCodeContextMaxBatchItems,
@@ -40,7 +39,7 @@ func TestNormalizeNativeCodeContextSettingsDefaultsAndOverrides(t *testing.T) {
 	if defaults.StorageDir != want.StorageDir || defaults.MaxEntries != want.MaxEntries || defaults.MaxDescriptionChars != want.MaxDescriptionChars ||
 		defaults.MaxRangeLines != want.MaxRangeLines || defaults.MaxFileBytes != want.MaxFileBytes || defaults.MaxOutputBytes != want.MaxOutputBytes ||
 		defaults.MaxStorageBytes != want.MaxStorageBytes || defaults.Relocate != want.Relocate || defaults.DefaultPriority != want.DefaultPriority ||
-		defaults.MaxDeliveries != want.MaxDeliveries || defaults.MaxFindResults != want.MaxFindResults || defaults.MaxScanTasks != want.MaxScanTasks || defaults.MaxBatchItems != want.MaxBatchItems || len(defaults.Policy.Paths) != 0 || defaults.Policy.UnrestrictedPaths {
+		defaults.MaxFindResults != want.MaxFindResults || defaults.MaxScanTasks != want.MaxScanTasks || defaults.MaxBatchItems != want.MaxBatchItems || len(defaults.Policy.Paths) != 0 || defaults.Policy.UnrestrictedPaths {
 		t.Fatalf("defaults = %+v, want %+v", *defaults, want)
 	}
 
@@ -54,14 +53,14 @@ func TestNormalizeNativeCodeContextSettingsDefaultsAndOverrides(t *testing.T) {
 
 	shared := filepath.Join(cwd, "shared")
 	configured, err := normalizeNativeCodeContextSettings(map[string]json.RawMessage{
-		"tools": json.RawMessage(`{"native":{"code_context":{"storage_dir":"` + shared + `","max_entries":7,"max_description_chars":80,"max_range_lines":30,"max_file_bytes":1000,"max_output_bytes":2000,"max_storage_bytes":3000,"relocate":false,"default_priority":2,"max_deliveries":3,"max_find_results":4,"max_scan_tasks":5,"max_batch_items":6,"paths":[{"action":"deny","path":"` + filepath.Join(cwd, "secret") + `"}]}}}`),
+		"tools": json.RawMessage(`{"native":{"code_context":{"storage_dir":"` + shared + `","max_entries":7,"max_description_chars":80,"max_range_lines":30,"max_file_bytes":1000,"max_output_bytes":2000,"max_storage_bytes":3000,"relocate":false,"default_priority":2,"max_find_results":4,"max_scan_tasks":5,"max_batch_items":6,"paths":[{"action":"deny","path":"` + filepath.Join(cwd, "secret") + `"}]}}}`),
 	}, "", "/session/setting.json", cwd, filepath.Join(cwd, "tool-data"))
 	if err != nil {
 		t.Fatalf("normalize configured: %v", err)
 	}
 	if configured.StorageDir != shared || configured.MaxEntries != 7 || configured.MaxDescriptionChars != 80 || configured.MaxRangeLines != 30 ||
 		configured.MaxFileBytes != 1000 || configured.MaxOutputBytes != 2000 || configured.MaxStorageBytes != 3000 ||
-		configured.Relocate || configured.DefaultPriority != 2 || configured.MaxDeliveries != 3 || configured.MaxFindResults != 4 || configured.MaxScanTasks != 5 || configured.MaxBatchItems != 6 {
+		configured.Relocate || configured.DefaultPriority != 2 || configured.MaxFindResults != 4 || configured.MaxScanTasks != 5 || configured.MaxBatchItems != 6 {
 		t.Fatalf("configured = %+v", *configured)
 	}
 	if len(configured.Policy.Paths) != 1 || configured.Policy.Paths[0].Action != "deny" {
@@ -88,7 +87,7 @@ func TestNormalizeNativeCodeContextSettingsRejectsInvalidValues(t *testing.T) {
 		`{"relocate":"yes"}`,
 		`{"default_priority":0}`,
 		`{"default_priority":7}`,
-		`{"max_deliveries":0}`,
+		`{"max_deliveries":3}`,
 		`{"max_find_results":1001}`,
 		`{"max_scan_tasks":0}`,
 		`{"max_batch_items":0}`,

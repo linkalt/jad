@@ -5,7 +5,7 @@
       "id": "native.code_context",
       "source": "native",
       "name": "code_context",
-      "description": "Read and save exact source ranges with descriptions for a task, find them, and print their current code.",
+      "description": "Save exact source ranges with descriptions per task, find them, and print their current code.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -13,7 +13,6 @@
             "type": "string",
             "enum": [
               "read",
-              "add",
               "update",
               "drop",
               "get",
@@ -21,22 +20,22 @@
               "find",
               "clear"
             ],
-            "description": "read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML, or without task the tasks; find searches the saved descriptions and paths; clear deletes the task. A call without arguments lists the tasks."
+            "description": "read prints lines and saves them; with a description it saves them without printing. update changes an entry by id. drop removes ids. get prints the saved code. list shows the entries, or without task the tasks (the default). find searches descriptions and paths. clear deletes the task."
           },
           "task": {
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-            "description": "Task key the entries belong to, for example T-023. Required except by list, which without it lists the tasks."
+            "description": "Task key, e.g. T-023."
           },
           "task_description": {
             "type": "string",
             "minLength": 1,
-            "description": "read, add and update: what the task is about, shown when the tasks are listed and by get; update with only task_description sets it."
+            "description": "read, update: what the task is about."
           },
           "id": {
             "type": "integer",
             "minimum": 1,
-            "description": "Entry id for update, or for add with from_task."
+            "description": "update: the entry."
           },
           "ids": {
             "type": "array",
@@ -45,12 +44,12 @@
               "minimum": 1
             },
             "minItems": 1,
-            "description": "Entry ids for drop or get; get without ids prints every entry."
+            "description": "drop, get: the entries; get without ids prints all."
           },
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "Source file, relative to cwd."
+            "description": "File, relative to cwd."
           },
           "start": {
             "type": "integer",
@@ -65,51 +64,23 @@
           "description": {
             "type": "string",
             "minLength": 1,
-            "description": "What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers. Optional on read: add it later with update."
+            "description": "What the code does and why it matters for the task; no line numbers."
           },
           "priority": {
             "type": "integer",
             "minimum": 1,
             "maximum": 6,
-            "description": "1 target, 2 callers and callees, 3 interfaces and implementations, 4 data and persistence, 5 tests, 6 secondary. get leaves out the highest numbers first."
-          },
-          "since": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{12}$",
-            "description": "get: the since token an earlier get printed. Entries whose code and description are unchanged since then are named, not printed again."
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "code",
-              "outline"
-            ],
-            "description": "get: code (default) prints descriptions and code; outline prints descriptions and ranges only."
-          },
-          "max_priority": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 6,
-            "description": "get, list and find: only entries of this priority or a lower number."
+            "description": "1 target, 2 callers/callees, 3 interfaces, 4 data, 5 tests, 6 other. get leaves out high numbers first."
           },
           "query": {
             "type": "string",
             "minLength": 1,
-            "description": "find: words to look for in the saved descriptions and paths."
-          },
-          "all_tasks": {
-            "type": "boolean",
-            "description": "find: also search the other tasks of the storage; their entries are shown only while their code is unchanged."
-          },
-          "from_task": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-            "description": "add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."
+            "description": "find: words to look for."
           },
           "items": {
             "type": "array",
             "minItems": 1,
-            "description": "read, add and update: several operations in one call, run in order; one that fails does not stop the others. Each item takes the fields a single call takes; a field given outside items (for example path) applies to every item that leaves it out.",
+            "description": "read, update: several in one call; fields outside items are their defaults.",
             "items": {
               "type": "object",
               "properties": {
@@ -137,199 +108,13 @@
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 6
-                },
-                "from_task": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
                 }
               },
               "additionalProperties": false
             }
           }
         },
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "required": [
-                "action"
-              ],
-              "properties": {
-                "action": {
-                  "not": {
-                    "const": "list"
-                  }
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "task"
-              ]
-            }
-          },
-          {
-            "if": {
-              "required": [
-                "task_description"
-              ]
-            },
-            "then": {
-              "properties": {
-                "action": {
-                  "enum": [
-                    "read",
-                    "add",
-                    "update"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "required": [
-                "items"
-              ]
-            },
-            "then": {
-              "properties": {
-                "action": {
-                  "enum": [
-                    "read",
-                    "add",
-                    "update"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "read"
-                }
-              },
-              "required": [
-                "action"
-              ],
-              "not": {
-                "required": [
-                  "items"
-                ]
-              }
-            },
-            "then": {
-              "required": [
-                "path",
-                "start",
-                "end"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "add"
-                }
-              },
-              "required": [
-                "action"
-              ],
-              "not": {
-                "required": [
-                  "items"
-                ]
-              }
-            },
-            "then": {
-              "anyOf": [
-                {
-                  "required": [
-                    "from_task",
-                    "id"
-                  ]
-                },
-                {
-                  "required": [
-                    "path",
-                    "start",
-                    "end",
-                    "description",
-                    "priority"
-                  ]
-                }
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "update"
-                }
-              },
-              "required": [
-                "action"
-              ],
-              "not": {
-                "required": [
-                  "items"
-                ]
-              }
-            },
-            "then": {
-              "anyOf": [
-                {
-                  "required": [
-                    "id"
-                  ]
-                },
-                {
-                  "required": [
-                    "task_description"
-                  ]
-                }
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "drop"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "ids"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "find"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "required": [
-                "query"
-              ]
-            }
-          }
-        ]
+        "additionalProperties": false
       }
     }
   ]

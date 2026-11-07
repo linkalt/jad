@@ -163,17 +163,11 @@ func writeCodeContextFile(dir, path, pattern string, data []byte) error {
 	return nil
 }
 
-// clear removes the task's file and its state; a task never written is already clear.
+// clear removes the task's file; a task never written is already clear.
 func (s codeContextStore) clear(task string) (bool, error) {
 	release := codeContextLocks.Lock(s.path(task))
 	err := os.Remove(s.path(task))
 	release()
-	releaseState := codeContextLocks.Lock(s.statePath(task))
-	stateErr := os.Remove(s.statePath(task))
-	releaseState()
-	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
-		return false, &codeContextStoreError{fmt.Sprintf("could not clear code_context state: %v", stateErr)}
-	}
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -183,22 +177,15 @@ func (s codeContextStore) clear(task string) (bool, error) {
 	return true, nil
 }
 
-// codeContextTaskFile is another task's file, for find and read across tasks.
+// codeContextTaskFile is one task's file, for the task list.
 type codeContextTaskFile struct {
 	task     string
 	modified time.Time
 }
 
-// otherTasks lists the task files of the directory except task, most recently written
-// first, at most limit of them.
-func (s codeContextStore) otherTasks(task string, limit int64) ([]codeContextTaskFile, error) {
-	files, _, err := s.tasks(task, limit)
-	return files, err
-}
-
-// tasks lists the task files of the directory except task (none when task is empty),
-// most recently written first, at most limit of them, and how many there are in all.
-func (s codeContextStore) tasks(task string, limit int64) ([]codeContextTaskFile, int, error) {
+// tasks lists the task files of the directory, most recently written first, at most
+// limit of them, and how many there are in all.
+func (s codeContextStore) tasks(limit int64) ([]codeContextTaskFile, int, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -209,7 +196,7 @@ func (s codeContextStore) tasks(task string, limit int64) ([]codeContextTaskFile
 	var files []codeContextTaskFile
 	for _, entry := range entries {
 		name, isJSON := strings.CutSuffix(entry.Name(), ".json")
-		if !isJSON || name == task || !entry.Type().IsRegular() || !codeContextTaskPattern.MatchString(name) {
+		if !isJSON || !entry.Type().IsRegular() || !codeContextTaskPattern.MatchString(name) {
 			continue
 		}
 		info, err := entry.Info()
@@ -229,93 +216,6 @@ func (s codeContextStore) tasks(task string, limit int64) ([]codeContextTaskFile
 		files = files[:limit]
 	}
 	return files, total, nil
-}
-
-// codeContextState is what a task's calls leave besides its entries: the deliveries a
-// later get can name with since, and counts of what the tool saved its callers. It is
-// kept apart from the task file, so it never counts against max_storage_bytes of the
-// entries and losing it loses no entry.
-type codeContextState struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Task          string                `json:"task"`
-	Deliveries    []codeContextDelivery `json:"deliveries"`
-	Stats         codeContextStats      `json:"stats"`
-}
-
-// codeContextDelivery is what one get printed: per entry id, the fingerprint of the
-// code and description the caller now holds.
-type codeContextDelivery struct {
-	Token      string           `json:"token"`
-	Generation int64            `json:"generation"`
-	CreatedAt  string           `json:"created_at"`
-	Entries    map[int64]string `json:"entries"`
-}
-
-// codeContextStats counts, per task, what the tool printed and what it spared.
-type codeContextStats struct {
-	Gets int64 `json:"gets"`
-	// CodeBytesPrinted is the code get and read printed; CodeBytesNotRepeated the code a
-	// get with since did not print again because the caller already had it.
-	CodeBytesPrinted     int64 `json:"code_bytes_printed"`
-	CodeBytesNotRepeated int64 `json:"code_bytes_not_repeated"`
-	EntriesRelocated     int64 `json:"entries_relocated"`
-	StaleSeen            int64 `json:"stale_seen"`
-	Reads                int64 `json:"reads"`
-	// ReadsAlreadySaved counts reads of lines an entry already held: a get would have
-	// given them.
-	ReadsAlreadySaved int64 `json:"reads_already_saved"`
-	Finds             int64 `json:"finds"`
-	FindsWithoutMatch int64 `json:"finds_without_match"`
-}
-
-// statePath keeps the state in a subdirectory: a task name cannot start with a dot, so
-// it is never mistaken for a task file.
-func (s codeContextStore) statePath(task string) string {
-	return filepath.Join(s.dir, ".state", task+".json")
-}
-
-func (s codeContextStore) loadState(task string) codeContextState {
-	empty := codeContextState{SchemaVersion: 1, Task: task, Deliveries: []codeContextDelivery{}}
-	data, err := os.ReadFile(s.statePath(task))
-	if err != nil {
-		return empty
-	}
-	var state codeContextState
-	// A state that cannot be read starts again empty: it holds no entry.
-	if json.Unmarshal(bytes.TrimSpace(data), &state) != nil || state.SchemaVersion != 1 || state.Task != task {
-		return empty
-	}
-	if state.Deliveries == nil {
-		state.Deliveries = []codeContextDelivery{}
-	}
-	return state
-}
-
-// mutateState applies operation to the task's state under its lock and writes it. The
-// oldest deliveries are forgotten beyond maxDeliveries or maxBytes.
-func (s codeContextStore) mutateState(task string, maxDeliveries, maxBytes int64, operation func(*codeContextState)) error {
-	path := s.statePath(task)
-	release := codeContextLocks.Lock(path)
-	defer release()
-	state := s.loadState(task)
-	operation(&state)
-	if over := int64(len(state.Deliveries)) - maxDeliveries; over > 0 {
-		state.Deliveries = state.Deliveries[over:]
-	}
-	for {
-		data, err := json.Marshal(state)
-		if err != nil {
-			return &codeContextStoreError{fmt.Sprintf("could not persist code_context state: %v", err)}
-		}
-		if int64(len(data)) > maxBytes && len(state.Deliveries) > 0 {
-			state.Deliveries = state.Deliveries[1:]
-			continue
-		}
-		if int64(len(data)) > maxBytes {
-			return &codeContextStoreError{fmt.Sprintf("code_context state of task %s would be %d bytes; max_storage_bytes is %d", task, len(data), maxBytes)}
-		}
-		return writeCodeContextFile(filepath.Dir(path), path, task+".json.tmp-", append(data, '\n'))
-	}
 }
 
 func codeContextTimestamp() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000Z") }
