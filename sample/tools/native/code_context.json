@@ -5,21 +5,23 @@
       "id": "native.code_context",
       "source": "native",
       "name": "code_context",
-      "description": "Save exact source ranges with descriptions for a task, and print their current code.",
+      "description": "Read and save exact source ranges with descriptions for a task, find them, and print their current code.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
             "enum": [
+              "read",
               "add",
               "update",
               "drop",
               "get",
               "list",
+              "find",
               "clear"
             ],
-            "description": "add saves a range; update changes one (id kept); drop removes; get prints the code; list shows the entries as YAML; clear deletes the task."
+            "description": "read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML; find searches the saved descriptions and paths; clear deletes the task."
           },
           "task": {
             "type": "string",
@@ -29,7 +31,7 @@
           "id": {
             "type": "integer",
             "minimum": 1,
-            "description": "Entry id for update."
+            "description": "Entry id for update, or for add with from_task."
           },
           "ids": {
             "type": "array",
@@ -58,13 +60,46 @@
           "description": {
             "type": "string",
             "minLength": 1,
-            "description": "What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers."
+            "description": "What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers. Optional on read: add it later with update."
           },
           "priority": {
             "type": "integer",
             "minimum": 1,
             "maximum": 6,
             "description": "1 target, 2 callers and callees, 3 interfaces and implementations, 4 data and persistence, 5 tests, 6 secondary. get leaves out the highest numbers first."
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{12}$",
+            "description": "get: the since token an earlier get printed. Entries whose code and description are unchanged since then are named, not printed again."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "code",
+              "outline"
+            ],
+            "description": "get: code (default) prints descriptions and code; outline prints descriptions and ranges only."
+          },
+          "max_priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "get, list and find: only entries of this priority or a lower number."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "find: words to look for in the saved descriptions and paths."
+          },
+          "all_tasks": {
+            "type": "boolean",
+            "description": "find: also search the other tasks of the storage; their entries are shown only while their code is unchanged."
+          },
+          "from_task": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "description": "add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."
           }
         },
         "required": [
@@ -77,7 +112,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "add"
+                  "const": "read"
                 }
               },
               "required": [
@@ -88,9 +123,38 @@
               "required": [
                 "path",
                 "start",
-                "end",
-                "description",
-                "priority"
+                "end"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "add"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "from_task",
+                    "id"
+                  ]
+                },
+                {
+                  "required": [
+                    "path",
+                    "start",
+                    "end",
+                    "description",
+                    "priority"
+                  ]
+                }
               ]
             }
           },
@@ -125,6 +189,23 @@
             "then": {
               "required": [
                 "ids"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "find"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "query"
               ]
             }
           }

@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -26,29 +25,38 @@ const codeContextToolID = "native.code_context"
 var codeContextInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["add","update","drop","get","list","clear"],"description":"add saves a range; update changes one (id kept); drop removes; get prints the code; list shows the entries as YAML; clear deletes the task."},
+    "action":{"type":"string","enum":["read","add","update","drop","get","list","find","clear"],"description":"read prints a range and saves it; add saves a range with its description; update changes one (id kept); drop removes; get prints the saved code; list shows the entries as YAML; find searches the saved descriptions and paths; clear deletes the task."},
     "task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"Task key the entries belong to, for example T-023."},
-    "id":{"type":"integer","minimum":1,"description":"Entry id for update."},
+    "id":{"type":"integer","minimum":1,"description":"Entry id for update, or for add with from_task."},
     "ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"description":"Entry ids for drop or get; get without ids prints every entry."},
     "path":{"type":"string","minLength":1,"description":"Source file, relative to cwd."},
     "start":{"type":"integer","minimum":1,"description":"First line, 1-based."},
     "end":{"type":"integer","minimum":1,"description":"Last line, inclusive."},
-    "description":{"type":"string","minLength":1,"description":"What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers."},
-    "priority":{"type":"integer","minimum":1,"maximum":6,"description":"1 target, 2 callers and callees, 3 interfaces and implementations, 4 data and persistence, 5 tests, 6 secondary. get leaves out the highest numbers first."}
+    "description":{"type":"string","minLength":1,"description":"What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers. Optional on read: add it later with update."},
+    "priority":{"type":"integer","minimum":1,"maximum":6,"description":"1 target, 2 callers and callees, 3 interfaces and implementations, 4 data and persistence, 5 tests, 6 secondary. get leaves out the highest numbers first."},
+    "since":{"type":"string","pattern":"^[0-9a-f]{12}$","description":"get: the since token an earlier get printed. Entries whose code and description are unchanged since then are named, not printed again."},
+    "mode":{"type":"string","enum":["code","outline"],"description":"get: code (default) prints descriptions and code; outline prints descriptions and ranges only."},
+    "max_priority":{"type":"integer","minimum":1,"maximum":6,"description":"get, list and find: only entries of this priority or a lower number."},
+    "query":{"type":"string","minLength":1,"description":"find: words to look for in the saved descriptions and paths."},
+    "all_tasks":{"type":"boolean","description":"find: also search the other tasks of the storage; their entries are shown only while their code is unchanged."},
+    "from_task":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$","description":"add: copy entry id of this other task (range, description, priority) once its code is checked unchanged."}
   },
   "required":["action","task"],
   "additionalProperties":false,
   "allOf":[
-    {"if":{"properties":{"action":{"const":"add"}},"required":["action"]},"then":{"required":["path","start","end","description","priority"]}},
+    {"if":{"properties":{"action":{"const":"read"}},"required":["action"]},"then":{"required":["path","start","end"]}},
+    {"if":{"properties":{"action":{"const":"add"}},"required":["action"]},"then":{"anyOf":[{"required":["from_task","id"]},{"required":["path","start","end","description","priority"]}]}},
     {"if":{"properties":{"action":{"const":"update"}},"required":["action"]},"then":{"required":["id"]}},
-    {"if":{"properties":{"action":{"const":"drop"}},"required":["action"]},"then":{"required":["ids"]}}
+    {"if":{"properties":{"action":{"const":"drop"}},"required":["action"]},"then":{"required":["ids"]}},
+    {"if":{"properties":{"action":{"const":"find"}},"required":["action"]},"then":{"required":["query"]}}
   ]
 }`)
 
 // NewCodeContextTool constructs native.code_context: per task, a list of exact source
-// ranges with descriptions. get reads each range again and prints its code; a range
-// whose bytes changed since it was saved is listed for the caller to re-read and update,
-// never printed as code. The tool never computes a new range itself.
+// ranges with descriptions. get reads each range again and prints its code. A range whose
+// saved bytes now occur exactly once elsewhere in the file is moved there; one whose bytes
+// changed is listed for the caller to re-read and update, never printed as code. The tool
+// never computes a new range from edits.
 func NewCodeContextTool(settings sessionfs.NativeCodeContextSettings) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(codeContextInputSchema)
 	if err != nil {
@@ -60,7 +68,7 @@ func NewCodeContextTool(settings sessionfs.NativeCodeContextSettings) (tools.Too
 			ID:          codeContextToolID,
 			Source:      "native",
 			Name:        "code_context",
-			Description: "Save exact source ranges with descriptions for a task, and print their current code.",
+			Description: "Read and save exact source ranges with descriptions for a task, find them, and print their current code.",
 			InputSchema: append(json.RawMessage(nil), codeContextInputSchema...),
 		},
 		Validator:          validator,
@@ -77,13 +85,15 @@ func normalizeCodeContextArguments(arguments map[string]any) map[string]any {
 	for key, value := range arguments {
 		normalized[key] = value
 	}
-	for _, key := range []string{"action", "task", "path"} {
+	for _, key := range []string{"action", "task", "path", "since", "mode", "query", "from_task"} {
 		if text, ok := normalized[key].(string); ok {
 			normalized[key] = strings.TrimSpace(text)
 		}
 	}
-	if action, ok := normalized["action"].(string); ok {
-		normalized["action"] = strings.ToLower(action)
+	for _, key := range []string{"action", "since", "mode"} {
+		if text, ok := normalized[key].(string); ok {
+			normalized[key] = strings.ToLower(text)
+		}
 	}
 	// A single id is accepted where ids is expected.
 	if _, hasIDs := normalized["ids"]; !hasIDs {
@@ -107,6 +117,12 @@ type codeContextCall struct {
 	start, end  int64
 	description string
 	priority    int64
+	since       string
+	mode        string
+	maxPriority int64
+	query       string
+	allTasks    bool
+	fromTask    string
 	has         map[string]bool
 }
 
@@ -120,7 +136,13 @@ func parseCodeContextCall(arguments map[string]any) codeContextCall {
 	if text, ok := arguments["description"].(string); ok {
 		call.description, call.has["description"] = normalizeCodeContextDescription(text), true
 	}
-	for key, target := range map[string]*int64{"id": &call.id, "start": &call.start, "end": &call.end, "priority": &call.priority} {
+	for key, target := range map[string]*string{"since": &call.since, "mode": &call.mode, "query": &call.query, "from_task": &call.fromTask} {
+		if text, ok := arguments[key].(string); ok {
+			*target, call.has[key] = text, true
+		}
+	}
+	call.allTasks, _ = arguments["all_tasks"].(bool)
+	for key, target := range map[string]*int64{"id": &call.id, "start": &call.start, "end": &call.end, "priority": &call.priority, "max_priority": &call.maxPriority} {
 		if value, ok := safeInteger(arguments[key]); ok {
 			*target, call.has[key] = value, true
 		}
@@ -155,22 +177,34 @@ func executeCodeContext(arguments map[string]any, execution tools.ExecutionConte
 	if call.has["description"] && (call.description == "" || int64(utf8.RuneCountInString(call.description)) > settings.MaxDescriptionChars) {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_description", fmt.Sprintf("description is empty or longer than %d characters", settings.MaxDescriptionChars))
 	}
-	if call.has["priority"] && (call.priority < 1 || call.priority > 6) {
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_priority", "priority must be 1 to 6")
+	for _, key := range []string{"priority", "max_priority"} {
+		if value := map[string]int64{"priority": call.priority, "max_priority": call.maxPriority}[key]; call.has[key] && (value < 1 || value > 6) {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_priority", key+" must be 1 to 6")
+		}
+	}
+	if call.has["from_task"] && (!codeContextTaskPattern.MatchString(call.fromTask) || call.fromTask == call.task) {
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_from_task", "from_task must name another task")
 	}
 	reader := codeContextReader{settings: settings, execution: execution}
 	by := codeContextCaller(execution)
 	switch call.action {
+	case "read":
+		return codeContextReadRange(call, reader, store, by)
 	case "add":
-		return codeContextAdd(call, reader, store, by)
+		if call.has["from_task"] {
+			return codeContextAddFrom(call, reader, store, by)
+		}
+		return codeContextAdd(call, reader, store, by, "")
 	case "update":
 		return codeContextUpdate(call, reader, store, by)
 	case "drop":
 		return codeContextDrop(call, callID, store, settings, by)
 	case "get":
-		return codeContextGet(call, reader, store)
+		return codeContextGet(call, reader, store, by)
 	case "list":
-		return codeContextList(call, reader, store)
+		return codeContextList(call, reader, store, by)
+	case "find":
+		return codeContextFind(call, reader, store)
 	case "clear":
 		removed, err := store.clear(call.task)
 		if err != nil {
@@ -181,7 +215,7 @@ func executeCodeContext(arguments map[string]any, execution tools.ExecutionConte
 		}
 		return fmt.Sprintf("code_context task %s cleared\n", call.task)
 	}
-	return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_action", "action must be add, update, drop, get, list or clear")
+	return tools.ExecutionError(callID, tools.StatusInvalidInput, "invalid_action", "action must be read, add, update, drop, get, list, find or clear")
 }
 
 func codeContextStoreFailure(callID string, err error) string {
@@ -201,7 +235,8 @@ type codeContextFailure struct{ text string }
 
 func (f *codeContextFailure) Error() string { return "code_context call refused" }
 
-func codeContextAdd(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
+// codeContextAdd saves call's range; note, when not empty, heads the answer.
+func codeContextAdd(call codeContextCall, reader codeContextReader, store codeContextStore, by, note string) string {
 	callID := reader.execution.CallID
 	read, failure := reader.readRange(call.path, call.start, call.end)
 	if failure != "" {
@@ -220,10 +255,10 @@ func codeContextAdd(call codeContextCall, reader codeContextReader, store codeCo
 			return &codeContextFailure{tools.ExecutionError(callID, tools.StatusInvalidInput, "too_many_entries", fmt.Sprintf("task %s already has %d entries; max_entries is %d", call.task, len(document.Entries), reader.settings.MaxEntries))}
 		}
 		saved = codeContextEntry{
-			ID: document.NextID, Priority: call.priority, Path: read.path, Start: call.start, End: call.end,
-			Description: call.description, FileSHA256: read.fileSHA256, ContentSHA256: read.contentSHA256,
+			ID: document.NextID, Priority: call.priority, Path: read.path, Start: call.start, End: call.end, Description: call.description,
 			UpdatedBy: by, UpdatedAt: codeContextTimestamp(), Generation: document.Generation,
 		}
+		read.store(&saved)
 		document.NextID++
 		document.Entries = append(document.Entries, saved)
 		return nil
@@ -233,12 +268,15 @@ func codeContextAdd(call codeContextCall, reader codeContextReader, store codeCo
 		if loadErr != nil {
 			return codeContextStoreFailure(callID, loadErr)
 		}
-		return "# the same range is already saved; nothing was added\n" + renderCodeContextYAML(current, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}})
+		return "# the same range is already saved; nothing was added\n" + renderCodeContextYAML(current, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
 	}
 	if err != nil {
 		return codeContextStoreFailure(callID, err)
 	}
-	return renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}})
+	if note != "" {
+		note = "# " + note + "\n"
+	}
+	return note + renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
 }
 
 // errCodeContextNoChange ends a mutation without writing.
@@ -273,7 +311,7 @@ func codeContextUpdate(call codeContextCall, reader codeContextReader, store cod
 			}
 		}
 		entry.Path, entry.Start, entry.End = read.path, start, end
-		entry.FileSHA256, entry.ContentSHA256 = read.fileSHA256, read.contentSHA256
+		read.store(&entry)
 		if call.has["description"] {
 			entry.Description = call.description
 		}
@@ -288,7 +326,7 @@ func codeContextUpdate(call codeContextCall, reader codeContextReader, store cod
 	if err != nil {
 		return codeContextStoreFailure(callID, err)
 	}
-	return renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}})
+	return renderCodeContextYAML(document, []codeContextEntry{saved}, map[int64]codeContextStatus{saved.ID: {}}, nil)
 }
 
 func codeContextDrop(call codeContextCall, callID string, store codeContextStore, settings sessionfs.NativeCodeContextSettings, by string) string {
@@ -347,8 +385,16 @@ type codeContextReader struct {
 type codeContextRead struct {
 	// path is the stored form: relative to the workspace when inside it.
 	path          string
+	data          []byte
+	content       []byte
 	fileSHA256    string
 	contentSHA256 string
+}
+
+// store sets the hashes of what was read on entry.
+func (r codeContextRead) store(entry *codeContextEntry) {
+	entry.FileSHA256, entry.ContentSHA256 = r.fileSHA256, r.contentSHA256
+	entry.ContentBytes, entry.HeadSHA256 = int64(len(r.content)), codeContextSHA256(codeContextHead(r.content))
 }
 
 // readFile reads the whole file the path names. A failure is a rendered tool error, and
@@ -407,7 +453,7 @@ func (r codeContextReader) readRange(path string, start, end int64) (codeContext
 	if !ok {
 		return codeContextRead{}, tools.ExecutionError(callID, tools.StatusInvalidInput, "range_outside_file", fmt.Sprintf("%s has %d lines; the range is %d-%d", display, lines, start, end))
 	}
-	return codeContextRead{path: display, fileSHA256: codeContextSHA256(data), contentSHA256: codeContextSHA256(content)}, ""
+	return codeContextRead{path: display, data: data, content: content, fileSHA256: codeContextSHA256(data), contentSHA256: codeContextSHA256(content)}, ""
 }
 
 // codeContextLines returns the exact bytes of lines start..end (1-based, inclusive),
@@ -449,312 +495,10 @@ func codeContextSHA256(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// codeContextStatus is an entry checked against the file as it is now. An entry is
-// current while its range still holds the bytes it was saved with, even when other parts
-// of the file changed; otherwise it is stale and reason says why.
-type codeContextStatus struct {
-	stale   bool
-	reason  string
-	content []byte
-}
-
-// checkCodeContext reads each distinct file of the entries once and checks every entry.
-func checkCodeContext(reader codeContextReader, entries []codeContextEntry) map[int64]codeContextStatus {
-	type fileState struct {
-		data   []byte
-		sha256 string
-		reason string
-	}
-	files := map[string]fileState{}
-	statuses := make(map[int64]codeContextStatus, len(entries))
-	for _, entry := range entries {
-		file, read := files[entry.Path]
-		if !read {
-			data, _, failure, reason := reader.readFile(entry.Path)
-			if failure == "" {
-				file = fileState{data: data, sha256: codeContextSHA256(data)}
-			} else {
-				file = fileState{reason: reason}
-			}
-			files[entry.Path] = file
-		}
-		if file.reason != "" {
-			statuses[entry.ID] = codeContextStatus{stale: true, reason: file.reason}
-			continue
-		}
-		content, _, ok := codeContextLines(file.data, entry.Start, entry.End)
-		switch {
-		case !ok:
-			statuses[entry.ID] = codeContextStatus{stale: true, reason: "the file changed and no longer has these lines"}
-		case file.sha256 == entry.FileSHA256 || codeContextSHA256(content) == entry.ContentSHA256:
-			statuses[entry.ID] = codeContextStatus{content: content}
-		default:
-			statuses[entry.ID] = codeContextStatus{stale: true, reason: "the file changed and these lines differ from what was saved"}
-		}
-	}
-	return statuses
-}
-
-func codeContextList(call codeContextCall, reader codeContextReader, store codeContextStore) string {
-	document, err := store.load(call.task)
-	if err != nil {
-		return codeContextStoreFailure(reader.execution.CallID, err)
-	}
-	entries := sortedCodeContextEntries(document.Entries)
-	return renderCodeContextYAML(document, entries, checkCodeContext(reader, entries))
-}
-
-func sortedCodeContextEntries(entries []codeContextEntry) []codeContextEntry {
-	sorted := append([]codeContextEntry(nil), entries...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if sorted[i].Priority != sorted[j].Priority {
-			return sorted[i].Priority < sorted[j].Priority
-		}
-		return sorted[i].ID < sorted[j].ID
-	})
-	return sorted
-}
-
-// renderCodeContextYAML writes the entries as YAML. statuses holds the checked entries;
-// an entry without one is not given a status.
-func renderCodeContextYAML(document codeContextDocument, entries []codeContextEntry, statuses map[int64]codeContextStatus) string {
-	var output strings.Builder
-	fmt.Fprintf(&output, "task: %s\ngeneration: %d\n", yamlString(document.Task), document.Generation)
-	if document.LastUpdatedBy != "" {
-		fmt.Fprintf(&output, "last_updated_by: %s\n", yamlString(document.LastUpdatedBy))
-	}
-	if len(entries) == 0 {
-		output.WriteString("entries: []\n")
-		return output.String()
-	}
-	output.WriteString("entries:\n")
-	for _, entry := range entries {
-		fmt.Fprintf(&output, "  - id: %d\n    priority: %d\n", entry.ID, entry.Priority)
-		if status, checked := statuses[entry.ID]; checked {
-			if status.stale {
-				fmt.Fprintf(&output, "    stale: true\n    stale_reason: %s\n", yamlString(status.reason))
-			} else {
-				output.WriteString("    stale: false\n")
-			}
-		}
-		fmt.Fprintf(&output, "    command: read(%s, %d, %d)\n", yamlString(entry.Path), entry.Start, entry.End)
-		output.WriteString("    description: |-\n")
-		for _, line := range strings.Split(entry.Description, "\n") {
-			if line == "" {
-				output.WriteString("\n")
-				continue
-			}
-			output.WriteString("      " + line + "\n")
-		}
-		fmt.Fprintf(&output, "    updated_by: %s\n    generation: %d\n    file_sha256: %s\n    content_sha256: %s\n",
-			yamlString(entry.UpdatedBy), entry.Generation, entry.FileSHA256, entry.ContentSHA256)
-	}
-	return output.String()
-}
-
 // yamlString quotes a scalar as a JSON string, which YAML reads as a double-quoted one.
 func yamlString(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
-}
-
-// codeContextBlock is the code printed once for one or more current entries of one file
-// whose ranges overlap or touch.
-type codeContextBlock struct {
-	path       string
-	start, end int64
-	priority   int64
-	entries    []codeContextEntry
-	content    []byte
-}
-
-func codeContextGet(call codeContextCall, reader codeContextReader, store codeContextStore) string {
-	document, err := store.load(call.task)
-	if err != nil {
-		return codeContextStoreFailure(reader.execution.CallID, err)
-	}
-	selected := document.Entries
-	var missing []int64
-	if len(call.ids) > 0 {
-		selected = nil
-		for _, id := range call.ids {
-			index := slices.IndexFunc(document.Entries, func(entry codeContextEntry) bool { return entry.ID == id })
-			if index < 0 {
-				missing = append(missing, id)
-				continue
-			}
-			selected = append(selected, document.Entries[index])
-		}
-	}
-	selected = sortedCodeContextEntries(selected)
-	statuses := checkCodeContext(reader, selected)
-	var stale []codeContextEntry
-	byPath := map[string][]codeContextEntry{}
-	for _, entry := range selected {
-		if statuses[entry.ID].stale {
-			stale = append(stale, entry)
-			continue
-		}
-		byPath[entry.Path] = append(byPath[entry.Path], entry)
-	}
-	blocks := mergeCodeContextBlocks(byPath, reader, statuses)
-	token := codeContextToken()
-	var shown []string
-	var left []codeContextBlock
-	var used int64
-	cutoff := int64(0)
-	for _, block := range blocks {
-		rendered := renderCodeContextBlock(block, token)
-		if cutoff == 0 || block.priority <= cutoff {
-			if used+int64(len(rendered)) <= reader.settings.MaxOutputBytes {
-				shown = append(shown, rendered)
-				used += int64(len(rendered))
-				continue
-			}
-			if cutoff == 0 {
-				cutoff = block.priority
-			}
-		}
-		left = append(left, block)
-	}
-
-	var output strings.Builder
-	shownEntries := 0
-	for _, block := range blocks {
-		shownEntries += len(block.entries)
-	}
-	leftEntries := 0
-	for _, block := range left {
-		leftEntries += len(block.entries)
-	}
-	shownEntries -= leftEntries
-	fmt.Fprintf(&output, "code_context task %s, generation %d: %d entries shown", call.task, document.Generation, shownEntries)
-	if len(stale) > 0 {
-		fmt.Fprintf(&output, ", %d stale", len(stale))
-	}
-	if leftEntries > 0 {
-		fmt.Fprintf(&output, ", %d left out by max_output_bytes", leftEntries)
-	}
-	output.WriteString("\n")
-	if len(missing) > 0 {
-		fmt.Fprintf(&output, "no entry %s\n", joinCodeContextIDs(missing))
-	}
-	if len(document.Entries) == 0 {
-		output.WriteString("the task has no entries; add ranges with action add\n")
-	}
-	for _, rendered := range shown {
-		output.WriteString("\n" + rendered)
-	}
-	if len(stale) > 0 {
-		fmt.Fprintf(&output, "\n=== %d stale entries: their code is not shown. Re-read the code, then update each entry (new start, end and, if the meaning changed, description) or drop it ===\n", len(stale))
-		for _, entry := range stale {
-			fmt.Fprintf(&output, "- id %d  %s  (was %d-%d, priority %d): %s\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority, statuses[entry.ID].reason)
-			output.WriteString(indentCodeContext(entry.Description, "  ") + "\n")
-		}
-	}
-	if leftEntries > 0 {
-		output.WriteString("\n=== left out by max_output_bytes: get them with ids ===\n")
-		for _, block := range left {
-			for _, entry := range block.entries {
-				fmt.Fprintf(&output, "- id %d  %s %d-%d  (priority %d)\n", entry.ID, entry.Path, entry.Start, entry.End, entry.Priority)
-			}
-		}
-	}
-	return output.String()
-}
-
-// mergeCodeContextBlocks joins the current entries of each file whose ranges overlap or
-// touch into one block, ordered by the block's best priority, then path and line.
-func mergeCodeContextBlocks(byPath map[string][]codeContextEntry, reader codeContextReader, statuses map[int64]codeContextStatus) []codeContextBlock {
-	var blocks []codeContextBlock
-	for path, entries := range byPath {
-		sort.SliceStable(entries, func(i, j int) bool {
-			if entries[i].Start != entries[j].Start {
-				return entries[i].Start < entries[j].Start
-			}
-			return entries[i].End < entries[j].End
-		})
-		var group []codeContextBlock
-		for _, entry := range entries {
-			if last := len(group) - 1; last >= 0 && entry.Start <= group[last].end+1 {
-				block := &group[last]
-				block.entries = append(block.entries, entry)
-				block.end = max(block.end, entry.End)
-				block.priority = min(block.priority, entry.Priority)
-				continue
-			}
-			group = append(group, codeContextBlock{path: path, start: entry.Start, end: entry.End, priority: entry.Priority, entries: []codeContextEntry{entry}})
-		}
-		for index := range group {
-			block := &group[index]
-			if len(block.entries) == 1 {
-				block.content = statuses[block.entries[0].ID].content
-				continue
-			}
-			block.content = joinCodeContextContent(*block, statuses)
-		}
-		blocks = append(blocks, group...)
-	}
-	sort.SliceStable(blocks, func(i, j int) bool {
-		if blocks[i].priority != blocks[j].priority {
-			return blocks[i].priority < blocks[j].priority
-		}
-		if blocks[i].path != blocks[j].path {
-			return blocks[i].path < blocks[j].path
-		}
-		return blocks[i].start < blocks[j].start
-	})
-	return blocks
-}
-
-// joinCodeContextContent builds a merged block's lines from its entries' checked bytes,
-// so every printed line is one some entry verified. Entries are sorted by start.
-func joinCodeContextContent(block codeContextBlock, statuses map[int64]codeContextStatus) []byte {
-	var content []byte
-	next := block.start
-	for _, entry := range block.entries {
-		if entry.End < next {
-			continue
-		}
-		lines := splitCodeContextLines(statuses[entry.ID].content)
-		skip := next - entry.Start
-		for _, line := range lines[skip:] {
-			content = append(content, line...)
-		}
-		next = entry.End + 1
-	}
-	return content
-}
-
-// splitCodeContextLines splits bytes after each newline, keeping the newlines.
-func splitCodeContextLines(content []byte) [][]byte {
-	var lines [][]byte
-	for len(content) > 0 {
-		index := bytes.IndexByte(content, '\n')
-		if index < 0 {
-			lines = append(lines, content)
-			break
-		}
-		lines = append(lines, content[:index+1])
-		content = content[index+1:]
-	}
-	return lines
-}
-
-func renderCodeContextBlock(block codeContextBlock, token string) string {
-	var output strings.Builder
-	fmt.Fprintf(&output, "=== %s lines %d-%d ===\n", block.path, block.start, block.end)
-	for _, entry := range block.entries {
-		fmt.Fprintf(&output, "#%d (priority %d, lines %d-%d, updated by %s)\n", entry.ID, entry.Priority, entry.Start, entry.End, entry.UpdatedBy)
-		output.WriteString(indentCodeContext(entry.Description, "  ") + "\n")
-	}
-	fmt.Fprintf(&output, "--- code %s ---\n", token)
-	output.Write(block.content)
-	if len(block.content) > 0 && block.content[len(block.content)-1] != '\n' {
-		output.WriteString("\n")
-	}
-	fmt.Fprintf(&output, "--- end code %s ---\n", token)
-	return output.String()
 }
 
 func indentCodeContext(text, prefix string) string {

@@ -20,9 +20,18 @@ const (
 	// one get, not a target.
 	defaultNativeCodeContextMaxOutputBytes  int64 = 400_000
 	defaultNativeCodeContextMaxStorageBytes int64 = 1 * 1024 * 1024
+	// defaultNativeCodeContextDefaultPriority is the priority of a range read without one:
+	// secondary, until the caller ranks it.
+	defaultNativeCodeContextDefaultPriority int64 = 6
+	defaultNativeCodeContextMaxDeliveries   int64 = 20
+	maxNativeCodeContextMaxDeliveries       int64 = 1_000
+	defaultNativeCodeContextMaxFindResults  int64 = 20
+	maxNativeCodeContextMaxFindResults      int64 = 1_000
+	defaultNativeCodeContextMaxScanTasks    int64 = 200
+	maxNativeCodeContextMaxScanTasks        int64 = 10_000
 )
 
-var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes"}
+var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max_description_chars", "max_range_lines", "max_file_bytes", "max_output_bytes", "max_storage_bytes", "relocate", "default_priority", "max_deliveries", "max_find_results", "max_scan_tasks"}
 
 // NativeCodeContextSettings configure native.code_context: a per-task list of exact
 // source ranges, each with a description, that get reads back as code.
@@ -43,6 +52,19 @@ type NativeCodeContextSettings struct {
 	// are left out first.
 	MaxOutputBytes  int64
 	MaxStorageBytes int64
+	// Relocate moves a range whose saved bytes are no longer at its lines but occur
+	// exactly once elsewhere in the file to where they are now.
+	Relocate bool
+	// DefaultPriority is the priority of a range saved by read without one.
+	DefaultPriority int64
+	// MaxDeliveries is how many get deliveries (since tokens) a task keeps; the oldest
+	// is forgotten first.
+	MaxDeliveries int64
+	// MaxFindResults bounds the entries one find returns.
+	MaxFindResults int64
+	// MaxScanTasks bounds the other tasks find and read look through, most recently
+	// written first.
+	MaxScanTasks int64
 }
 
 func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, globalJadRoot, settingPath, cwd, toolStorageDir string) (*NativeCodeContextSettings, error) {
@@ -89,9 +111,19 @@ func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, glob
 		{"max_file_bytes", &settings.MaxFileBytes, defaultNativeCodeContextMaxFileBytes, 1, maxNativeToolBytes},
 		{"max_output_bytes", &settings.MaxOutputBytes, defaultNativeCodeContextMaxOutputBytes, 1, maxNativeToolBytes},
 		{"max_storage_bytes", &settings.MaxStorageBytes, defaultNativeCodeContextMaxStorageBytes, 1, maxNativeToolBytes},
+		{"default_priority", &settings.DefaultPriority, defaultNativeCodeContextDefaultPriority, 1, 6},
+		{"max_deliveries", &settings.MaxDeliveries, defaultNativeCodeContextMaxDeliveries, 1, maxNativeCodeContextMaxDeliveries},
+		{"max_find_results", &settings.MaxFindResults, defaultNativeCodeContextMaxFindResults, 1, maxNativeCodeContextMaxFindResults},
+		{"max_scan_tasks", &settings.MaxScanTasks, defaultNativeCodeContextMaxScanTasks, 1, maxNativeCodeContextMaxScanTasks},
 	} {
 		if *field.target, err = configuredInteger(fields, field.name, field.fallback, field.min, field.max, settingPath, section); err != nil {
 			return nil, err
+		}
+	}
+	settings.Relocate = true
+	if raw, exists := fields["relocate"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &settings.Relocate); err != nil {
+			return nil, configError("%s: %s.relocate must be a boolean", settingPath, section)
 		}
 	}
 	if settings.StorageDir, err = normalizeNativeCodeContextStorageDir(fields, cwd, toolStorageDir, settingPath); err != nil {

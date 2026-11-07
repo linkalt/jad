@@ -23,6 +23,11 @@ func codeContextTestSettings(storage string) sessionfs.NativeCodeContextSettings
 		MaxFileBytes:        1 << 20,
 		MaxOutputBytes:      1 << 20,
 		MaxStorageBytes:     1 << 20,
+		Relocate:            true,
+		DefaultPriority:     6,
+		MaxDeliveries:       20,
+		MaxFindResults:      20,
+		MaxScanTasks:        200,
 	}
 }
 
@@ -145,23 +150,36 @@ func TestCodeContextEntryIsStaleOnlyWhenItsLinesChange(t *testing.T) {
 		t.Fatalf("an edit outside the range made it stale:\n%s", got)
 	}
 
-	// Lines inserted above move the code: the saved range now reads other bytes.
-	f.write("b.go", "new1\nnew2\n"+original)
+	// Lines inserted above move the code; its bytes occur once, so the entry follows them
+	// and the move is saved.
+	moved := "new1\nnew2\n" + original
+	f.write("b.go", moved)
 	got := f.call(`{"action":"get","task":"T-002"}`)
-	if strings.Contains(got, "--- code ") || !strings.Contains(got, "1 stale entries") ||
-		!strings.Contains(got, "- id 1  b.go  (was 4-6, priority 1): the file changed and these lines differ from what was saved\n  the target\n") {
-		t.Fatalf("a moved range was not reported stale, or its code was printed:\n%s", got)
+	if codeBlock(t, got, "b.go") != "b4\nb5\nb6\n" || strings.Contains(got, "stale") || !strings.Contains(got, "1 relocated") ||
+		!strings.Contains(got, "#1 (priority 1, lines 6-8, updated by executor, moved from 4-6)") {
+		t.Fatalf("moved code was not relocated:\n%s", got)
 	}
-	if listed := f.call(`{"action":"list","task":"T-002"}`); !strings.Contains(listed, "stale: true") || !strings.Contains(listed, `command: read("b.go", 4, 6)`) {
+	if listed := f.call(`{"action":"list","task":"T-002"}`); !strings.Contains(listed, `command: read("b.go", 6, 8)`) || strings.Contains(listed, "moved_from") || !strings.Contains(listed, "entries_relocated: 1") {
+		t.Fatalf("the relocation was not saved:\n%s", listed)
+	}
+
+	// The code itself changes: stale, its code not printed.
+	f.write("b.go", strings.Replace(moved, "b5\n", "b5 changed\n", 1))
+	got = f.call(`{"action":"get","task":"T-002"}`)
+	if strings.Contains(got, "--- code ") || !strings.Contains(got, "1 stale entries") ||
+		!strings.Contains(got, "- id 1  b.go  (was 6-8, priority 1): the file changed and these lines differ from what was saved\n  the target\n") {
+		t.Fatalf("a changed range was not reported stale, or its code was printed:\n%s", got)
+	}
+	if listed := f.call(`{"action":"list","task":"T-002"}`); !strings.Contains(listed, "stale: true") || !strings.Contains(listed, `command: read("b.go", 6, 8)`) {
 		t.Fatalf("list of a stale entry = %s", listed)
 	}
 
 	// The caller re-reads and updates the range; the id is kept.
 	updated := f.call(`{"action":"update","task":"T-002","id":1,"start":6,"end":8}`)
-	if !strings.Contains(updated, "  - id: 1\n") || !strings.Contains(updated, `command: read("b.go", 6, 8)`) || !strings.Contains(updated, "description: |-\n      the target\n") || !strings.Contains(updated, "generation: 2") {
+	if !strings.Contains(updated, "  - id: 1\n") || !strings.Contains(updated, `command: read("b.go", 6, 8)`) || !strings.Contains(updated, "description: |-\n      the target\n") || !strings.Contains(updated, "generation: 3") {
 		t.Fatalf("update = %s", updated)
 	}
-	if got := f.call(`{"action":"get","task":"T-002"}`); codeBlock(t, got, "b.go") != "b4\nb5\nb6\n" || strings.Contains(got, "stale") {
+	if got := f.call(`{"action":"get","task":"T-002"}`); codeBlock(t, got, "b.go") != "b4\nb5 changed\nb6\n" || strings.Contains(got, "stale") {
 		t.Fatalf("updated entry:\n%s", got)
 	}
 
