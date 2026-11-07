@@ -163,7 +163,10 @@ type codeContextCall struct {
 	id     int64
 	ids    []int64
 	// idRanges are the ranges of ids, first and last included, ids gives as "a-b".
-	idRanges    [][2]int64
+	idRanges [][2]int64
+	// badIDs are the ids and ranges of ids that are not whole numbers an entry id can be
+	// (one too large, say); the call is refused, never read as one without them.
+	badIDs      []string
 	path        string
 	start, end  int64
 	description string
@@ -219,19 +222,23 @@ func parseCodeContextFields(arguments map[string]any, base *codeContextCall) cod
 						from, fromErr := strconv.ParseInt(first, 10, 64)
 						to, toErr := strconv.ParseInt(last, 10, 64)
 						if fromErr != nil || toErr != nil {
-							from, to = 0, 0
+							call.badIDs = append(call.badIDs, text)
+						} else if span := [2]int64{from, to}; !slices.Contains(call.idRanges, span) {
+							call.idRanges = append(call.idRanges, span)
 						}
-						call.idRanges = append(call.idRanges, [2]int64{from, to})
 						continue
 					}
 					parsed, err := strconv.ParseInt(text, 10, 64)
-					value, ok = parsed, err == nil && parsed > 0
+					value, ok = parsed, err == nil
 				}
-				if ok && !slices.Contains(call.ids, value) {
+				switch {
+				case !ok || value < 1:
+					call.badIDs = append(call.badIDs, fmt.Sprint(item))
+				case !slices.Contains(call.ids, value):
 					call.ids = append(call.ids, value)
 				}
 			}
-			call.has["ids"] = len(call.ids) > 0 || len(call.idRanges) > 0
+			call.has["ids"] = len(call.ids) > 0 || len(call.idRanges) > 0 || len(call.badIDs) > 0
 		}
 	}
 	if text, ok := arguments["path"].(string); ok {
@@ -319,6 +326,9 @@ func validateCodeContextCall(call codeContextCall, settings sessionfs.NativeCode
 		return invalid("missing_fields", "find needs query")
 	case call.action == "update" && !call.has["items"] && !call.has["id"] && !call.has["task_description"]:
 		return invalid("missing_fields", "update needs id, items or task_description")
+	}
+	if len(call.badIDs) > 0 {
+		return invalid("invalid_id", fmt.Sprintf("ids holds %s, which is not an entry id; ids are whole numbers from 1, or ranges such as \"1-20\"", call.badIDs[0]))
 	}
 	for _, span := range call.idRanges {
 		if span[0] < 1 || span[1] < span[0] {

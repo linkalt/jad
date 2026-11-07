@@ -35,17 +35,23 @@ func TestCodeContextIDRanges(t *testing.T) {
 			t.Fatalf("%s showed %q, want %q:\n%s", arguments, descriptions, want, got)
 		}
 	}
-	if got := f.call(`{"action":"get","task":"T-40","ids":["10-20",2,1]}`); !strings.Contains(got, ": 1 entries shown\nno entry 2, 10-20\n") {
+	// A range given twice is reported once.
+	if got := f.call(`{"action":"get","task":"T-40","ids":["10-20",2,1,"10-20"]}`); !strings.Contains(got, ": 1 entries shown\nno entry 2, 10-20\n") {
 		t.Fatalf("ids and ranges naming no entry were not reported:\n%s", got)
 	}
 	if got := f.call(`{"action":"drop","task":"T-40","ids":["3-4","7-9"]}`); !strings.Contains(got, ": dropped 3, 4; no entry 7-9\n") {
 		t.Fatalf("drop of id ranges:\n%s", got)
 	}
 	for arguments, want := range map[string]string{
-		`{"action":"get","task":"T-40","ids":["5-2"]}`:                    "error_code: invalid_range",
-		`{"action":"get","task":"T-40","ids":["0-3"]}`:                    "validation_failed",
-		`{"action":"get","task":"T-40","ids":["a-b"]}`:                    "validation_failed",
-		`{"action":"get","task":"T-40","ids":["99999999999999999999-1"]}`: "error_code: invalid_range",
+		`{"action":"get","task":"T-40","ids":["5-2"]}`: "error_code: invalid_range",
+		`{"action":"get","task":"T-40","ids":["0-3"]}`: "validation_failed",
+		`{"action":"get","task":"T-40","ids":["a-b"]}`: "validation_failed",
+		// An id too large for an entry is refused, never read as get without ids (all).
+		`{"action":"get","task":"T-40","ids":["99999999999999999999-1"]}`: `ids holds 99999999999999999999-1, which is not an entry id`,
+		`{"action":"get","task":"T-40","ids":["99999999999999999999"]}`:   "error_code: invalid_id",
+		`{"action":"get","task":"T-40","ids":[99999999999999999999]}`:     "error_code: invalid_id",
+		`{"action":"get","task":"T-40","ids":[9007199254740993]}`:         "error_code: invalid_id",
+		`{"action":"drop","task":"T-40","ids":[99999999999999999999]}`:    "error_code: invalid_id",
 	} {
 		if got := f.call(arguments); !strings.Contains(got, want) {
 			t.Fatalf("%s answered, want %s:\n%s", arguments, want, got)

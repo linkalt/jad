@@ -101,7 +101,7 @@ task description: Make the glob brace cap configurable.
 3. **Stale entries:** each entry's line with the reason, but no code. The caller re-reads the code and then updates or drops the entry.
 4. **Left out:** entries over `max_output_bytes`, as `#id p<priority> path:start-end`.
 
-`ids` of `get` and `drop` takes entry ids and ranges of ids, `"a-b"` with both included, so a large task is read in parts (`["1-20"]`, then `["21-40"]`). A range skips the ids no entry has (dropped ones); only a range that names no entry at all, or a single id with no entry, is reported as `no entry`.
+`ids` of `get` and `drop` takes entry ids and ranges of ids, `"a-b"` with both included, so a large task is read in parts (`["1-20"]`, then `["21-40"]`). A range skips the ids no entry has (dropped ones); only a range that names no entry at all, or a single id with no entry, is reported as `no entry`. An id or range that is not a whole number an entry id can be (one too large, say) refuses the call with `invalid_id`, so it is never read as `get` without ids.
 
 ## Staleness
 
