@@ -60,6 +60,8 @@ code_context({action: "read", task: "T-023", path: "internal/tools/native/glob_m
               description: "expandGlobBraces expands a brace pattern ... so this is where the cap becomes configurable."})  // saves, no code printed
 code_context({action: "get", task: "T-023"})                 // every entry: descriptions and current code
 code_context({action: "get", task: "T-023", ids: [4, 7]})
+code_context({action: "get", task: "T-023", path: "internal/tools/native/glob_match.go", start: 40, end: 55})  // only these lines
+code_context({action: "get", task: "T-023", id: 4, start: 120})  // entry 4 from line 120 to its end
 code_context({action: "find", task: "T-023", query: "glob cap"})
 code_context({action: "list", task: "T-023"})                // one line per entry, no code, with stale and moved notes
 code_context({action: "update", task: "T-023", id: 1, start: 36, end: 70})  // id kept; omitted fields kept
@@ -99,6 +101,8 @@ task description: Make the glob brace cap configurable.
 2. **Code blocks:** one block per file region, merging current entries of one file whose ranges overlap or touch. A block shows every entry's line, then the exact code between `--- code <token> ---` and `--- end code <token> ---`. The token is random per call.
 3. **Stale entries:** each entry's line with the reason, but no code. The caller re-reads the code and then updates or drops the entry.
 4. **Left out:** entries over `max_output_bytes`, as `#id p<priority> path:start-end`.
+
+Without `path`, `start` or `end`, `get` prints its entries whole (all of them, or those of `ids`). `path` keeps the entries of that file. `start` and `end` (each optional, and needing `path` or `ids`) keep the entries that hold any of those lines, as relocated, and print only those lines of each block; a cut block's header names the whole range, `=== a.go lines 40-55 of 34-63 ===`. This is how a block left out by `max_output_bytes` is read in parts. When no entry holds the lines, the header shows 0 entries and a note says so.
 
 ## Staleness
 

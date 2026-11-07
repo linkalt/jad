@@ -49,17 +49,17 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "description": "File, relative to cwd."
+            "description": "File, relative to cwd. get: only its entries."
           },
           "start": {
             "type": "integer",
             "minimum": 1,
-            "description": "First line, 1-based."
+            "description": "First line, 1-based. get: print from this line (with path or ids); default all."
           },
           "end": {
             "type": "integer",
             "minimum": 1,
-            "description": "Last line, inclusive."
+            "description": "Last line, inclusive. get: print to this line; default all."
           },
           "description": {
             "type": "string",

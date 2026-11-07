@@ -3,6 +3,7 @@ package native
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -148,9 +149,102 @@ func codeContextNote(status codeContextStatus) string {
 type codeContextBlock struct {
 	path       string
 	start, end int64
-	priority   int64
-	entries    []codeContextEntry
-	content    []byte
+	// whole is the merged range when a get range printed only part of it, else zero.
+	whole    [2]int64
+	priority int64
+	entries  []codeContextEntry
+	content  []byte
+}
+
+// codeContextSpan is the part of the saved code a get prints: the entries of path when
+// path is set, and lines start..end of them; zero start and end are the whole range.
+type codeContextSpan struct {
+	path       string
+	start, end int64
+}
+
+func newCodeContextSpan(call codeContextCall, workspaceRoot string) codeContextSpan {
+	span := codeContextSpan{}
+	if call.has["path"] {
+		path := call.path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workspaceRoot, path)
+		}
+		span.path = displayPath(workspaceRoot, filepath.Clean(path))
+	}
+	if call.has["start"] {
+		span.start = call.start
+	}
+	if call.has["end"] {
+		span.end = call.end
+	}
+	return span
+}
+
+func (s codeContextSpan) lines() bool { return s.start > 0 || s.end > 0 }
+
+// overlaps reports whether an entry's range has a line the span prints.
+func (s codeContextSpan) overlaps(entry codeContextEntry) bool {
+	return (s.start == 0 || entry.End >= s.start) && (s.end == 0 || entry.Start <= s.end)
+}
+
+// String is how the header names the span: " in path lines a-b".
+func (s codeContextSpan) String() string {
+	text := ""
+	if s.path != "" {
+		text = " in " + s.path
+	}
+	if s.lines() {
+		text += " " + s.linesText()
+	}
+	return text
+}
+
+func (s codeContextSpan) linesText() string {
+	switch {
+	case s.start > 0 && s.end > 0:
+		return fmt.Sprintf("lines %d-%d", s.start, s.end)
+	case s.start > 0:
+		return fmt.Sprintf("lines %d-end", s.start)
+	}
+	return fmt.Sprintf("lines 1-%d", s.end)
+}
+
+// missing is the note of a get whose span matched no entry.
+func (s codeContextSpan) missing(ids []int64) string {
+	text := "no entry"
+	if len(ids) > 0 {
+		text += " of ids " + joinCodeContextIDs(ids)
+	}
+	if s.path != "" {
+		text += " in " + s.path
+	}
+	if s.lines() {
+		text += " holds " + s.linesText()
+	}
+	return text
+}
+
+// clip cuts a block to the span's lines, keeping its merged range in whole.
+func (s codeContextSpan) clip(block codeContextBlock) codeContextBlock {
+	start, end := block.start, block.end
+	if s.start > start {
+		start = s.start
+	}
+	if s.end > 0 && s.end < end {
+		end = s.end
+	}
+	if start == block.start && end == block.end {
+		return block
+	}
+	lines := splitCodeContextLines(block.content)
+	var content []byte
+	for _, line := range lines[start-block.start : end-block.start+1] {
+		content = append(content, line...)
+	}
+	block.whole = [2]int64{block.start, block.end}
+	block.start, block.end, block.content = start, end, content
+	return block
 }
 
 func codeContextGet(call codeContextCall, reader codeContextReader, store codeContextStore, by string) string {
@@ -159,8 +253,25 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 		return codeContextStoreFailure(reader.execution.CallID, err)
 	}
 	selected, missing := selectCodeContextEntries(document, call.ids)
+	span := newCodeContextSpan(call, reader.execution.WorkspaceRoot)
+	if span.path != "" {
+		selected = slices.DeleteFunc(selected, func(entry codeContextEntry) bool { return entry.Path != span.path })
+	}
 	checked := checkCodeContextTask(call.task, reader, store, by, document, selected)
 	document, statuses := checked.document, checked.statuses
+	// The lines are matched after the check, against the ranges as relocated.
+	if span.lines() {
+		checked.entries = slices.DeleteFunc(checked.entries, func(entry codeContextEntry) bool { return !span.overlaps(entry) })
+		checked.relocated, checked.stale = 0, 0
+		for _, entry := range checked.entries {
+			if statuses[entry.ID].relocated {
+				checked.relocated++
+			}
+			if statuses[entry.ID].stale {
+				checked.stale++
+			}
+		}
+	}
 	var stale []codeContextEntry
 	byPath := map[string][]codeContextEntry{}
 	for _, entry := range checked.entries {
@@ -177,8 +288,11 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 	if len(missing) > 0 {
 		notes = append(notes, "no entry "+joinCodeContextIDs(missing))
 	}
-	if len(document.Entries) == 0 {
+	switch {
+	case len(document.Entries) == 0:
 		notes = append(notes, "the task has no entries; save ranges with read")
+	case len(checked.entries) == 0 && (span.path != "" || span.lines()):
+		notes = append(notes, span.missing(call.ids))
 	}
 
 	token := codeContextToken()
@@ -188,6 +302,7 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 	cutoff := int64(0)
 	shownEntries, leftEntries := 0, 0
 	for _, block := range mergeCodeContextBlocks(byPath, statuses) {
+		block = span.clip(block)
 		rendered := renderCodeContextBlock(block, statuses, token)
 		if cutoff == 0 || block.priority <= cutoff {
 			if used+int64(len(rendered)) <= reader.settings.MaxOutputBytes {
@@ -205,7 +320,7 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 	}
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "code_context task %s, generation %d: %d entries shown%s", call.task, document.Generation, shownEntries, checked.counts())
+	fmt.Fprintf(&output, "code_context task %s, generation %d: %d entries shown%s%s", call.task, document.Generation, shownEntries, span, checked.counts())
 	if leftEntries > 0 {
 		fmt.Fprintf(&output, ", %d left out by max_output_bytes", leftEntries)
 	}
@@ -223,7 +338,7 @@ func codeContextGet(call codeContextCall, reader codeContextReader, store codeCo
 		}
 	}
 	if leftEntries > 0 {
-		output.WriteString("\n=== left out by max_output_bytes: get them with ids ===\n")
+		output.WriteString("\n=== left out by max_output_bytes: get them with ids, or part of one with ids, start and end ===\n")
 		for _, block := range left {
 			for _, entry := range block.entries {
 				fmt.Fprintf(&output, "#%d p%d %s\n", entry.ID, entry.Priority, codeContextWhere(entry))
@@ -313,7 +428,11 @@ func splitCodeContextLines(content []byte) [][]byte {
 
 func renderCodeContextBlock(block codeContextBlock, statuses map[int64]codeContextStatus, token string) string {
 	var output strings.Builder
-	fmt.Fprintf(&output, "=== %s lines %d-%d ===\n", block.path, block.start, block.end)
+	fmt.Fprintf(&output, "=== %s lines %d-%d", block.path, block.start, block.end)
+	if block.whole != [2]int64{} {
+		fmt.Fprintf(&output, " of %d-%d", block.whole[0], block.whole[1])
+	}
+	output.WriteString(" ===\n")
 	for _, entry := range block.entries {
 		writeCodeContextEntry(&output, entry, fmt.Sprintf("lines %d-%d", entry.Start, entry.End), codeContextNote(statuses[entry.ID]))
 	}

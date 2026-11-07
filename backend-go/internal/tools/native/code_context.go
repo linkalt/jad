@@ -30,9 +30,9 @@ var codeContextInputSchema = json.RawMessage(`{
     "task_description":{"type":"string","minLength":1,"description":"read, update: what the task is about."},
     "id":{"type":"integer","minimum":1,"description":"update: the entry."},
     "ids":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"description":"drop, get: the entries; get without ids prints all."},
-    "path":{"type":"string","minLength":1,"description":"File, relative to cwd."},
-    "start":{"type":"integer","minimum":1,"description":"First line, 1-based."},
-    "end":{"type":"integer","minimum":1,"description":"Last line, inclusive."},
+    "path":{"type":"string","minLength":1,"description":"File, relative to cwd. get: only its entries."},
+    "start":{"type":"integer","minimum":1,"description":"First line, 1-based. get: print from this line (with path or ids); default all."},
+    "end":{"type":"integer","minimum":1,"description":"Last line, inclusive. get: print to this line; default all."},
     "description":{"type":"string","minLength":1,"description":"What the code does and why it matters for the task; no line numbers."},
     "priority":{"type":"integer","minimum":1,"maximum":6,"description":"1 target, 2 callers/callees, 3 interfaces, 4 data, 5 tests, 6 other. get leaves out high numbers first."},
     "query":{"type":"string","minLength":1,"description":"find: words to look for."},
@@ -289,6 +289,10 @@ func validateCodeContextCall(call codeContextCall, settings sessionfs.NativeCode
 		return invalid("missing_fields", "find needs query")
 	case call.action == "update" && !call.has["items"] && !call.has["id"] && !call.has["task_description"]:
 		return invalid("missing_fields", "update needs id, items or task_description")
+	case call.action == "get" && (call.has["start"] || call.has["end"]) && !call.has["path"] && !call.has["ids"]:
+		return invalid("missing_fields", "get with start or end needs path or ids")
+	case call.action == "get" && call.has["start"] && call.has["end"] && call.end < call.start:
+		return invalid("invalid_range", "end must be at least start")
 	}
 	if call.has["task_description"] && !validCodeContextDescription(call.taskDescription, settings) {
 		return invalid("invalid_description", fmt.Sprintf("task_description is empty or longer than %d characters", settings.MaxDescriptionChars))
