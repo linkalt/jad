@@ -10,7 +10,7 @@ import (
 var (
 	toolNodeNames   = []string{"native", "extension", "mcp"}
 	nativeToolNames = []string{
-		"read_image", "lsp", "exec", "async", "task", "memory", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
+		"read_image", "lsp", "exec", "async", "task", "code_context", "memory", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
 	}
 	// removedNativeTools are the tools exec replaced, each with what to do instead. Their
 	// keys are refused by name, never ignored, so a setting that still names one says why.

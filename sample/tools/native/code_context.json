@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "native.code_context",
+      "source": "native",
+      "name": "code_context",
+      "description": "Save exact source ranges with descriptions for a task, and print their current code.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "update",
+              "drop",
+              "get",
+              "list",
+              "clear"
+            ],
+            "description": "add saves a range; update changes one (id kept); drop removes; get prints the code; list shows the entries as YAML; clear deletes the task."
+          },
+          "task": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "description": "Task key the entries belong to, for example T-023."
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Entry id for update."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minItems": 1,
+            "description": "Entry ids for drop or get; get without ids prints every entry."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Source file, relative to cwd."
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "First line, 1-based."
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Last line, inclusive."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What the code does, its inputs, outputs and constraints, and why it matters for the task; no line numbers."
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "1 target, 2 callers and callees, 3 interfaces and implementations, 4 data and persistence, 5 tests, 6 secondary. get leaves out the highest numbers first."
+          }
+        },
+        "required": [
+          "action",
+          "task"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "add"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "path",
+                "start",
+                "end",
+                "description",
+                "priority"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "drop"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "ids"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

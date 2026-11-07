@@ -187,6 +187,7 @@ type SessionConfig struct {
 	ExtensionWebSearch       *ExtensionWebSearchSettings
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
+	NativeCodeContext        *NativeCodeContextSettings
 	NativeMemory             *NativeMemorySettings
 	NativeRequestDraft       *NativeRequestDraftSettings
 	NativeSkill              *NativeSkillSettings
@@ -479,6 +480,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	nativeCodeContext, err := normalizeNativeCodeContextSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, storagePaths.ToolStorage)
+	if err != nil {
+		return SessionConfig{}, err
+	}
 	nativeMemory, err := normalizeNativeMemorySettings(setting, settingPath, cwd, storagePaths.ToolStorage)
 	if err != nil {
 		return SessionConfig{}, err
@@ -648,6 +653,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ExtensionWebSearch:       extensionWebSearch,
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
+		NativeCodeContext:        nativeCodeContext,
 		NativeMemory:             nativeMemory,
 		NativeRequestDraft:       nativeRequestDraft,
 		NativeSkill:              nativeSkill,

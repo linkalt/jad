@@ -704,7 +704,7 @@
           "type": "array",
           "default": [],
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^(lsp|read_image|exec|async|task|memory|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+          "items": {"type": "string", "pattern": "^(lsp|read_image|exec|async|task|code_context|memory|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
           "description": "Tools kept in plan mode although they can change something, as tools.allow entries: a native tool name, mcp:<server>:<tool> or mcp:<server>:*. tools.allow and tools.deny still apply to them."
         }
       },
@@ -1765,6 +1765,25 @@
                 }
               },
               "additionalProperties": false
+            },
+            "code_context": {
+              "type": "object",
+              "description": "Go backend only. Per task, a list of exact source ranges, read(path, start, end), each with a description and the hashes of what was read. get prints each range's current code; a range whose lines no longer hold the saved bytes is listed as stale for the caller to re-read and update, never printed as code. The tool never computes a new range. The path rules are its own (read_style): without paths it reaches the workspace only. Needs code_context in tool_definition_paths.",
+              "allOf": [
+                {
+                  "$ref": "#/$defs/read_style"
+                }
+              ],
+              "properties": {
+                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".code_context", "description": "Directory of the task files (<task>.json). Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; an absolute path is used as-is, which is how profiles share one task's entries."},
+                "max_entries": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 500, "description": "Most entries one task may hold."},
+                "max_description_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000, "description": "Longest description of one entry, in characters."},
+                "max_range_lines": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 2000, "description": "Most lines one entry may read."},
+                "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 4194304, "description": "Largest file a range is read from; a larger one is refused on add and shows as stale on get."},
+                "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 400000, "description": "Most bytes of code blocks one get prints (about 100K tokens by default; a ceiling, not a target). Blocks of the highest priority numbers are left out first and listed by id."},
+                "max_storage_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576, "description": "Largest task file; a write that would exceed it is refused."}
+              },
+              "unevaluatedProperties": false
             },
             "memory": {
               "type": "object",
