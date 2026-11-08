@@ -406,7 +406,7 @@ func (c *layoutCompose) noteProfileName(id string, profile layoutProfileFile) {
 // <state>/<session>/<category>/<name>/.
 //
 // The transcript, staging and HTTP debug stay under the root state folder. The tool
-// storage (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit
+// storage (bash spill, records, tasks, fetch, processes, sub-agent runs, write/edit
 // backups) lives under the session cwd, in toolBase, so the file tools reach it with no
 // extra path rule and a project keeps its own tool state.
 func (c *layoutCompose) storageEntry(profile catalog.Entry, toolBase string) map[string]any {

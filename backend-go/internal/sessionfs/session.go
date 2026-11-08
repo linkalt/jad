@@ -188,7 +188,7 @@ type SessionConfig struct {
 	NativeAsync              *NativeAsyncSettings
 	NativeTask               *NativeTaskSettings
 	NativeCodeContext        *NativeCodeContextSettings
-	NativeMemory             *NativeMemorySettings
+	NativeRecords            *NativeRecordsSettings
 	NativeRequestDraft       *NativeRequestDraftSettings
 	NativeSkill              *NativeSkillSettings
 	ExtensionDecideSystemone *ExtensionDecideSystemoneSettings
@@ -484,7 +484,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeMemory, err := normalizeNativeMemorySettings(setting, settingPath, cwd, storagePaths.ToolStorage)
+	nativeRecords, err := normalizeNativeRecordsSettings(setting, settingPath, cwd, storagePaths.ToolStorage)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -543,7 +543,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 			}
 		}
 	}
-	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeTask, nativeMemory, nativeSubagent, nativeAsync)
+	stateContext, err := normalizeStateContextSettings(setting, settingPath, cwd, nativeTask, nativeRecords, nativeSubagent, nativeAsync)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -654,7 +654,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeAsync:              nativeAsync,
 		NativeTask:               nativeTask,
 		NativeCodeContext:        nativeCodeContext,
-		NativeMemory:             nativeMemory,
+		NativeRecords:            nativeRecords,
 		NativeRequestDraft:       nativeRequestDraft,
 		NativeSkill:              nativeSkill,
 		ExtensionDecideSystemone: extensionDecideSystemone,

@@ -1136,7 +1136,7 @@ func TestLayoutSubagentWithoutModelKeepsTheCallersModel(t *testing.T) {
 	}
 }
 
-// Tool state (bash spill, memory, tasks, fetch, processes, sub-agent runs, write/edit
+// Tool state (bash spill, records, tasks, fetch, processes, sub-agent runs, write/edit
 // backups) lives under the session cwd, so the file tools reach it with no extra rule.
 // The transcript and staging stay under the root state folder.
 func TestLayoutToolStorageIsUnderTheCWD(t *testing.T) {

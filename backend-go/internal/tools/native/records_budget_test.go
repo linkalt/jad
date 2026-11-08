@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestMemoryStoreListByteBudgetStopsBeforeNextRecord(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	store := NewMemoryStore(root)
-	settings := memoryTestSettings(root)
+func TestRecordsStoreListByteBudgetStopsBeforeNextRecord(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	store := NewRecordsStore(root)
+	settings := recordsTestSettings(root)
 	first, err := store.Create("note", map[string]any{"value": "x"}, settings)
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestMemoryStoreListByteBudgetStopsBeforeNextRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oneItemBytes, err := memoryListItemsSize([]MemoryItem{newest})
+	oneItemBytes, err := recordsListItemsSize([]RecordsItem{newest})
 	if err != nil {
 		t.Fatal(err)
 	}

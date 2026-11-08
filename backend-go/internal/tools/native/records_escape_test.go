@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// memoryEscapeCases are the characters the writer must escape exactly once. U+2028 is
-// written raw, matching the JavaScript-compatible output checked in memory_json_test.go.
-var memoryEscapeCases = []struct {
+// recordsEscapeCases are the characters the writer must escape exactly once. U+2028 is
+// written raw, matching the JavaScript-compatible output checked in records_json_test.go.
+var recordsEscapeCases = []struct {
 	name  string
 	input string
 }{
@@ -24,15 +24,15 @@ var memoryEscapeCases = []struct {
 	{"line separator U+2028", "\u2028"},
 }
 
-func TestMemoryStoreRoundTripsEscapedStrings(t *testing.T) {
-	for _, tc := range memoryEscapeCases {
+func TestRecordsStoreRoundTripsEscapedStrings(t *testing.T) {
+	for _, tc := range recordsEscapeCases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "memory")
-			store := NewMemoryStore(root)
+			root := filepath.Join(t.TempDir(), "records")
+			store := NewRecordsStore(root)
 			store.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
-			settings := memoryTestSettings(root)
-			value := memoryValueFromGo(map[string]any{"text": tc.input})
-			created, err := store.CreateValue("note", value, memoryGoMap(value), settings)
+			settings := recordsTestSettings(root)
+			value := recordsValueFromGo(map[string]any{"text": tc.input})
+			created, err := store.CreateValue("note", value, recordsGoMap(value), settings)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -47,14 +47,14 @@ func TestMemoryStoreRoundTripsEscapedStrings(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreUpdatesDoNotGrowEscapedStrings(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	store := NewMemoryStore(root)
+func TestRecordsStoreUpdatesDoNotGrowEscapedStrings(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	store := NewRecordsStore(root)
 	store.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
-	settings := memoryTestSettings(root)
+	settings := recordsTestSettings(root)
 	input := "q\" b\\ n\n t\t"
-	value := memoryValueFromGo(map[string]any{"text": input})
-	created, err := store.CreateValue("note", value, memoryGoMap(value), settings)
+	value := recordsValueFromGo(map[string]any{"text": input})
+	created, err := store.CreateValue("note", value, recordsGoMap(value), settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +65,8 @@ func TestMemoryStoreUpdatesDoNotGrowEscapedStrings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d Get: %v", round, err)
 		}
-		updated := memoryValueFromGo(map[string]any{"text": current.Data["text"]})
-		item, err := store.UpdateValue("note", ref, etag, updated, memoryGoMap(updated), settings)
+		updated := recordsValueFromGo(map[string]any{"text": current.Data["text"]})
+		item, err := store.UpdateValue("note", ref, etag, updated, recordsGoMap(updated), settings)
 		if err != nil {
 			t.Fatalf("round %d UpdateValue: %v", round, err)
 		}
@@ -86,9 +86,9 @@ func TestMemoryStoreUpdatesDoNotGrowEscapedStrings(t *testing.T) {
 	}
 }
 
-// legacyMemoryRecord writes text as the pre-fix writer did: each escape's backslash is
+// legacyRecord writes text as the pre-fix writer did: each escape's backslash is
 // doubled. The test writes the file directly so the fixture cannot drift with the fix.
-func legacyMemoryRecord(t *testing.T, path, text string) {
+func legacyRecord(t *testing.T, path, text string) {
 	t.Helper()
 	legacy := strings.NewReplacer(`\`, `\\`).Replace(text)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -99,14 +99,14 @@ func legacyMemoryRecord(t *testing.T, path, text string) {
 	}
 }
 
-func TestMemoryStoreReadsAndRepairsLegacyEscapes(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	store := NewMemoryStore(root)
-	settings := memoryTestSettings(root)
+func TestRecordsStoreReadsAndRepairsLegacyEscapes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	store := NewRecordsStore(root)
+	settings := recordsTestSettings(root)
 	name := "note-20260101T000000.000Z-0000000000000001-11111111-1111-4111-8111-111111111111.json"
 	ref := "note/" + name
 	path := filepath.Join(root, "note", name)
-	legacyMemoryRecord(t, path, "{\n  \"text\": \"a\\\"b\"\n}\n")
+	legacyRecord(t, path, "{\n  \"text\": \"a\\\"b\"\n}\n")
 	if _, err := store.Get("note", ref, settings); err != nil {
 		t.Fatalf("Get of legacy record: %v", err)
 	}
@@ -130,10 +130,10 @@ func TestMemoryStoreReadsAndRepairsLegacyEscapes(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreRepairLeavesUnprovenRecordsAlone(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	store := NewMemoryStore(root)
-	settings := memoryTestSettings(root)
+func TestRecordsStoreRepairLeavesUnprovenRecordsAlone(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	store := NewRecordsStore(root)
+	settings := recordsTestSettings(root)
 	name := "note-20260101T000000.000Z-0000000000000002-22222222-2222-4222-8222-222222222222.json"
 	ref := "note/" + name
 	path := filepath.Join(root, "note", name)

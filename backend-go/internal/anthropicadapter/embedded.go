@@ -17,7 +17,7 @@ var embeddedRefusedKeys = []string{"listen", "caller_token_env"}
 // growing history every round, seconds apart, so the prefix is read back from the cache
 // far more often than it is written. (The standalone adapter keeps caching off: its
 // callers are unknown.) The last-history breakpoint, not the automatic one, because jad
-// inserts its state context (task list, memory, processes) as messages after conversation
+// inserts its state context (task list, records, processes) as messages after conversation
 // items; the adapter folds them into text it never marks, so the breakpoint stays on the
 // conversation and a changed state block does not move it.
 func EmbeddedCacheDefault() CacheConfig {

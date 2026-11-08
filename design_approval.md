@@ -97,7 +97,7 @@ Approved calls produce the same records as today. Denied calls add one ordinary 
 * It is not confinement. After approval a `bash` command still runs with the backend user's rights, and a command can fetch and run more code.
 * It cannot show what a script will do, only the command text.
 * Approval is per tool. A tool whose approval is `off` is never asked about, so a model refused on one tool can reach the same effect through another that does not ask. Seen with a real model: after three timed-out `write` calls it ran `echo -n "hi" > t.txt` through an ungated `bash`. Set `approval.default` to `"ask"` to cover every tool that can ask (write, edit, bash, process, each MCP server) without listing them; a tool's own `off` still wins, so use it only where you mean it.
-* Tools that cannot ask (read, grep, glob, fetch, skill, task, memory, request_draft) are never gated, whatever `approval.default` says. Files changed by an approved process later are not covered either.
+* Tools that cannot ask (read, grep, glob, fetch, skill, task, records, request_draft) are never gated, whatever `approval.default` says. Files changed by an approved process later are not covered either.
 * Real confinement needs an OS-level sandbox (bubblewrap, a container, a separate user). That is a different project.
 
 ## 8. Failure handling

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func BenchmarkMemoryStoreList100Records(b *testing.B) {
-	root := filepath.Join(b.TempDir(), "memory")
-	policy := memoryTestSettings(root)
+func BenchmarkRecordsStoreList100Records(b *testing.B) {
+	root := filepath.Join(b.TempDir(), "records")
+	policy := recordsTestSettings(root)
 	policy.MaxRecordsPerType = 100
 	policy.MaxTotalRecords = 100
 	policy.MaxRecordBytes = 4 * 1024
@@ -18,7 +18,7 @@ func BenchmarkMemoryStoreList100Records(b *testing.B) {
 	policy.MaxListBytes = 1 << 20
 	policy.MaxScanRecords = 200
 	policy.MaxScanBytes = 1 << 20
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	for index := 0; index < 100; index++ {
 		if _, err := store.Create("bench", map[string]any{"index": index, "value": "payload"}, policy); err != nil {
 			b.Fatal(err)
@@ -33,19 +33,19 @@ func BenchmarkMemoryStoreList100Records(b *testing.B) {
 	}
 }
 
-// BenchmarkMemoryStoreCreateWithExistingRecords is one create into a store that already
+// BenchmarkRecordsStoreCreateWithExistingRecords is one create into a store that already
 // holds N records of one type (the quota scan stats every record).
-func BenchmarkMemoryStoreCreateWithExistingRecords(b *testing.B) {
+func BenchmarkRecordsStoreCreateWithExistingRecords(b *testing.B) {
 	for _, existing := range []int{100, 1000, 3000} {
 		b.Run(fmt.Sprintf("%d-records", existing), func(b *testing.B) {
-			root := filepath.Join(b.TempDir(), "memory")
-			policy := memoryTestSettings(root)
+			root := filepath.Join(b.TempDir(), "records")
+			policy := recordsTestSettings(root)
 			policy.MaxRecordsPerType = int64(existing) + int64(b.N) + 10
 			policy.MaxTotalRecords = policy.MaxRecordsPerType
 			policy.MaxScanRecords = policy.MaxRecordsPerType + 10
 			policy.MaxTotalBytes = 1 << 30
 			policy.MaxScanBytes = 1 << 30
-			store := NewMemoryStore(root)
+			store := NewRecordsStore(root)
 			for index := 0; index < existing; index++ {
 				if _, err := store.Create("bench", map[string]any{"index": index, "value": "payload"}, policy); err != nil {
 					b.Fatal(err)

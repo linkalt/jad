@@ -6,18 +6,18 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-// MemoryGroup counts the records of one type that share a value at a field path.
-type MemoryGroup struct {
+// RecordsGroup counts the records of one type that share a value at a field path.
+type RecordsGroup struct {
 	Value     any
 	Canonical string
 	Count     int
 }
 
-// MemoryGroupResult is a bounded count of matching records by field value.
+// RecordsGroupResult is a bounded count of matching records by field value.
 // Ungrouped counts matching records without the field. AtLeast is true when a
 // scan limit stopped the scan, so every count is a lower bound.
-type MemoryGroupResult struct {
-	Groups    []MemoryGroup
+type RecordsGroupResult struct {
+	Groups    []RecordsGroup
 	Ungrouped int
 	AtLeast   bool
 }
@@ -25,8 +25,8 @@ type MemoryGroupResult struct {
 // GroupBy scans the records of recordType that match filter and excludeAny and
 // counts them by the value at path. The scan is bounded by the policy's
 // MaxScanRecords and MaxScanBytes. Groups are ordered by count, then by value.
-func (s *MemoryStore) GroupBy(recordType string, filter map[string]any, excludeAny []map[string]any, path string, policy sessionfs.NativeMemorySettings) (MemoryGroupResult, error) {
-	var result MemoryGroupResult
+func (s *RecordsStore) GroupBy(recordType string, filter map[string]any, excludeAny []map[string]any, path string, policy sessionfs.NativeRecordsSettings) (RecordsGroupResult, error) {
+	var result RecordsGroupResult
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
@@ -36,7 +36,7 @@ func (s *MemoryStore) GroupBy(recordType string, filter map[string]any, excludeA
 			return err
 		}
 		sort.Strings(names)
-		counted := map[string]*MemoryGroup{}
+		counted := map[string]*RecordsGroup{}
 		var scanned, scannedBytes int64
 		for _, name := range names {
 			if scanned >= policy.MaxScanRecords {
@@ -53,32 +53,32 @@ func (s *MemoryStore) GroupBy(recordType string, filter map[string]any, excludeA
 				break
 			}
 			scannedBytes += int64(len(text))
-			value, parseErr := parseMemoryJSON(text)
-			if parseErr != nil || value.kind != memoryObject {
+			value, parseErr := parseRecordsJSON(text)
+			if parseErr != nil || value.kind != recordsObject {
 				continue
 			}
-			data := memoryGoMap(value)
-			if !memoryMatches(data, filter, excludeAny) {
+			data := recordsGoMap(value)
+			if !recordsMatches(data, filter, excludeAny) {
 				continue
 			}
-			fieldValue, found := memoryValueAt(data, path)
+			fieldValue, found := recordsValueAt(data, path)
 			if !found {
 				result.Ungrouped++
 				continue
 			}
-			canonical, canonicalErr := memoryJSONCanonical(memoryValueFromGo(fieldValue))
+			canonical, canonicalErr := recordsJSONCanonical(recordsValueFromGo(fieldValue))
 			if canonicalErr != nil {
 				result.Ungrouped++
 				continue
 			}
 			group := counted[canonical]
 			if group == nil {
-				group = &MemoryGroup{Value: fieldValue, Canonical: canonical}
+				group = &RecordsGroup{Value: fieldValue, Canonical: canonical}
 				counted[canonical] = group
 			}
 			group.Count++
 		}
-		result.Groups = make([]MemoryGroup, 0, len(counted))
+		result.Groups = make([]RecordsGroup, 0, len(counted))
 		for _, group := range counted {
 			result.Groups = append(result.Groups, *group)
 		}

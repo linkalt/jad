@@ -2,9 +2,9 @@
   "schema_version": 1,
   "tools": [
     {
-      "id": "native.memory",
+      "id": "native.records",
       "source": "native",
-      "name": "memory",
+      "name": "records",
       "description": "Store and retrieve bounded JSON-object records. `create` assigns and returns the record's ref; never invent one or create a duplicate just to obtain a ref. Reuse returned refs with `get`/`update`/`delete`, and list or search first when checking for an existing record. `search` finds records whose values contain all the words of `query`; `delete` removes a record that is no longer true or needed.",
       "inputSchema": {
         "type": "object",

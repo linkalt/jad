@@ -12,15 +12,15 @@ that shows exactly the intended difference and nothing else.
 ## 1. What exists today (read from source)
 
 - Config: `statecontext` in the session setting (`sessionfs/state_context_settings.go`): `enabled`, `trigger` (an array
-  that accepts only `compaction`, line 53), `tools` (`task`, `memory`, `process`, `subagent`), `role` (`developer`
-  default), `max_bytes`. Per-provider options live under `tools.native.<tool>.statecontext` (memory has selectors `type`,
+  that accepts only `compaction`, line 53), `tools` (`task`, `records`, `process`, `subagent`), `role` (`developer`
+  default), `max_bytes`. Per-provider options live under `tools.native.<tool>.statecontext` (records has selectors `type`,
   `filter`, `exclude_any`, `limit`; task has `statuses`, `limit`; process and subagent have `states`, `limit`).
 - Build: `collectStateContextSnapshot` (`app/state_context.go`) runs each provider, renders ONE JSON document, and puts
   `stateContextPreamble` (`app/state_context.go:14`, hardcoded) in front (`:182`). Over `max_bytes` it trims items from the
   largest provider, then queries. It returns "include" whenever statecontext is enabled and the trigger matches; I found no
   check for "every provider returned nothing" (to be confirmed by a test in step 0).
 - Triggers today: manual compaction (`app/maintenance.go:89`) and automatic compaction (`RefreshStateContext`,
-  `app/resolver.go:803`). So a new session, or one that never compacted, has no block at all, and `memory` records are
+  `app/resolver.go:803`). So a new session, or one that never compacted, has no block at all, and `records` records are
   invisible to the model until the first compaction.
 - Storage: the rendered text is stored whole in `statecontext.json` (`transcript.StateContextSnapshot.Text`), read per run
   (`app/resolver.go:819-823`). Compaction replaces it; front-compaction keeps it; reset deletes it.
@@ -56,8 +56,8 @@ applies to the next entry, and nothing is re-joined at request time.
 ### 2.1 `request_draft` in statecontext: DECIDED, done
 
 A draft is a user message; the snapshot is a developer prompt. The provider and `accepted-request.json` were removed (see
-`DECISIONS.md`). What must survive a compaction goes to `memory` (a type such as `request`, selected by
-`tools.native.memory.statecontext`).
+`DECISIONS.md`). What must survive a compaction goes to `records` (a type such as `request`, selected by
+`tools.native.records.statecontext`).
 
 ### 2.2 Header text in settings
 
@@ -101,18 +101,18 @@ Reading: the user types or picks a prompt and fires the `user` trigger (2.7); th
 
 Idea (yours): list how many records match a filter and let the model fetch them with the tool when it needs them.
 ```json
-"memory": {"mode": "summary", "groups": [
+"records": {"mode": "summary", "groups": [
   {"type": "bug_report", "filter": {"status": "fixed"}, "count": 3},
   {"type": "bug_report", "filter": {"status": "open"},  "count": 10}]}
 ```
-`type` and `filter` are exactly the arguments of a `memory` list call, so each group is also the recipe to fetch it.
-- memory: `group_by` a field per selector; counted by scanning, bounded by `max_scan_records` and `max_scan_bytes`; a
+`type` and `filter` are exactly the arguments of a `records` list call, so each group is also the recipe to fetch it.
+- records: `group_by` a field per selector; counted by scanning, bounded by `max_scan_records` and `max_scan_bytes`; a
   truncated scan reports `at_least: true`. This is the large win.
 - task: counts per status; ids only for `in-progress`. process, subagent: counts per state; running and queued ones listed
   with ids (the model must act on them).
 - Config: `mode` (`items` default, `summary`, or `hybrid`: items for some states, counts for the rest) on the existing
-  per-tool `statecontext` block, plus `group_by` on memory selectors. Default stays `items`.
-- Decide: render as JSON counts or as sentences ("You have 3 memory type bug_report with status fixed")? Recommend JSON:
+  per-tool `statecontext` block, plus `group_by` on records selectors. Default stays `items`.
+- Decide: render as JSON counts or as sentences ("You have 3 records type bug_report with status fixed")? Recommend JSON:
   field values come from records the model wrote, and putting them into a sentence blurs data and instructions.
 - Link to 2.8: if blocks are appended and never edited, small blocks matter. Summary mode is what makes frequent triggers
   affordable. Do not start before the measurement in step 0.
@@ -124,7 +124,7 @@ Today `statecontext.trigger` is a list that accepts only `compaction`. Proposed 
 | Trigger | When | Why |
 |---|---|---|
 | `compaction` | after manual or automatic compaction | exists |
-| `session_start` | the first run of a session that has no block yet (and after a front-compact that removed it, see 2.8) | tasks and memory are visible from the start instead of after the first compaction |
+| `session_start` | the first run of a session that has no block yet (and after a front-compact that removed it, see 2.8) | tasks and records are visible from the start instead of after the first compaction |
 | `user` | the user fires it from the UI (2.4) | on-demand block with a custom prompt |
 | `run_start` | the start of each user turn; written only when the data differs from the latest block | keeps the model current without compaction; needs 2.5 and 2.9 to be cheap |
 
@@ -135,8 +135,8 @@ Config shape (replaces the flat `trigger`, `tools`, `max_bytes`; `enabled`, `hea
 "statecontext": {
   "enabled": true, "header": "...", "role": "developer",
   "triggers": {
-    "compaction":    {"tools": ["task","memory"], "max_bytes": 65536, "prompt": "...", "prompt_documents": []},
-    "session_start": {"tools": ["memory"]},
+    "compaction":    {"tools": ["task","records"], "max_bytes": 65536, "prompt": "...", "prompt_documents": []},
+    "session_start": {"tools": ["records"]},
     "user":          {"tools": ["task"], "max_prompt_bytes": 4096}
   }
 }
@@ -224,10 +224,10 @@ Old 2.6 (snapshot stored as parts) is replaced by 2.8.
 7. `run_start` with change detection.
    DONE (see `DECISIONS.md`, "Statecontext run_start trigger"). Change detection compares `data_sha256` of the latest
    block; the "state is now empty" block is the first block whose providers are all empty. Live check pending.
-8. Summary mode (2.5): memory first, then task, process, subagent. Gated by step 0.
-   Memory part DONE (see `DECISIONS.md`, "Statecontext memory summary mode"): per-selector `group_by`. Task, process and
+8. Summary mode (2.5): records first, then task, process, subagent. Gated by step 0.
+   Records part DONE (see `DECISIONS.md`, "Statecontext memory summary mode"; the tool was named memory then): per-selector `group_by`. Task, process and
    subagent part DONE ("Statecontext task, process and subagent summary mode"): per-section `mode: "summary"` with
-   `counts` and `detail_statuses`/`detail_states`. The hybrid form of 2.5 is the detail list. Live check: memory only so far.
+   `counts` and `detail_statuses`/`detail_states`. The hybrid form of 2.5 is the detail list. Live check: records only so far.
 
 Order reason: 1 to 4 are small and keep today's storage, so they can ship before the risky part; 5 must precede 6 and 7;
 8 is independent and can move earlier if step 0 shows large blocks.

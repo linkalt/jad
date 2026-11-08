@@ -2,12 +2,12 @@ package native
 
 import "testing"
 
-func TestMemoryJSONStringifyMatchesJavaScriptObjectOrdering(t *testing.T) {
-	value, err := parseMemoryJSON([]byte(`{"2":"two","1":"one","html":"<tag>","line":"a\u2028b"}`))
+func TestRecordsJSONStringifyMatchesJavaScriptObjectOrdering(t *testing.T) {
+	value, err := parseRecordsJSON([]byte(`{"2":"two","1":"one","html":"<tag>","line":"a\u2028b"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := memoryJSONPretty(value)
+	encoded, err := recordsJSONPretty(value)
 	if err != nil {
 		t.Fatal(err)
 	}

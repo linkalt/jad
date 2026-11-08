@@ -11,9 +11,9 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-func memoryCall(t *testing.T, catalog *tools.Catalog, arguments string) string {
+func recordsCall(t *testing.T, catalog *tools.Catalog, arguments string) string {
 	t.Helper()
-	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "call-memory", "name": "memory", "arguments": arguments})
+	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": "call-records", "name": "records", "arguments": arguments})
 	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{})
 	if err != nil {
 		t.Fatal(err)
@@ -27,12 +27,12 @@ func memoryCall(t *testing.T, catalog *tools.Catalog, arguments string) string {
 	return item.Output
 }
 
-func TestMemoryErrorsListTheValidValues(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	settings := memoryTestSettings(root)
+func TestRecordsErrorsListTheValidValues(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	settings := recordsTestSettings(root)
 	settings.AllowedTypes = []string{"note", "plan"}
-	store := NewMemoryStore(root)
-	tool, err := NewMemoryTool(settings, store)
+	store := NewRecordsStore(root)
+	tool, err := NewRecordsTool(settings, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestMemoryErrorsListTheValidValues(t *testing.T) {
 	}
 	var refs []string
 	for _, title := range []string{"a", "b", "c"} {
-		out := memoryCall(t, catalog, `{"operation":"create","type":"note","data":{"title":"`+title+`"}}`)
+		out := recordsCall(t, catalog, `{"operation":"create","type":"note","data":{"title":"`+title+`"}}`)
 		for _, line := range strings.Split(out, "\n") {
 			if ref, ok := strings.CutPrefix(strings.TrimSpace(line), "ref: "); ok {
 				refs = append(refs, ref)
@@ -53,13 +53,13 @@ func TestMemoryErrorsListTheValidValues(t *testing.T) {
 		t.Fatalf("created %d refs, want 3", len(refs))
 	}
 
-	notAllowed := memoryCall(t, catalog, `{"operation":"list","type":"secret"}`)
-	if !strings.Contains(notAllowed, "memory type is not allowed") || !strings.Contains(notAllowed, "available_types: note, plan") {
+	notAllowed := recordsCall(t, catalog, `{"operation":"list","type":"secret"}`)
+	if !strings.Contains(notAllowed, "record type is not allowed") || !strings.Contains(notAllowed, "available_types: note, plan") {
 		t.Errorf("a type outside the allowed list did not name the allowed types:\n%s", notAllowed)
 	}
 
-	missing := memoryCall(t, catalog, `{"operation":"get","type":"note","ref":"note/note-20200101T000000.000Z-0000000000000001-00000000-0000-4000-8000-000000000000.json"}`)
-	if !strings.Contains(missing, "memory record was not found") {
+	missing := recordsCall(t, catalog, `{"operation":"get","type":"note","ref":"note/note-20200101T000000.000Z-0000000000000001-00000000-0000-4000-8000-000000000000.json"}`)
+	if !strings.Contains(missing, "record was not found") {
 		t.Fatalf("expected a not-found answer:\n%s", missing)
 	}
 	// ListLimit is 2, so only the two newest refs are offered.
@@ -73,12 +73,12 @@ func TestMemoryErrorsListTheValidValues(t *testing.T) {
 		t.Errorf("not-found answer did not list the two newest refs %v:\n%s", refs[1:], missing)
 	}
 
-	invalid := memoryCall(t, catalog, `{"operation":"get","type":"note","ref":"nonsense"}`)
-	if !strings.Contains(invalid, "memory ref is invalid") || !strings.Contains(invalid, "available_refs: ") {
+	invalid := recordsCall(t, catalog, `{"operation":"get","type":"note","ref":"nonsense"}`)
+	if !strings.Contains(invalid, "record ref is invalid") || !strings.Contains(invalid, "available_refs: ") {
 		t.Errorf("an invalid ref did not list refs:\n%s", invalid)
 	}
 
-	empty := memoryCall(t, catalog, `{"operation":"get","type":"plan","ref":"nonsense"}`)
+	empty := recordsCall(t, catalog, `{"operation":"get","type":"plan","ref":"nonsense"}`)
 	if strings.Contains(empty, "available_refs") {
 		t.Errorf("a type with no records offered refs:\n%s", empty)
 	}

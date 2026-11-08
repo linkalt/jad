@@ -12,78 +12,78 @@ import (
 	"strings"
 )
 
-// memoryJSONValue is a minimal ordered JSON tree for JS-compatible stringify.
-type memoryJSONKind uint8
+// recordsJSONValue is a minimal ordered JSON tree for JS-compatible stringify.
+type recordsJSONKind uint8
 
 const (
-	memoryNull memoryJSONKind = iota
-	memoryBool
-	memoryNumber
-	memoryString
-	memoryArray
-	memoryObject
+	recordsNull recordsJSONKind = iota
+	recordsBool
+	recordsNumber
+	recordsString
+	recordsArray
+	recordsObject
 )
 
-type memoryJSONPair struct {
+type recordsJSONPair struct {
 	key   string
-	value *memoryJSONValue
+	value *recordsJSONValue
 }
-type memoryJSONValue struct {
-	kind   memoryJSONKind
+type recordsJSONValue struct {
+	kind   recordsJSONKind
 	bool   bool
 	text   string
-	array  []*memoryJSONValue
-	object []memoryJSONPair
+	array  []*recordsJSONValue
+	object []recordsJSONPair
 }
 
-func memoryObjectValue(pairs []memoryJSONPair) *memoryJSONValue {
-	return &memoryJSONValue{kind: memoryObject, object: pairs}
+func recordsObjectValue(pairs []recordsJSONPair) *recordsJSONValue {
+	return &recordsJSONValue{kind: recordsObject, object: pairs}
 }
-func memoryArrayValue(values []*memoryJSONValue) *memoryJSONValue {
-	return &memoryJSONValue{kind: memoryArray, array: values}
+func recordsArrayValue(values []*recordsJSONValue) *recordsJSONValue {
+	return &recordsJSONValue{kind: recordsArray, array: values}
 }
-func memoryArrayValueFromItems(items []MemoryItem) *memoryJSONValue {
-	values := make([]*memoryJSONValue, 0, len(items))
+func recordsArrayValueFromItems(items []RecordsItem) *recordsJSONValue {
+	values := make([]*recordsJSONValue, 0, len(items))
 	for _, item := range items {
-		values = append(values, memoryValueFromGo(item))
+		values = append(values, recordsValueFromGo(item))
 	}
-	return memoryArrayValue(values)
+	return recordsArrayValue(values)
 }
 
-func memoryValueFromGo(value any) *memoryJSONValue {
+func recordsValueFromGo(value any) *recordsJSONValue {
 	switch typed := value.(type) {
 	case nil:
-		return &memoryJSONValue{kind: memoryNull}
+		return &recordsJSONValue{kind: recordsNull}
 	case bool:
-		return &memoryJSONValue{kind: memoryBool, bool: typed}
+		return &recordsJSONValue{kind: recordsBool, bool: typed}
 	case string:
-		return &memoryJSONValue{kind: memoryString, text: typed}
+		return &recordsJSONValue{kind: recordsString, text: typed}
 	case json.Number:
-		return &memoryJSONValue{kind: memoryNumber, text: typed.String()}
+		return &recordsJSONValue{kind: recordsNumber, text: typed.String()}
 	case float64:
-		return &memoryJSONValue{kind: memoryNumber, text: strconv.FormatFloat(typed, 'g', -1, 64)}
+		return &recordsJSONValue{kind: recordsNumber, text: strconv.FormatFloat(typed, 'g', -1, 64)}
 	case float32:
-		return &memoryJSONValue{kind: memoryNumber, text: strconv.FormatFloat(float64(typed), 'g', -1, 32)}
+		return &recordsJSONValue{kind: recordsNumber, text: strconv.FormatFloat(float64(typed), 'g', -1, 32)}
 	case int:
-		return &memoryJSONValue{kind: memoryNumber, text: strconv.Itoa(typed)}
+		return &recordsJSONValue{kind: recordsNumber, text: strconv.Itoa(typed)}
 	case int64:
-		return &memoryJSONValue{kind: memoryNumber, text: strconv.FormatInt(typed, 10)}
+		return &recordsJSONValue{kind: recordsNumber, text: strconv.FormatInt(typed, 10)}
 	case uint64:
-		return &memoryJSONValue{kind: memoryNumber, text: strconv.FormatUint(typed, 10)}
+		return &recordsJSONValue{kind: recordsNumber, text: strconv.FormatUint(typed, 10)}
 	case []any:
-		array := make([]*memoryJSONValue, 0, len(typed))
+		array := make([]*recordsJSONValue, 0, len(typed))
 		for _, entry := range typed {
-			array = append(array, memoryValueFromGo(entry))
+			array = append(array, recordsValueFromGo(entry))
 		}
-		return memoryArrayValue(array)
-	case MemoryItem:
+		return recordsArrayValue(array)
+	case RecordsItem:
 		data := typed.value
 		if data == nil {
-			data = memoryValueFromGo(typed.Data)
+			data = recordsValueFromGo(typed.Data)
 		}
-		return memoryObjectValue([]memoryJSONPair{
-			{key: "ref", value: memoryValueFromGo(typed.Ref)},
-			{key: "etag", value: memoryValueFromGo(typed.ETag)},
+		return recordsObjectValue([]recordsJSONPair{
+			{key: "ref", value: recordsValueFromGo(typed.Ref)},
+			{key: "etag", value: recordsValueFromGo(typed.ETag)},
 			{key: "data", value: data},
 		})
 	case map[string]any:
@@ -92,28 +92,28 @@ func memoryValueFromGo(value any) *memoryJSONValue {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
-		pairs := make([]memoryJSONPair, 0, len(keys))
+		pairs := make([]recordsJSONPair, 0, len(keys))
 		for _, key := range keys {
-			pairs = append(pairs, memoryJSONPair{key: key, value: memoryValueFromGo(typed[key])})
+			pairs = append(pairs, recordsJSONPair{key: key, value: recordsValueFromGo(typed[key])})
 		}
-		return memoryObjectValue(pairs)
+		return recordsObjectValue(pairs)
 	default:
 		encoded, err := json.Marshal(typed)
 		if err != nil {
-			return &memoryJSONValue{kind: memoryNull}
+			return &recordsJSONValue{kind: recordsNull}
 		}
-		value, err := parseMemoryJSON(encoded)
+		value, err := parseRecordsJSON(encoded)
 		if err != nil {
-			return &memoryJSONValue{kind: memoryNull}
+			return &recordsJSONValue{kind: recordsNull}
 		}
 		return value
 	}
 }
 
-func parseMemoryJSON(data []byte) (*memoryJSONValue, error) {
+func parseRecordsJSON(data []byte) (*recordsJSONValue, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	value, err := parseMemoryJSONValue(decoder)
+	value, err := parseRecordsJSONValue(decoder)
 	if err != nil {
 		return nil, err
 	}
@@ -123,44 +123,44 @@ func parseMemoryJSON(data []byte) (*memoryJSONValue, error) {
 	return value, nil
 }
 
-// parseStoredMemoryJSON parses a stored record. A record that fails to parse is read
-// through its undone text only when memoryLegacyEscapeText proves it was written with
+// parseStoredRecordsJSON parses a stored record. A record that fails to parse is read
+// through its undone text only when recordsLegacyEscapeText proves it was written with
 // the doubled escapes.
-func parseStoredMemoryJSON(text []byte) (*memoryJSONValue, error) {
-	value, err := parseMemoryJSON(text)
+func parseStoredRecordsJSON(text []byte) (*recordsJSONValue, error) {
+	value, err := parseRecordsJSON(text)
 	if err == nil {
 		return value, nil
 	}
-	if _, legacy, ok := memoryLegacyEscapeText(text); ok {
+	if _, legacy, ok := recordsLegacyEscapeText(text); ok {
 		return legacy, nil
 	}
 	return nil, err
 }
 
-// memoryLegacyEscapeText proves a record was written by quoteMemoryString before its
+// recordsLegacyEscapeText proves a record was written by quoteRecordsString before its
 // fix. The old writer doubled every backslash in the correct encoding, so undoing that
 // is one ReplaceAll. The proof needs all of these: the stored text is invalid JSON, the
 // undone text parses to an object, and the undone text is the canonical pretty form of
 // that object. A record that is valid JSON is never reported as legacy, because an old
 // backslash, newline or tab record is valid JSON with a wrong value and cannot be told
 // apart from a correct record.
-func memoryLegacyEscapeText(text []byte) ([]byte, *memoryJSONValue, bool) {
-	if _, err := parseMemoryJSON(text); err == nil {
+func recordsLegacyEscapeText(text []byte) ([]byte, *recordsJSONValue, bool) {
+	if _, err := parseRecordsJSON(text); err == nil {
 		return nil, nil, false
 	}
 	undone := bytes.ReplaceAll(text, []byte(`\\`), []byte(`\`))
-	value, err := parseMemoryJSON(undone)
-	if err != nil || value.kind != memoryObject {
+	value, err := parseRecordsJSON(undone)
+	if err != nil || value.kind != recordsObject {
 		return nil, nil, false
 	}
-	canonical, err := memoryJSONPretty(value)
+	canonical, err := recordsJSONPretty(value)
 	if err != nil || canonical != string(undone) {
 		return nil, nil, false
 	}
 	return undone, value, true
 }
 
-func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
+func parseRecordsJSONValue(decoder *json.Decoder) (*recordsJSONValue, error) {
 	token, err := decoder.Token()
 	if err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
 	case json.Delim:
 		switch typed {
 		case '{':
-			pairs := make([]memoryJSONPair, 0)
+			pairs := make([]recordsJSONPair, 0)
 			positions := make(map[string]int)
 			for decoder.More() {
 				keyToken, err := decoder.Token()
@@ -180,7 +180,7 @@ func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
 				if !ok {
 					return nil, errors.New("invalid JSON object key")
 				}
-				value, err := parseMemoryJSONValue(decoder)
+				value, err := parseRecordsJSONValue(decoder)
 				if err != nil {
 					return nil, err
 				}
@@ -188,17 +188,17 @@ func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
 					pairs[position].value = value
 				} else {
 					positions[key] = len(pairs)
-					pairs = append(pairs, memoryJSONPair{key: key, value: value})
+					pairs = append(pairs, recordsJSONPair{key: key, value: value})
 				}
 			}
 			if _, err := decoder.Token(); err != nil {
 				return nil, err
 			}
-			return memoryObjectValue(memoryJSObjectOrder(pairs)), nil
+			return recordsObjectValue(recordsJSObjectOrder(pairs)), nil
 		case '[':
-			values := make([]*memoryJSONValue, 0)
+			values := make([]*recordsJSONValue, 0)
 			for decoder.More() {
-				value, err := parseMemoryJSONValue(decoder)
+				value, err := parseRecordsJSONValue(decoder)
 				if err != nil {
 					return nil, err
 				}
@@ -207,46 +207,46 @@ func parseMemoryJSONValue(decoder *json.Decoder) (*memoryJSONValue, error) {
 			if _, err := decoder.Token(); err != nil {
 				return nil, err
 			}
-			return memoryArrayValue(values), nil
+			return recordsArrayValue(values), nil
 		default:
 			return nil, errors.New("unexpected JSON delimiter")
 		}
 	case json.Number:
-		return &memoryJSONValue{kind: memoryNumber, text: typed.String()}, nil
+		return &recordsJSONValue{kind: recordsNumber, text: typed.String()}, nil
 	case string:
-		return &memoryJSONValue{kind: memoryString, text: typed}, nil
+		return &recordsJSONValue{kind: recordsString, text: typed}, nil
 	case bool:
-		return &memoryJSONValue{kind: memoryBool, bool: typed}, nil
+		return &recordsJSONValue{kind: recordsBool, bool: typed}, nil
 	case nil:
-		return &memoryJSONValue{kind: memoryNull}, nil
+		return &recordsJSONValue{kind: recordsNull}, nil
 	default:
 		return nil, fmt.Errorf("unsupported JSON token %T", token)
 	}
 }
 
-func memoryJSObjectOrder(pairs []memoryJSONPair) []memoryJSONPair {
+func recordsJSObjectOrder(pairs []recordsJSONPair) []recordsJSONPair {
 	type indexedPair struct {
-		pair  memoryJSONPair
+		pair  recordsJSONPair
 		index uint64
 	}
 	indices := make([]indexedPair, 0)
-	other := make([]memoryJSONPair, 0, len(pairs))
+	other := make([]recordsJSONPair, 0, len(pairs))
 	for _, pair := range pairs {
-		if index, ok := memoryArrayIndex(pair.key); ok {
+		if index, ok := recordsArrayIndex(pair.key); ok {
 			indices = append(indices, indexedPair{pair: pair, index: index})
 		} else {
 			other = append(other, pair)
 		}
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i].index < indices[j].index })
-	ordered := make([]memoryJSONPair, 0, len(pairs))
+	ordered := make([]recordsJSONPair, 0, len(pairs))
 	for _, entry := range indices {
 		ordered = append(ordered, entry.pair)
 	}
 	return append(ordered, other...)
 }
 
-func memoryArrayIndex(key string) (uint64, bool) {
+func recordsArrayIndex(key string) (uint64, bool) {
 	if key == "0" {
 		return 0, true
 	}
@@ -260,90 +260,90 @@ func memoryArrayIndex(key string) (uint64, bool) {
 	return index, true
 }
 
-func memoryGoMap(value *memoryJSONValue) map[string]any {
+func recordsGoMap(value *recordsJSONValue) map[string]any {
 	out := make(map[string]any, len(value.object))
 	for _, pair := range value.object {
-		out[pair.key] = memoryGoValue(pair.value)
+		out[pair.key] = recordsGoValue(pair.value)
 	}
 	return out
 }
-func memoryGoValue(value *memoryJSONValue) any {
+func recordsGoValue(value *recordsJSONValue) any {
 	switch value.kind {
-	case memoryNull:
+	case recordsNull:
 		return nil
-	case memoryBool:
+	case recordsBool:
 		return value.bool
-	case memoryNumber:
+	case recordsNumber:
 		return json.Number(value.text)
-	case memoryString:
+	case recordsString:
 		return value.text
-	case memoryArray:
+	case recordsArray:
 		out := make([]any, 0, len(value.array))
 		for _, entry := range value.array {
-			out = append(out, memoryGoValue(entry))
+			out = append(out, recordsGoValue(entry))
 		}
 		return out
-	case memoryObject:
-		return memoryGoMap(value)
+	case recordsObject:
+		return recordsGoMap(value)
 	default:
 		return nil
 	}
 }
 
-func memoryJSONDepth(value *memoryJSONValue) int64 {
-	if value == nil || (value.kind != memoryArray && value.kind != memoryObject) {
+func recordsJSONDepth(value *recordsJSONValue) int64 {
+	if value == nil || (value.kind != recordsArray && value.kind != recordsObject) {
 		return 0
 	}
 	var child int64
-	if value.kind == memoryArray {
+	if value.kind == recordsArray {
 		for _, entry := range value.array {
-			child = max(child, memoryJSONDepth(entry))
+			child = max(child, recordsJSONDepth(entry))
 		}
 	} else {
 		for _, pair := range value.object {
-			child = max(child, memoryJSONDepth(pair.value))
+			child = max(child, recordsJSONDepth(pair.value))
 		}
 	}
 	return child + 1
 }
 
-func memoryJSONCompact(value *memoryJSONValue) ([]byte, error) {
+func recordsJSONCompact(value *recordsJSONValue) ([]byte, error) {
 	var output bytes.Buffer
-	if err := writeMemoryJSON(&output, value, -1, 0); err != nil {
+	if err := writeRecordsJSON(&output, value, -1, 0); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil
 }
-func memoryJSONPretty(value *memoryJSONValue) (string, error) {
+func recordsJSONPretty(value *recordsJSONValue) (string, error) {
 	var output bytes.Buffer
-	if err := writeMemoryJSON(&output, value, 2, 0); err != nil {
+	if err := writeRecordsJSON(&output, value, 2, 0); err != nil {
 		return "", err
 	}
 	return output.String() + "\n", nil
 }
-func writeMemoryJSON(output *bytes.Buffer, value *memoryJSONValue, indent, depth int) error {
+func writeRecordsJSON(output *bytes.Buffer, value *recordsJSONValue, indent, depth int) error {
 	if value == nil {
 		output.WriteString("null")
 		return nil
 	}
 	switch value.kind {
-	case memoryNull:
+	case recordsNull:
 		output.WriteString("null")
-	case memoryBool:
+	case recordsBool:
 		if value.bool {
 			output.WriteString("true")
 		} else {
 			output.WriteString("false")
 		}
-	case memoryNumber:
-		output.WriteString(memoryJSNumber(value.text))
-	case memoryString:
-		encoded, err := quoteMemoryString(value.text)
+	case recordsNumber:
+		output.WriteString(recordsJSNumber(value.text))
+	case recordsString:
+		encoded, err := quoteRecordsString(value.text)
 		if err != nil {
 			return err
 		}
 		output.Write(encoded)
-	case memoryArray:
+	case recordsArray:
 		output.WriteByte('[')
 		for index, entry := range value.array {
 			if index > 0 {
@@ -351,18 +351,18 @@ func writeMemoryJSON(output *bytes.Buffer, value *memoryJSONValue, indent, depth
 			}
 			if indent >= 0 {
 				output.WriteByte('\n')
-				writeMemoryIndent(output, indent, depth+1)
+				writeRecordsIndent(output, indent, depth+1)
 			}
-			if err := writeMemoryJSON(output, entry, indent, depth+1); err != nil {
+			if err := writeRecordsJSON(output, entry, indent, depth+1); err != nil {
 				return err
 			}
 		}
 		if len(value.array) > 0 && indent >= 0 {
 			output.WriteByte('\n')
-			writeMemoryIndent(output, indent, depth)
+			writeRecordsIndent(output, indent, depth)
 		}
 		output.WriteByte(']')
-	case memoryObject:
+	case recordsObject:
 		output.WriteByte('{')
 		for index, pair := range value.object {
 			if index > 0 {
@@ -370,9 +370,9 @@ func writeMemoryJSON(output *bytes.Buffer, value *memoryJSONValue, indent, depth
 			}
 			if indent >= 0 {
 				output.WriteByte('\n')
-				writeMemoryIndent(output, indent, depth+1)
+				writeRecordsIndent(output, indent, depth+1)
 			}
-			key, err := quoteMemoryString(pair.key)
+			key, err := quoteRecordsString(pair.key)
 			if err != nil {
 				return err
 			}
@@ -382,26 +382,26 @@ func writeMemoryJSON(output *bytes.Buffer, value *memoryJSONValue, indent, depth
 			} else {
 				output.WriteByte(':')
 			}
-			if err := writeMemoryJSON(output, pair.value, indent, depth+1); err != nil {
+			if err := writeRecordsJSON(output, pair.value, indent, depth+1); err != nil {
 				return err
 			}
 		}
 		if len(value.object) > 0 && indent >= 0 {
 			output.WriteByte('\n')
-			writeMemoryIndent(output, indent, depth)
+			writeRecordsIndent(output, indent, depth)
 		}
 		output.WriteByte('}')
 	default:
-		return errors.New("invalid memory JSON value")
+		return errors.New("invalid records JSON value")
 	}
 	return nil
 }
-func writeMemoryIndent(output *bytes.Buffer, indent, depth int) {
+func writeRecordsIndent(output *bytes.Buffer, indent, depth int) {
 	for range indent * depth {
 		output.WriteByte(' ')
 	}
 }
-func quoteMemoryString(value string) ([]byte, error) {
+func quoteRecordsString(value string) ([]byte, error) {
 	var output bytes.Buffer
 	output.WriteByte('"')
 	for _, character := range value {
@@ -431,7 +431,7 @@ func quoteMemoryString(value string) ([]byte, error) {
 	output.WriteByte('"')
 	return output.Bytes(), nil
 }
-func memoryJSNumber(value string) string {
+func recordsJSNumber(value string) string {
 	number, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
 		return "null"
@@ -456,29 +456,29 @@ func memoryJSNumber(value string) string {
 	}
 	return strconv.FormatFloat(number, 'f', -1, 64)
 }
-func memoryJSONCanonical(value *memoryJSONValue) (string, error) {
-	canonical := memorySortJSON(value)
-	encoded, err := memoryJSONCompact(canonical)
+func recordsJSONCanonical(value *recordsJSONValue) (string, error) {
+	canonical := recordsSortJSON(value)
+	encoded, err := recordsJSONCompact(canonical)
 	return string(encoded), err
 }
-func memorySortJSON(value *memoryJSONValue) *memoryJSONValue {
+func recordsSortJSON(value *recordsJSONValue) *recordsJSONValue {
 	if value == nil {
-		return &memoryJSONValue{kind: memoryNull}
+		return &recordsJSONValue{kind: recordsNull}
 	}
-	if value.kind == memoryArray {
-		array := make([]*memoryJSONValue, len(value.array))
+	if value.kind == recordsArray {
+		array := make([]*recordsJSONValue, len(value.array))
 		for index, entry := range value.array {
-			array[index] = memorySortJSON(entry)
+			array[index] = recordsSortJSON(entry)
 		}
-		return memoryArrayValue(array)
+		return recordsArrayValue(array)
 	}
-	if value.kind == memoryObject {
-		pairs := append([]memoryJSONPair(nil), value.object...)
+	if value.kind == recordsObject {
+		pairs := append([]recordsJSONPair(nil), value.object...)
 		sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
 		for index := range pairs {
-			pairs[index].value = memorySortJSON(pairs[index].value)
+			pairs[index].value = recordsSortJSON(pairs[index].value)
 		}
-		return memoryObjectValue(pairs)
+		return recordsObjectValue(pairs)
 	}
 	return value
 }

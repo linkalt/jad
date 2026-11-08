@@ -280,8 +280,8 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeTask != nil {
 		candidates = append(candidates, config.NativeTask.StorageDir)
 	}
-	if config.NativeMemory != nil {
-		candidates = append(candidates, config.NativeMemory.StorageDir)
+	if config.NativeRecords != nil {
+		candidates = append(candidates, config.NativeRecords.StorageDir)
 	}
 	if config.NativeSubagent != nil {
 		candidates = append(candidates, config.NativeSubagent.StorageDir)

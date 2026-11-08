@@ -23,54 +23,54 @@ import (
 )
 
 var (
-	memoryTypePattern     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
-	memoryFilenamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-(?:[0-9]{16}-)?[0-9a-f-]{36}\.json$`)
-	memoryCursorIDPattern = regexp.MustCompile(`^m_([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})$`)
-	memoryUUIDPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
-	memorySequencePattern = regexp.MustCompile(`^[0-9]+$`)
-	memoryPathSegment     = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+	recordsTypePattern     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+	recordsFilenamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-(?:[0-9]{16}-)?[0-9a-f-]{36}\.json$`)
+	recordsCursorIDPattern = regexp.MustCompile(`^m_([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})$`)
+	recordsUUIDPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
+	recordsSequencePattern = regexp.MustCompile(`^[0-9]+$`)
+	recordsPathSegment     = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 )
 
-// MemoryStoreError describes invalid, missing, or inaccessible memory data.
-type MemoryStoreError struct {
+// RecordsStoreError describes invalid, missing, or inaccessible record data.
+type RecordsStoreError struct {
 	Message string
 	// Kind is set for the errors whose answer lists the valid values.
-	Kind memoryErrorKind
+	Kind recordsErrorKind
 }
 
-type memoryErrorKind int
+type recordsErrorKind int
 
 const (
-	memoryErrorOther memoryErrorKind = iota
-	memoryErrorType
-	memoryErrorRef
+	recordsErrorOther recordsErrorKind = iota
+	recordsErrorType
+	recordsErrorRef
 )
 
-func (e *MemoryStoreError) Error() string { return e.Message }
+func (e *RecordsStoreError) Error() string { return e.Message }
 
-// MemoryConflictError reports the current ETag after a stale conditional update.
-type MemoryConflictError struct{ CurrentETag string }
+// RecordsConflictError reports the current ETag after a stale conditional update.
+type RecordsConflictError struct{ CurrentETag string }
 
-func (e *MemoryConflictError) Error() string {
-	return "memory record changed; retrieve it before updating"
+func (e *RecordsConflictError) Error() string {
+	return "record changed; retrieve it before updating"
 }
 
-// MemoryItem is one persistent record. The private value preserves JSON object
+// RecordsItem is one persistent record. The private value preserves JSON object
 // insertion order from the source record for TypeScript-compatible rendering.
-type MemoryItem struct {
+type RecordsItem struct {
 	Ref     string         `json:"ref"`
 	ETag    string         `json:"etag"`
 	Data    map[string]any `json:"data"`
-	value   *memoryJSONValue
+	value   *recordsJSONValue
 	rawText []byte
 }
 
 // MarshalJSON keeps data's original property order while exposing the same
 // public {ref, etag, data} record shape.
-func (item MemoryItem) MarshalJSON() ([]byte, error) {
+func (item RecordsItem) MarshalJSON() ([]byte, error) {
 	value := item.value
 	if value == nil {
-		value = memoryValueFromGo(item.Data)
+		value = recordsValueFromGo(item.Data)
 	}
 	ref, err := json.Marshal(item.Ref)
 	if err != nil {
@@ -80,7 +80,7 @@ func (item MemoryItem) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := memoryJSONCompact(value)
+	encoded, err := recordsJSONCompact(value)
 	if err != nil {
 		return nil, err
 	}
@@ -95,23 +95,23 @@ func (item MemoryItem) MarshalJSON() ([]byte, error) {
 	return out, nil
 }
 
-// MemoryListResult is a bounded page of memory records.
-type MemoryListResult struct {
-	Items      []MemoryItem
+// RecordsListResult is a bounded page of records.
+type RecordsListResult struct {
+	Items      []RecordsItem
 	NextCursor string
 	Warnings   []string
 	HasMore    bool
 }
 
-type memoryTotals struct{ types, records, bytes, typeRecords int64 }
-type memoryLegacyCursor struct {
+type recordsTotals struct{ types, records, bytes, typeRecords int64 }
+type recordsLegacyCursor struct {
 	V      int    `json:"v"`
 	Type   string `json:"type"`
 	Order  string `json:"order"`
 	Filter string `json:"filter"`
 	Last   string `json:"last"`
 }
-type memoryStoredCursor struct {
+type recordsStoredCursor struct {
 	V                 int              `json:"v"`
 	Type              string           `json:"type"`
 	Order             string           `json:"order"`
@@ -122,17 +122,17 @@ type memoryStoredCursor struct {
 	// Query is the normalized query of a search cursor; empty for a list cursor.
 	Query string `json:"query,omitempty"`
 }
-type memoryListOptions struct {
+type recordsListOptions struct {
 	CreateCursor bool
 	ExcludeAny   []map[string]any
 	// Query, when set, keeps only records whose string and number values contain every
-	// term (see memorySearchTerms).
+	// term (see recordsSearchTerms).
 	Query string
 }
 
-// MemoryStore stores one JSON file per record beneath a configured root.
+// RecordsStore stores one JSON file per record beneath a configured root.
 // Resolver-owned PathLocks serialize operations across catalogs sharing a root.
-type MemoryStore struct {
+type RecordsStore struct {
 	root  string
 	locks *PathLocks
 	now   func() time.Time
@@ -143,9 +143,9 @@ type MemoryStore struct {
 	sizes map[string]map[string]int64
 }
 
-// NewMemoryStore creates a memory store. An optional shared PathLocks enables
+// NewRecordsStore creates a records store. An optional shared PathLocks enables
 // serialization across independently resolved catalogs using the same root.
-func NewMemoryStore(root string, shared ...*PathLocks) *MemoryStore {
+func NewRecordsStore(root string, shared ...*PathLocks) *RecordsStore {
 	absolute, err := filepath.Abs(root)
 	if err == nil {
 		root = filepath.Clean(absolute)
@@ -156,17 +156,17 @@ func NewMemoryStore(root string, shared ...*PathLocks) *MemoryStore {
 	if len(shared) > 0 && shared[0] != nil {
 		locks = shared[0]
 	}
-	return &MemoryStore{root: root, locks: locks, now: time.Now, sizes: make(map[string]map[string]int64)}
+	return &RecordsStore{root: root, locks: locks, now: time.Now, sizes: make(map[string]map[string]int64)}
 }
 
 // Create persists a new record using JSON object data.
-func (s *MemoryStore) Create(recordType string, data map[string]any, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	return s.CreateValue(recordType, memoryValueFromGo(data), data, policy)
+func (s *RecordsStore) Create(recordType string, data map[string]any, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	return s.CreateValue(recordType, recordsValueFromGo(data), data, policy)
 }
 
 // CreateValue persists a record from an insertion-order-preserving JSON value.
-func (s *MemoryStore) CreateValue(recordType string, value *memoryJSONValue, data map[string]any, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	var item MemoryItem
+func (s *RecordsStore) CreateValue(recordType string, value *recordsJSONValue, data map[string]any, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	var item RecordsItem
 	if err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
@@ -178,12 +178,12 @@ func (s *MemoryStore) CreateValue(recordType string, value *memoryJSONValue, dat
 		if err != nil {
 			return err
 		}
-		text, err := memoryJSONPretty(value)
+		text, err := recordsJSONPretty(value)
 		if err != nil {
 			return err
 		}
 		if totals.typeRecords >= policy.MaxRecordsPerType || totals.records >= policy.MaxTotalRecords || totals.bytes+int64(len(text)) > policy.MaxTotalBytes || (totals.typeRecords == 0 && totals.types >= policy.MaxTypes) {
-			return &MemoryStoreError{Message: "memory capacity has been reached"}
+			return &RecordsStoreError{Message: "records capacity has been reached"}
 		}
 		sequence, err := s.nextSequence()
 		if err != nil {
@@ -192,7 +192,7 @@ func (s *MemoryStore) CreateValue(recordType string, value *memoryJSONValue, dat
 		if _, err := s.typeDirectory(recordType, true); err != nil {
 			return err
 		}
-		name, err := memoryFilename(recordType, sequence, s.now())
+		name, err := recordsFilename(recordType, sequence, s.now())
 		if err != nil {
 			return err
 		}
@@ -201,17 +201,17 @@ func (s *MemoryStore) CreateValue(recordType string, value *memoryJSONValue, dat
 			return err
 		}
 		s.rememberSize(recordType, name, int64(len(text)))
-		item = MemoryItem{Ref: recordType + "/" + name, ETag: memoryETag([]byte(text)), Data: data, value: value, rawText: []byte(text)}
+		item = RecordsItem{Ref: recordType + "/" + name, ETag: recordsETag([]byte(text)), Data: data, value: value, rawText: []byte(text)}
 		return nil
 	}); err != nil {
-		return MemoryItem{}, err
+		return RecordsItem{}, err
 	}
 	return item, nil
 }
 
 // Get reads one record and returns its current ETag.
-func (s *MemoryStore) Get(recordType, ref string, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	var item MemoryItem
+func (s *RecordsStore) Get(recordType, ref string, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	var item RecordsItem
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
@@ -227,14 +227,14 @@ func (s *MemoryStore) Get(recordType, ref string, policy sessionfs.NativeMemoryS
 }
 
 // Update replaces record data, optionally requiring an exact current ETag.
-func (s *MemoryStore) Update(recordType, ref, ifMatch string, data map[string]any, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	return s.UpdateValue(recordType, ref, ifMatch, memoryValueFromGo(data), data, policy)
+func (s *RecordsStore) Update(recordType, ref, ifMatch string, data map[string]any, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	return s.UpdateValue(recordType, ref, ifMatch, recordsValueFromGo(data), data, policy)
 }
 
 // RepairLegacyRecord rewrites one record written with the doubled escapes. It changes
-// the record only when memoryLegacyEscapeText proves it, and keeps a sibling backup until
+// the record only when recordsLegacyEscapeText proves it, and keeps a sibling backup until
 // the rewrite succeeds. It reports false, without writing, for a record that is valid JSON.
-func (s *MemoryStore) RepairLegacyRecord(recordType, ref string, policy sessionfs.NativeMemorySettings) (bool, error) {
+func (s *RecordsStore) RepairLegacyRecord(recordType, ref string, policy sessionfs.NativeRecordsSettings) (bool, error) {
 	repaired := false
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
@@ -246,28 +246,28 @@ func (s *MemoryStore) RepairLegacyRecord(recordType, ref string, policy sessionf
 		}
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
-			return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+			return &RecordsStoreError{Message: "record was not found", Kind: recordsErrorRef}
 		}
 		if err != nil {
 			return err
 		}
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return &MemoryStoreError{Message: "memory record is not a safe file"}
+			return &RecordsStoreError{Message: "record is not a safe file"}
 		}
 		text, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if _, err := parseMemoryJSON(text); err == nil {
+		if _, err := parseRecordsJSON(text); err == nil {
 			return nil
 		}
-		undone, _, ok := memoryLegacyEscapeText(text)
+		undone, _, ok := recordsLegacyEscapeText(text)
 		if !ok {
-			return &MemoryStoreError{Message: "memory record is malformed"}
+			return &RecordsStoreError{Message: "record is malformed"}
 		}
 		backup := path + ".legacy-backup"
 		if _, err := os.Lstat(backup); err == nil {
-			return &MemoryStoreError{Message: "memory repair backup already exists; remove it before repairing"}
+			return &RecordsStoreError{Message: "records repair backup already exists; remove it before repairing"}
 		}
 		if err := s.atomicWrite(backup, text); err != nil {
 			return err
@@ -286,8 +286,8 @@ func (s *MemoryStore) RepairLegacyRecord(recordType, ref string, policy sessionf
 }
 
 // UpdateValue is the insertion-order-preserving form of Update.
-func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memoryJSONValue, data map[string]any, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	var item MemoryItem
+func (s *RecordsStore) UpdateValue(recordType, ref, ifMatch string, value *recordsJSONValue, data map[string]any, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	var item RecordsItem
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
@@ -300,9 +300,9 @@ func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memory
 			return err
 		}
 		if ifMatch != "" && current.ETag != ifMatch {
-			return &MemoryConflictError{CurrentETag: current.ETag}
+			return &RecordsConflictError{CurrentETag: current.ETag}
 		}
-		next, err := memoryJSONPretty(value)
+		next, err := recordsJSONPretty(value)
 		if err != nil {
 			return err
 		}
@@ -311,7 +311,7 @@ func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memory
 			return err
 		}
 		if totals.bytes-int64(len(currentText(current)))+int64(len(next)) > policy.MaxTotalBytes {
-			return &MemoryStoreError{Message: "memory capacity has been reached"}
+			return &RecordsStoreError{Message: "records capacity has been reached"}
 		}
 		path, err := s.target(recordType, ref)
 		if err != nil {
@@ -321,37 +321,37 @@ func (s *MemoryStore) UpdateValue(recordType, ref, ifMatch string, value *memory
 			return err
 		}
 		s.rememberSize(recordType, strings.TrimPrefix(ref, recordType+"/"), int64(len(next)))
-		item = MemoryItem{Ref: ref, ETag: memoryETag([]byte(next)), Data: data, value: value, rawText: []byte(next)}
+		item = RecordsItem{Ref: ref, ETag: recordsETag([]byte(next)), Data: data, value: value, rawText: []byte(next)}
 		return nil
 	})
 	return item, err
 }
 
 // List returns a bounded page, preserving TypeScript cursor and ordering rules.
-func (s *MemoryStore) List(recordType string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeMemorySettings) (MemoryListResult, error) {
-	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, memoryListOptions{CreateCursor: true})
+func (s *RecordsStore) List(recordType string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeRecordsSettings) (RecordsListResult, error) {
+	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, recordsListOptions{CreateCursor: true})
 }
 
 // Search is List that keeps only the records whose string and number values contain
 // every whitespace-separated term of query, compared case-insensitively. Its cursor
 // carries the query, so it continues only the same search.
-func (s *MemoryStore) Search(recordType, query string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeMemorySettings) (MemoryListResult, error) {
+func (s *RecordsStore) Search(recordType, query string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeRecordsSettings) (RecordsListResult, error) {
 	if int64(len(query)) > policy.MaxQueryBytes {
-		return MemoryListResult{}, &MemoryStoreError{Message: fmt.Sprintf("memory search query exceeds the configured %d bytes", policy.MaxQueryBytes)}
+		return RecordsListResult{}, &RecordsStoreError{Message: fmt.Sprintf("records search query exceeds the configured %d bytes", policy.MaxQueryBytes)}
 	}
-	terms := memorySearchTerms(query)
+	terms := recordsSearchTerms(query)
 	if len(terms) == 0 {
-		return MemoryListResult{}, &MemoryStoreError{Message: "memory search query has no words"}
+		return RecordsListResult{}, &RecordsStoreError{Message: "records search query has no words"}
 	}
-	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, memoryListOptions{CreateCursor: true, Query: strings.Join(terms, " ")})
+	return s.list(recordType, requestedFilter, limit, requestedOrder, token, policy, recordsListOptions{CreateCursor: true, Query: strings.Join(terms, " ")})
 }
 
 // Delete removes one record. With ifMatch set, the record must still have that ETag.
 // It returns the ref and the ETag the record had. A malformed record can be deleted too.
 // The type's directory is removed with its last record, so it no longer counts toward
 // max_types.
-func (s *MemoryStore) Delete(recordType, ref, ifMatch string, policy sessionfs.NativeMemorySettings) (MemoryItem, error) {
-	var item MemoryItem
+func (s *RecordsStore) Delete(recordType, ref, ifMatch string, policy sessionfs.NativeRecordsSettings) (RecordsItem, error) {
+	var item RecordsItem
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
@@ -362,40 +362,40 @@ func (s *MemoryStore) Delete(recordType, ref, ifMatch string, policy sessionfs.N
 		}
 		text, err := s.readRecordText(recordType, filepath.Base(path))
 		if errors.Is(err, os.ErrNotExist) {
-			return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+			return &RecordsStoreError{Message: "record was not found", Kind: recordsErrorRef}
 		}
 		if err != nil {
-			return &MemoryStoreError{Message: "memory record is not a safe file"}
+			return &RecordsStoreError{Message: "record is not a safe file"}
 		}
-		etag := memoryETag(text)
+		etag := recordsETag(text)
 		// readRecordText also refuses a symlink or directory under a record name; those
 		// are left in place for a person to look at.
 		if ifMatch != "" && etag != ifMatch {
-			return &MemoryConflictError{CurrentETag: etag}
+			return &RecordsConflictError{CurrentETag: etag}
 		}
 		if err := os.Remove(path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+				return &RecordsStoreError{Message: "record was not found", Kind: recordsErrorRef}
 			}
 			return err
 		}
 		delete(s.sizes[recordType], filepath.Base(path))
 		// Fails, harmlessly, while the directory still holds anything.
 		_ = os.Remove(filepath.Dir(path))
-		item = MemoryItem{Ref: ref, ETag: etag}
+		item = RecordsItem{Ref: ref, ETag: etag}
 		return nil
 	})
 	return item, err
 }
 
-func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeMemorySettings, options memoryListOptions) (MemoryListResult, error) {
-	var result MemoryListResult
+func (s *RecordsStore) list(recordType string, requestedFilter map[string]any, limit int64, requestedOrder, token any, policy sessionfs.NativeRecordsSettings, options recordsListOptions) (RecordsListResult, error) {
+	var result RecordsListResult
 	err := s.withLock(func() error {
 		if err := s.checkType(recordType, policy); err != nil {
 			return err
 		}
-		legacy := parseMemoryLegacyCursor(token)
-		var stored *memoryStoredCursor
+		legacy := parseRecordsLegacyCursor(token)
+		var stored *recordsStoredCursor
 		if token != nil && legacy == nil {
 			var err error
 			stored, err = s.readStoredCursor(token, policy)
@@ -403,11 +403,11 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				return err
 			}
 			if stored == nil {
-				return &MemoryStoreError{Message: "memory cursor is invalid"}
+				return &RecordsStoreError{Message: "record cursor is invalid"}
 			}
 		}
 		if token != nil && legacy == nil && stored == nil {
-			return &MemoryStoreError{Message: "memory cursor is invalid"}
+			return &RecordsStoreError{Message: "record cursor is invalid"}
 		}
 		filter := requestedFilter
 		if filter == nil {
@@ -425,11 +425,11 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 			excludeAny = []map[string]any{}
 		}
 		if int64(len(excludeAny)) > policy.MaxFilterFields {
-			return &MemoryStoreError{Message: "memory filter exceeds configured limits (exclude_any)"}
+			return &RecordsStoreError{Message: "records filter exceeds configured limits (exclude_any)"}
 		}
 		for _, clause := range excludeAny {
 			if clause == nil || len(clause) == 0 {
-				return &MemoryStoreError{Message: "memory filter exceeds configured limits (exclude_any)"}
+				return &RecordsStoreError{Message: "records filter exceeds configured limits (exclude_any)"}
 			}
 		}
 		filterKeys := make([]string, 0, len(filter))
@@ -442,32 +442,32 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 			}
 		}
 		if int64(len(filterKeys)) > policy.MaxFilterFields {
-			return &MemoryStoreError{Message: "memory filter exceeds configured limits (filter/exclude_any)"}
+			return &RecordsStoreError{Message: "records filter exceeds configured limits (filter/exclude_any)"}
 		}
 		for _, key := range filterKeys {
 			parts := strings.Split(key, ".")
 			if int64(len(parts)) > policy.MaxFilterDepth {
-				return &MemoryStoreError{Message: "memory filter exceeds configured limits (filter/exclude_any)"}
+				return &RecordsStoreError{Message: "records filter exceeds configured limits (filter/exclude_any)"}
 			}
 			for _, part := range parts {
-				if !memoryPathSegment.MatchString(part) || part == "__proto__" || part == "prototype" || part == "constructor" {
-					return &MemoryStoreError{Message: "memory filter exceeds configured limits (filter/exclude_any)"}
+				if !recordsPathSegment.MatchString(part) || part == "__proto__" || part == "prototype" || part == "constructor" {
+					return &RecordsStoreError{Message: "records filter exceeds configured limits (filter/exclude_any)"}
 				}
 			}
 		}
-		order, err := memoryOrder(requestedOrder, legacy, stored)
+		order, err := recordsOrder(requestedOrder, legacy, stored)
 		if err != nil {
 			return err
 		}
-		fp, err := memoryCursorFingerprint(filter, excludeAny, options.Query)
+		fp, err := recordsCursorFingerprint(filter, excludeAny, options.Query)
 		if err != nil {
 			return err
 		}
 		if legacy != nil && (legacy.Type != recordType || legacy.Order != order || legacy.Filter != fp) {
-			return &MemoryStoreError{Message: "memory cursor is invalid"}
+			return &RecordsStoreError{Message: "record cursor is invalid"}
 		}
 		if stored != nil && (stored.Type != recordType || stored.Order != order || stored.FilterFingerprint != fp) {
-			return &MemoryStoreError{Message: "memory cursor is invalid"}
+			return &RecordsStoreError{Message: "record cursor is invalid"}
 		}
 		last := ""
 		if legacy != nil {
@@ -518,7 +518,7 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 		if options.Query != "" {
 			terms = strings.Split(options.Query, " ")
 		}
-		items := make([]MemoryItem, 0)
+		items := make([]RecordsItem, 0)
 		itemsJSONBytes := int64(2)
 		warnings := make([]string, 0)
 		var scanned, scannedBytes int64
@@ -544,26 +544,26 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				break
 			}
 			scannedBytes += int64(len(text))
-			value, parseErr := parseStoredMemoryJSON(text)
-			if parseErr != nil || value.kind != memoryObject {
+			value, parseErr := parseStoredRecordsJSON(text)
+			if parseErr != nil || value.kind != recordsObject {
 				position = ref
 				if len(warnings) < 8 {
 					warnings = append(warnings, "unreadable record: "+ref)
 				}
 				continue
 			}
-			data := memoryGoMap(value)
-			if !memoryMatches(data, filter, excludeAny) || !memoryContainsTerms(value, terms) {
+			data := recordsGoMap(value)
+			if !recordsMatches(data, filter, excludeAny) || !recordsContainsTerms(value, terms) {
 				position = ref
 				continue
 			}
 			// text is this record's own buffer and nothing writes to it, so the item keeps it.
-			candidate := MemoryItem{Ref: ref, ETag: memoryETag(text), Data: data, value: value, rawText: text}
+			candidate := RecordsItem{Ref: ref, ETag: recordsETag(text), Data: data, value: value, rawText: text}
 			if int64(len(items)) >= limit {
 				stopped = true
 				break
 			}
-			candidateJSON, err := memoryJSONCompact(memoryValueFromGo(candidate))
+			candidateJSON, err := recordsJSONCompact(recordsValueFromGo(candidate))
 			if err != nil {
 				return err
 			}
@@ -586,23 +586,23 @@ func (s *MemoryStore) list(recordType string, requestedFilter map[string]any, li
 				return err
 			}
 		}
-		result = MemoryListResult{Items: items, NextCursor: nextCursor, Warnings: warnings, HasMore: stopped}
+		result = RecordsListResult{Items: items, NextCursor: nextCursor, Warnings: warnings, HasMore: stopped}
 		return nil
 	})
 	return result, err
 }
 
-func (s *MemoryStore) withLock(operation func() error) error {
+func (s *RecordsStore) withLock(operation func() error) error {
 	if s == nil {
-		return &MemoryStoreError{Message: "memory storage is not available"}
+		return &RecordsStoreError{Message: "records storage is not available"}
 	}
-	release := s.locks.Lock("memory:" + s.root)
+	release := s.locks.Lock("records:" + s.root)
 	defer release()
 	return operation()
 }
 
 // RecentRefs returns up to limit refs of one type, newest first.
-func (s *MemoryStore) RecentRefs(recordType string, limit int64) []string {
+func (s *RecordsStore) RecentRefs(recordType string, limit int64) []string {
 	var refs []string
 	_ = s.withLock(func() error {
 		names, err := s.files(recordType)
@@ -621,9 +621,9 @@ func (s *MemoryStore) RecentRefs(recordType string, limit int64) []string {
 	return refs
 }
 
-func (s *MemoryStore) checkType(recordType string, policy sessionfs.NativeMemorySettings) error {
-	if !memoryTypePattern.MatchString(recordType) {
-		return &MemoryStoreError{Message: "memory type is invalid", Kind: memoryErrorType}
+func (s *RecordsStore) checkType(recordType string, policy sessionfs.NativeRecordsSettings) error {
+	if !recordsTypePattern.MatchString(recordType) {
+		return &RecordsStoreError{Message: "record type is invalid", Kind: recordsErrorType}
 	}
 	if policy.AllowedTypes != nil {
 		for _, allowed := range policy.AllowedTypes {
@@ -631,26 +631,26 @@ func (s *MemoryStore) checkType(recordType string, policy sessionfs.NativeMemory
 				return nil
 			}
 		}
-		return &MemoryStoreError{Message: "memory type is not allowed", Kind: memoryErrorType}
+		return &RecordsStoreError{Message: "record type is not allowed", Kind: recordsErrorType}
 	}
 	return nil
 }
 
-func (s *MemoryStore) checkData(value *memoryJSONValue, policy sessionfs.NativeMemorySettings) error {
-	if value == nil || value.kind != memoryObject || memoryJSONDepth(value) > policy.MaxJSONDepth {
-		return &MemoryStoreError{Message: "memory data must be a JSON object within the configured depth"}
+func (s *RecordsStore) checkData(value *recordsJSONValue, policy sessionfs.NativeRecordsSettings) error {
+	if value == nil || value.kind != recordsObject || recordsJSONDepth(value) > policy.MaxJSONDepth {
+		return &RecordsStoreError{Message: "record data must be a JSON object within the configured depth"}
 	}
-	text, err := memoryJSONPretty(value)
+	text, err := recordsJSONPretty(value)
 	if err != nil {
 		return err
 	}
 	if int64(len(text)) > policy.MaxRecordBytes {
-		return &MemoryStoreError{Message: "memory data exceeds the configured record size"}
+		return &RecordsStoreError{Message: "record data exceeds the configured record size"}
 	}
 	return nil
 }
 
-func (s *MemoryStore) ensureRoot() error {
+func (s *RecordsStore) ensureRoot() error {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return err
 	}
@@ -659,12 +659,12 @@ func (s *MemoryStore) ensureRoot() error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return &MemoryStoreError{Message: "memory storage path is not a safe directory"}
+		return &RecordsStoreError{Message: "records storage path is not a safe directory"}
 	}
 	return nil
 }
 
-func (s *MemoryStore) typeDirectory(recordType string, create bool) (string, error) {
+func (s *RecordsStore) typeDirectory(recordType string, create bool) (string, error) {
 	if err := s.ensureRoot(); err != nil {
 		return "", err
 	}
@@ -672,7 +672,7 @@ func (s *MemoryStore) typeDirectory(recordType string, create bool) (string, err
 	info, err := os.Lstat(path)
 	if err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", &MemoryStoreError{Message: "memory type storage is not a safe directory"}
+			return "", &RecordsStoreError{Message: "record type storage is not a safe directory"}
 		}
 		return path, nil
 	}
@@ -690,18 +690,18 @@ func (s *MemoryStore) typeDirectory(recordType string, create bool) (string, err
 		return "", err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", &MemoryStoreError{Message: "memory type storage is not a safe directory"}
+		return "", &RecordsStoreError{Message: "record type storage is not a safe directory"}
 	}
 	return path, nil
 }
 
-func (s *MemoryStore) files(recordType string) ([]string, error) {
+func (s *RecordsStore) files(recordType string) ([]string, error) {
 	return s.filesKnowing(recordType, nil)
 }
 
 // filesKnowing is files that skips the name check for a name in known: the store has
 // already validated that name as a record file, and the entry is still a regular file.
-func (s *MemoryStore) filesKnowing(recordType string, known map[string]int64) ([]string, error) {
+func (s *RecordsStore) filesKnowing(recordType string, known map[string]int64) ([]string, error) {
 	directory, err := s.typeDirectory(recordType, false)
 	if err != nil || directory == "" {
 		return []string{}, err
@@ -720,22 +720,22 @@ func (s *MemoryStore) filesKnowing(recordType string, known map[string]int64) ([
 			names = append(names, name)
 			continue
 		}
-		if memoryFilenamePattern.MatchString(name) && strings.HasPrefix(name, recordType+"-") {
+		if recordsFilenamePattern.MatchString(name) && strings.HasPrefix(name, recordType+"-") {
 			names = append(names, name)
 		}
 	}
 	return names, nil
 }
 
-func (s *MemoryStore) rememberSize(recordType, name string, size int64) {
+func (s *RecordsStore) rememberSize(recordType, name string, size int64) {
 	if s.sizes[recordType] == nil {
 		s.sizes[recordType] = make(map[string]int64)
 	}
 	s.sizes[recordType][name] = size
 }
 
-func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySettings) (memoryTotals, error) {
-	var totals memoryTotals
+func (s *RecordsStore) totals(recordType string, policy sessionfs.NativeRecordsSettings) (recordsTotals, error) {
+	var totals recordsTotals
 	if err := s.ensureRoot(); err != nil {
 		return totals, err
 	}
@@ -745,14 +745,14 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 	}
 	scanned := make(map[string]map[string]int64, len(directories))
 	for _, directory := range directories {
-		if !directory.IsDir() || !memoryTypePattern.MatchString(directory.Name()) {
+		if !directory.IsDir() || !recordsTypePattern.MatchString(directory.Name()) {
 			continue
 		}
 		totals.types++
 		known := s.sizes[directory.Name()]
 		names, err := s.filesKnowing(directory.Name(), known)
 		if err != nil {
-			return memoryTotals{}, err
+			return recordsTotals{}, err
 		}
 		current := make(map[string]int64, len(names))
 		for _, name := range names {
@@ -760,7 +760,7 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 			if !seen {
 				info, err := os.Stat(filepath.Join(s.root, directory.Name(), name))
 				if err != nil {
-					return memoryTotals{}, err
+					return recordsTotals{}, err
 				}
 				size = info.Size()
 			}
@@ -771,7 +771,7 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 				totals.typeRecords++
 			}
 			if totals.records > policy.MaxScanRecords || totals.bytes > policy.MaxScanBytes {
-				return memoryTotals{}, &MemoryStoreError{Message: "memory quota scan exceeded its configured budget"}
+				return recordsTotals{}, &RecordsStoreError{Message: "records quota scan exceeded its configured budget"}
 			}
 		}
 		scanned[directory.Name()] = current
@@ -780,61 +780,61 @@ func (s *MemoryStore) totals(recordType string, policy sessionfs.NativeMemorySet
 	return totals, nil
 }
 
-func (s *MemoryStore) target(recordType, ref string) (string, error) {
+func (s *RecordsStore) target(recordType, ref string) (string, error) {
 	parts := strings.Split(ref, "/")
-	if len(parts) != 2 || parts[0] != recordType || !memoryFilenamePattern.MatchString(parts[1]) || !strings.HasPrefix(parts[1], recordType+"-") {
-		return "", &MemoryStoreError{Message: "memory ref is invalid for the selected type", Kind: memoryErrorRef}
+	if len(parts) != 2 || parts[0] != recordType || !recordsFilenamePattern.MatchString(parts[1]) || !strings.HasPrefix(parts[1], recordType+"-") {
+		return "", &RecordsStoreError{Message: "record ref is invalid for the selected type", Kind: recordsErrorRef}
 	}
 	return filepath.Join(s.root, recordType, parts[1]), nil
 }
 
-func (s *MemoryStore) load(recordType, ref string) (MemoryItem, error) {
+func (s *RecordsStore) load(recordType, ref string) (RecordsItem, error) {
 	path, err := s.target(recordType, ref)
 	if err != nil {
-		return MemoryItem{}, err
+		return RecordsItem{}, err
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+		return RecordsItem{}, &RecordsStoreError{Message: "record was not found", Kind: recordsErrorRef}
 	}
 	if err != nil {
-		return MemoryItem{}, err
+		return RecordsItem{}, err
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record is not a safe file"}
+		return RecordsItem{}, &RecordsStoreError{Message: "record is not a safe file"}
 	}
 	text, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record was not found", Kind: memoryErrorRef}
+		return RecordsItem{}, &RecordsStoreError{Message: "record was not found", Kind: recordsErrorRef}
 	}
 	if err != nil {
-		return MemoryItem{}, err
+		return RecordsItem{}, err
 	}
-	value, err := parseStoredMemoryJSON(text)
-	if err != nil || value.kind != memoryObject {
-		return MemoryItem{}, &MemoryStoreError{Message: "memory record is malformed"}
+	value, err := parseStoredRecordsJSON(text)
+	if err != nil || value.kind != recordsObject {
+		return RecordsItem{}, &RecordsStoreError{Message: "record is malformed"}
 	}
-	return MemoryItem{Ref: ref, ETag: memoryETag(text), Data: memoryGoMap(value), value: value, rawText: append([]byte(nil), text...)}, nil
+	return RecordsItem{Ref: ref, ETag: recordsETag(text), Data: recordsGoMap(value), value: value, rawText: append([]byte(nil), text...)}, nil
 }
 
 // readRecordText returns a record's bytes in a buffer of their own, which the caller may keep.
-func (s *MemoryStore) readRecordText(recordType, name string) ([]byte, error) {
+func (s *RecordsStore) readRecordText(recordType, name string) ([]byte, error) {
 	path := filepath.Join(s.root, recordType, name)
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("not a regular memory record")
+		return nil, errors.New("not a regular record")
 	}
 	return os.ReadFile(path)
 }
 
-func (s *MemoryStore) atomicWrite(path string, data []byte) error {
+func (s *RecordsStore) atomicWrite(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	id, err := memoryUUID()
+	id, err := recordsUUID()
 	if err != nil {
 		return err
 	}
@@ -859,24 +859,24 @@ func (s *MemoryStore) atomicWrite(path string, data []byte) error {
 	return nil
 }
 
-func (s *MemoryStore) nextSequence() (uint64, error) {
+func (s *RecordsStore) nextSequence() (uint64, error) {
 	path := filepath.Join(s.root, ".memory-sequence")
 	current := uint64(0)
 	data, err := os.ReadFile(path)
 	if err == nil {
 		text := strings.TrimSuffix(string(data), "\n")
-		if text == "" || strings.TrimSpace(text) != text || !memorySequencePattern.MatchString(text) {
-			return 0, &MemoryStoreError{Message: "memory sequence is malformed"}
+		if text == "" || strings.TrimSpace(text) != text || !recordsSequencePattern.MatchString(text) {
+			return 0, &RecordsStoreError{Message: "record sequence is malformed"}
 		}
 		current, err = strconv.ParseUint(text, 10, 64)
 		if err != nil || current > math.MaxInt64 {
-			return 0, &MemoryStoreError{Message: "memory sequence is malformed"}
+			return 0, &RecordsStoreError{Message: "record sequence is malformed"}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return 0, err
 	}
 	if current >= 9_007_199_254_740_991 {
-		return 0, &MemoryStoreError{Message: "memory sequence is exhausted"}
+		return 0, &RecordsStoreError{Message: "record sequence is exhausted"}
 	}
 	next := current + 1
 	if err := s.atomicWrite(path, []byte(strconv.FormatUint(next, 10)+"\n")); err != nil {
@@ -885,7 +885,7 @@ func (s *MemoryStore) nextSequence() (uint64, error) {
 	return next, nil
 }
 
-func (s *MemoryStore) cursorDirectory(create bool) (string, error) {
+func (s *RecordsStore) cursorDirectory(create bool) (string, error) {
 	if err := s.ensureRoot(); err != nil {
 		return "", err
 	}
@@ -893,7 +893,7 @@ func (s *MemoryStore) cursorDirectory(create bool) (string, error) {
 	info, err := os.Lstat(path)
 	if err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", &MemoryStoreError{Message: "memory cursor storage is not a safe directory"}
+			return "", &RecordsStoreError{Message: "record cursor storage is not a safe directory"}
 		}
 		return path, nil
 	}
@@ -911,12 +911,12 @@ func (s *MemoryStore) cursorDirectory(create bool) (string, error) {
 		return "", err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", &MemoryStoreError{Message: "memory cursor storage is not a safe directory"}
+		return "", &RecordsStoreError{Message: "record cursor storage is not a safe directory"}
 	}
 	return path, nil
 }
 
-func (s *MemoryStore) pruneCursors(directory string, policy sessionfs.NativeMemorySettings) error {
+func (s *RecordsStore) pruneCursors(directory string, policy sessionfs.NativeRecordsSettings) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return err
@@ -928,7 +928,7 @@ func (s *MemoryStore) pruneCursors(directory string, policy sessionfs.NativeMemo
 	}
 	active := make([]cursorFile, 0)
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() || !memoryUUIDPattern.MatchString(strings.TrimSuffix(entry.Name(), ".json")) || !strings.HasSuffix(entry.Name(), ".json") {
+		if !entry.Type().IsRegular() || !recordsUUIDPattern.MatchString(strings.TrimSuffix(entry.Name(), ".json")) || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
@@ -954,51 +954,51 @@ func (s *MemoryStore) pruneCursors(directory string, policy sessionfs.NativeMemo
 	return nil
 }
 
-func (s *MemoryStore) readStoredCursor(value any, policy sessionfs.NativeMemorySettings) (*memoryStoredCursor, error) {
+func (s *RecordsStore) readStoredCursor(value any, policy sessionfs.NativeRecordsSettings) (*recordsStoredCursor, error) {
 	token, ok := value.(string)
-	if !ok || len(token) > 64 || !memoryCursorIDPattern.MatchString(token) {
-		return nil, &MemoryStoreError{Message: "memory cursor is invalid"}
+	if !ok || len(token) > 64 || !recordsCursorIDPattern.MatchString(token) {
+		return nil, &RecordsStoreError{Message: "record cursor is invalid"}
 	}
-	match := memoryCursorIDPattern.FindStringSubmatch(token)
+	match := recordsCursorIDPattern.FindStringSubmatch(token)
 	directory, err := s.cursorDirectory(false)
 	if err != nil {
 		return nil, err
 	}
 	if directory == "" {
-		return nil, &MemoryStoreError{Message: "memory cursor was not found"}
+		return nil, &RecordsStoreError{Message: "record cursor was not found"}
 	}
 	path := filepath.Join(directory, strings.ToLower(match[1])+".json")
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, &MemoryStoreError{Message: "memory cursor was not found"}
+		return nil, &RecordsStoreError{Message: "record cursor was not found"}
 	}
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, &MemoryStoreError{Message: "memory cursor is not a safe file"}
+		return nil, &RecordsStoreError{Message: "record cursor is not a safe file"}
 	}
 	if time.Since(info.ModTime()) >= time.Duration(policy.CursorTTLMS)*time.Millisecond {
 		_ = os.Remove(path)
-		return nil, &MemoryStoreError{Message: "memory cursor expired"}
+		return nil, &RecordsStoreError{Message: "record cursor expired"}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cursor memoryStoredCursor
+	var cursor recordsStoredCursor
 	if err := json.Unmarshal(data, &cursor); err != nil || cursor.V != 1 || cursor.Type == "" || (cursor.Order != "newest" && cursor.Order != "oldest") || cursor.Filter == nil || cursor.Last == "" || cursor.FilterFingerprint == "" {
-		return nil, &MemoryStoreError{Message: "memory cursor is invalid"}
+		return nil, &RecordsStoreError{Message: "record cursor is invalid"}
 	}
-	fingerprint, err := memoryCursorFingerprint(cursor.Filter, cursor.ExcludeAny, cursor.Query)
+	fingerprint, err := recordsCursorFingerprint(cursor.Filter, cursor.ExcludeAny, cursor.Query)
 	if err != nil || fingerprint != cursor.FilterFingerprint {
-		return nil, &MemoryStoreError{Message: "memory cursor is invalid"}
+		return nil, &RecordsStoreError{Message: "record cursor is invalid"}
 	}
 	return &cursor, nil
 }
 
-func (s *MemoryStore) createCursor(recordType, order string, filter map[string]any, excludeAny []map[string]any, query, filterFingerprint, last string, policy sessionfs.NativeMemorySettings) (string, error) {
-	cursor := memoryStoredCursor{V: 1, Type: recordType, Order: order, Filter: filter, FilterFingerprint: filterFingerprint, Last: last, Query: query}
+func (s *RecordsStore) createCursor(recordType, order string, filter map[string]any, excludeAny []map[string]any, query, filterFingerprint, last string, policy sessionfs.NativeRecordsSettings) (string, error) {
+	cursor := recordsStoredCursor{V: 1, Type: recordType, Order: order, Filter: filter, FilterFingerprint: filterFingerprint, Last: last, Query: query}
 	if len(excludeAny) > 0 {
 		cursor.ExcludeAny = excludeAny
 	}
@@ -1007,7 +1007,7 @@ func (s *MemoryStore) createCursor(recordType, order string, filter map[string]a
 		return "", err
 	}
 	if int64(len(data)) > policy.MaxCursorBytes {
-		return "", &MemoryStoreError{Message: "memory cursor exceeds configured size"}
+		return "", &RecordsStoreError{Message: "record cursor exceeds configured size"}
 	}
 	directory, err := s.cursorDirectory(true)
 	if err != nil {
@@ -1016,7 +1016,7 @@ func (s *MemoryStore) createCursor(recordType, order string, filter map[string]a
 	if err := s.pruneCursors(directory, policy); err != nil {
 		return "", err
 	}
-	id, err := memoryUUID()
+	id, err := recordsUUID()
 	if err != nil {
 		return "", err
 	}
@@ -1026,7 +1026,7 @@ func (s *MemoryStore) createCursor(recordType, order string, filter map[string]a
 	return "m_" + id, nil
 }
 
-func parseMemoryLegacyCursor(value any) *memoryLegacyCursor {
+func parseRecordsLegacyCursor(value any) *recordsLegacyCursor {
 	token, ok := value.(string)
 	if !ok || len(token) > 2048 {
 		return nil
@@ -1035,18 +1035,18 @@ func parseMemoryLegacyCursor(value any) *memoryLegacyCursor {
 	if err != nil {
 		return nil
 	}
-	var cursor memoryLegacyCursor
+	var cursor recordsLegacyCursor
 	if json.Unmarshal(data, &cursor) != nil || (cursor.V != 1 && cursor.V != 2) || cursor.Type == "" || (cursor.Order != "newest" && cursor.Order != "oldest") || cursor.Filter == "" || cursor.Last == "" {
 		return nil
 	}
 	return &cursor
 }
 
-func memoryOrder(requested any, legacy *memoryLegacyCursor, stored *memoryStoredCursor) (string, error) {
+func recordsOrder(requested any, legacy *recordsLegacyCursor, stored *recordsStoredCursor) (string, error) {
 	if requested != nil {
 		order, ok := requested.(string)
 		if !ok || (order != "newest" && order != "oldest") {
-			return "", &MemoryStoreError{Message: "memory order is invalid"}
+			return "", &RecordsStoreError{Message: "records order is invalid"}
 		}
 		return order, nil
 	}
@@ -1059,8 +1059,8 @@ func memoryOrder(requested any, legacy *memoryLegacyCursor, stored *memoryStored
 	return "newest", nil
 }
 
-func memoryFilename(recordType string, sequence uint64, now time.Time) (string, error) {
-	id, err := memoryUUID()
+func recordsFilename(recordType string, sequence uint64, now time.Time) (string, error) {
+	id, err := recordsUUID()
 	if err != nil {
 		return "", err
 	}
@@ -1068,7 +1068,7 @@ func memoryFilename(recordType string, sequence uint64, now time.Time) (string, 
 	return fmt.Sprintf("%s-%s-%016d-%s.json", recordType, stamp, sequence, id), nil
 }
 
-func memoryUUID() (string, error) {
+func recordsUUID() (string, error) {
 	var bytes [16]byte
 	if _, err := io.ReadFull(rand.Reader, bytes[:]); err != nil {
 		return "", err
@@ -1079,40 +1079,40 @@ func memoryUUID() (string, error) {
 	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
 }
 
-func memoryETag(text []byte) string {
+func recordsETag(text []byte) string {
 	digest := sha256.Sum256(text)
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-func currentText(item MemoryItem) []byte {
+func currentText(item RecordsItem) []byte {
 	if item.rawText != nil {
 		return item.rawText
 	}
 	if item.value == nil {
-		encoded, _ := memoryJSONPretty(memoryValueFromGo(item.Data))
+		encoded, _ := recordsJSONPretty(recordsValueFromGo(item.Data))
 		return []byte(encoded)
 	}
-	encoded, _ := memoryJSONPretty(item.value)
+	encoded, _ := recordsJSONPretty(item.value)
 	return []byte(encoded)
 }
 
-func memoryListItemsSize(items []MemoryItem) (int, error) {
-	encoded, err := memoryJSONCompact(memoryArrayValueFromItems(items))
+func recordsListItemsSize(items []RecordsItem) (int, error) {
+	encoded, err := recordsJSONCompact(recordsArrayValueFromItems(items))
 	return len(encoded), err
 }
 
-func memoryFilterFingerprint(filter map[string]any, excludeAny []map[string]any) (string, error) {
-	filterValue := memoryValueFromGo(filter)
-	canonical, err := memoryJSONCanonical(filterValue)
+func recordsFilterFingerprint(filter map[string]any, excludeAny []map[string]any) (string, error) {
+	filterValue := recordsValueFromGo(filter)
+	canonical, err := recordsJSONCanonical(filterValue)
 	if err != nil {
 		return "", err
 	}
 	if len(excludeAny) > 0 {
-		clauses := make([]*memoryJSONValue, 0, len(excludeAny))
+		clauses := make([]*recordsJSONValue, 0, len(excludeAny))
 		for _, clause := range excludeAny {
-			clauses = append(clauses, memoryValueFromGo(clause))
+			clauses = append(clauses, recordsValueFromGo(clause))
 		}
-		encoded, err := memoryJSONCanonical(memoryArrayValue(clauses))
+		encoded, err := recordsJSONCanonical(recordsArrayValue(clauses))
 		if err != nil {
 			return "", err
 		}
@@ -1122,32 +1122,32 @@ func memoryFilterFingerprint(filter map[string]any, excludeAny []map[string]any)
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func memoryMatches(data, filter map[string]any, excludeAny []map[string]any) bool {
-	if !memoryMatchesClause(data, filter) {
+func recordsMatches(data, filter map[string]any, excludeAny []map[string]any) bool {
+	if !recordsMatchesClause(data, filter) {
 		return false
 	}
 	for _, clause := range excludeAny {
-		if memoryMatchesClause(data, clause) {
+		if recordsMatchesClause(data, clause) {
 			return false
 		}
 	}
 	return true
 }
 
-func memoryMatchesClause(data, clause map[string]any) bool {
+func recordsMatchesClause(data, clause map[string]any) bool {
 	for key, expected := range clause {
-		actual, found := memoryValueAt(data, key)
-		if !found || !memoryDeepEqual(actual, expected) {
+		actual, found := recordsValueAt(data, key)
+		if !found || !recordsDeepEqual(actual, expected) {
 			return false
 		}
 	}
 	return true
 }
 
-func memoryValueAt(data map[string]any, path string) (any, bool) {
+func recordsValueAt(data map[string]any, path string) (any, bool) {
 	var current any = data
 	for _, part := range strings.Split(path, ".") {
-		if !memoryPathSegment.MatchString(part) || part == "__proto__" || part == "prototype" || part == "constructor" {
+		if !recordsPathSegment.MatchString(part) || part == "__proto__" || part == "prototype" || part == "constructor" {
 			return nil, false
 		}
 		object, ok := current.(map[string]any)
@@ -1162,26 +1162,26 @@ func memoryValueAt(data map[string]any, path string) (any, bool) {
 	return current, true
 }
 
-func memoryDeepEqual(left, right any) bool {
-	leftCanonical, leftErr := memoryJSONCanonical(memoryValueFromGo(left))
-	rightCanonical, rightErr := memoryJSONCanonical(memoryValueFromGo(right))
+func recordsDeepEqual(left, right any) bool {
+	leftCanonical, leftErr := recordsJSONCanonical(recordsValueFromGo(left))
+	rightCanonical, rightErr := recordsJSONCanonical(recordsValueFromGo(right))
 	return leftErr == nil && rightErr == nil && leftCanonical == rightCanonical
 }
 
-func memoryListContentText(result MemoryListResult) (string, error) {
-	pairs := []memoryJSONPair{{key: "items", value: memoryArrayValueFromItems(result.Items)}}
+func recordsListContentText(result RecordsListResult) (string, error) {
+	pairs := []recordsJSONPair{{key: "items", value: recordsArrayValueFromItems(result.Items)}}
 	if result.NextCursor != "" {
-		pairs = append(pairs, memoryJSONPair{key: "next_cursor", value: memoryValueFromGo(result.NextCursor)})
+		pairs = append(pairs, recordsJSONPair{key: "next_cursor", value: recordsValueFromGo(result.NextCursor)})
 	}
 	if len(result.Warnings) > 0 {
-		warnings := make([]*memoryJSONValue, 0, len(result.Warnings))
+		warnings := make([]*recordsJSONValue, 0, len(result.Warnings))
 		for _, warning := range result.Warnings {
-			warnings = append(warnings, memoryValueFromGo(warning))
+			warnings = append(warnings, recordsValueFromGo(warning))
 		}
-		pairs = append(pairs, memoryJSONPair{key: "warnings", value: memoryArrayValue(warnings)})
+		pairs = append(pairs, recordsJSONPair{key: "warnings", value: recordsArrayValue(warnings)})
 	}
 	var output bytes.Buffer
-	if err := writeMemoryJSON(&output, memoryObjectValue(pairs), 2, 0); err != nil {
+	if err := writeRecordsJSON(&output, recordsObjectValue(pairs), 2, 0); err != nil {
 		return "", err
 	}
 	return output.String(), nil

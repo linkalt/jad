@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestMemoryQuotaSeesEveryRecordSizeAfterCreateUpdateAndOutsideChanges(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	policy := memoryTestSettings(root)
+func TestRecordsQuotaSeesEveryRecordSizeAfterCreateUpdateAndOutsideChanges(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	policy := recordsTestSettings(root)
 	policy.MaxRecordBytes = 1 << 20
 	policy.MaxTotalBytes = 3200
 	policy.MaxScanBytes = 1 << 20
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	body := func(n int) map[string]any { return map[string]any{"v": strings.Repeat("x", n)} }
 
 	first, err := store.Create("note", body(1000), policy)
@@ -49,7 +49,7 @@ func TestMemoryQuotaSeesEveryRecordSizeAfterCreateUpdateAndOutsideChanges(t *tes
 
 	// A second store on the same root sees the files; the first store sees a record the
 	// second created (a new file name is always stat-ed).
-	other := NewMemoryStore(root)
+	other := NewRecordsStore(root)
 	if _, err := other.Create("note", body(1000), policy); err != nil {
 		t.Fatalf("create through second store: %v", err)
 	}
@@ -58,16 +58,16 @@ func TestMemoryQuotaSeesEveryRecordSizeAfterCreateUpdateAndOutsideChanges(t *tes
 	}
 }
 
-func TestMemoryTotalsMatchAFreshStoreAfterManyOperations(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	policy := memoryTestSettings(root)
+func TestRecordsTotalsMatchAFreshStoreAfterManyOperations(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	policy := recordsTestSettings(root)
 	policy.MaxTotalBytes = 1 << 30
 	policy.MaxScanBytes = 1 << 30
 	policy.MaxTypes = 10
 	policy.MaxRecordsPerType = 100
 	policy.MaxTotalRecords = 1000
 	policy.MaxScanRecords = 1000
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	var refs []string
 	for index := 0; index < 40; index++ {
 		item, err := store.Create([]string{"a", "b", "c"}[index%3], map[string]any{"n": index, "v": strings.Repeat("y", index*7)}, policy)
@@ -86,7 +86,7 @@ func TestMemoryTotalsMatchAFreshStoreAfterManyOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := NewMemoryStore(root).totals("a", policy)
+	want, err := NewRecordsStore(root).totals("a", policy)
 	if err != nil {
 		t.Fatal(err)
 	}

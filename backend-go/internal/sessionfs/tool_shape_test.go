@@ -18,7 +18,8 @@ func TestLoadSessionConfigMatchesToolNamespaceValidation(t *testing.T) {
 		{name: "native null defaults to an empty object", toolset: `{"native":null}`},
 		{name: "mcp null is refused, unlike the legacy tools.mcp", toolset: `{"mcp":null}`, wantErr: "mcp must be an object"},
 		{name: "unknown toolset key", toolset: `{"mcp_servers":[]}`, wantErr: `unknown field "mcp_servers"`},
-		{name: "unknown native tool with suggestion", toolset: `{"native":{"memry":{}}}`, wantErr: "tools.native.memry is not supported; did you mean memory?"},
+		{name: "unknown native tool with suggestion", toolset: `{"native":{"recrds":{}}}`, wantErr: "tools.native.recrds is not supported; did you mean records?"},
+		{name: "old memory key is refused with the rename", toolset: `{"native":{"memory":{}}}`, wantErr: "tools.native.memory was removed; memory was renamed to records; move the settings to tools.native.records and use the name records in tool lists; delete the key"},
 		{name: "mcp node must be an object", toolset: `{"mcp":[]}`, wantErr: "mcp"},
 		{name: "native node must be an object", toolset: `{"native":[]}`, wantErr: "native"},
 	} {
@@ -48,7 +49,7 @@ func TestNormalizeMCPServersNullDenyToolsUsesDefault(t *testing.T) {
 }
 
 func TestUnsupportedToolKeyWithoutSuggestion(t *testing.T) {
-	candidates := []string{"memory", "shell"}
+	candidates := []string{"records", "shell"}
 	for _, key := range []string{"", "x"} {
 		err := unsupportedToolKey("tools.native", key, candidates, "")
 		if err == nil || strings.Contains(err.Error(), "did you mean") {

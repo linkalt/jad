@@ -19,6 +19,7 @@ var removedToolHints = map[string]string{
 	"bash":        "move the settings to tools.native.exec",
 	"process":     "becomes an async handle",
 	"fetch":       "fetch pages with exec",
+	"memory":      "memory was renamed to records",
 }
 
 // The tools exec replaced are refused by name under tools.native, each with what to do

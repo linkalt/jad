@@ -94,8 +94,8 @@ type Resolver struct {
 	openAsyncHost func(string, asyncmgr.Config, *slog.Logger) (*native.AsyncHost, error)
 	mcpManagers   map[string]*mcpclient.Manager
 	taskStores    map[string]*native.TaskStore
-	memoryStores  map[string]*native.MemoryStore
-	// storeSessions lists the session files that use each task and memory store,
+	recordsStores map[string]*native.RecordsStore
+	// storeSessions lists the session files that use each task and records store,
 	// keyed by kind and storage key, so deleting the last of them can release the store.
 	storeSessions map[string]map[string]struct{}
 	mutationLock  *native.PathLocks
@@ -285,7 +285,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 		openAsyncHost:     native.NewAsyncHost,
 		mcpManagers:       make(map[string]*mcpclient.Manager),
 		taskStores:        make(map[string]*native.TaskStore),
-		memoryStores:      make(map[string]*native.MemoryStore),
+		recordsStores:     make(map[string]*native.RecordsStore),
 		storeSessions:     make(map[string]map[string]struct{}),
 		mutationLock:      native.NewPathLocks(),
 		gate:              &sessiongate.Gate{},
@@ -453,11 +453,11 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 
 // preparedRun is everything a run needs beyond the session settings.
 type preparedRun struct {
-	config      sessionfs.SessionConfig
-	runner      *session.Runner
-	toolCatalog *tools.Catalog
-	taskStore   *native.TaskStore
-	memoryStore *native.MemoryStore
+	config       sessionfs.SessionConfig
+	runner       *session.Runner
+	toolCatalog  *tools.Catalog
+	taskStore    *native.TaskStore
+	recordsStore *native.RecordsStore
 }
 
 // prepareRun reads the model file, builds the tool catalog (connecting MCP
@@ -469,7 +469,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 	if err != nil {
 		return preparedRun{}, err
 	}
-	toolCatalog, taskStore, memoryStore, err := r.buildToolCatalog(ctx, config)
+	toolCatalog, taskStore, recordsStore, err := r.buildToolCatalog(ctx, config)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -500,7 +500,7 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 		}
 		shared.runners[runnerKey] = runner
 	}
-	return preparedRun{config: config, runner: runner, toolCatalog: toolCatalog, taskStore: taskStore, memoryStore: memoryStore}, nil
+	return preparedRun{config: config, runner: runner, toolCatalog: toolCatalog, taskStore: taskStore, recordsStore: recordsStore}, nil
 }
 
 // providerAPIKey returns the key handed to the provider client for a loaded model, and
@@ -620,8 +620,8 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 
 // buildToolCatalog is the catalog the profile's model sees: every registered tool, narrowed
 // by the profile's tools.allow when it has one.
-func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.MemoryStore, error) {
-	registered, taskStore, memoryStore, err := r.buildRegisteredCatalog(ctx, config)
+func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
+	registered, taskStore, recordsStore, err := r.buildRegisteredCatalog(ctx, config)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -631,13 +631,13 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)
 	}
-	return toolCatalog, taskStore, memoryStore, nil
+	return toolCatalog, taskStore, recordsStore, nil
 }
 
 // buildRegisteredCatalog builds every tool the session registers (native, then MCP).
-func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.MemoryStore, error) {
+func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
 	taskStore := r.sharedTaskStore(config)
-	memoryStore := r.sharedMemoryStore(config)
+	recordsStore := r.sharedRecordsStore(config)
 	subagentMCP := native.NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
 	// One lazy set per prepare: read from the state folder once, and passed to both the native
 	// pass and the MCP pass below. Nil when the profile has no tools.lazy.
@@ -645,7 +645,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)
 	}
-	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, taskStore, memoryStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
+	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, taskStore, recordsStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)
 	}
@@ -701,7 +701,7 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	}); err != nil {
 		return nil, nil, nil, mapSessionError(err)
 	}
-	return registered, taskStore, memoryStore, nil
+	return registered, taskStore, recordsStore, nil
 }
 
 // AsyncHost implements native.AsyncResources: one async manager per tool storage folder,
@@ -858,27 +858,27 @@ func (r *Resolver) sharedTaskStore(config sessionfs.SessionConfig) *native.TaskS
 	return store
 }
 
-func (r *Resolver) sharedMemoryStore(config sessionfs.SessionConfig) *native.MemoryStore {
-	if config.NativeMemory == nil {
+func (r *Resolver) sharedRecordsStore(config sessionfs.SessionConfig) *native.RecordsStore {
+	if config.NativeRecords == nil {
 		return nil
 	}
-	storageKey := filepath.Clean(config.NativeMemory.StorageDir)
+	storageKey := filepath.Clean(config.NativeRecords.StorageDir)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if store := r.memoryStores[storageKey]; store != nil {
-		r.noteStoreSession("memory", storageKey, config.SettingPath)
+	if store := r.recordsStores[storageKey]; store != nil {
+		r.noteStoreSession("records", storageKey, config.SettingPath)
 		return store
 	}
 	if r.closed {
 		return nil
 	}
-	r.noteStoreSession("memory", storageKey, config.SettingPath)
-	store := native.NewMemoryStore(storageKey, r.mutationLock)
-	r.memoryStores[storageKey] = store
+	r.noteStoreSession("records", storageKey, config.SettingPath)
+	store := native.NewRecordsStore(storageKey, r.mutationLock)
+	r.recordsStores[storageKey] = store
 	return store
 }
 
-// noteStoreSession records that a session file uses a task or memory store. The
+// noteStoreSession records that a session file uses a task or records store. The
 // caller holds r.mu.
 func (r *Resolver) noteStoreSession(kind, storageKey, settingPath string) {
 	key := kind + "\x00" + storageKey
@@ -900,8 +900,8 @@ func (r *Resolver) sharedMCPManager(config sessionfs.SessionConfig) (*mcpclient.
 
 // Resources implements native.ToolsetResources: the shared stores of a toolset that a
 // sub-agent names, keyed by that toolset's own storage directories.
-func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore, *native.MemoryStore) {
-	return r.sharedTaskStore(config), r.sharedMemoryStore(config)
+func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore, *native.RecordsStore) {
+	return r.sharedTaskStore(config), r.sharedRecordsStore(config)
 }
 
 // loadAgentToolsetMCP connects the MCP servers of every toolset a sub-agent names and

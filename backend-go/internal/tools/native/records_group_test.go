@@ -6,7 +6,7 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-func seedGroupRecords(t *testing.T, store *MemoryStore, settings sessionfs.NativeMemorySettings) {
+func seedGroupRecords(t *testing.T, store *RecordsStore, settings sessionfs.NativeRecordsSettings) {
 	t.Helper()
 	for _, data := range []map[string]any{
 		{"status": "open", "area": "core"},
@@ -22,11 +22,11 @@ func seedGroupRecords(t *testing.T, store *MemoryStore, settings sessionfs.Nativ
 	}
 }
 
-func TestMemoryStoreGroupByCountsFilteredRecords(t *testing.T) {
+func TestRecordsStoreGroupByCountsFilteredRecords(t *testing.T) {
 	root := t.TempDir()
-	settings := memoryTestSettings(root)
+	settings := recordsTestSettings(root)
 	settings.MaxRecordsPerType = 10
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	seedGroupRecords(t, store, settings)
 
 	result, err := store.GroupBy("bug", map[string]any{"area": "core"}, []map[string]any{{"archived": true}}, "status", settings)
@@ -41,11 +41,11 @@ func TestMemoryStoreGroupByCountsFilteredRecords(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreGroupByReportsAtLeastWhenScanIsBounded(t *testing.T) {
+func TestRecordsStoreGroupByReportsAtLeastWhenScanIsBounded(t *testing.T) {
 	root := t.TempDir()
-	settings := memoryTestSettings(root)
+	settings := recordsTestSettings(root)
 	settings.MaxRecordsPerType = 10
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	seedGroupRecords(t, store, settings)
 	settings.MaxScanRecords = 2
 
@@ -62,15 +62,15 @@ func TestMemoryStoreGroupByReportsAtLeastWhenScanIsBounded(t *testing.T) {
 	}
 }
 
-func TestCollectMemoryStateContextSummaryGroupsAreFetchRecipes(t *testing.T) {
+func TestCollectRecordsStateContextSummaryGroupsAreFetchRecipes(t *testing.T) {
 	root := t.TempDir()
-	settings := memoryTestSettings(root)
+	settings := recordsTestSettings(root)
 	settings.MaxRecordsPerType = 10
-	store := NewMemoryStore(root)
+	store := NewRecordsStore(root)
 	seedGroupRecords(t, store, settings)
-	selector := sessionfs.NativeMemoryStateContextSelector{Type: "bug", Filter: map[string]any{"area": "core"}, GroupBy: "status", Limit: 10}
+	selector := sessionfs.NativeRecordsStateContextSelector{Type: "bug", Filter: map[string]any{"area": "core"}, GroupBy: "status", Limit: 10}
 
-	state, err := CollectMemoryStateContext(store, settings, []sessionfs.NativeMemoryStateContextSelector{selector})
+	state, err := CollectRecordsStateContext(store, settings, []sessionfs.NativeRecordsStateContextSelector{selector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +95,10 @@ func TestCollectMemoryStateContextSummaryGroupsAreFetchRecipes(t *testing.T) {
 	}
 }
 
-func TestMemoryStateContextTrimsSummaryEntriesWithoutDroppingTheSummary(t *testing.T) {
-	state := &MemoryStateContext{Summaries: []MemoryStateContextSummary{{
+func TestRecordsStateContextTrimsSummaryEntriesWithoutDroppingTheSummary(t *testing.T) {
+	state := &RecordsStateContext{Summaries: []RecordsStateContextSummary{{
 		Type: "bug", GroupBy: "status", Ungrouped: 2,
-		Groups: []MemoryStateContextGroup{{Filter: map[string]any{"status": "open"}, Count: 5}, {Filter: map[string]any{"status": "fixed"}, Count: 1}},
+		Groups: []RecordsStateContextGroup{{Filter: map[string]any{"status": "open"}, Count: 5}, {Filter: map[string]any{"status": "fixed"}, Count: 1}},
 	}}}
 	for want := 3; want > 0; want-- {
 		if state.StateContextItemCount() != want || !state.TrimStateContextItem() {

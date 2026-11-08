@@ -75,8 +75,8 @@ type stateContextQueryTrimmer interface {
 // stateContextSources are the live stores the providers read. A source a session does
 // not configure may be nil.
 type stateContextSources struct {
-	task   native.TaskStateSource
-	memory *native.MemoryStore
+	task    native.TaskStateSource
+	records *native.RecordsStore
 	// subagent holds the child runs; owner is the session key whose runs are listed.
 	subagent *native.SubagentManager
 	owner    string
@@ -156,9 +156,9 @@ func buildStateContextSnapshot(
 			return native.CollectTaskStateContext(sources.task, config.NativeTask.StateContext)
 		}
 	}
-	if config.NativeMemory != nil {
-		collectors["memory"] = func() (any, error) {
-			return native.CollectMemoryStateContext(sources.memory, *config.NativeMemory, config.NativeMemory.StateContext)
+	if config.NativeRecords != nil {
+		collectors["records"] = func() (any, error) {
+			return native.CollectRecordsStateContext(sources.records, *config.NativeRecords, config.NativeRecords.StateContext)
 		}
 	}
 	if config.NativeSubagent != nil {

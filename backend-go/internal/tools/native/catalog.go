@@ -60,27 +60,27 @@ func BuildCatalogWithLocks(config sessionfs.SessionConfig, locks *PathLocks) (*t
 
 // BuildCatalogWithResources shares resolver-owned stateful stores across tool
 // catalogs created for the same configured storage directory.
-func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, memoryStore *MemoryStore) (*tools.Catalog, error) {
-	return BuildCatalogWithSubagents(config, locks, taskStore, memoryStore, nil, nil, nil, nil)
+func BuildCatalogWithResources(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore) (*tools.Catalog, error) {
+	return BuildCatalogWithSubagents(config, locks, taskStore, recordsStore, nil, nil, nil, nil)
 }
 
 // BuildCatalogWithSubagents is BuildCatalogWithResources plus the launcher that runs
 // the children of the subagent tool. A nil launcher still lists the tool, and a call
 // to it answers that sub-agent runs are unavailable; listing tools needs no launcher.
-func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, memoryStore *MemoryStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources) (*tools.Catalog, error) {
-	return BuildCatalogWithMessenger(config, locks, taskStore, memoryStore, launcher, mcp, subagentManager, toolsets, nil)
+func BuildCatalogWithSubagents(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources) (*tools.Catalog, error) {
+	return BuildCatalogWithMessenger(config, locks, taskStore, recordsStore, launcher, mcp, subagentManager, toolsets, nil)
 }
 
 // BuildCatalogWithMessenger is BuildCatalogWithSubagents plus the messenger behind the
 // profile_message tool. Without a messenger the tool is not offered.
-func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, memoryStore *MemoryStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
-	return BuildCatalogWithAsync(config, locks, taskStore, memoryStore, launcher, mcp, subagentManager, toolsets, messenger, nil, nil)
+func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger) (*tools.Catalog, error) {
+	return BuildCatalogWithAsync(config, locks, taskStore, recordsStore, launcher, mcp, subagentManager, toolsets, messenger, nil, nil)
 }
 
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
-func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, memoryStore *MemoryStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
-	if config.NativeLSP == nil && config.NativeExec == nil && config.NativeReadImage == nil && config.NativeTask == nil && config.NativeCodeContext == nil && config.NativeMemory == nil && config.ExtensionWebSearch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
+func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
+	if config.NativeLSP == nil && config.NativeExec == nil && config.NativeReadImage == nil && config.NativeTask == nil && config.NativeCodeContext == nil && config.NativeRecords == nil && config.ExtensionWebSearch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
 		return tools.NewCatalog(nil)
 	}
 	if locks == nil {
@@ -94,7 +94,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
 		}
 	}
-	loaded, definitions, toolSmithNested, err := buildNativeTools(config, locks, taskStore, memoryStore, asyncHost, lazy)
+	loaded, definitions, toolSmithNested, err := buildNativeTools(config, locks, taskStore, recordsStore, asyncHost, lazy)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func GateLazyTools(list []tools.Tool, lazy *tools.LazySet) []tools.Tool {
 // tools built from it share their state with every other session that uses the same
 // storage directory. A nil ToolsetResources makes each store private, which suits tests.
 type ToolsetResources interface {
-	Resources(config sessionfs.SessionConfig) (*TaskStore, *MemoryStore)
+	Resources(config sessionfs.SessionConfig) (*TaskStore, *RecordsStore)
 }
 
 // buildAgentToolsets builds the native tools of every toolset a sub-agent names. The
@@ -306,11 +306,11 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 			derived.NativeAsync = nil
 		}
 		var taskStore *TaskStore
-		var memoryStore *MemoryStore
+		var recordsStore *RecordsStore
 		if resources != nil {
-			taskStore, memoryStore = resources.Resources(derived)
+			taskStore, recordsStore = resources.Resources(derived)
 		}
-		loaded, _, _, err := buildNativeTools(derived, locks, taskStore, memoryStore, asyncHost, nil)
+		loaded, _, _, err := buildNativeTools(derived, locks, taskStore, recordsStore, asyncHost, nil)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}
@@ -321,9 +321,9 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 
 // buildNativeTools builds every native tool the settings enable except the subagent
 // tool, with the definitions it read.
-func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, memoryStore *MemoryStore, asyncHost *AsyncHost, lazy *tools.LazySet) ([]tools.Tool, map[string]tools.Definition, *ToolSmithNested, error) {
-	if config.NativeMemory != nil && memoryStore == nil {
-		memoryStore = NewMemoryStore(config.NativeMemory.StorageDir, locks)
+func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, asyncHost *AsyncHost, lazy *tools.LazySet) ([]tools.Tool, map[string]tools.Definition, *ToolSmithNested, error) {
+	if config.NativeRecords != nil && recordsStore == nil {
+		recordsStore = NewRecordsStore(config.NativeRecords.StorageDir, locks)
 	}
 	if len(config.ToolDefinitionPaths) == 0 {
 		for _, name := range sessionfs.NativeToolNames() {
@@ -417,12 +417,12 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	if config.NativeMemory != nil {
-		definition, err := requireNativeDefinition(config, definitions, "memory", memoryToolID, memoryInputSchema)
+	if config.NativeRecords != nil {
+		definition, err := requireNativeDefinition(config, definitions, "records", recordsToolID, recordsInputSchema)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewMemoryTool(*config.NativeMemory, memoryStore)
+		tool, err := NewRecordsTool(*config.NativeRecords, recordsStore)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -517,8 +517,8 @@ func nativeToolConfigured(config sessionfs.SessionConfig, name string) bool {
 		return config.NativeTask != nil
 	case "code_context":
 		return config.NativeCodeContext != nil
-	case "memory":
-		return config.NativeMemory != nil
+	case "records":
+		return config.NativeRecords != nil
 	case "request_draft":
 		return config.NativeRequestDraft != nil
 	case "skill":

@@ -82,7 +82,7 @@ func TestHarnessPathsHoldEveryConfiguredStoreDirectory(t *testing.T) {
 	workspace := t.TempDir()
 	stores := map[string]string{
 		"task":         filepath.Join(workspace, "plans"),
-		"memory":       filepath.Join(workspace, "notes"),
+		"records":      filepath.Join(workspace, "notes"),
 		"code_context": filepath.Join(workspace, "ctx"),
 		"tool_smith":   filepath.Join(workspace, "smith-out"),
 	}
@@ -90,7 +90,7 @@ func TestHarnessPathsHoldEveryConfiguredStoreDirectory(t *testing.T) {
 		WorkingDir:        workspace,
 		SettingPath:       filepath.Join(workspace, "sessions", "demo", "setting.json"),
 		NativeTask:        &sessionfs.NativeTaskSettings{StorageDir: stores["task"]},
-		NativeMemory:      &sessionfs.NativeMemorySettings{StorageDir: stores["memory"]},
+		NativeRecords:     &sessionfs.NativeRecordsSettings{StorageDir: stores["records"]},
 		NativeCodeContext: &sessionfs.NativeCodeContextSettings{StorageDir: stores["code_context"]},
 		NativeToolSmith:   &sessionfs.NativeToolSmithSettings{Child: sessionfs.NativeBashSettings{Spill: sessionfs.NativeBashSpillSettings{StorageDir: stores["tool_smith"]}}},
 	}
@@ -109,7 +109,7 @@ func TestHarnessPathsHoldEveryConfiguredStoreDirectory(t *testing.T) {
 		}
 	}
 
-	config.NativeTask, config.NativeMemory, config.NativeCodeContext, config.NativeToolSmith = nil, nil, nil, nil
+	config.NativeTask, config.NativeRecords, config.NativeCodeContext, config.NativeToolSmith = nil, nil, nil, nil
 	paths := HarnessPaths(config)
 	for name, dir := range stores {
 		if containsPath(paths, dir) {

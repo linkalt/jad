@@ -66,7 +66,7 @@
           "description": "Tools the model sees, as the names of a tool or an mcp:<server>:<tool> entry. tools.lazy entries, and load_tool while tools.lazy is non-empty, count as allowed and need not be repeated here. A tool_smith script can call only the tools this shows.",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|memory|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },
@@ -75,7 +75,7 @@
           "description": "Tools the model does not see, as the names of a tool or an mcp:<server>:<tool> entry; wins over allow. A tool_smith script cannot call them either.",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|memory|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },
@@ -84,7 +84,7 @@
           "description": "Tools the model sees by name and one-line summary only; load_tool loads a tool, which is then listed with its full definition from the next request, and a call to a lazy tool before that is refused with tool_not_loaded. Same entries as allow, except load_tool, which is refused as a lazy entry. A lazy entry counts as allowed, so it need not be repeated in allow (a whole-server entry \"mcp:<server>:*\" only while allow names nothing of that server: otherwise allow decides which of its tools are shown, and the wildcard makes them lazy), and while the list is non-empty load_tool counts as allowed too; deny still wins, and a lazy entry that deny covers, or a deny that names load_tool, is a configuration error. Needs tools.native.load_tool, or the profile is refused at load. Needs a catalog layout (a session without one is a configuration error). A sub-agent, a nested subagent or profile_message child gets its owner's lazy tools gated with the same set (its loads go to the owner's lazy_tools.json, or to the target's own for profile_message), and load_tool only when the owner enables it and the agent lists it.",
           "items": {
             "type": "string",
-            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|memory|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|mcp:[A-Za-z0-9_-]+:\\S+)$"
+            "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
         },

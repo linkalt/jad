@@ -49,7 +49,7 @@ func TestNativeToolStorageDirResolution(t *testing.T) {
 		resolve                 resolver
 	}{
 		{"task", "tools.native.task", defaultNativeTaskStorageDir, direct(normalizeNativeTaskStorageDir)},
-		{"memory", "tools.native.memory", defaultNativeMemoryStorageDir, direct(normalizeNativeMemoryStorageDir)},
+		{"records", "tools.native.records", defaultNativeRecordsStorageDir, direct(normalizeNativeRecordsStorageDir)},
 		{"subagent", "tools.native.subagent", defaultNativeSubagentStorageDir, direct(normalizeNativeSubagentStorageDir)},
 		{"code_context", "tools.native.code_context", defaultNativeCodeContextStorageDir, direct(normalizeNativeCodeContextStorageDir)},
 		{"bash spill", "tools.native.bash", defaultNativeBashSpillDir, spill("tools.native.bash")},
@@ -77,9 +77,9 @@ func TestNativeToolStorageDirResolution(t *testing.T) {
 
 func TestNativeToolStorageDirRejectsEmptyAndNonString(t *testing.T) {
 	cwd := t.TempDir()
-	for _, tool := range []string{"task", "memory", "subagent", "code_context"} {
+	for _, tool := range []string{"task", "records", "subagent", "code_context"} {
 		normalize := map[string]func(map[string]json.RawMessage, string, string, string) (string, error){
-			"task": normalizeNativeTaskStorageDir, "memory": normalizeNativeMemoryStorageDir,
+			"task": normalizeNativeTaskStorageDir, "records": normalizeNativeRecordsStorageDir,
 			"subagent": normalizeNativeSubagentStorageDir, "code_context": normalizeNativeCodeContextStorageDir,
 		}[tool]
 		for _, raw := range []string{`""`, `"  "`, `3`} {

@@ -13,18 +13,18 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-func newSearchTestStore(t *testing.T) (*MemoryStore, string) {
+func newSearchTestStore(t *testing.T) (*RecordsStore, string) {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "memory")
-	store := NewMemoryStore(root)
+	root := filepath.Join(t.TempDir(), "records")
+	store := NewRecordsStore(root)
 	store.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	return store, root
 }
 
-func TestMemoryStoreDeleteChecksETagAndFreesCapacity(t *testing.T) {
+func TestRecordsStoreDeleteChecksETagAndFreesCapacity(t *testing.T) {
 	store, root := newSearchTestStore(t)
-	settings := memoryTestSettings(root)
-	created := make([]MemoryItem, 0, settings.MaxRecordsPerType)
+	settings := recordsTestSettings(root)
+	created := make([]RecordsItem, 0, settings.MaxRecordsPerType)
 	for id := int64(1); id <= settings.MaxRecordsPerType; id++ {
 		item, err := store.Create("note", map[string]any{"id": id}, settings)
 		if err != nil {
@@ -36,7 +36,7 @@ func TestMemoryStoreDeleteChecksETagAndFreesCapacity(t *testing.T) {
 		t.Fatalf("a full type accepted a record: %v", err)
 	}
 	_, err := store.Delete("note", created[0].Ref, created[1].ETag, settings)
-	var conflict *MemoryConflictError
+	var conflict *RecordsConflictError
 	if !errors.As(err, &conflict) || conflict.CurrentETag != created[0].ETag {
 		t.Fatalf("delete with a stale ETag = %v", err)
 	}
@@ -44,8 +44,8 @@ func TestMemoryStoreDeleteChecksETagAndFreesCapacity(t *testing.T) {
 	if err != nil || deleted.Ref != created[0].Ref || deleted.ETag != created[0].ETag {
 		t.Fatalf("delete = %+v, %v", deleted, err)
 	}
-	var storeError *MemoryStoreError
-	if _, err := store.Get("note", created[0].Ref, settings); !errors.As(err, &storeError) || storeError.Kind != memoryErrorRef {
+	var storeError *RecordsStoreError
+	if _, err := store.Get("note", created[0].Ref, settings); !errors.As(err, &storeError) || storeError.Kind != recordsErrorRef {
 		t.Fatalf("get after delete = %v", err)
 	}
 	if _, err := store.Delete("note", created[0].Ref, "", settings); !errors.As(err, &storeError) || !strings.Contains(err.Error(), "not found") {
@@ -80,10 +80,10 @@ func TestMemoryStoreDeleteChecksETagAndFreesCapacity(t *testing.T) {
 	}
 }
 
-func TestMemoryCursorContinuesAfterItsRecordIsDeleted(t *testing.T) {
+func TestRecordsCursorContinuesAfterItsRecordIsDeleted(t *testing.T) {
 	store, root := newSearchTestStore(t)
-	settings := memoryTestSettings(root)
-	created := make([]MemoryItem, 0, 4)
+	settings := recordsTestSettings(root)
+	created := make([]RecordsItem, 0, 4)
 	for id := 1; id <= 4; id++ {
 		item, err := store.Create("page", map[string]any{"id": id}, settings)
 		if err != nil {
@@ -114,9 +114,9 @@ func TestMemoryCursorContinuesAfterItsRecordIsDeleted(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreSearchMatchesEveryTermInValues(t *testing.T) {
+func TestRecordsStoreSearchMatchesEveryTermInValues(t *testing.T) {
 	store, root := newSearchTestStore(t)
-	settings := memoryTestSettings(root)
+	settings := recordsTestSettings(root)
 	settings.MaxRecordsPerType = 10
 	settings.MaxQueryBytes = 64
 	records := []map[string]any{
@@ -125,7 +125,7 @@ func TestMemoryStoreSearchMatchesEveryTermInValues(t *testing.T) {
 		{"beta": "alpha"}, // "beta" is only a key
 		{"nested": map[string]any{"deep": "ALPHA and beta"}, "status": "done"}, // nested, upper case
 	}
-	created := make([]MemoryItem, 0, len(records))
+	created := make([]RecordsItem, 0, len(records))
 	for _, data := range records {
 		item, err := store.Create("note", data, settings)
 		if err != nil {
@@ -133,7 +133,7 @@ func TestMemoryStoreSearchMatchesEveryTermInValues(t *testing.T) {
 		}
 		created = append(created, item)
 	}
-	refs := func(result MemoryListResult) []string {
+	refs := func(result RecordsListResult) []string {
 		out := make([]string, 0, len(result.Items))
 		for _, item := range result.Items {
 			out = append(out, item.Ref)
@@ -186,26 +186,26 @@ func TestMemoryStoreSearchMatchesEveryTermInValues(t *testing.T) {
 
 func TestListCursorFingerprintIsUnchangedWithoutAQuery(t *testing.T) {
 	filter := map[string]any{"status": "open"}
-	plain, err := memoryFilterFingerprint(filter, nil)
+	plain, err := recordsFilterFingerprint(filter, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := memoryCursorFingerprint(filter, nil, "")
+	listed, err := recordsCursorFingerprint(filter, nil, "")
 	if err != nil || listed != plain {
 		t.Fatalf("a list cursor fingerprint changed: %s, %v", listed, err)
 	}
-	searched, err := memoryCursorFingerprint(filter, nil, "open")
+	searched, err := recordsCursorFingerprint(filter, nil, "open")
 	if err != nil || searched == plain {
 		t.Fatalf("a search cursor fingerprint did not include the query: %s, %v", searched, err)
 	}
 }
 
-func TestNativeMemoryToolDeleteAndSearch(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "memory")
-	settings := memoryTestSettings(root)
+func TestNativeRecordsToolDeleteAndSearch(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "records")
+	settings := recordsTestSettings(root)
 	settings.MaxQueryBytes = 64
-	store := NewMemoryStore(root)
-	tool, err := NewMemoryTool(settings, store)
+	store := NewRecordsStore(root)
+	tool, err := NewRecordsTool(settings, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestNativeMemoryToolDeleteAndSearch(t *testing.T) {
 	}
 	call := func(id, arguments string) string {
 		t.Helper()
-		raw, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": id, "name": "memory", "arguments": arguments})
+		raw, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": id, "name": "records", "arguments": arguments})
 		output, err := catalog.ExecuteFunctionCall(context.Background(), raw, tools.ExecutionContext{})
 		if err != nil {
 			t.Fatal(err)
@@ -238,15 +238,15 @@ func TestNativeMemoryToolDeleteAndSearch(t *testing.T) {
 	}
 
 	output := call("search", `{"operation":"search","type":"note","query":"release"}`)
-	if !strings.Contains(output, "2 memory records found") || !strings.Contains(output, "operation: search") {
+	if !strings.Contains(output, "2 records found") || !strings.Contains(output, "operation: search") {
 		t.Fatalf("search output = %s", output)
 	}
 	output = call("stale", `{"operation":"delete","type":"note","ref":"`+gone.Ref+`","if_match":"`+kept.ETag+`"}`)
-	if !strings.Contains(output, "memory_conflict") || !strings.Contains(output, gone.ETag) || !strings.Contains(output, "delete") {
+	if !strings.Contains(output, "records_conflict") || !strings.Contains(output, gone.ETag) || !strings.Contains(output, "delete") {
 		t.Fatalf("stale delete output = %s", output)
 	}
 	output = call("delete", `{"operation":"delete","type":"note","ref":"`+gone.Ref+`","if_match":"`+gone.ETag+`"}`)
-	if !strings.Contains(output, "Memory record deleted") || !strings.Contains(output, gone.Ref) {
+	if !strings.Contains(output, "Record deleted") || !strings.Contains(output, gone.Ref) {
 		t.Fatalf("delete output = %s", output)
 	}
 	output = call("again", `{"operation":"delete","type":"note","ref":"`+gone.Ref+`"}`)
@@ -254,7 +254,7 @@ func TestNativeMemoryToolDeleteAndSearch(t *testing.T) {
 		t.Fatalf("delete of a deleted record should list the refs left: %s", output)
 	}
 	output = call("one", `{"operation":"search","type":"note","query":"RELEASE plan"}`)
-	if !strings.Contains(output, "0 memory records found") {
+	if !strings.Contains(output, "0 records found") {
 		t.Fatalf("search after delete = %s", output)
 	}
 	for name, arguments := range map[string]string{

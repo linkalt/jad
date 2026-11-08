@@ -10,10 +10,10 @@ import (
 var (
 	toolNodeNames   = []string{"native", "extension", "mcp"}
 	nativeToolNames = []string{
-		"read_image", "lsp", "exec", "async", "task", "code_context", "memory", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
+		"read_image", "lsp", "exec", "async", "task", "code_context", "records", "request_draft", "skill", "subagent", "profile_message", "tool_smith", "transcript", "transcripts", "profile", "load_tool",
 	}
-	// removedNativeTools are the tools exec replaced, each with what to do instead. Their
-	// keys are refused by name, never ignored, so a setting that still names one says why.
+	// removedNativeTools are the tools exec replaced (and memory, renamed to records), each
+	// with what to do instead. Their keys are refused by name, never ignored, so a setting that still names one says why.
 	// The advice is completed by removedToolKeyHint or removedToolListHint.
 	removedNativeTools = map[string]string{
 		"read":        "read files with exec (cat, sed -n, head) or a saved exec helper",
@@ -26,6 +26,7 @@ var (
 		"bash":        "exec runs shell commands (lang bash, its default); move the settings to tools.native.exec",
 		"process":     "exec runs long commands: a call that outlasts block_ms becomes an async handle",
 		"fetch":       "fetch pages with exec (curl, or a helper)",
+		"memory":      "memory was renamed to records; move the settings to tools.native.records and use the name records in tool lists",
 	}
 	// extensionToolNames are the tools under tools.extension: tools that call a provider API.
 	extensionToolNames = []string{"decide_systemone", "web_search"}

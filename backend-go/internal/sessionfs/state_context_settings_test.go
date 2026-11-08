@@ -11,18 +11,18 @@ import (
 
 const stateContextSettingPath = "/session/setting.json"
 
-func normalizeStateContextRaw(t *testing.T, raw string, task *NativeTaskSettings, memory *NativeMemorySettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
+func normalizeStateContextRaw(t *testing.T, raw string, task *NativeTaskSettings, records *NativeRecordsSettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
 	t.Helper()
-	return normalizeStateContextRawIn(t, t.TempDir(), raw, task, memory, subagent)
+	return normalizeStateContextRawIn(t, t.TempDir(), raw, task, records, subagent)
 }
 
-func normalizeStateContextRawIn(t *testing.T, cwd, raw string, task *NativeTaskSettings, memory *NativeMemorySettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
+func normalizeStateContextRawIn(t *testing.T, cwd, raw string, task *NativeTaskSettings, records *NativeRecordsSettings, subagent *NativeSubagentSettings) (StateContextSettings, error) {
 	t.Helper()
 	setting := map[string]json.RawMessage{}
 	if raw != "" {
 		setting["statecontext"] = json.RawMessage(raw)
 	}
-	return normalizeStateContextSettings(setting, stateContextSettingPath, cwd, task, memory, subagent, nil)
+	return normalizeStateContextSettings(setting, stateContextSettingPath, cwd, task, records, subagent, nil)
 }
 
 func TestNormalizeStateContextSettingsDefaultsAndRemovedProcessProvider(t *testing.T) {
@@ -49,13 +49,13 @@ func TestNormalizeStateContextSettingsDefaultsAndRemovedProcessProvider(t *testi
 
 func TestNormalizeStateContextSettingsTriggersAreIndependent(t *testing.T) {
 	configured, err := normalizeStateContextRaw(t,
-		`{"enabled":true,"triggers":{"compaction":{"tools":["task","memory"],"max_bytes":4096},"session_start":{"tools":["memory"]}}}`, &NativeTaskSettings{}, &NativeMemorySettings{StateContext: []NativeMemoryStateContextSelector{{Type: "project", Limit: 1}}}, nil)
+		`{"enabled":true,"triggers":{"compaction":{"tools":["task","records"],"max_bytes":4096},"session_start":{"tools":["records"]}}}`, &NativeTaskSettings{}, &NativeRecordsSettings{StateContext: []NativeRecordsStateContextSelector{{Type: "project", Limit: 1}}}, nil)
 	if err != nil {
 		t.Fatalf("two triggers: %v", err)
 	}
 	want := map[string]StateContextTrigger{
-		"compaction":    {Tools: []string{"task", "memory"}, MaxBytes: 4096},
-		"session_start": {Tools: []string{"memory"}, MaxBytes: defaultStateContextMaxBytes},
+		"compaction":    {Tools: []string{"task", "records"}, MaxBytes: 4096},
+		"session_start": {Tools: []string{"records"}, MaxBytes: defaultStateContextMaxBytes},
 	}
 	if !reflect.DeepEqual(configured.Triggers, want) {
 		t.Fatalf("triggers = %+v, want %+v", configured.Triggers, want)
@@ -104,14 +104,14 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	for _, test := range []struct {
 		name, raw, want string
 		task            *NativeTaskSettings
-		memory          *NativeMemorySettings
+		records         *NativeRecordsSettings
 	}{
 		{name: "task", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["task"]}}}`, want: "requires tools.native.task"},
-		{name: "memory", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["memory"]}}}`, want: "requires tools.native.memory"},
-		{name: "memory without selector", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["memory"]}}}`, memory: &NativeMemorySettings{}, want: "requires at least one tools.native.memory.statecontext selector"},
-		{name: "second trigger", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["task"]},"session_start":{"tools":["memory"]}}}`, task: &NativeTaskSettings{}, want: "(trigger session_start) requires tools.native.memory"},
+		{name: "records", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["records"]}}}`, want: "requires tools.native.records"},
+		{name: "records without selector", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["records"]}}}`, records: &NativeRecordsSettings{}, want: "requires at least one tools.native.records.statecontext selector"},
+		{name: "second trigger", raw: `{"enabled":true,"triggers":{"compaction":{"tools":["task"]},"session_start":{"tools":["records"]}}}`, task: &NativeTaskSettings{}, want: "(trigger session_start) requires tools.native.records"},
 	} {
-		_, err := normalizeStateContextRaw(t, test.raw, test.task, test.memory, nil)
+		_, err := normalizeStateContextRaw(t, test.raw, test.task, test.records, nil)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: error = %v, want %q", test.name, err, test.want)
 		}
@@ -121,10 +121,10 @@ func TestNormalizeStateContextSettingsRejectsInvalidAndUnavailableProviders(t *t
 	if err != nil || !configuredTask.Enabled || !reflect.DeepEqual(configuredTask.Triggers["compaction"].Tools, []string{"task"}) {
 		t.Fatalf("configured task provider = %+v, error = %v", configuredTask, err)
 	}
-	memorySettings := &NativeMemorySettings{StateContext: []NativeMemoryStateContextSelector{{Type: "project", Filter: map[string]any{}, Limit: 1}}}
-	configuredMemory, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"compaction":{"tools":["memory"]}}}`, nil, memorySettings, nil)
-	if err != nil || !configuredMemory.Enabled || !reflect.DeepEqual(configuredMemory.Triggers["compaction"].Tools, []string{"memory"}) {
-		t.Fatalf("configured memory provider = %+v, error = %v", configuredMemory, err)
+	recordsSettings := &NativeRecordsSettings{StateContext: []NativeRecordsStateContextSelector{{Type: "project", Filter: map[string]any{}, Limit: 1}}}
+	configuredRecords, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"compaction":{"tools":["records"]}}}`, nil, recordsSettings, nil)
+	if err != nil || !configuredRecords.Enabled || !reflect.DeepEqual(configuredRecords.Triggers["compaction"].Tools, []string{"records"}) {
+		t.Fatalf("configured records provider = %+v, error = %v", configuredRecords, err)
 	}
 	if _, err := normalizeStateContextRaw(t, `{"triggers":{"compaction":{"tools":["task"]}}}`, nil, nil, nil); err != nil {
 		t.Fatalf("disabled task provider should remain inert, error = %v", err)
@@ -203,7 +203,7 @@ func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 		raw    string
 		accept bool
 	}{
-		{`{"enabled":true,"header":"h","role":"system","triggers":{"compaction":{"tools":["task"],"max_bytes":2048},"session_start":{"tools":["memory"]}}}`, true},
+		{`{"enabled":true,"header":"h","role":"system","triggers":{"compaction":{"tools":["task"],"max_bytes":2048},"session_start":{"tools":["records"]}}}`, true},
 		{`{"triggers":{}}`, true},
 		{`{"triggers":{"timer":{"tools":["task"]}}}`, false},
 		{`{"triggers":{"compaction":{}}}`, false},
@@ -223,7 +223,7 @@ func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 		if got := schemaAccepts(t, schema, `{"statecontext":`+test.raw+`}`); got != test.accept {
 			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
 		}
-		_, err := normalizeStateContextRaw(t, test.raw, &NativeTaskSettings{}, &NativeMemorySettings{StateContext: []NativeMemoryStateContextSelector{{Type: "p", Limit: 1}}}, nil)
+		_, err := normalizeStateContextRaw(t, test.raw, &NativeTaskSettings{}, &NativeRecordsSettings{StateContext: []NativeRecordsStateContextSelector{{Type: "p", Limit: 1}}}, nil)
 		if (err == nil) != test.accept {
 			t.Errorf("loader accepts %s = %v (err %v), want %v", test.raw, err == nil, err, test.accept)
 		}
@@ -231,25 +231,25 @@ func TestStateContextSchemaAgreesWithTheLoader(t *testing.T) {
 }
 
 func TestNormalizeStateContextSettingsUserTriggerMaxPromptBytes(t *testing.T) {
-	memory := &NativeMemorySettings{StateContext: []NativeMemoryStateContextSelector{{Type: "project", Limit: 1}}}
-	configured, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["memory"]}}}`, nil, memory, nil)
+	records := &NativeRecordsSettings{StateContext: []NativeRecordsStateContextSelector{{Type: "project", Limit: 1}}}
+	configured, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["records"]}}}`, nil, records, nil)
 	if err != nil {
 		t.Fatalf("user trigger: %v", err)
 	}
 	if got := configured.Triggers["user"].MaxPromptBytes; got != defaultStateContextMaxPromptBytes {
 		t.Fatalf("default max_prompt_bytes = %d, want %d", got, defaultStateContextMaxPromptBytes)
 	}
-	custom, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":100}}}`, nil, memory, nil)
+	custom, err := normalizeStateContextRaw(t, `{"enabled":true,"triggers":{"user":{"tools":["records"],"max_prompt_bytes":100}}}`, nil, records, nil)
 	if err != nil || custom.Triggers["user"].MaxPromptBytes != 100 {
 		t.Fatalf("custom max_prompt_bytes = %+v, %v", custom.Triggers["user"], err)
 	}
 	for name, raw := range map[string]string{
-		"zero":              `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":0}}}`,
-		"above the cap":     `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_prompt_bytes":65537}}}`,
-		"not on compaction": `{"enabled":true,"triggers":{"compaction":{"tools":["memory"],"max_prompt_bytes":10}}}`,
-		"exceeds max_bytes": `{"enabled":true,"triggers":{"user":{"tools":["memory"],"max_bytes":1024,"max_prompt_bytes":2000}}}`,
+		"zero":              `{"enabled":true,"triggers":{"user":{"tools":["records"],"max_prompt_bytes":0}}}`,
+		"above the cap":     `{"enabled":true,"triggers":{"user":{"tools":["records"],"max_prompt_bytes":65537}}}`,
+		"not on compaction": `{"enabled":true,"triggers":{"compaction":{"tools":["records"],"max_prompt_bytes":10}}}`,
+		"exceeds max_bytes": `{"enabled":true,"triggers":{"user":{"tools":["records"],"max_bytes":1024,"max_prompt_bytes":2000}}}`,
 	} {
-		if _, err := normalizeStateContextRaw(t, raw, nil, memory, nil); err == nil {
+		if _, err := normalizeStateContextRaw(t, raw, nil, records, nil); err == nil {
 			t.Fatalf("%s: want a config error", name)
 		}
 	}

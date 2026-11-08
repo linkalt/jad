@@ -40,7 +40,7 @@ type StateContextTrigger struct {
 }
 
 // StateContextSettings controls optional context snapshots derived at a trigger.
-// Configured native task, memory, subagent and async providers are supported.
+// Configured native task, records, subagent and async providers are supported.
 type StateContextSettings struct {
 	Enabled bool
 	// Header is the first line of every snapshot. It carries the warning that the data
@@ -62,7 +62,7 @@ func normalizeStateContextSettings(
 	settingPath string,
 	cwd string,
 	task *NativeTaskSettings,
-	memory *NativeMemorySettings,
+	records *NativeRecordsSettings,
 	subagent *NativeSubagentSettings,
 	async *NativeAsyncSettings,
 ) (StateContextSettings, error) {
@@ -137,7 +137,7 @@ func normalizeStateContextSettings(
 			if !configured {
 				continue
 			}
-			if err := checkStateContextProviders(name, trigger.Tools, settingPath, task, memory, subagent, async); err != nil {
+			if err := checkStateContextProviders(name, trigger.Tools, settingPath, task, records, subagent, async); err != nil {
 				return StateContextSettings{}, err
 			}
 		}
@@ -172,11 +172,11 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 	trigger := StateContextTrigger{Tools: []string{}}
 	value, exists := fields["tools"]
 	if !exists || strings.TrimSpace(string(value)) == "null" {
-		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, subagent, or async", settingPath, section)
+		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, records, subagent, or async", settingPath, section)
 	}
 	var rawTools []json.RawMessage
 	if err := json.Unmarshal(value, &rawTools); err != nil || len(rawTools) == 0 {
-		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, memory, subagent, or async", settingPath, section)
+		return StateContextTrigger{}, configError("%s: %s.tools must be a non-empty list of task, records, subagent, or async", settingPath, section)
 	}
 	seen := make(map[string]struct{}, len(rawTools))
 	for _, rawTool := range rawTools {
@@ -185,8 +185,8 @@ func normalizeStateContextTrigger(name string, raw json.RawMessage, header, sett
 		if err == nil && tool == "process" {
 			return StateContextTrigger{}, configError("%s: %s.tools: the process provider was removed with tools.native.process; exec's background runs are listed by the async provider", settingPath, section)
 		}
-		if err != nil || (tool != "task" && tool != "memory" && tool != "subagent" && tool != "async") {
-			return StateContextTrigger{}, configError("%s: %s.tools must contain only task, memory, subagent, or async", settingPath, section)
+		if err != nil || (tool != "task" && tool != "records" && tool != "subagent" && tool != "async") {
+			return StateContextTrigger{}, configError("%s: %s.tools must contain only task, records, subagent, or async", settingPath, section)
 		}
 		if _, duplicate := seen[tool]; !duplicate {
 			trigger.Tools = append(trigger.Tools, tool)
@@ -261,7 +261,7 @@ func checkStateContextProviders(
 	tools []string,
 	settingPath string,
 	task *NativeTaskSettings,
-	memory *NativeMemorySettings,
+	records *NativeRecordsSettings,
 	subagent *NativeSubagentSettings,
 	async *NativeAsyncSettings,
 ) error {
@@ -279,12 +279,12 @@ func checkStateContextProviders(
 			if subagent == nil {
 				return configError("%s: statecontext provider subagent (trigger %s) requires tools.native.subagent", settingPath, trigger)
 			}
-		case "memory":
-			if memory == nil {
-				return configError("%s: statecontext provider memory (trigger %s) requires tools.native.memory", settingPath, trigger)
+		case "records":
+			if records == nil {
+				return configError("%s: statecontext provider records (trigger %s) requires tools.native.records", settingPath, trigger)
 			}
-			if len(memory.StateContext) == 0 {
-				return configError("%s: statecontext provider memory (trigger %s) requires at least one tools.native.memory.statecontext selector", settingPath, trigger)
+			if len(records.StateContext) == 0 {
+				return configError("%s: statecontext provider records (trigger %s) requires at least one tools.native.records.statecontext selector", settingPath, trigger)
 			}
 		}
 	}

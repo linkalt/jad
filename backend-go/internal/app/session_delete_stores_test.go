@@ -12,37 +12,37 @@ import (
 
 func storeConfig(settingPath, dir string) sessionfs.SessionConfig {
 	return sessionfs.SessionConfig{
-		SettingPath:  settingPath,
-		NativeTask:   &sessionfs.NativeTaskSettings{StorageDir: filepath.Join(dir, "tasks")},
-		NativeMemory: &sessionfs.NativeMemorySettings{StorageDir: filepath.Join(dir, "memory")},
+		SettingPath:   settingPath,
+		NativeTask:    &sessionfs.NativeTaskSettings{StorageDir: filepath.Join(dir, "tasks")},
+		NativeRecords: &sessionfs.NativeRecordsSettings{StorageDir: filepath.Join(dir, "records")},
 	}
 }
 
-func storeCounts(r *Resolver) (tasks, memory, sessions int) {
+func storeCounts(r *Resolver) (tasks, records, sessions int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.taskStores), len(r.memoryStores), len(r.storeSessions)
+	return len(r.taskStores), len(r.recordsStores), len(r.storeSessions)
 }
 
-func TestReleasingSessionsDropsTheirTaskAndMemoryStores(t *testing.T) {
+func TestReleasingSessionsDropsTheirTaskAndRecordsStores(t *testing.T) {
 	f := newLayoutFixture(t)
 	resolver := f.service.resolver
 	const sessions = 50
 	for index := 0; index < sessions; index++ {
 		path := filepath.Join(f.root, "sessions", fmt.Sprintf("s%03d.json", index))
 		config := storeConfig(path, filepath.Join(f.cwd, fmt.Sprintf("s%03d", index)))
-		if resolver.sharedTaskStore(config) == nil || resolver.sharedMemoryStore(config) == nil {
+		if resolver.sharedTaskStore(config) == nil || resolver.sharedRecordsStore(config) == nil {
 			t.Fatal("store not created")
 		}
 	}
-	if tasks, memory, _ := storeCounts(resolver); tasks != sessions || memory != sessions {
-		t.Fatalf("stores = %d/%d, want %d each", tasks, memory, sessions)
+	if tasks, records, _ := storeCounts(resolver); tasks != sessions || records != sessions {
+		t.Fatalf("stores = %d/%d, want %d each", tasks, records, sessions)
 	}
 	for index := 0; index < sessions; index++ {
 		resolver.releaseSessionChildren(filepath.Join(f.root, "sessions", fmt.Sprintf("s%03d.json", index)))
 	}
-	if tasks, memory, tracked := storeCounts(resolver); tasks+memory+tracked != 0 {
-		t.Fatalf("after release: %d task, %d memory stores, %d tracked keys; want 0", tasks, memory, tracked)
+	if tasks, records, tracked := storeCounts(resolver); tasks+records+tracked != 0 {
+		t.Fatalf("after release: %d task, %d records stores, %d tracked keys; want 0", tasks, records, tracked)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestStoreReleaseIsSafeWithInFlightUse(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
-				resolver.sharedMemoryStore(config)
+				resolver.sharedRecordsStore(config)
 				if store := resolver.sharedTaskStore(config); store != nil {
 					_, _ = store.List(native.TaskListFilter{})
 				}
@@ -92,7 +92,7 @@ func TestStoreReleaseIsSafeWithInFlightUse(t *testing.T) {
 	}
 	wg.Wait()
 	resolver.releaseSessionChildren(path)
-	if tasks, memory, tracked := storeCounts(resolver); tasks+memory+tracked != 0 {
-		t.Fatalf("stores left: %d/%d/%d", tasks, memory, tracked)
+	if tasks, records, tracked := storeCounts(resolver); tasks+records+tracked != 0 {
+		t.Fatalf("stores left: %d/%d/%d", tasks, records, tracked)
 	}
 }

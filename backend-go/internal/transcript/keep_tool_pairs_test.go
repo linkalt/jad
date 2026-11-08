@@ -51,7 +51,7 @@ func TestKeepToolPairsCountsAcrossAllKeptTurns(t *testing.T) {
 				if err := store.AppendInputItems([]byte(user)); err != nil {
 					t.Fatal(err)
 				}
-				call := fmt.Sprintf(`{"type":"function_call","call_id":"c%d","name":"memory","arguments":"{}"}`, i)
+				call := fmt.Sprintf(`{"type":"function_call","call_id":"c%d","name":"records","arguments":"{}"}`, i)
 				if err := journal.Append([]byte(`{"type":"response.completed","response":{"id":"a` + fmt.Sprint(i) + `","status":"completed","output":[` + call + `]}}`)); err != nil {
 					t.Fatal(err)
 				}

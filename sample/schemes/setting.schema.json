@@ -8,7 +8,7 @@
     "statecontextTrigger": {
       "type": "object",
       "properties": {
-        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "memory", "subagent", "async"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and async are Go backend only; async lists the pending (live or unread) async handles."},
+        "tools": {"type": "array", "items": {"type": "string", "enum": ["task", "records", "subagent", "async"]}, "uniqueItems": true, "minItems": 1, "description": "Providers copied into the snapshot. Each needs its tools.native entry. subagent and async are Go backend only; async lists the pending (live or unread) async handles."},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760, "default": 65536},
         "prompt": {"type": "string", "pattern": "\\S", "description": "Trusted instruction text placed after the header and before the data. It is read from the setting, not from the data."},
         "prompt_documents": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Files whose text follows prompt, in order. Relative paths resolve from cwd; ~ is expanded. A file that cannot be read, repeats an earlier path, or does not fit in what is left of max_bytes after the header and the text before it is a config error; such a file is refused from its size without being read. The files are read when settings load, so an edit applies to the next snapshot written."},
@@ -447,7 +447,7 @@
         "tool_storage_dir": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Folder that holds the tool storage (exec spill, memory, tasks, async handles, sub-agent runs), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd; the default is .jad/state. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
+          "description": "Folder that holds the tool storage (exec spill, records, tasks, async handles, sub-agent runs), as <folder>/<session>/<category>/<name>/tools. A relative path is relative to the session cwd; the default is .jad/state. The transcript and staging stay in the root state folder. Defaults, session and profile may all set it; the nearer level wins."
         }
       }
     }
@@ -704,7 +704,7 @@
           "type": "array",
           "default": [],
           "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^(lsp|read_image|exec|async|task|code_context|memory|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
+          "items": {"type": "string", "pattern": "^(lsp|read_image|exec|async|task|code_context|records|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"},
           "description": "Tools kept in plan mode although they can change something, as tools.allow entries: a native tool name, mcp:<server>:<tool> or mcp:<server>:*. tools.allow and tools.deny still apply to them."
         }
       },
@@ -1790,12 +1790,12 @@
               },
               "unevaluatedProperties": false
             },
-            "memory": {
+            "records": {
               "type": "object",
               "properties": {
                 "statecontext": {
                   "type": "array",
-                  "description": "Selected memory records included in statecontext snapshots. Types are dynamic; specify each included type, optional exact-match filter, and limit.",
+                  "description": "Selected records included in statecontext snapshots. Types are dynamic; specify each included type, optional exact-match filter, and limit.",
                   "items": {
                     "type": "object",
                     "required": ["type"],
@@ -1803,7 +1803,7 @@
                       "type": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
                       "filter": {"type": "object", "default": {}},
                       "limit": {"type": "integer", "minimum": 1, "default": 10},
-                      "group_by": {"type": "string", "description": "Dot-separated field path. Replaces the records with a count per value at that path; each group carries the filter of a memory list call that fetches it. The scan is bounded by max_scan_records and max_scan_bytes, and at_least reports a truncated scan. Cannot be combined with limit, and the path cannot also be a filter key."}
+                      "group_by": {"type": "string", "description": "Dot-separated field path. Replaces the records with a count per value at that path; each group carries the filter of a records list call that fetches it. The scan is bounded by max_scan_records and max_scan_bytes, and at_least reports a truncated scan. Cannot be combined with limit, and the path cannot also be a filter key."}
                     },
                     "additionalProperties": false
                   },
@@ -1812,8 +1812,8 @@
                 "storage_dir": {
                   "type": "string",
                   "pattern": "\\S",
-                  "default": ".memory",
-                  "description": "Memory root directory. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is. A store is shared by every profile and session that resolves to the same path: an absolute path, or the same configured relative value (which lands in one path under the cwd)."
+                  "default": ".records",
+                  "description": "Records root directory. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is. A store is shared by every profile and session that resolves to the same path: an absolute path, or the same configured relative value (which lands in one path under the cwd)."
                 },
                 "max_types": {
                   "type": "integer",
@@ -1898,7 +1898,7 @@
                 },
                 "max_query_bytes": {
                   "type": "integer",
-                  "description": "Largest search query, in bytes, the memory tool's search operation accepts.",
+                  "description": "Largest search query, in bytes, the records tool's search operation accepts.",
                   "minimum": 1,
                   "maximum": 65536,
                   "default": 1024

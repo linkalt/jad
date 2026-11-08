@@ -1,19 +1,22 @@
-# Memory Tool — Design and Workflow
+# Records Tool — Design and Workflow
 
 **Status:** Revised draft
 
-**Storage:** Configured local directory tree (`tools.native.memory.storage_dir`)
-**Primary goal:** Give an agent one bounded, safe memory tool for arbitrary JSON-object records without a new tool schema for each record type.
+**Storage:** Configured local directory tree (`tools.native.records.storage_dir`)
+
+**Renamed 2026-11-08:** this tool was called `memory` (id `native.memory`, key `tools.native.memory`, default directory `.memory`). The old names are refused, there is no alias, and stored data is not migrated. To keep an old store, copy it once while the backend is stopped: `cp -a <old>/.memory/. <new>/.records/` (the directories sit under the same profile `tool_storage` root, or `setting.cwd`). The store's sidecar files `.memory-sequence` and `.memory-cursors` keep their old names on purpose, so a copied store keeps its ref numbering and cursors.
+
+**Primary goal:** Give an agent one bounded, safe records tool for arbitrary JSON-object records without a new tool schema for each record type.
 
 ## 1. Scope and non-goals
 
-`memory` stores type-scoped JSON objects. The application or prompt gives a type its meaning; the engine does not require a type-specific payload schema.
+`records` stores type-scoped JSON objects. The application or prompt gives a type its meaning; the engine does not require a type-specific payload schema.
 
 Examples include `workspace`, `task`, and `contact`. A record's type and identity are external metadata: the JSON payload does not duplicate an `id`, `type`, or timestamps.
 
 The tool provides `create`, `get`, `list`, `search`, `update`, and `delete` (`search` and `delete` were added on 2026-11-04). It intentionally does **not** provide partial JSON patching, arbitrary query operators, an index, automatic retention, or date partitioning.
 
-Stored data is untrusted data, never executable instructions. A memory record cannot change agent instructions, permissions, tool policy, or configuration.
+Stored data is untrusted data, never executable instructions. A record cannot change agent instructions, permissions, tool policy, or configuration.
 
 ## 2. Storage and identity
 
@@ -23,15 +26,15 @@ Configure storage as follows:
 {
   "tools": {
     "native": {
-      "memory": {
-        "storage_dir": ".memory"
+      "records": {
+        "storage_dir": ".records"
       }
     }
   }
 }
 ```
 
-`storage_dir` defaults to `.memory` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or beneath `setting.cwd` when no profile is selected. A configured relative directory resolves from the session cwd instead (changed 2026-11-08; the old store under the profile root is not migrated); absolute paths are used as-is. Profile roots default to `<cwd>/.jad/profiles/<profile-name>/tools`; existing data is not migrated. Different profiles receive separate default roots, but sessions using the same profile, an explicit absolute path, or the same configured relative value (one cwd path) share storage without write coordination.
+`storage_dir` defaults to `.records` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or beneath `setting.cwd` when no profile is selected. A configured relative directory resolves from the session cwd instead (changed 2026-11-08; the old store under the profile root is not migrated); absolute paths are used as-is. Profile roots default to `<cwd>/.jad/profiles/<profile-name>/tools`; existing data is not migrated. Different profiles receive separate default roots, but sessions using the same profile, an explicit absolute path, or the same configured relative value (one cwd path) share storage without write coordination.
 
 ```text
 <storage_dir>/
@@ -65,7 +68,7 @@ Each file contains exactly one UTF-8 JSON object followed by a newline:
 
 ```json
 {
-  "title": "Build memory tool",
+  "title": "Build records tool",
   "status": "open",
   "priority": "high",
   "labels": ["agent", "storage"]
@@ -102,7 +105,7 @@ Exactly the fields applicable to the operation are accepted. Unknown top-level f
   "operation": "create",
   "type": "task",
   "data": {
-    "title": "Build memory tool",
+    "title": "Build records tool",
     "status": "open"
   }
 }
@@ -131,7 +134,7 @@ The agent never selects a filename.
 }
 ```
 
-The selected type must match the type component of the canonical ref. A successful result returns `type`, `ref`, `data`, and the content `etag`. A missing or malformed record returns an operational not-found/error result without probing outside the memory root.
+The selected type must match the type component of the canonical ref. A successful result returns `type`, `ref`, `data`, and the content `etag`. A missing or malformed record returns an operational not-found/error result without probing outside the records root.
 
 ### 4.3 List
 
@@ -158,7 +161,7 @@ The selected type must match the type component of the canonical ref. A successf
     {
       "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
       "etag": "sha256:…",
-      "data": {"title": "Build memory tool", "status": "open"}
+      "data": {"title": "Build records tool", "status": "open"}
     }
   ],
   "next_cursor": null,
@@ -177,7 +180,7 @@ The MVP scans only the selected type directory. It sorts canonical filenames lex
   "ref": "task/task-20250308T120000.123Z-550e8400-e29b-41d4-a716-446655440000.json",
   "if_match": "sha256:…",
   "data": {
-    "title": "Build memory tool",
+    "title": "Build records tool",
     "status": "done"
   }
 }
@@ -199,7 +202,7 @@ In the implementation `if_match` is optional: omitted, the update is uncondition
 }
 ```
 
-`search` is `list` with one more condition: every whitespace-separated word of `query` must appear, ignoring case, in at least one string or number value of the record, at any depth. Keys are not searched, and different words may match different values. `filter`, `limit`, `order`, and `cursor` work as for `list`; the result has the same shape. A search cursor carries the normalized query, so it continues only the same search, and a list cursor does not continue a search. There is no index: a search scans the type directory under the same `max_scan_records` and `max_scan_bytes` budget as `list`, and `tools.native.memory.max_query_bytes` (default 1024) bounds the query.
+`search` is `list` with one more condition: every whitespace-separated word of `query` must appear, ignoring case, in at least one string or number value of the record, at any depth. Keys are not searched, and different words may match different values. `filter`, `limit`, `order`, and `cursor` work as for `list`; the result has the same shape. A search cursor carries the normalized query, so it continues only the same search, and a list cursor does not continue a search. There is no index: a search scans the type directory under the same `max_scan_records` and `max_scan_bytes` budget as `list`, and `tools.native.records.max_query_bytes` (default 1024) bounds the query.
 
 ### 4.6 Delete
 
@@ -238,11 +241,11 @@ MVP filters use deterministic exact matching:
 
 ## 6. Limits and storage policy
 
-All limits are backend configuration, not model arguments. The initial native-memory settings should include sensible defaults for:
+All limits are backend configuration, not model arguments. The initial native-records settings should include sensible defaults for:
 
 ```ts
-interface NativeMemoryToolSettings {
-  storage_dir: string;         // default .memory under profile tool_storage (or setting.cwd without a profile); a configured relative value is from setting.cwd; or absolute
+interface NativeRecordsToolSettings {
+  storage_dir: string;         // default .records under profile tool_storage (or setting.cwd without a profile); a configured relative value is from setting.cwd; or absolute
   max_types: number;
   max_type_chars: number;
   allowed_types?: string[];
@@ -261,21 +264,21 @@ interface NativeMemoryToolSettings {
 }
 ```
 
-Without an index, the store establishes quota totals with a bounded scan before a mutation. If that scan cannot establish totals within its configured scan budget, the mutation fails conservatively rather than guessing that capacity remains. A create that would exceed record or byte quotas fails rather than silently pruning memory. Updates account for the old and new file size. Automatic retention is out of scope, so capacity exhaustion is a visible result: the agent frees space only by an explicit `delete`, never by silent pruning.
+Without an index, the store establishes quota totals with a bounded scan before a mutation. If that scan cannot establish totals within its configured scan budget, the mutation fails conservatively rather than guessing that capacity remains. A create that would exceed record or byte quotas fails rather than silently pruning records. Updates account for the old and new file size. Automatic retention is out of scope, so capacity exhaustion is a visible result: the agent frees space only by an explicit `delete`, never by silent pruning.
 
 List responses obey item and byte budgets. The scan has independent record and byte budgets, so a sparse filter cannot force an unbounded directory walk. If a scan limit is reached, the result is partial with a cursor/hint rather than falsely complete. Corrupt or unreadable candidate files are skipped, reported as bounded warnings by canonical ref, and do not abort unrelated records.
 
 ## 7. Filesystem, concurrency, and recovery
 
-1. Resolve a configured relative `storage_dir` from `setting.cwd`; default to `.memory` under the selected profile's `tool_storage` root (or `setting.cwd` when no profile is selected); preserve configured absolute directories.
+1. Resolve a configured relative `storage_dir` from `setting.cwd`; default to `.records` under the selected profile's `tool_storage` root (or `setting.cwd` when no profile is selected); preserve configured absolute directories.
 2. Create the root and type directory only after validating the type and quotas.
 3. Use a unique temporary filename in the target directory, write valid UTF-8 JSON plus newline, then atomically rename it. Explicit fsync durability policy is deferred.
 4. Use exclusive temporary-file creation; do not expose temporary files to list operations.
 5. Serialize mutations for a ref/type inside the process. For an update, re-read and hash the target while holding its lock, verify `if_match`, then atomically replace it.
 6. On open/list, ignore stale temporary files and optionally prune them only if they are old enough under configured policy.
-7. Keep memory-root traversal fixed. Reject symlinks, non-directory type parents, malformed filenames, and any ref that does not resolve exactly to the selected type directory.
+7. Keep records-root traversal fixed. Reject symlinks, non-directory type parents, malformed filenames, and any ref that does not resolve exactly to the selected type directory.
 
-Atomic rename prevents torn reads. The ETag precondition prevents lost updates. It does not provide distributed locking across independent backend processes; the MVP documents a single backend owner for one memory root. Multi-process coordination requires a lock/index backend before sharing a root.
+Atomic rename prevents torn reads. The ETag precondition prevents lost updates. It does not provide distributed locking across independent backend processes; the MVP documents a single backend owner for one records root. Multi-process coordination requires a lock/index backend before sharing a root.
 
 ## 8. Privacy and safety
 
@@ -320,7 +323,7 @@ The MVP scans a single type directory and treats files as the source of truth. I
 The first version is complete when it can:
 
 - create an arbitrary JSON object under a valid type and generated unique filename;
-- resolve a configured relative `storage_dir` from `setting.cwd`, default to `.memory` under the selected profile's `tool_storage` root (or `setting.cwd` when no profile is selected), and accept explicit absolute directories;
+- resolve a configured relative `storage_dir` from `setting.cwd`, default to `.records` under the selected profile's `tool_storage` root (or `setting.cwd` when no profile is selected), and accept explicit absolute directories;
 - get and list records for one type without exposing definition or temporary files;
 - perform bounded exact-match filtering over safe dot paths;
 - return canonical refs and ETags outside the original payload;

@@ -24,13 +24,13 @@ exec native=null err: setting.json: tools.native must be a JSON object
 exec native=missing nil
 exec native=tools-null err: setting.json: tools must be a JSON object
 exec native=valid-empty-object nil
-memory native=string err: setting.json: tools.native must be a JSON object
-memory native=number err: setting.json: tools.native must be a JSON object
-memory native=array err: setting.json: tools.native must be a JSON object
-memory native=null err: setting.json: tools.native must be a JSON object
-memory native=missing nil
-memory native=tools-null err: setting.json: tools must be a JSON object
-memory native=valid-empty-object nil
+records native=string err: setting.json: tools.native must be a JSON object
+records native=number err: setting.json: tools.native must be a JSON object
+records native=array err: setting.json: tools.native must be a JSON object
+records native=null err: setting.json: tools.native must be a JSON object
+records native=missing nil
+records native=tools-null err: setting.json: tools must be a JSON object
+records native=valid-empty-object nil
 profile_message native=string err: setting.json: tools.native must be a JSON object
 profile_message native=number err: setting.json: tools.native must be a JSON object
 profile_message native=array err: setting.json: tools.native must be a JSON object
@@ -121,8 +121,8 @@ func TestNativeDirectPathRefusesNullNative(t *testing.T) {
 			v, err := normalizeNativeExecSettings(s, "/tmp/jad", settingPath, "/tmp/cwd", "/tmp/session", "/tmp/tools", "")
 			return v != nil, err
 		}},
-		{"memory", func(s map[string]json.RawMessage) (bool, error) {
-			v, err := normalizeNativeMemorySettings(s, settingPath, "/tmp/cwd", "/tmp/tools")
+		{"records", func(s map[string]json.RawMessage) (bool, error) {
+			v, err := normalizeNativeRecordsSettings(s, settingPath, "/tmp/cwd", "/tmp/tools")
 			return v != nil, err
 		}},
 		{"profile_message", func(s map[string]json.RawMessage) (bool, error) {

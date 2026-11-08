@@ -25,7 +25,7 @@ import (
 // the new reference, and the profile's transcript is copied up to a turn, line for line,
 // so the new session goes on from that point and the old one is untouched. The copy's
 // history block (the compaction backup) and the images its lines refer to come along;
-// caches are rebuilt by the new session, and tool storage (memory, tasks, processes) and
+// caches are rebuilt by the new session, and tool storage (records, tasks, processes) and
 // checkpoints start empty.
 func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, request httpapi.ForkRequest) (httpapi.ForkResult, error) {
 	if ctx == nil {

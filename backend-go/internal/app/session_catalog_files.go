@@ -94,7 +94,7 @@ func sessionFileGone(file string) bool {
 }
 
 // releaseSessionChildren stops the MCP server processes that belong to the deleted session
-// file, and drops the task and memory stores no other
+// file, and drops the task and records stores no other
 // session uses. A store held by a run that outlives the delete keeps working; a later
 // access builds a new one over the same files. Without it they would run until the server stops,
 // with no session left to reach them. A session created again under the same name gets
@@ -123,8 +123,8 @@ func (r *Resolver) releaseSessionChildren(settingPath string) {
 		switch kind {
 		case "task":
 			delete(r.taskStores, storageKey)
-		case "memory":
-			delete(r.memoryStores, storageKey)
+		case "records":
+			delete(r.recordsStores, storageKey)
 		}
 	}
 	r.mu.Unlock()
