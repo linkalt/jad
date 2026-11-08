@@ -19,7 +19,7 @@ func taskTestSettings(directory string) sessionfs.NativeTaskSettings {
 	return sessionfs.NativeTaskSettings{
 		MaxTasks: 20, ListLimit: 10, MaxListLimit: 20, MaxTitleChars: 100,
 		MaxTags: 4, MaxTagChars: 20, MaxDocuments: 4, MaxDocumentChars: 100,
-		MaxStorageBytes: 10_000, MaxListBytes: 1_000, StorageDir: directory,
+		MaxStorageBytes: 10_000, MaxListBytes: 1_000, MaxBatchOps: 20, StorageDir: directory,
 		StateContext: sessionfs.NativeTaskStateContextSettings{Statuses: []string{"in-progress", "done"}, Limit: 25},
 	}
 }
@@ -160,9 +160,14 @@ func TestNativeTaskActionErrorsLimitsAndCorruptStorage(t *testing.T) {
 func TestNativeTaskSchemaAndArgumentAliases(t *testing.T) {
 	settings := taskTestSettings(t.TempDir())
 	store := NewTaskStore(settings.StorageDir)
-	invalid := runTaskTool(t, store, settings, 1, map[string]any{"action": "add"})
+	// The schema has no allOf rules; Execute enforces them with their own error codes.
+	missing := runTaskTool(t, store, settings, 1, map[string]any{"action": "add"})
+	if !strings.Contains(missing, "error_type: execution") || !strings.Contains(missing, "error_code: missing_title") {
+		t.Fatalf("missing add title should fail in Execute:\n%s", missing)
+	}
+	invalid := runTaskTool(t, store, settings, 11, map[string]any{"action": "add", "title": ""})
 	if !strings.Contains(invalid, "error_type: schema") || !strings.Contains(invalid, "ajv_errors:") {
-		t.Fatalf("missing add title should fail schema validation:\n%s", invalid)
+		t.Fatalf("empty add title should fail schema validation:\n%s", invalid)
 	}
 	added := runTaskTool(t, store, settings, 2, map[string]any{"title": "New task"})
 	if taskIDFromOutput(t, added) != "T-001" {

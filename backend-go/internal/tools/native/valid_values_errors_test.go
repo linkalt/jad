@@ -84,11 +84,11 @@ func TestRecordsErrorsListTheValidValues(t *testing.T) {
 	}
 }
 
-func TestTaskNotFoundListsTheTaskIDs(t *testing.T) {
+func TestTaskNotFoundListsTheOpenTaskIDs(t *testing.T) {
 	directory := t.TempDir()
 	settings := taskTestSettings(filepath.Join(directory, "tasks"))
 	store := NewTaskStore(settings.StorageDir)
-	if out := runTaskTool(t, store, settings, 1, map[string]any{"id": "T-001"}); strings.Contains(out, "available_ids") {
+	if out := runTaskTool(t, store, settings, 1, map[string]any{"id": "T-001"}); strings.Contains(out, "open_ids") {
 		t.Errorf("an empty store offered ids:\n%s", out)
 	}
 	first := taskIDFromOutput(t, runTaskTool(t, store, settings, 2, map[string]any{"title": "one"}))
@@ -99,13 +99,16 @@ func TestTaskNotFoundListsTheTaskIDs(t *testing.T) {
 	if !strings.Contains(out, "error_code: task_not_found") {
 		t.Fatalf("expected task_not_found:\n%s", out)
 	}
-	for _, id := range []string{first, second, done} {
+	for _, id := range []string{first, second} {
 		if !strings.Contains(out, id) {
-			t.Errorf("available_ids lacks %s (done tasks are valid ids too):\n%s", id, out)
+			t.Errorf("open_ids lacks %s:\n%s", id, out)
 		}
 	}
-	if !strings.Contains(out, "available_ids: ") {
-		t.Errorf("no available_ids line:\n%s", out)
+	if !strings.Contains(out, "open_ids: ") || strings.Contains(out, "available_ids") {
+		t.Errorf("no open_ids line, or the old name is still used:\n%s", out)
+	}
+	if line := taskInfoLine(out, "open_ids"); strings.Contains(line, done) {
+		t.Errorf("open_ids lists the done task %s:\n%s", done, out)
 	}
 }
 

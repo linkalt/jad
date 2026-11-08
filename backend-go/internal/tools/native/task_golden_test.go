@@ -40,6 +40,10 @@ func TestNativeTaskOutputMatchesNodeMessagesJSONLGolden(t *testing.T) {
 	}
 }
 
+// The two fixtures below were Node-generated schema errors (the allOf rules of the old
+// schema). The redesign dropped allOf, so the same calls now fail in Execute with their
+// own error codes, and the fixtures were rewritten by hand to that output; the add golden
+// above is still the Node one. Node byte parity ends here (decided with the redesign).
 func TestNativeTaskSchemaErrorMatchesNodeMessagesJSONLGolden(t *testing.T) {
 	settings := taskTestSettings(filepath.Join(t.TempDir(), "tasks"))
 	tool, err := NewTaskTool(settings, NewTaskStore(settings.StorageDir))

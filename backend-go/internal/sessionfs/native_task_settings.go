@@ -29,6 +29,13 @@ const (
 	maxNativeTaskStateContext     int64 = 100_000
 )
 
+// DefaultNativeTaskMaxBatchOps is how many operations one task call may batch when
+// tools.native.task.max_batch_ops is not set.
+const (
+	DefaultNativeTaskMaxBatchOps int64 = 20
+	maxNativeTaskMaxBatchOps     int64 = 200
+)
+
 var defaultNativeTaskStateStatuses = []string{"in-progress", "done"}
 var defaultNativeTaskDetailStatuses = []string{"in-progress"}
 var allowedNativeTaskStatuses = map[string]struct{}{
@@ -59,6 +66,7 @@ type NativeTaskSettings struct {
 	MaxDocumentChars int64
 	MaxStorageBytes  int64
 	MaxListBytes     int64
+	MaxBatchOps      int64 // most operations one call may pass in ops
 	StorageDir       string
 	StateContext     NativeTaskStateContextSettings
 }
@@ -88,7 +96,7 @@ func normalizeNativeTaskSettings(setting map[string]json.RawMessage, settingPath
 			return nil, configError("%s: tools.native.task.storage_path was removed; use storage_dir", settingPath)
 		}
 		switch key {
-		case "max_tasks", "list_limit", "max_list_limit", "max_title_chars", "max_tags", "max_tag_chars", "max_documents", "max_document_chars", "max_storage_bytes", "max_list_bytes", "storage_dir", "statecontext":
+		case "max_tasks", "list_limit", "max_list_limit", "max_title_chars", "max_tags", "max_tag_chars", "max_documents", "max_document_chars", "max_storage_bytes", "max_list_bytes", "max_batch_ops", "storage_dir", "statecontext":
 		default:
 			return nil, configError("%s: tools.native.task.%s is not supported", settingPath, key)
 		}
@@ -126,6 +134,9 @@ func normalizeNativeTaskSettings(setting map[string]json.RawMessage, settingPath
 		return nil, err
 	}
 	if settings.MaxListBytes, err = configuredInteger(fields, "max_list_bytes", defaultNativeTaskListBytes, 1, maxNativeTaskBytes, settingPath, "tools.native.task"); err != nil {
+		return nil, err
+	}
+	if settings.MaxBatchOps, err = configuredInteger(fields, "max_batch_ops", DefaultNativeTaskMaxBatchOps, 1, maxNativeTaskMaxBatchOps, settingPath, "tools.native.task"); err != nil {
 		return nil, err
 	}
 	settings.StorageDir, err = normalizeNativeTaskStorageDir(fields, cwd, toolStorageDir, settingPath)

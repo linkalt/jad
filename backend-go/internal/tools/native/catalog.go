@@ -394,7 +394,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		loaded = append(loaded, tool)
 	}
 	if config.NativeTask != nil {
-		definition, err := requireNativeDefinition(config, definitions, "task", taskToolID, taskInputSchema)
+		definition, err := requireTaskDefinition(config, definitions)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -572,6 +572,23 @@ func requireExecDefinition(config sessionfs.SessionConfig, definitions map[strin
 		}
 	}
 	return requireNativeDefinition(config, definitions, "exec", execToolID, execInputSchema)
+}
+
+// requireTaskDefinition is requireNativeDefinition for task. A definition file may also hold
+// the schema task had before ops (taskInputSchemaV1); the model is then shown the current one,
+// and the current description when the file still has the old one, so a file copied from an
+// older version still loads and ops, offset, q and detail are offered all the same.
+func requireTaskDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition) (tools.Definition, error) {
+	if definition, exists := definitions[taskToolID]; exists && definition.Name == "task" && definition.Source == "native" {
+		if matches, err := sameJSON(definition.InputSchema, taskInputSchemaV1); err == nil && matches {
+			definition.InputSchema = append(json.RawMessage(nil), taskInputSchema...)
+			if definition.Description == taskDescriptionV1 {
+				definition.Description = taskDescription
+			}
+			return definition, nil
+		}
+	}
+	return requireNativeDefinition(config, definitions, "task", taskToolID, taskInputSchema)
 }
 
 // requireModelChoiceDefinition is requireNativeDefinition for a tool with a model_choice

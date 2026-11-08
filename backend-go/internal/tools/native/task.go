@@ -8,6 +8,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 
@@ -17,31 +18,26 @@ import (
 
 const taskToolID = "native.task"
 
+const taskDescription = "Create and maintain session tasks. Pass ops to run several actions in one call."
+
 var taskInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["list","get","add","update","done","delete"],"description":"Optional when the supplied fields make the action clear."},
-    "id":{"type":"string","minLength":1,"description":"Task id returned by add."},
-    "title":{"type":"string","minLength":1,"description":"Task title for add or update."},
-    "status":{"type":"string","enum":["todo","in-progress","blocked","done","all"],"description":"Task state; all is a list filter only."},
-    "priority":{"type":"string","enum":["low","normal","high","urgent"],"description":"Optional task priority or list filter. Defaults to normal when adding."},
-    "tags":{"type":"array","items":{"type":"string"},"description":"Task tags. An empty array clears tags on update."},
-    "documents":{"type":"array","items":{"type":"string"},"description":"Planning-document paths. An empty array clears links on update."},
-    "tag":{"type":"string","minLength":1,"description":"Optional tag filter for list."},
-    "limit":{"type":"integer","minimum":1,"description":"Optional list limit; defaults to the session policy."}
+    "action":{"type":"string","enum":["list","get","add","update","done","delete"],"description":"Inferred when omitted."},
+    "id":{"type":"string","description":"Task id, e.g. T-001."},
+    "title":{"type":"string","minLength":1},
+    "status":{"type":"string","enum":["todo","in-progress","blocked","done","all"],"description":"all is a list filter. List default: not done."},
+    "priority":{"type":"string","enum":["low","normal","high","urgent"],"description":"Default normal on add."},
+    "tags":{"type":"array","items":{"type":"string"},"description":"[] clears on update."},
+    "documents":{"type":"array","items":{"type":"string"},"description":"Planning-document paths; [] clears."},
+    "tag":{"type":"string","description":"List filter."},
+    "q":{"type":"string","description":"List: words found in title, tags or document paths."},
+    "limit":{"type":"integer","minimum":1},
+    "offset":{"type":"integer","minimum":0,"description":"List: skip this many."},
+    "detail":{"type":"boolean","description":"List: add document paths and update time."},
+    "ops":{"type":"array","minItems":1,"items":{"type":"object"},"description":"Batch instead of the fields above: objects with the same fields, run in order, all or nothing."}
   },
-  "additionalProperties":false,
-  "allOf":[
-    {"if":{"properties":{"action":{"const":"add"}},"required":["action"]},"then":{"properties":{"title":{}},"required":["title"]}},
-    {"if":{"properties":{"action":{"enum":["get","update","done","delete"]}},"required":["action"]},"then":{"properties":{"id":{}},"required":["id"]}},
-    {"if":{"properties":{"action":{"const":"update"}},"required":["action"]},"then":{"anyOf":[
-      {"properties":{"title":{}},"required":["title"]},
-      {"properties":{"status":{}},"required":["status"]},
-      {"properties":{"priority":{}},"required":["priority"]},
-      {"properties":{"tags":{}},"required":["tags"]},
-      {"properties":{"documents":{}},"required":["documents"]}
-    ]}}
-  ]
+  "additionalProperties":false
 }`)
 
 type taskAction string
@@ -87,7 +83,7 @@ func NewTaskTool(settings sessionfs.NativeTaskSettings, store *TaskStore) (tools
 			ID:          taskToolID,
 			Source:      "native",
 			Name:        "task",
-			Description: "Create and maintain session tasks.",
+			Description: taskDescription,
 			InputSchema: append(json.RawMessage(nil), taskInputSchema...),
 		},
 		Validator:          validator,
@@ -100,6 +96,46 @@ func NewTaskTool(settings sessionfs.NativeTaskSettings, store *TaskStore) (tools
 }
 
 func normalizeTaskArguments(arguments map[string]any) map[string]any {
+	_, batch := arguments["ops"]
+	normalized := normalizeTaskFields(arguments, !batch)
+	if items, ok := normalized["ops"].([]any); ok {
+		// Each op is a call of its own: it is normalized the way a flat call is, so an
+		// alias or an omitted action means the same in a batch.
+		ops := make([]any, len(items))
+		for index, item := range items {
+			ops[index] = item
+			if fields, ok := item.(map[string]any); ok {
+				ops[index] = normalizeTaskFields(fields, true)
+			}
+		}
+		normalized["ops"] = ops
+	}
+	return normalized
+}
+
+// normalizeTaskID turns the spellings of a task number a model may write (1, T-1, t1,
+// T-001) into the canonical T-001. Anything else is only trimmed and upper-cased, so a
+// value that is not a positive task number stays invalid for the task action to refuse.
+// Normalizing twice gives the same id, because %03d of a number reads back as that number.
+func normalizeTaskID(id string) string {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	digits := id
+	if strings.HasPrefix(id, "T") {
+		digits = strings.TrimPrefix(strings.TrimPrefix(id, "T"), "-")
+	}
+	if digits == "" || strings.Trim(digits, "0123456789") != "" {
+		return id
+	}
+	number, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || number < 1 || number > maxSafeTaskID {
+		return id
+	}
+	return fmt.Sprintf("T-%03d", number)
+}
+
+// normalizeTaskFields normalizes the fields of one call or of one op. A call that has
+// ops infers no action, so ops stays the only field of a valid batch.
+func normalizeTaskFields(arguments map[string]any, inferAction bool) map[string]any {
 	normalized := make(map[string]any, len(arguments)+1)
 	for key, value := range arguments {
 		normalized[key] = value
@@ -133,7 +169,10 @@ func normalizeTaskArguments(arguments map[string]any) map[string]any {
 		}
 	}
 	if id, ok := normalized["id"].(string); ok {
-		normalized["id"] = strings.ToUpper(strings.TrimSpace(id))
+		normalized["id"] = normalizeTaskID(id)
+	}
+	if query, ok := normalized["q"].(string); ok {
+		normalized["q"] = strings.TrimSpace(query)
 	}
 	if title, ok := normalized["title"].(string); ok {
 		normalized["title"] = strings.TrimSpace(title)
@@ -167,7 +206,10 @@ func normalizeTaskArguments(arguments map[string]any) map[string]any {
 		}
 		normalized["limit"] = json.Number(fmt.Sprint(limit))
 	}
-	if _, exists := normalized["action"]; !exists {
+	if offset, ok := safeInteger(normalized["offset"]); ok {
+		normalized["offset"] = json.Number(fmt.Sprint(max(offset, 0)))
+	}
+	if _, exists := normalized["action"]; !exists && inferAction {
 		id, isString := normalized["id"].(string)
 		hasID := isString && len(id) > 0
 		_, hasTitle := normalized["title"]
@@ -232,13 +274,65 @@ func executeNativeTask(
 	if store == nil {
 		return tools.ExecutionError(execution.CallID, tools.StatusError, "task_store_unavailable", "The task store is not available"), nil
 	}
+	if _, batch := arguments["ops"]; batch {
+		return executeTaskBatch(arguments, execution, settings, store)
+	}
+	call, failure := parseTaskCall(arguments, settings)
+	if failure != nil {
+		return taskFailure(execution.CallID, failure.code, failure.summary), nil
+	}
+	op := call.op
+	outcome, err := store.Apply([]TaskOp{op}, settings)
+	if err != nil {
+		return taskStorageError(execution.CallID, err), nil
+	}
+	if outcome.Miss != nil {
+		return taskNotFound(execution.CallID, op.ID, outcome.Miss), nil
+	}
+	result := outcome.Results[0]
+	switch op.Action {
+	case taskActionList:
+		return renderTaskList(execution.CallID, result.List, op.Filter.Offset, call.detail, settings)
+	case taskActionAdd:
+		return renderTask(execution.CallID, op.Action, result.Task, "Task added")
+	case taskActionGet:
+		return renderTask(execution.CallID, op.Action, result.Task, "Task retrieved")
+	case taskActionDelete:
+		return taskRender(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "Task deleted", Information: []tools.Information{{Key: "action", Value: string(op.Action)}, {Key: "task_id", Value: op.ID}}})
+	case taskActionDone:
+		return renderTask(execution.CallID, op.Action, result.Task, "Task completed")
+	default:
+		return renderTask(execution.CallID, op.Action, result.Task, "Task updated")
+	}
+}
+
+// taskCall is one validated call of the task tool, a flat call or one op of a batch.
+type taskCall struct {
+	op TaskOp
+	// detail asks a list for document paths and update times.
+	detail bool
+}
+
+// taskCallFailure is a rule a call breaks, as the error code and summary the model reads.
+type taskCallFailure struct {
+	code    string
+	summary string
+}
+
+// parseTaskCall checks one call against every rule of its action and builds the store
+// operation. The rules are not in the schema (a flat schema cannot say them for the ops
+// of a batch), so this is the one place that enforces them.
+func parseTaskCall(arguments map[string]any, settings sessionfs.NativeTaskSettings) (taskCall, *taskCallFailure) {
+	fail := func(code, summary string) (taskCall, *taskCallFailure) {
+		return taskCall{}, &taskCallFailure{code: code, summary: summary}
+	}
 	action, valid := taskActionFor(arguments)
 	if !valid {
-		return taskFailure(execution.CallID, "invalid_action", "Task action is invalid"), nil
+		return fail("invalid_action", "Task action is invalid")
 	}
 	id := taskText(arguments["id"])
 	if id != "" {
-		id = strings.ToUpper(id)
+		id = normalizeTaskID(id)
 	}
 	taskStatus, hasTaskStatus := taskStatusValue(arguments["status"])
 	taskPriority, hasTaskPriority := taskPriorityValue(arguments["priority"])
@@ -250,25 +344,41 @@ func executeNativeTask(
 	documents, hasDocuments := taskStringArray(arguments["documents"], settings.MaxDocuments, settings.MaxDocumentChars)
 
 	if hasTitle && !validTaskText(title, settings.MaxTitleChars) {
-		return taskFailure(execution.CallID, "invalid_title", "Task title is empty or exceeds the configured length"), nil
+		return fail("invalid_title", "Task title is empty or exceeds the configured length")
 	}
 	if _, exists := arguments["tags"]; exists && !hasTags {
-		return taskFailure(execution.CallID, "invalid_tags", "Task tags exceed the configured limits or contain empty values"), nil
+		return fail("invalid_tags", "Task tags exceed the configured limits or contain empty values")
 	}
 	if _, exists := arguments["documents"]; exists && !hasDocuments {
-		return taskFailure(execution.CallID, "invalid_documents", "Task documents exceed the configured limits or contain empty values"), nil
+		return fail("invalid_documents", "Task documents exceed the configured limits or contain empty values")
 	}
 
 	switch action {
 	case taskActionList:
-		if !taskNoExtra(arguments, "action", "status", "priority", "tag", "limit") {
-			return taskFailure(execution.CallID, "invalid_list", "List accepts only status, priority, tag, and limit filters"), nil
+		if !taskNoExtra(arguments, "action", "status", "priority", "tag", "q", "limit", "offset", "detail") {
+			return fail("invalid_list", "List accepts only status, priority, tag, q, limit, offset, and detail")
 		}
 		if _, exists := arguments["status"]; exists && arguments["status"] != "all" && !hasTaskStatus {
-			return taskFailure(execution.CallID, "invalid_status", "Task status is invalid"), nil
+			return fail("invalid_status", "Task status is invalid")
 		}
 		if _, exists := arguments["priority"]; exists && !hasTaskPriority {
-			return taskFailure(execution.CallID, "invalid_priority", "Task priority is invalid"), nil
+			return fail("invalid_priority", "Task priority is invalid")
+		}
+		query, hasQuery := arguments["q"]
+		if _, isText := query.(string); hasQuery && !isText {
+			return fail("invalid_list", "List q must be a string")
+		}
+		detail, hasDetail := arguments["detail"]
+		if _, isBool := detail.(bool); hasDetail && !isBool {
+			return fail("invalid_list", "List detail must be true or false")
+		}
+		offset := int64(0)
+		if raw, exists := arguments["offset"]; exists {
+			value, ok := safeInteger(raw)
+			if !ok || value < 0 {
+				return fail("invalid_list", "List offset must be a whole number of 0 or more")
+			}
+			offset = value
 		}
 		limit := int(settings.ListLimit)
 		if requested, ok := safeInteger(arguments["limit"]); ok {
@@ -280,7 +390,7 @@ func executeNativeTask(
 		if int64(limit) > settings.MaxListLimit {
 			limit = int(settings.MaxListLimit)
 		}
-		filter := TaskListFilter{Limit: limit}
+		filter := TaskListFilter{Limit: limit, Offset: int(min(offset, math.MaxInt32))}
 		if arguments["status"] == "all" {
 			filter.Status = "all"
 		} else if hasTaskStatus {
@@ -292,53 +402,23 @@ func executeNativeTask(
 		if tag, ok := arguments["tag"].(string); ok {
 			filter.Tag = tag
 		}
-		listed, err := store.List(filter)
-		if err != nil {
-			return taskStorageError(execution.CallID, err), nil
+		if text, ok := query.(string); ok {
+			filter.Query = text
 		}
-		lines := make([]string, 0, len(listed.Tasks))
-		lineBytes := 0
-		for _, task := range listed.Tasks {
-			line := fmt.Sprintf("%s | %s | %s | %s", task.ID, task.Status, task.Priority, task.Title)
-			if len(task.Tags) > 0 {
-				line += " | tags: " + strings.Join(task.Tags, ",")
-			}
-			if len(task.Documents) > 0 {
-				line += fmt.Sprintf(" | documents: %d", len(task.Documents))
-			}
-			nextBytes := lineBytes + len(line)
-			if len(lines) > 0 {
-				nextBytes++
-			}
-			if int64(nextBytes) > settings.MaxListBytes {
-				break
-			}
-			lines = append(lines, line)
-			lineBytes = nextBytes
-		}
-		hasMore := listed.HasMore || len(lines) < len(listed.Tasks)
-		information := []tools.Information{{Key: "action", Value: "list"}, {Key: "count", Value: len(lines)}}
-		if hasMore {
-			information = append(information, tools.Information{Key: "has_more", Value: true})
-		}
-		options := tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: fmt.Sprintf("%d task%s listed", len(lines), pluralSuffix(len(lines))), Information: information}
-		if len(lines) > 0 {
-			options.Content = &tools.Content{Encoding: "utf8", Text: strings.Join(lines, "\n")}
-		}
-		return taskRender(options)
+		return taskCall{op: TaskOp{Action: action, Filter: filter}, detail: detail == true}, nil
 
 	case taskActionAdd:
 		if !taskNoExtra(arguments, "action", "title", "status", "priority", "tags", "documents") {
-			return taskFailure(execution.CallID, "invalid_add", "Add accepts title, todo or in-progress status, priority, tags, and documents"), nil
+			return fail("invalid_add", "Add accepts title, todo or in-progress status, priority, tags, and documents")
 		}
 		if !hasTitle || title == "" {
-			return taskFailure(execution.CallID, "missing_title", "Add requires a title"), nil
+			return fail("missing_title", "Add requires a title")
 		}
 		if _, exists := arguments["status"]; exists && (!hasTaskStatus || (taskStatus != TaskTodo && taskStatus != TaskInProgress)) {
-			return taskFailure(execution.CallID, "invalid_creation_status", "New tasks must be todo or in-progress"), nil
+			return fail("invalid_creation_status", "New tasks must be todo or in-progress")
 		}
 		if _, exists := arguments["priority"]; exists && !hasTaskPriority {
-			return taskFailure(execution.CallID, "invalid_priority", "Task priority is invalid"), nil
+			return fail("invalid_priority", "Task priority is invalid")
 		}
 		if !hasTaskStatus {
 			taskStatus = TaskTodo
@@ -352,69 +432,43 @@ func executeNativeTask(
 		if !hasDocuments {
 			documents = []string{}
 		}
-		task, err := store.Create(TaskInput{Title: title, Status: taskStatus, Priority: taskPriority, Tags: tags, Documents: documents}, settings)
-		if err != nil {
-			return taskStorageError(execution.CallID, err), nil
-		}
-		return renderTask(execution.CallID, action, task, "Task added")
+		return taskCall{op: TaskOp{Action: action, Input: TaskInput{Title: title, Status: taskStatus, Priority: taskPriority, Tags: tags, Documents: documents}}}, nil
 
 	default:
 		if id == "" {
-			return taskFailure(execution.CallID, "missing_task_id", "This task action requires an id"), nil
+			return fail("missing_task_id", "This task action requires an id")
 		}
 		if !taskIDTextPattern.MatchString(id) {
-			return taskFailure(execution.CallID, "invalid_task_id", "Task id is invalid"), nil
+			return fail("invalid_task_id", "Task id is invalid")
 		}
 		switch action {
 		case taskActionGet:
 			if !taskNoExtra(arguments, "action", "id") {
-				return taskFailure(execution.CallID, "invalid_get", "Get accepts only an id"), nil
+				return fail("invalid_get", "Get accepts only an id")
 			}
-			task, found, err := store.Get(id)
-			if err != nil {
-				return taskStorageError(execution.CallID, err), nil
-			}
-			if !found {
-				return taskNotFound(execution.CallID, id, store, settings), nil
-			}
-			return renderTask(execution.CallID, action, task, "Task retrieved")
+			return taskCall{op: TaskOp{Action: action, ID: id}}, nil
 
 		case taskActionDelete:
 			if !taskNoExtra(arguments, "action", "id") {
-				return taskFailure(execution.CallID, "invalid_delete", "Delete requires exactly an id"), nil
+				return fail("invalid_delete", "Delete requires exactly an id")
 			}
-			deleted, err := store.Delete(id, settings)
-			if err != nil {
-				return taskStorageError(execution.CallID, err), nil
-			}
-			if !deleted {
-				return taskNotFound(execution.CallID, id, store, settings), nil
-			}
-			return taskRender(tools.ResultOptions{ID: execution.CallID, Status: tools.StatusOK, Summary: "Task deleted", Information: []tools.Information{{Key: "action", Value: string(action)}, {Key: "task_id", Value: id}}})
+			return taskCall{op: TaskOp{Action: action, ID: id}}, nil
 
 		case taskActionDone:
 			if !taskNoExtra(arguments, "action", "id") {
-				return taskFailure(execution.CallID, "invalid_done", "Done requires exactly an id"), nil
+				return fail("invalid_done", "Done requires exactly an id")
 			}
-			status := TaskDone
-			task, found, err := store.Update(id, TaskPatch{Status: &status}, settings)
-			if err != nil {
-				return taskStorageError(execution.CallID, err), nil
-			}
-			if !found {
-				return taskNotFound(execution.CallID, id, store, settings), nil
-			}
-			return renderTask(execution.CallID, action, task, "Task completed")
+			return taskCall{op: TaskOp{Action: action, ID: id}}, nil
 
 		case taskActionUpdate:
 			if !taskNoExtra(arguments, "action", "id", "title", "status", "priority", "tags", "documents") {
-				return taskFailure(execution.CallID, "invalid_update", "Update accepts title, status, priority, tags, and documents"), nil
+				return fail("invalid_update", "Update accepts title, status, priority, tags, and documents")
 			}
 			if _, exists := arguments["status"]; exists && !hasTaskStatus {
-				return taskFailure(execution.CallID, "invalid_status", "Task status is invalid"), nil
+				return fail("invalid_status", "Task status is invalid")
 			}
 			if _, exists := arguments["priority"]; exists && !hasTaskPriority {
-				return taskFailure(execution.CallID, "invalid_priority", "Task priority is invalid"), nil
+				return fail("invalid_priority", "Task priority is invalid")
 			}
 			patch := TaskPatch{}
 			if hasTitle {
@@ -433,19 +487,62 @@ func executeNativeTask(
 				patch.Documents = &documents
 			}
 			if !hasTitle && !hasTaskStatus && !hasTaskPriority && !hasTags && !hasDocuments {
-				return taskFailure(execution.CallID, "missing_update", "Update needs a title, status, priority, tags, or documents"), nil
+				return fail("missing_update", "Update needs a title, status, priority, tags, or documents")
 			}
-			task, found, err := store.Update(id, patch, settings)
-			if err != nil {
-				return taskStorageError(execution.CallID, err), nil
-			}
-			if !found {
-				return taskNotFound(execution.CallID, id, store, settings), nil
-			}
-			return renderTask(execution.CallID, action, task, "Task updated")
+			return taskCall{op: TaskOp{Action: action, ID: id, Patch: patch}}, nil
 		}
 	}
-	return taskFailure(execution.CallID, "invalid_action", "Task action is invalid"), nil
+	return fail("invalid_action", "Task action is invalid")
+}
+
+// taskListLine is the line a task has in a list: id, status, priority and title, then
+// its tags and its documents. detail names the documents instead of counting them and
+// adds the update time.
+func taskListLine(task TaskRecord, detail bool) string {
+	line := fmt.Sprintf("%s | %s | %s | %s", task.ID, task.Status, task.Priority, task.Title)
+	if len(task.Tags) > 0 {
+		line += " | tags: " + strings.Join(task.Tags, ",")
+	}
+	if len(task.Documents) > 0 {
+		if detail {
+			line += " | documents: " + strings.Join(task.Documents, ",")
+		} else {
+			line += fmt.Sprintf(" | documents: %d", len(task.Documents))
+		}
+	}
+	if detail {
+		line += " | updated: " + task.UpdatedAt
+	}
+	return line
+}
+
+// renderTaskList is the result of a flat list call: the lines that fit max_list_bytes,
+// and, when matches remain (cut by the limit or by the bytes), has_more and the offset
+// of the next page.
+func renderTaskList(callID string, listed TaskListResult, offset int, detail bool, settings sessionfs.NativeTaskSettings) (string, error) {
+	lines := make([]string, 0, len(listed.Tasks))
+	lineBytes := 0
+	for _, task := range listed.Tasks {
+		line := taskListLine(task, detail)
+		nextBytes := lineBytes + len(line)
+		if len(lines) > 0 {
+			nextBytes++
+		}
+		if int64(nextBytes) > settings.MaxListBytes {
+			break
+		}
+		lines = append(lines, line)
+		lineBytes = nextBytes
+	}
+	information := []tools.Information{{Key: "action", Value: "list"}, {Key: "count", Value: len(lines)}, {Key: "total", Value: listed.Total}}
+	if offset+len(lines) < listed.Total {
+		information = append(information, tools.Information{Key: "has_more", Value: true}, tools.Information{Key: "next_offset", Value: offset + len(lines)})
+	}
+	options := tools.ResultOptions{ID: callID, Status: tools.StatusOK, Summary: fmt.Sprintf("%d task%s listed", len(lines), pluralSuffix(len(lines))), Information: information}
+	if len(lines) > 0 {
+		options.Content = &tools.Content{Encoding: "utf8", Text: strings.Join(lines, "\n")}
+	}
+	return taskRender(options)
 }
 
 func taskActionFor(arguments map[string]any) (taskAction, bool) {
@@ -542,17 +639,26 @@ func taskFailure(callID, code, summary string) string {
 	return tools.ExecutionError(callID, tools.StatusInvalidInput, code, summary)
 }
 
-// taskNotFound lists the ids that exist, so the agent can pick one instead of guessing.
-func taskNotFound(callID, id string, store *TaskStore, settings sessionfs.NativeTaskSettings) string {
+// taskNotFound lists the ids of the tasks that are not done, so the agent can pick one
+// instead of guessing. The store read them where the lookup failed.
+func taskNotFound(callID, id string, miss *TaskMiss) string {
 	information := []tools.Information{{Key: "task_id", Value: id}}
-	if listed, err := store.List(TaskListFilter{Status: "all", Limit: int(settings.ListLimit)}); err == nil && len(listed.Tasks) > 0 {
-		ids := make([]string, 0, len(listed.Tasks))
-		for _, task := range listed.Tasks {
-			ids = append(ids, task.ID)
-		}
-		information = append(information, tools.Information{Key: "available_ids", Value: strings.Join(ids, ", ")})
+	if openIDs := taskOpenIDs(miss); openIDs != "" {
+		information = append(information, tools.Information{Key: "open_ids", Value: openIDs})
 	}
 	return tools.ExecutionError(callID, tools.StatusNotFound, "task_not_found", "No task has that id", information...)
+}
+
+// taskOpenIDs is the open_ids value: the ids, then how many more are not listed.
+func taskOpenIDs(miss *TaskMiss) string {
+	if miss == nil || len(miss.OpenIDs) == 0 {
+		return ""
+	}
+	text := strings.Join(miss.OpenIDs, ", ")
+	if more := miss.OpenTotal - len(miss.OpenIDs); more > 0 {
+		text += fmt.Sprintf(" (+%d more)", more)
+	}
+	return text
 }
 
 func taskStorageError(callID string, err error) string {

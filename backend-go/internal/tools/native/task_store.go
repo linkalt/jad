@@ -2,6 +2,7 @@ package native
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,10 +11,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/sessionlock"
 )
 
 const taskStorageFileName = "tasks.json"
@@ -163,12 +166,20 @@ type TaskListFilter struct {
 	Statuses []TaskStatus
 	Priority TaskPriority
 	Tag      string
-	Limit    int
+	// Query keeps the tasks in which every word of it is a case-insensitive substring of
+	// the title, a tag or a document path.
+	Query string
+	// Offset skips that many matches in list order before Limit counts.
+	Offset int
+	Limit  int
 }
 
 type TaskListResult struct {
-	Tasks   []TaskRecord
+	Tasks []TaskRecord
+	// HasMore reports that matches remain after the page.
 	HasMore bool
+	// Total is the number of matches before Offset and Limit.
+	Total int
 }
 
 type TaskPatch struct {
@@ -204,57 +215,242 @@ func NewTaskStore(storageDir string) *TaskStore {
 
 func (s *TaskStore) path() string { return filepath.Join(s.storageDir, taskStorageFileName) }
 
-func (s *TaskStore) Create(input TaskInput, policy sessionfs.NativeTaskSettings) (TaskRecord, error) {
-	var created TaskRecord
-	err := s.mutate(policy.MaxStorageBytes, func(document *taskDocument) error {
+// TaskOp is one operation of Apply. Action selects which of the other fields it reads:
+// add reads Input, update reads ID and Patch, get, done and delete read ID, list reads
+// Filter.
+type TaskOp struct {
+	Action taskAction
+	ID     string
+	Input  TaskInput
+	Patch  TaskPatch
+	Filter TaskListFilter
+}
+
+// TaskOpResult is what one operation of Apply produced.
+type TaskOpResult struct {
+	// Task is the record an add, update, done or get produced or read, and the record
+	// a delete removed.
+	Task TaskRecord
+	// List is the page a list produced.
+	List TaskListResult
+	// Changed reports that the operation changed the document; done on a task that is
+	// already done does not.
+	Changed bool
+}
+
+// TaskMiss describes the tasks that exist when an operation named an id that does not.
+type TaskMiss struct {
+	// OpenIDs are the ids of the tasks that are not done, in list order, at most the
+	// policy's list limit of them.
+	OpenIDs []string
+	// OpenTotal is how many tasks are not done.
+	OpenTotal int
+}
+
+// TaskApplyResult is the outcome of Apply.
+type TaskApplyResult struct {
+	// Results has one entry per operation that ran.
+	Results []TaskOpResult
+	// Failed is the index of the operation that stopped Apply, or -1.
+	Failed int
+	// Miss is set when the failed operation named an id that does not exist.
+	Miss *TaskMiss
+	// Wrote reports that the document was written.
+	Wrote bool
+}
+
+func (op TaskOp) readOnly() bool { return op.Action == taskActionGet || op.Action == taskActionList }
+
+// Apply runs ops in order against one loaded document and writes it once. The store
+// is locked, in this process and across processes, from the load to the write. It is
+// all or nothing: an operation that fails (an id that does not exist, a full store)
+// stops Apply before anything is written, and Failed names it. Nothing is written
+// either when no operation changed the document.
+func (s *TaskStore) Apply(ops []TaskOp, policy sessionfs.NativeTaskSettings) (TaskApplyResult, error) {
+	outcome := TaskApplyResult{Failed: -1}
+	run := func(document *taskDocument, reload func() (taskDocument, error)) (bool, error) {
+		results := make([]TaskOpResult, 0, len(ops))
+		changed := false
+		for index, op := range ops {
+			result, found, err := applyTaskOp(document, op, policy)
+			if err != nil {
+				outcome.Failed = index
+				return false, err
+			}
+			if !found {
+				outcome.Failed = index
+				outcome.Results = results
+				pristine := document
+				if changed {
+					// Earlier operations changed the document in memory only; the ids to
+					// offer are the ones that exist, so they come from the stored file.
+					if stored, err := reload(); err == nil {
+						pristine = &stored
+					}
+				}
+				outcome.Miss = taskMiss(pristine, policy.ListLimit)
+				return false, nil
+			}
+			changed = changed || result.Changed
+			results = append(results, result)
+		}
+		outcome.Results = results
+		return changed, nil
+	}
+	readOnly := true
+	for _, op := range ops {
+		readOnly = readOnly && op.readOnly()
+	}
+	var err error
+	if readOnly {
+		err = s.read(func(document *taskDocument) error {
+			_, err := run(document, s.load)
+			return err
+		})
+	} else {
+		err = s.mutate(policy.MaxStorageBytes, func(document *taskDocument) (bool, error) {
+			changed, err := run(document, s.load)
+			outcome.Wrote = changed && err == nil
+			return changed, err
+		})
+		if err != nil {
+			outcome.Wrote = false
+		}
+	}
+	return outcome, err
+}
+
+// applyTaskOp runs one operation on the in-memory document. found is false when the
+// operation names an id that does not exist.
+func applyTaskOp(document *taskDocument, op TaskOp, policy sessionfs.NativeTaskSettings) (TaskOpResult, bool, error) {
+	if op.Action == taskActionList {
+		return TaskOpResult{List: listTaskDocument(document, op.Filter)}, true, nil
+	}
+	if op.Action == taskActionAdd {
 		if int64(len(document.Tasks)) >= policy.MaxTasks {
-			return &TaskStoreError{Message: "the configured task capacity has been reached"}
+			return TaskOpResult{}, false, &TaskStoreError{Message: "the configured task capacity has been reached"}
 		}
 		if document.NextID < 1 || document.NextID > maxSafeTaskID {
-			return &TaskStoreError{Message: "task id allocation is exhausted"}
+			return TaskOpResult{}, false, &TaskStoreError{Message: "task id allocation is exhausted"}
 		}
 		timestamp := taskTimestamp()
-		created = TaskRecord{
+		created := TaskRecord{
 			ID:        fmt.Sprintf("T-%03d", document.NextID),
-			Title:     input.Title,
-			Status:    input.Status,
-			Priority:  input.Priority,
-			Tags:      append([]string{}, input.Tags...),
-			Documents: append([]string{}, input.Documents...),
+			Title:     op.Input.Title,
+			Status:    op.Input.Status,
+			Priority:  op.Input.Priority,
+			Tags:      append([]string{}, op.Input.Tags...),
+			Documents: append([]string{}, op.Input.Documents...),
 			CreatedAt: timestamp,
 			UpdatedAt: timestamp,
 		}
 		document.NextID++
 		document.Tasks = append(document.Tasks, created)
-		return nil
-	})
-	return cloneTaskRecord(created), err
+		return TaskOpResult{Task: cloneTaskRecord(created), Changed: true}, true, nil
+	}
+	for index := range document.Tasks {
+		task := &document.Tasks[index]
+		if task.ID != op.ID {
+			continue
+		}
+		switch op.Action {
+		case taskActionGet:
+			return TaskOpResult{Task: cloneTaskRecord(*task)}, true, nil
+		case taskActionDelete:
+			removed := cloneTaskRecord(*task)
+			document.Tasks = append(document.Tasks[:index], document.Tasks[index+1:]...)
+			return TaskOpResult{Task: removed, Changed: true}, true, nil
+		case taskActionDone:
+			if task.Status == TaskDone {
+				return TaskOpResult{Task: cloneTaskRecord(*task)}, true, nil
+			}
+			task.Status = TaskDone
+		default:
+			patch := op.Patch
+			if patch.Title != nil {
+				task.Title = *patch.Title
+			}
+			if patch.Status != nil {
+				task.Status = *patch.Status
+			}
+			if patch.Priority != nil {
+				task.Priority = *patch.Priority
+			}
+			if patch.Tags != nil {
+				task.Tags = append([]string{}, (*patch.Tags)...)
+			}
+			if patch.Documents != nil {
+				task.Documents = append([]string{}, (*patch.Documents)...)
+			}
+		}
+		task.UpdatedAt = taskTimestamp()
+		return TaskOpResult{Task: cloneTaskRecord(*task), Changed: true}, true, nil
+	}
+	return TaskOpResult{}, false, nil
+}
+
+// taskMiss lists the ids of the tasks that are not done, in list order.
+func taskMiss(document *taskDocument, limit int64) *TaskMiss {
+	open := sortedTasks(document, TaskListFilter{Statuses: []TaskStatus{TaskTodo, TaskInProgress, TaskBlocked}})
+	miss := &TaskMiss{OpenTotal: len(open)}
+	for index, task := range open {
+		if int64(index) >= limit {
+			break
+		}
+		miss.OpenIDs = append(miss.OpenIDs, task.ID)
+	}
+	return miss
+}
+
+func (s *TaskStore) Create(input TaskInput, policy sessionfs.NativeTaskSettings) (TaskRecord, error) {
+	outcome, err := s.Apply([]TaskOp{{Action: taskActionAdd, Input: input}}, policy)
+	if err != nil || len(outcome.Results) != 1 {
+		return TaskRecord{}, err
+	}
+	return outcome.Results[0].Task, nil
 }
 
 func (s *TaskStore) Get(id string) (TaskRecord, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	document, err := s.load()
-	if err != nil {
+	outcome, err := s.Apply([]TaskOp{{Action: taskActionGet, ID: id}}, sessionfs.NativeTaskSettings{})
+	if err != nil || outcome.Failed >= 0 {
 		return TaskRecord{}, false, err
 	}
-	for _, task := range document.Tasks {
-		if task.ID == id {
-			return cloneTaskRecord(task), true, nil
-		}
-	}
-	return TaskRecord{}, false, nil
+	return outcome.Results[0].Task, true, nil
 }
 
+// List returns one page of the tasks that match filter, in list order. Total counts the
+// matches before the page: Offset of them are skipped and Limit are returned.
 func (s *TaskStore) List(filter TaskListFilter) (TaskListResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	document, err := s.load()
-	if err != nil {
+	outcome, err := s.Apply([]TaskOp{{Action: taskActionList, Filter: filter}}, sessionfs.NativeTaskSettings{})
+	if err != nil || len(outcome.Results) != 1 {
 		return TaskListResult{}, err
 	}
-	matching := make([]TaskRecord, 0, len(document.Tasks))
-	for _, task := range document.Tasks {
+	return outcome.Results[0].List, nil
+}
+
+func (s *TaskStore) Update(id string, patch TaskPatch, policy sessionfs.NativeTaskSettings) (TaskRecord, bool, error) {
+	outcome, err := s.Apply([]TaskOp{{Action: taskActionUpdate, ID: id, Patch: patch}}, policy)
+	if err != nil || outcome.Failed >= 0 {
+		return TaskRecord{}, false, err
+	}
+	return outcome.Results[0].Task, true, nil
+}
+
+func (s *TaskStore) Delete(id string, policy sessionfs.NativeTaskSettings) (bool, error) {
+	outcome, err := s.Apply([]TaskOp{{Action: taskActionDelete, ID: id}}, policy)
+	if err != nil || outcome.Failed >= 0 {
+		return false, err
+	}
+	return true, nil
+}
+
+// sortedTasks returns pointers into document of the tasks that match filter, in list
+// order: status rank, priority rank, updated_at newest first, then id. Nothing is cloned.
+func sortedTasks(document *taskDocument, filter TaskListFilter) []*TaskRecord {
+	terms := recordsSearchTerms(filter.Query)
+	matching := make([]*TaskRecord, 0, len(document.Tasks))
+	for index := range document.Tasks {
+		task := &document.Tasks[index]
 		if filter.Statuses != nil {
 			if !containsTaskStatus(filter.Statuses, task.Status) {
 				continue
@@ -274,7 +470,10 @@ func (s *TaskStore) List(filter TaskListFilter) (TaskListResult, error) {
 		if filter.Tag != "" && !containsString(task.Tags, filter.Tag) {
 			continue
 		}
-		matching = append(matching, cloneTaskRecord(task))
+		if !taskContainsTerms(task, terms) {
+			continue
+		}
+		matching = append(matching, task)
 	}
 	sort.Slice(matching, func(i, j int) bool {
 		left, right := matching[i], matching[j]
@@ -289,77 +488,102 @@ func (s *TaskStore) List(filter TaskListFilter) (TaskListResult, error) {
 		}
 		return left.ID < right.ID
 	})
-	limit := filter.Limit
-	if limit < 0 {
-		limit = 0
-	}
-	hasMore := len(matching) > limit
-	if limit < len(matching) {
-		matching = matching[:limit]
-	}
-	return TaskListResult{Tasks: matching, HasMore: hasMore}, nil
+	return matching
 }
 
-func (s *TaskStore) Update(id string, patch TaskPatch, policy sessionfs.NativeTaskSettings) (TaskRecord, bool, error) {
-	var updated TaskRecord
-	found := false
-	err := s.mutate(policy.MaxStorageBytes, func(document *taskDocument) error {
-		for index := range document.Tasks {
-			task := &document.Tasks[index]
-			if task.ID != id {
-				continue
-			}
-			if patch.Title != nil {
-				task.Title = *patch.Title
-			}
-			if patch.Status != nil {
-				task.Status = *patch.Status
-			}
-			if patch.Priority != nil {
-				task.Priority = *patch.Priority
-			}
-			if patch.Tags != nil {
-				task.Tags = append([]string{}, (*patch.Tags)...)
-			}
-			if patch.Documents != nil {
-				task.Documents = append([]string{}, (*patch.Documents)...)
-			}
-			task.UpdatedAt = taskTimestamp()
-			updated = cloneTaskRecord(*task)
-			found = true
-			break
-		}
-		return nil
-	})
-	return updated, found, err
+// listTaskDocument filters and sorts first and clones only the returned page.
+func listTaskDocument(document *taskDocument, filter TaskListFilter) TaskListResult {
+	matching := sortedTasks(document, filter)
+	total := len(matching)
+	offset := max(filter.Offset, 0)
+	limit := max(filter.Limit, 0)
+	start := min(offset, total)
+	end := min(start+limit, total)
+	page := make([]TaskRecord, 0, end-start)
+	for _, task := range matching[start:end] {
+		page = append(page, cloneTaskRecord(*task))
+	}
+	return TaskListResult{Tasks: page, HasMore: end < total, Total: total}
 }
 
-func (s *TaskStore) Delete(id string, policy sessionfs.NativeTaskSettings) (bool, error) {
-	deleted := false
-	err := s.mutate(policy.MaxStorageBytes, func(document *taskDocument) error {
-		for index, task := range document.Tasks {
-			if task.ID == id {
-				document.Tasks = append(document.Tasks[:index], document.Tasks[index+1:]...)
-				deleted = true
+// taskContainsTerms reports whether every term is a case-insensitive substring of the
+// title, a tag or a document path, the rule recordsContainsTerms applies to records.
+func taskContainsTerms(task *TaskRecord, terms []string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+	texts := make([]string, 0, 1+len(task.Tags)+len(task.Documents))
+	texts = append(texts, strings.ToLower(task.Title))
+	for _, tag := range task.Tags {
+		texts = append(texts, strings.ToLower(tag))
+	}
+	for _, path := range task.Documents {
+		texts = append(texts, strings.ToLower(path))
+	}
+	for _, term := range terms {
+		found := false
+		for _, text := range texts {
+			if strings.Contains(text, term) {
+				found = true
 				break
 			}
 		}
-		return nil
-	})
-	return deleted, err
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
-func (s *TaskStore) mutate(maxStorageBytes int64, operation func(*taskDocument) error) error {
+// locked holds the store's in-process mutex and the lock file beside tasks.json, so
+// another process that shares the directory cannot load or write in between. A read of
+// a directory that does not exist yet takes no lock file: there is nothing to protect
+// and a read must not create the directory.
+func (s *TaskStore) locked(read bool, operation func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	document, err := s.load()
+	if read {
+		if _, err := os.Stat(s.storageDir); errors.Is(err, os.ErrNotExist) {
+			return operation()
+		}
+	}
+	lockPath, err := sessionlock.PathFor(s.path())
 	if err != nil {
-		return err
+		return &TaskStoreError{Message: fmt.Sprintf("could not lock task storage: %v", err)}
 	}
-	if err := operation(&document); err != nil {
-		return err
+	lock, err := sessionlock.Acquire(context.Background(), lockPath)
+	if err != nil {
+		return &TaskStoreError{Message: fmt.Sprintf("could not lock task storage: %v", err)}
 	}
-	return s.write(document, maxStorageBytes)
+	defer lock.Close()
+	return operation()
+}
+
+func (s *TaskStore) read(operation func(*taskDocument) error) error {
+	return s.locked(true, func() error {
+		document, err := s.load()
+		if err != nil {
+			return err
+		}
+		return operation(&document)
+	})
+}
+
+// mutate loads the document, runs operation on it and writes it back, all under the
+// lock. operation reports whether it changed the document; when it did not, or failed,
+// nothing is written.
+func (s *TaskStore) mutate(maxStorageBytes int64, operation func(*taskDocument) (bool, error)) error {
+	return s.locked(false, func() error {
+		document, err := s.load()
+		if err != nil {
+			return err
+		}
+		changed, err := operation(&document)
+		if err != nil || !changed {
+			return err
+		}
+		return s.write(document, maxStorageBytes)
+	})
 }
 
 func (s *TaskStore) load() (taskDocument, error) {
@@ -422,6 +646,12 @@ func (s *TaskStore) write(document taskDocument, maxStorageBytes int64) error {
 	if writeErr != nil {
 		_ = temporary.Close()
 		return &TaskStoreError{Message: fmt.Sprintf("could not persist task storage: %v", writeErr)}
+	}
+	// The data reaches the disk before the rename makes it the stored file, so a power
+	// cut leaves the old file or the new one, never an empty one.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return &TaskStoreError{Message: fmt.Sprintf("could not persist task storage: %v", err)}
 	}
 	if err := temporary.Close(); err != nil {
 		return &TaskStoreError{Message: fmt.Sprintf("could not persist task storage: %v", err)}

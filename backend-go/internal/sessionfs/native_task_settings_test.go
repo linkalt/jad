@@ -26,11 +26,23 @@ func TestNormalizeNativeTaskSettingsDefaultsAndOverrides(t *testing.T) {
 	if settings.MaxTasks != 12 || settings.ListLimit != 2 || settings.MaxListLimit != 3 || settings.MaxTitleChars != defaultNativeTaskMaxTitle {
 		t.Fatalf("normalized task limits = %+v", settings)
 	}
+	if settings.MaxBatchOps != 20 {
+		t.Fatalf("default max_batch_ops = %d, want 20", settings.MaxBatchOps)
+	}
 	if settings.StorageDir != filepath.Join(cwd, "plans") {
 		t.Fatalf("task storage dir = %q", settings.StorageDir)
 	}
 	if len(settings.StateContext.Statuses) != 2 || settings.StateContext.Statuses[0] != "done" || settings.StateContext.Statuses[1] != "in-progress" || settings.StateContext.Limit != 2 {
 		t.Fatalf("task statecontext settings = %+v", settings.StateContext)
+	}
+
+	for raw, want := range map[string]int64{`{"max_batch_ops":1}`: 1, `{"max_batch_ops":50}`: 50, `{"max_batch_ops":200}`: 200} {
+		settings, err = normalizeNativeTaskSettings(map[string]json.RawMessage{
+			"tools": json.RawMessage(`{"native":{"task":` + raw + `}}`),
+		}, "/session/setting.json", cwd, "")
+		if err != nil || settings.MaxBatchOps != want {
+			t.Fatalf("task settings %s: max_batch_ops = %+v, error = %v, want %d", raw, settings, err, want)
+		}
 	}
 
 	absolute := filepath.Join(cwd, "absolute-tasks")
@@ -54,6 +66,10 @@ func TestNormalizeNativeTaskSettingsRejectsInvalidPolicies(t *testing.T) {
 		`{"statecontext":{"statuses":["unknown"]}}`,
 		`{"statecontext":{"limit":0}}`,
 		`{"storage_dir":"  "}`,
+		`{"max_batch_ops":0}`,
+		`{"max_batch_ops":201}`,
+		`{"max_batch_ops":"20"}`,
+		`{"max_batch_ops":1.5}`,
 	} {
 		_, err := normalizeNativeTaskSettings(map[string]json.RawMessage{
 			"tools": json.RawMessage(`{"native":{"task":` + raw + `}}`),

@@ -5,34 +5,25 @@
       "id": "native.task",
       "source": "native",
       "name": "task",
-      "description": "Create and maintain session tasks.",
+      "description": "Create and maintain session tasks. Pass ops to run several actions in one call.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "action": {
-            "type": "string",
-            "enum": ["list", "get", "add", "update", "done", "delete"],
-            "description": "Optional when the supplied fields make the action clear."
-          },
-          "id": {"type": "string", "minLength": 1, "description": "Task id returned by add."},
-          "title": {"type": "string", "minLength": 1, "description": "Task title for add or update."},
-          "status": {"type": "string", "enum": ["todo", "in-progress", "blocked", "done", "all"], "description": "Task state; all is a list filter only."},
-          "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"], "description": "Optional task priority or list filter. Defaults to normal when adding."},
-          "tags": {"type": "array", "items": {"type": "string"}, "description": "Task tags. An empty array clears tags on update."},
-          "documents": {"type": "array", "items": {"type": "string"}, "description": "Planning-document paths. An empty array clears links on update."},
-          "tag": {"type": "string", "minLength": 1, "description": "Optional tag filter for list."},
-          "limit": {"type": "integer", "minimum": 1, "description": "Optional list limit; defaults to the session policy."}
+          "action": {"type": "string", "enum": ["list", "get", "add", "update", "done", "delete"], "description": "Inferred when omitted."},
+          "id": {"type": "string", "description": "Task id, e.g. T-001."},
+          "title": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["todo", "in-progress", "blocked", "done", "all"], "description": "all is a list filter. List default: not done."},
+          "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"], "description": "Default normal on add."},
+          "tags": {"type": "array", "items": {"type": "string"}, "description": "[] clears on update."},
+          "documents": {"type": "array", "items": {"type": "string"}, "description": "Planning-document paths; [] clears."},
+          "tag": {"type": "string", "description": "List filter."},
+          "q": {"type": "string", "description": "List: words found in title, tags or document paths."},
+          "limit": {"type": "integer", "minimum": 1},
+          "offset": {"type": "integer", "minimum": 0, "description": "List: skip this many."},
+          "detail": {"type": "boolean", "description": "List: add document paths and update time."},
+          "ops": {"type": "array", "minItems": 1, "items": {"type": "object"}, "description": "Batch instead of the fields above: objects with the same fields, run in order, all or nothing."}
         },
-        "additionalProperties": false,
-        "allOf": [
-          {"if": {"properties": {"action": {"const": "add"}}, "required": ["action"]}, "then": {"properties": {"title": {}}, "required": ["title"]}},
-          {"if": {"properties": {"action": {"enum": ["get", "update", "done", "delete"]}}, "required": ["action"]}, "then": {"properties": {"id": {}}, "required": ["id"]}},
-          {"if": {"properties": {"action": {"const": "update"}}, "required": ["action"]}, "then": {"anyOf": [
-            {"properties": {"title": {}}, "required": ["title"]}, {"properties": {"status": {}}, "required": ["status"]},
-            {"properties": {"priority": {}}, "required": ["priority"]}, {"properties": {"tags": {}}, "required": ["tags"]},
-            {"properties": {"documents": {}}, "required": ["documents"]}
-          ]}}
-        ]
+        "additionalProperties": false
       }
     }
   ]
