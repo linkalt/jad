@@ -75,3 +75,58 @@ func TestHarnessPathsHoldTheExecSpillDirectory(t *testing.T) {
 		t.Fatalf("HarnessPaths = %v, holds exec's directory although the tool is off", paths)
 	}
 }
+
+// An explicit relative storage_dir resolves from the cwd, so every store can sit inside the
+// workspace; each configured one is harness-owned and a tool that is off adds nothing.
+func TestHarnessPathsHoldEveryConfiguredStoreDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	stores := map[string]string{
+		"task":         filepath.Join(workspace, "plans"),
+		"memory":       filepath.Join(workspace, "notes"),
+		"code_context": filepath.Join(workspace, "ctx"),
+		"tool_smith":   filepath.Join(workspace, "smith-out"),
+	}
+	config := sessionfs.SessionConfig{
+		WorkingDir:        workspace,
+		SettingPath:       filepath.Join(workspace, "sessions", "demo", "setting.json"),
+		NativeTask:        &sessionfs.NativeTaskSettings{StorageDir: stores["task"]},
+		NativeMemory:      &sessionfs.NativeMemorySettings{StorageDir: stores["memory"]},
+		NativeCodeContext: &sessionfs.NativeCodeContextSettings{StorageDir: stores["code_context"]},
+		NativeToolSmith:   &sessionfs.NativeToolSmithSettings{Child: sessionfs.NativeBashSettings{Spill: sessionfs.NativeBashSpillSettings{StorageDir: stores["tool_smith"]}}},
+	}
+	patterns := ExclusionPatterns(workspace, HarnessPaths(config))
+	for name, dir := range stores {
+		if paths := HarnessPaths(config); !containsPath(paths, dir) {
+			t.Fatalf("HarnessPaths = %v, want the %s store %s", paths, name, dir)
+		}
+		rel, _ := filepath.Rel(workspace, dir)
+		found := false
+		for _, pattern := range patterns {
+			found = found || pattern == "/"+rel
+		}
+		if !found {
+			t.Fatalf("ExclusionPatterns = %v, want /%s for the %s store", patterns, rel, name)
+		}
+	}
+
+	config.NativeTask, config.NativeMemory, config.NativeCodeContext, config.NativeToolSmith = nil, nil, nil, nil
+	paths := HarnessPaths(config)
+	for name, dir := range stores {
+		if containsPath(paths, dir) {
+			t.Fatalf("HarnessPaths = %v, holds the %s store although the tool is off", paths, name)
+		}
+	}
+}
+
+// A configured tool whose spill directory is empty must not turn into a pattern for the workspace itself.
+func TestHarnessPathsSkipEmptyStoreDirectories(t *testing.T) {
+	workspace := t.TempDir()
+	config := sessionfs.SessionConfig{
+		WorkingDir:        workspace,
+		NativeCodeContext: &sessionfs.NativeCodeContextSettings{},
+		NativeToolSmith:   &sessionfs.NativeToolSmithSettings{},
+	}
+	if paths := HarnessPaths(config); containsPath(paths, workspace) {
+		t.Fatalf("HarnessPaths = %v, holds the workspace for an empty store directory", paths)
+	}
+}

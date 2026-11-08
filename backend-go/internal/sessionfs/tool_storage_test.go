@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,5 +93,26 @@ func TestNativeToolStorageDirRejectsEmptyAndNonString(t *testing.T) {
 	_, err := normalizeNativeBashSpill(json.RawMessage(`{"storage_dir":" "}`), "tools.native.exec", "/session/setting.json", cwd, cwd, cwd)
 	if err == nil || !strings.Contains(err.Error(), "tools.native.exec.spill.storage_dir must be a non-empty string") {
 		t.Errorf("exec spill empty storage_dir: error = %v", err)
+	}
+}
+
+// A storage_dir that cannot be made absolute stays a config error (HTTP 422), as it was
+// for the sub-agent store before the rule was shared.
+func TestNativeSubagentStorageDirUnresolvableIsAConfigError(t *testing.T) {
+	gone := t.TempDir()
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Skipf("cannot remove the working directory: %v", err)
+	}
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("the working directory is still reported")
+	}
+	_, err := normalizeNativeSubagentStorageDir(nil, "relative-cwd", "", "/s/setting.json")
+	var problem *ConfigError
+	if !errors.As(err, &problem) {
+		t.Fatalf("error = %T %v, want *ConfigError", err, err)
+	}
+	if want := "/s/setting.json: tools.native.subagent.storage_dir could not be resolved: "; !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("error = %q, want prefix %q", err.Error(), want)
 	}
 }

@@ -125,7 +125,7 @@ A reverted file makes its entries current again. Only the profile that changed t
 
 | Key | Default | Meaning |
 |---|---|---|
-| `storage_dir` | `.code_context` | one `<task>.json` per task. A configured relative path is from the cwd; the default is under the profile's `tool_storage` (else the cwd). An absolute path shares one task between profiles. |
+| `storage_dir` | `.code_context` | one `<task>.json` per task. A configured relative path is from the cwd; the default is under the profile's `tool_storage` (else the cwd). An absolute path shares one task across profiles and sessions; the same configured relative value lands in one cwd path, so it shares too. |
 | `paths` | workspace only | read rules (`read_style`) |
 | `max_entries` | 500 | entries per task |
 | `max_description_chars` | 4000 | an entry's or a task's description |

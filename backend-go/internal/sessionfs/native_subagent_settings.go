@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -432,7 +433,14 @@ func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string
 }
 
 func normalizeNativeSubagentStorageDir(fields map[string]json.RawMessage, cwd, toolStorageDir, settingPath string) (string, error) {
-	return normalizeToolStorageSubdir(fields, defaultNativeSubagentStorageDir, cwd, toolStorageDir, "tools.native.subagent.storage_dir", settingPath)
+	const field = "tools.native.subagent.storage_dir"
+	dir, err := normalizeToolStorageSubdir(fields, defaultNativeSubagentStorageDir, cwd, toolStorageDir, field, settingPath)
+	var problem *ConfigError
+	if err != nil && !errors.As(err, &problem) {
+		// Keep the config error of a path that cannot be made absolute, so it still maps to 422.
+		return "", configError("%s: %s could not be resolved: %v", settingPath, field, errors.Unwrap(err))
+	}
+	return dir, err
 }
 
 func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath, settingDir, cwd string) (NativeSubagentAgent, error) {

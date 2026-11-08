@@ -286,8 +286,14 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeSubagent != nil {
 		candidates = append(candidates, config.NativeSubagent.StorageDir)
 	}
+	if config.NativeCodeContext != nil {
+		candidates = append(candidates, config.NativeCodeContext.StorageDir)
+	}
 	if config.NativeExec != nil {
 		candidates = append(candidates, config.NativeExec.Child.Spill.StorageDir)
+	}
+	if config.NativeToolSmith != nil {
+		candidates = append(candidates, config.NativeToolSmith.Child.Spill.StorageDir)
 	}
 	// The session's state folder is harness-owned unless the workspace is that folder.
 	if config.StateDir != "" && filepath.Clean(config.StateDir) != filepath.Clean(config.WorkingDir) {

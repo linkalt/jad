@@ -36,7 +36,7 @@ var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max
 type NativeCodeContextSettings struct {
 	// StorageDir holds one JSON file per task. A configured relative directory is from the
 	// cwd; the default is under the profile's tool_storage (the cwd without a profile). An
-	// absolute directory shares it between profiles.
+	// absolute directory, or the same relative one, shares it between profiles.
 	StorageDir string
 	// Policy is the tool's own read rules: which files a range may name.
 	Policy NativePathPolicy
