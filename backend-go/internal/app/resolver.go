@@ -658,8 +658,9 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 		return nil, nil, nil, mapSessionError(err)
 	}
 	// The parent's copy is gated (its lazy tools only) and hooked. The subagent's children get the
-	// raw list: each child's session copy is gated with the same set and hooked by the subagent tool
-	// (bindMCP, GateFor), and a toolset's copy is hooked with its own profile's hooks.
+	// raw list: each child's copy, a session tool or a toolset's, is gated with the same set and then
+	// hooked by the subagent tool (bindMCP, GateFor): a session copy with the owner's hooks, a
+	// toolset's copy with its own profile's hooks.
 	lazy.Bind(mcpTools)
 	parentMCPTools := native.WithToolEventHooksAll(native.GateLazyTools(mcpTools, lazy), config.Hooks, config.Model.APIKeyEnv)
 	mcpCatalog, err := tools.NewCatalog(parentMCPTools)
@@ -905,11 +906,11 @@ func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore,
 // loadAgentToolsetMCP connects the MCP servers of every toolset a sub-agent names and
 // returns their tools by toolset ID. Each toolset has its own manager, so a server that
 // two toolsets use differently is not closed by the other's run.
-func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.SessionConfig) (map[string][]tools.Tool, error) {
+func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.SessionConfig) (map[string]native.ToolsetMCP, error) {
 	if len(config.AgentToolsets) == 0 {
 		return nil, nil
 	}
-	loaded := make(map[string][]tools.Tool, len(config.AgentToolsets))
+	loaded := make(map[string]native.ToolsetMCP, len(config.AgentToolsets))
 	for _, id := range slices.Sorted(maps.Keys(config.AgentToolsets)) {
 		derived := config.AgentToolsets[id]
 		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + id)
@@ -920,7 +921,8 @@ func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.Ses
 		if err != nil {
 			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, id, err)})
 		}
-		loaded[id] = native.WithToolEventHooksAll(mcpTools, derived.Hooks, config.Model.APIKeyEnv)
+		// Raw: the subagent tool gates each copy with the owner's lazy set, then hooks it with these hooks.
+		loaded[id] = native.ToolsetMCP{Tools: mcpTools, Hooks: derived.Hooks}
 	}
 	return loaded, nil
 }

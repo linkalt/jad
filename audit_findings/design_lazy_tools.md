@@ -69,8 +69,10 @@ loaded it; after a load it is present with its real schema, from the next reques
   then applies `WithToolEventHooksAll`. The raw MCP list goes to `SubagentMCP.BindToolsets`. For each
   child, a session MCP tool is gated with the same set (`GateFor`) and then hooked with the owner's
   hooks (`WithToolEventHooks`), so a child's lazy MCP tool is refused until loaded and its call fires
-  the owner's pre_tool and post_tool once. A toolset's MCP tool is not hooked again there: the resolver
-  already hooked it with its own profile's hooks.
+  the owner's pre_tool and post_tool once. A toolset's MCP tool takes the same path with its own copy and
+  its own profile's hooks (`ToolsetMCP.Hooks`): `GateFor` gates the tool it is given, so the child keeps the
+  toolset's connection, while the owner's `tools.lazy` decides whether it is lazy and `load_tool describe`
+  shows the owner's definition.
 - `Bind` skips a tool already bound and `Gate` skips a tool already gated, so no tool is wrapped
   twice.
 - The stub design is reversed. A lazy tool is no longer sent to the model as a summary with a

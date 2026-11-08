@@ -157,14 +157,22 @@ func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
 	return nil
 }
 
+// ToolsetMCP is the MCP tools loaded for one toolset: the raw tools, as the toolset's own manager
+// listed them, and the hooks of the toolset's profile. The subagent tool gates a tool with the
+// owner's lazy set and then hooks it with Hooks, so the hooks wrap the gate as they do for the owner.
+type ToolsetMCP struct {
+	Tools []tools.Tool
+	Hooks sessionfs.HooksSettings
+}
+
 // BindToolsets is Bind plus the MCP tools loaded for each toolset an agent names, by
 // toolset ID. An agent with a toolset resolves its mcp: entries against that toolset's
 // tools only, never the session's.
-func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool) error {
+func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[string]ToolsetMCP) error {
 	if m == nil || m.tool == nil {
 		return nil
 	}
-	return m.tool.bindMCP(mcpTools, toolsetTools, m.hookTool)
+	return m.tool.bindMCP(mcpTools, toolsetTools, m.hooks, m.hookWith)
 }
 
 // hookTool wraps a nested copy of a tool with the owning profile's hooks. A nil handle returns the
@@ -173,7 +181,15 @@ func (m *SubagentMCP) hookTool(tool tools.Tool) tools.Tool {
 	if m == nil {
 		return tool
 	}
-	return WithToolEventHooks(tool, m.hooks, m.apiKeyEnv)
+	return m.hookWith(m.hooks, tool)
+}
+
+// hookWith wraps a nested copy of a tool with the given profile's hooks (a toolset's, for its tool).
+func (m *SubagentMCP) hookWith(hooks sessionfs.HooksSettings, tool tools.Tool) tools.Tool {
+	if m == nil {
+		return tool
+	}
+	return WithToolEventHooks(tool, hooks, m.apiKeyEnv)
 }
 
 type subagentTool struct {
@@ -676,14 +692,17 @@ func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers 
 // agent names are given; a tool is never added because its server calls it read-only,
 // since that is the server's own claim.
 //
-// hook wraps a child's copy of a session MCP tool with the owner's hooks. It runs after
-// the lazy gate, because GateFor rebuilds a lazy tool from the set. Toolset tools are not wrapped:
-// the resolver already hooks them with their own profile's hooks.
-func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]tools.Tool, hook func(tools.Tool) tools.Tool) error {
+// Each child's copy is the raw tool, gated by the owner's lazy set (the gate wraps the tool it is
+// given, so a toolset's copy stays the toolset's) and then wrapped by hook: with the owner's hooks
+// for a session tool, with the toolset's own hooks (ToolsetMCP.Hooks) for a toolset tool. The hooks
+// wrap the gate, so a refused call to a lazy tool still fires them once.
+func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]ToolsetMCP, ownerHooks sessionfs.HooksSettings, hook func(sessionfs.HooksSettings, tools.Tool) tools.Tool) error {
 	session := newMCPPool(mcpTools)
 	pools := make(map[string]mcpPool, len(toolsetTools))
-	for id, loadedTools := range toolsetTools {
-		pools[id] = newMCPPool(loadedTools)
+	toolsetHooks := make(map[string]sessionfs.HooksSettings, len(toolsetTools))
+	for id, loaded := range toolsetTools {
+		pools[id] = newMCPPool(loaded.Tools)
+		toolsetHooks[id] = loaded.Hooks
 	}
 
 	s.mu.Lock()
@@ -695,9 +714,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 		}
 		byID, loadedText := session.byID, session.loadedText
 		where := ""
-		fromToolset := false
+		hooks := ownerHooks
 		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
-			fromToolset = true
+			hooks = toolsetHooks[toolsetKey]
 			pool := pools[toolsetKey]
 			byID, loadedText = pool.byID, pool.loadedText
 			if byID == nil {
@@ -717,10 +736,7 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 				// tools array, and runs only through the child's load_tool (run). GateFor leaves the set's
 				// one-shot gate to the parent.
 				gated, _ := s.lazy.GateFor(tool)
-				if !fromToolset {
-					gated = hook(gated)
-				}
-				childTools = append(childTools, gated)
+				childTools = append(childTools, hook(hooks, gated))
 			}
 		}
 		for _, id := range agent.mcpIDs {

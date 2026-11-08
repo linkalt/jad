@@ -425,6 +425,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	delete(agentSetting, "__leaf_budget")
 	sessionExtra, _ := agentSetting["__session"].(map[string]any)
 	delete(agentSetting, "__session")
+	// __session_toolset adds keys (hooks) to the session's own toolset file.
+	sessionToolset, _ := agentSetting["__session_toolset"].(map[string]any)
+	delete(agentSetting, "__session_toolset")
 	// __load_tool enables tools.native.load_tool and its definition, which a profile with
 	// tools.lazy needs: the profile is refused at load without it.
 	_, withLoadTool := agentSetting["__load_tool"]
@@ -462,7 +465,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		agentSetting["model"] = "openai/child"
 	}
 
-	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}}
+	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}, ToolsetExtra: sessionToolset}
 	// __profile_models replaces the models the profile lists, which a call's model may pick.
 	if models, ok := agentSetting["__profile_models"].([]string); ok {
 		spec.ProfileModels = models

@@ -564,6 +564,68 @@ func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
 	}
 }
 
+// A child whose toolset lists the MCP server the owner has as a lazy session server keeps the toolset's
+// copy: the owner's tools.lazy gates it, and the toolset's own hooks wrap the gate, so the refused
+// direct call and the load_tool run each fire the toolset's pre_tool and post_tool once, and the
+// owner's hooks never. The two copies share the server file but not the connection or the hooks; the
+// markers tell which copy ran. Before the fix, GateFor swapped in the owner's copy and the toolset's
+// hooks were lost (the owner's fired instead).
+func TestToolsetChildOfALazyOwnerServerKeepsItsOwnCopyAndHooks(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	for _, tc := range []struct {
+		name      string
+		call      [2]string
+		wantCalls int32
+		wantText  string
+	}{
+		{"a direct call is refused", [2]string{name, `{"word":"answer"}`}, 0, "lazy_tool_not_loaded"},
+		{"a load_tool run executes the toolset's copy", [2]string{"load_tool", `{"run":"mcp:fixture:lookup","arguments":{"word":"answer"}}`}, 1, "MCP says answer is 99"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ownerMarker, toolsetMarker := filepath.Join(dir, "owner"), filepath.Join(dir, "toolset")
+			hooks := func(marker string) map[string]any {
+				return map[string]any{"enabled": true,
+					"pre_tool":  []any{map[string]any{"name": "pre", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo pre >> " + marker}}},
+					"post_tool": []any{map[string]any{"name": "post", "match": "mcp:fixture:lookup", "argv": []string{"sh", "-c", "echo post >> " + marker}}},
+				}
+			}
+			calls := &atomic.Int32{}
+			profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
+			// The hooks of the session's toolset are the owner's; the agent's toolset has its own.
+			f := buildSubagentFixtureWithMCP(t, map[string]any{
+				"model": "child.json", "toolset": "extra/lookup", "tools": []string{"load_tool", "mcp:fixture:lookup"},
+				"__session": profileSession(profileTools), "__session_toolset": map[string]any{"hooks": hooks(ownerMarker)}, "__load_tool": true,
+				"__toolsets": map[string]any{"extra/lookup": map[string]any{
+					"native": map[string]any{"load_tool": map[string]any{}},
+					"mcp":    map[string]any{"m/fixture": map[string]any{"deny_tools": []string{}}},
+					"hooks":  hooks(toolsetMarker),
+				}},
+			}, false, nil, &mcpFixture{calls: calls})
+			f.provider.childFirstCall = tc.call
+			if body := f.run(t); !strings.Contains(body, "event: completed") {
+				t.Fatalf("run did not complete:\n%s", body)
+			}
+			child := f.provider.forModel("child-model")
+			if len(child) < 2 {
+				t.Fatalf("child made %d requests", len(child))
+			}
+			if history := child[len(child)-1].Text; !strings.Contains(history, tc.wantText) {
+				t.Errorf("the child's history lacks %q:\n%s", tc.wantText, history)
+			}
+			if calls.Load() != tc.wantCalls {
+				t.Errorf("the MCP server ran %d times, want %d", calls.Load(), tc.wantCalls)
+			}
+			if data, _ := os.ReadFile(toolsetMarker); string(data) != "pre\npost\n" {
+				t.Errorf("the toolset's hook events = %q, want one pre_tool then one post_tool", data)
+			}
+			if data, err := os.ReadFile(ownerMarker); err == nil {
+				t.Errorf("the owner's hooks fired for the toolset's tool: %q", data)
+			}
+		})
+	}
+}
+
 // tools.lazy needs no catalog layout: the lazy set keeps nothing in a state folder, so a session without one
 // opens a set like any other.
 func TestOpenLazySetNeedsNoStateFolder(t *testing.T) {

@@ -57,6 +57,9 @@ type Spec struct {
 	// MCPConfig maps "<category>/<name>" to the MCP server file's content; it replaces the
 	// placeholder connection MCP writes.
 	MCPConfig map[string]map[string]any
+	// ToolsetExtra adds top-level keys (hooks, for one) to the generated toolset file "coding/default".
+	// ToolsetRaw replaces it.
+	ToolsetExtra map[string]any
 	// ToolsetRaw is the exact text of the toolset file "coding/default", for a test of a
 	// malformed one. It replaces Native and MCP.
 	ToolsetRaw string
@@ -189,6 +192,9 @@ func Write(t *testing.T, spec Spec) Fixture {
 			use[id] = orEmpty(fields)
 		}
 		file["mcp"] = use
+		for key, value := range spec.ToolsetExtra {
+			file[key] = value
+		}
 		put("tools/"+toolset+".json", file)
 	}
 

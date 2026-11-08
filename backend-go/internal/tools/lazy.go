@@ -72,19 +72,17 @@ func (s *LazySet) Gate(tool Tool) (Tool, bool) {
 	return s.GateFor(tool)
 }
 
-// GateFor returns a fresh lazy gate of a tool the set has bound, and false for any other tool. It
-// does not mark the tool as gated, so any number of catalogs can gate their own copies of one lazy
-// tool, all reading this set. Gate keeps its one-shot contract for the owning catalog.
+// GateFor returns a fresh lazy gate of the tool it is given, and false for any other tool: the set
+// must have bound the tool's ID and the tool must be able to be lazy. The gate wraps the given tool,
+// never the set's own bound copy, so a catalog whose copy differs from the owner's (a toolset's
+// connection and hooks) keeps its copy; the set supplies only the decision. It does not mark the
+// tool as gated, so any number of catalogs can gate their own copies of one lazy tool, all reading
+// this set. Gate keeps its one-shot contract for the owning catalog.
 func (s *LazySet) GateFor(tool Tool) (Tool, bool) {
 	if s == nil || !CanBeLazy(tool.Definition) || !s.bindings[tool.Definition.ID] {
 		return tool, false
 	}
-	for _, entry := range s.bound {
-		if entry.Tool.Definition.ID == tool.Definition.ID {
-			return WithLazyGate(entry, s), true
-		}
-	}
-	return tool, false
+	return WithLazyGate(LazyEntry{Tool: tool}, s), true
 }
 
 // shows reports whether the profile shows the tool; with no predicate every tool is shown.

@@ -352,3 +352,42 @@ func eagerRows(catalog *Catalog) []RouteDefinition {
 	}
 	return rows
 }
+
+// GateFor gates the tool it is given, not the copy the set bound: a second copy of a bound ID (a
+// toolset's) keeps its own definition and executor, and the set's own copy never runs.
+func TestGateForGatesTheGivenCopyNotTheBoundOne(t *testing.T) {
+	set := openSet(t, []string{"mcp:docs:search"}, 256)
+	owner := lazyTool(t, "mcp:docs:search", "mcp", "search")
+	ownerRan := false
+	owner.Execute = func(context.Context, map[string]any, ExecutionContext) (string, error) {
+		ownerRan = true
+		return "owner", nil
+	}
+	set.Bind([]Tool{owner})
+	other := lazyTool(t, "mcp:docs:search", "mcp", "search")
+	other.Definition.Description = "the other copy"
+	other.Execute = func(context.Context, map[string]any, ExecutionContext) (string, error) { return "other", nil }
+
+	gated, ok := set.GateFor(other)
+	if !ok {
+		t.Fatal("GateFor did not gate a copy of a bound ID")
+	}
+	if gated.Definition.Description != "the other copy" {
+		t.Errorf("the gate carries the description %q, want the given copy's", gated.Definition.Description)
+	}
+	catalog, err := NewCatalog([]Tool{gated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c", "name": "search", "arguments": "{}"})
+	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, ExecutionContext{ViaRunner: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "other") || ownerRan {
+		t.Errorf("a run answered %s (owner ran: %v), want the given copy's output", raw, ownerRan)
+	}
+	if entries := set.Entries(); len(entries) != 1 || entries[0].Tool.Definition.Description == "the other copy" {
+		t.Errorf("the set's own entry changed: %v", entries)
+	}
+}

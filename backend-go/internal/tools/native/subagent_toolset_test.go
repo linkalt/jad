@@ -1,6 +1,8 @@
 package native
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -180,7 +182,7 @@ func buildSubagentCatalogWithToolset(t *testing.T, settings sessionfs.NativeSuba
 // An agent with a toolset resolves its mcp: entries against that toolset's servers only.
 func TestSubagentToolsetResolvesMCPEntriesAgainstItsOwnServers(t *testing.T) {
 	sessionMCP := []tools.Tool{mcpStub(t, "browser", "click")}
-	toolsetMCP := map[string][]tools.Tool{searchToolset: {mcpStub(t, "zvec", "search")}}
+	toolsetMCP := map[string]ToolsetMCP{searchToolset: {Tools: []tools.Tool{mcpStub(t, "zvec", "search")}}}
 	build := func(settings sessionfs.NativeSubagentSettings, launcher SubagentLauncher) (*tools.Catalog, error) {
 		hook := &SubagentMCP{}
 		parentTools := withExecutors(t, readOnlyTool("read"))
@@ -236,5 +238,88 @@ func TestSubagentToolsetWithNoLoadedMCPToolsNamesNone(t *testing.T) {
 	err := hook.BindToolsets([]tools.Tool{mcpStub(t, "zvec", "search")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not a loaded MCP tool of toolset extra/search (loaded: none)") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// sameIDStub is an MCP tool "mcp:docs:search" with its own description, schema and call counter, so
+// two copies of one ID can be told apart.
+func sameIDStub(t *testing.T, description, property string, calls *int) tools.Tool {
+	t.Helper()
+	schema := []byte(`{"type":"object","properties":{"` + property + `":{"type":"string"}}}`)
+	validator, err := tools.CompileSchema(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := mcpStub(t, "docs", "search")
+	tool.Definition.Description, tool.Definition.InputSchema = description, schema
+	tool.Validator = validator
+	tool.Execute = func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
+		*calls++
+		return description + " ran", nil
+	}
+	return tool
+}
+
+// A toolset child whose MCP server has the ID of one of the owner's lazy servers keeps the toolset's
+// copy. The owner's tools.lazy gates that copy, and load_tool shows the owner's description and schema,
+// but a run executes the toolset's connection, and a direct call (refused) and a run each fire the
+// toolset's hooks once and the owner's never.
+func TestToolsetChildKeepsItsOwnCopyOfALazyOwnerServer(t *testing.T) {
+	var ownerCalls, toolsetCalls int
+	ownerTool := sameIDStub(t, "owner description", "ownerarg", &ownerCalls)
+	toolsetTool := sameIDStub(t, "toolset description", "toolsetarg", &toolsetCalls)
+	dir := t.TempDir()
+	ownerMarker, toolsetMarker := filepath.Join(dir, "owner"), filepath.Join(dir, "toolset")
+	ownerHooks := eventSettings([]sessionfs.ToolEventHook{eventHook("owner", "*", "echo fired >> "+ownerMarker)}, nil)
+	toolsetHooks := eventSettings([]sessionfs.ToolEventHook{eventHook("toolset", "*", "echo fired >> "+toolsetMarker)}, nil)
+
+	set := tools.NewLazySet([]string{"mcp:docs:search"}, 256, nil)
+	set.Bind([]tools.Tool{ownerTool})
+	loadTool, err := NewLoadToolTool(set, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcp := NewSubagentMCP(ownerHooks, "")
+	launcher := &fakeLauncher{}
+	parentTools := withExecutors(t, readOnlyTool("read"))
+	tool, err := newSubagentTool(subagentSettings(toolsetAgent("finder", "grep", "load_tool", "mcp:docs:search")), parentTools,
+		map[string]subagentToolset{searchToolset: {native: withExecutors(t, readOnlyTool("grep"))}}, launcher, mcp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.SetLazy(set, &loadTool); err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.BindToolsets([]tools.Tool{ownerTool}, map[string]ToolsetMCP{searchToolset: {Tools: []tools.Tool{toolsetTool}, Hooks: toolsetHooks}}); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := tools.NewCatalog(append(parentTools, tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subagentCall(t, catalog, `{"task":"x","agent":"finder"}`)
+	child := launcher.requests[0].Tools
+
+	described := executeNamedCall(t, child, "load_tool", `{"names":["mcp:docs:search"]}`)
+	if !strings.Contains(described, "owner description") || !strings.Contains(described, "ownerarg") || strings.Contains(described, "toolset") {
+		t.Errorf("describe = %s, want the owner's description and schema only", described)
+	}
+
+	refused := executeNamedCall(t, child, "mcp_docs_search_0123456789", `{}`)
+	if !strings.Contains(refused, "lazy_tool_not_loaded") {
+		t.Errorf("a direct call to the lazy toolset tool = %s, want lazy_tool_not_loaded", refused)
+	}
+	if ownerCalls+toolsetCalls != 0 || countLines(t, toolsetMarker) != 1 || countLines(t, ownerMarker) != 0 {
+		t.Errorf("after the refusal: owner ran %d, toolset ran %d, toolset hook fired %d (want 1), owner hook fired %d (want 0)",
+			ownerCalls, toolsetCalls, countLines(t, toolsetMarker), countLines(t, ownerMarker))
+	}
+
+	ran := executeThroughLoadTool(t, child, "mcp:docs:search", `{}`)
+	if !strings.Contains(ran, "toolset description ran") {
+		t.Errorf("run = %s, want the toolset copy's output", ran)
+	}
+	if ownerCalls != 0 || toolsetCalls != 1 || countLines(t, toolsetMarker) != 2 || countLines(t, ownerMarker) != 0 {
+		t.Errorf("after the run: owner ran %d (want 0), toolset ran %d (want 1), toolset hook fired %d (want 2), owner hook fired %d (want 0)",
+			ownerCalls, toolsetCalls, countLines(t, toolsetMarker), countLines(t, ownerMarker))
 	}
 }
