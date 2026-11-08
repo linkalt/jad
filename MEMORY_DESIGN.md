@@ -31,7 +31,7 @@ Configure storage as follows:
 }
 ```
 
-`storage_dir` defaults to `.memory` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or beneath `setting.cwd` when no profile is selected. Relative configured directories use that same base; absolute paths are used as-is. Profile roots default to `<cwd>/.jad/profiles/<profile-name>/tools`; existing data is not migrated. Different profiles receive separate roots, but sessions using the same profile or an explicit shared path still share storage without write coordination.
+`storage_dir` defaults to `.memory` beneath the selected profile's `paths.profiles.<name>.tool_storage` root, or beneath `setting.cwd` when no profile is selected. A configured relative directory resolves from the session cwd instead (changed 2026-11-08; the old store under the profile root is not migrated); absolute paths are used as-is. Profile roots default to `<cwd>/.jad/profiles/<profile-name>/tools`; existing data is not migrated. Different profiles receive separate roots, but sessions using the same profile or an explicit shared path still share storage without write coordination.
 
 ```text
 <storage_dir>/

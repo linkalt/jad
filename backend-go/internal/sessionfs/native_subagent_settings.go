@@ -432,26 +432,7 @@ func normalizeNativeSubagentStateContext(raw json.RawMessage, settingPath string
 }
 
 func normalizeNativeSubagentStorageDir(fields map[string]json.RawMessage, cwd, toolStorageDir, settingPath string) (string, error) {
-	configured := defaultNativeSubagentStorageDir
-	if raw, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(raw)) != "null" {
-		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-			return "", configError("%s: tools.native.subagent.storage_dir must be a non-empty string", settingPath)
-		}
-		configured = strings.TrimSpace(configured)
-	}
-	configured = expandHome(configured)
-	if !filepath.IsAbs(configured) {
-		base := cwd
-		if toolStorageDir != "" {
-			base = toolStorageDir
-		}
-		configured = filepath.Join(base, configured)
-	}
-	absolute, err := filepath.Abs(configured)
-	if err != nil {
-		return "", configError("%s: tools.native.subagent.storage_dir could not be resolved: %v", settingPath, err)
-	}
-	return filepath.Clean(absolute), nil
+	return normalizeToolStorageSubdir(fields, defaultNativeSubagentStorageDir, cwd, toolStorageDir, "tools.native.subagent.storage_dir", settingPath)
 }
 
 func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath, settingDir, cwd string) (NativeSubagentAgent, error) {

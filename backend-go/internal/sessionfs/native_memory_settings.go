@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -200,26 +199,7 @@ func normalizeNativeMemorySettings(setting map[string]json.RawMessage, settingPa
 }
 
 func normalizeNativeMemoryStorageDir(fields map[string]json.RawMessage, cwd, toolStorageDir, settingPath string) (string, error) {
-	configured := defaultNativeMemoryStorageDir
-	if raw, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(raw)) != "null" {
-		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-			return "", configError("%s: tools.native.memory.storage_dir must be a non-empty string", settingPath)
-		}
-		configured = strings.TrimSpace(configured)
-	}
-	configured = expandHome(configured)
-	if !filepath.IsAbs(configured) {
-		base := cwd
-		if toolStorageDir != "" {
-			base = toolStorageDir
-		}
-		configured = filepath.Join(base, configured)
-	}
-	absolute, err := filepath.Abs(configured)
-	if err != nil {
-		return "", fmt.Errorf("resolve tools.native.memory.storage_dir: %w", err)
-	}
-	return filepath.Clean(absolute), nil
+	return normalizeToolStorageSubdir(fields, defaultNativeMemoryStorageDir, cwd, toolStorageDir, "tools.native.memory.storage_dir", settingPath)
 }
 
 func normalizeNativeMemoryStateContext(raw json.RawMessage, settingPath string, maxLimit, maxFilterFields, maxFilterDepth int64, allowedTypes []string) ([]NativeMemoryStateContextSelector, error) {

@@ -355,19 +355,9 @@ func normalizeNativeBashSpill(raw json.RawMessage, section, settingPath, cwd, se
 		return settings, nil
 	}
 
-	storageDir, err := bashString(fields, "storage_dir", defaultDir, settingPath+": "+section+".spill", false)
-	if err != nil {
+	if settings.StorageDir, err = normalizeToolStorageSubdir(fields, defaultDir, cwd, toolStorageDir, section+".spill.storage_dir", settingPath); err != nil {
 		return NativeBashSpillSettings{}, err
 	}
-	storageDir = expandHome(storageDir)
-	if !filepath.IsAbs(storageDir) {
-		base := cwd
-		if toolStorageDir != "" {
-			base = toolStorageDir
-		}
-		storageDir = filepath.Join(base, storageDir)
-	}
-	settings.StorageDir = filepath.Clean(storageDir)
 	return settings, nil
 }
 

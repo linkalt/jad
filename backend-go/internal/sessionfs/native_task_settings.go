@@ -2,8 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -142,26 +140,7 @@ func normalizeNativeTaskSettings(setting map[string]json.RawMessage, settingPath
 }
 
 func normalizeNativeTaskStorageDir(fields map[string]json.RawMessage, cwd, toolStorageDir, settingPath string) (string, error) {
-	configured := defaultNativeTaskStorageDir
-	if raw, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(raw)) != "null" {
-		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-			return "", configError("%s: tools.native.task.storage_dir must be a non-empty string", settingPath)
-		}
-		configured = strings.TrimSpace(configured)
-	}
-	configured = expandHome(configured)
-	if !filepath.IsAbs(configured) {
-		base := cwd
-		if toolStorageDir != "" {
-			base = toolStorageDir
-		}
-		configured = filepath.Join(base, configured)
-	}
-	absolute, err := filepath.Abs(configured)
-	if err != nil {
-		return "", fmt.Errorf("resolve tools.native.task.storage_dir: %w", err)
-	}
-	return filepath.Clean(absolute), nil
+	return normalizeToolStorageSubdir(fields, defaultNativeTaskStorageDir, cwd, toolStorageDir, "tools.native.task.storage_dir", settingPath)
 }
 
 func normalizeNativeTaskStateContext(raw json.RawMessage, settingPath string, maxLimit int64) (NativeTaskStateContextSettings, error) {

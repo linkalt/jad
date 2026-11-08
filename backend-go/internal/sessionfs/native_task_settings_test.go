@@ -26,7 +26,7 @@ func TestNormalizeNativeTaskSettingsDefaultsAndOverrides(t *testing.T) {
 	if settings.MaxTasks != 12 || settings.ListLimit != 2 || settings.MaxListLimit != 3 || settings.MaxTitleChars != defaultNativeTaskMaxTitle {
 		t.Fatalf("normalized task limits = %+v", settings)
 	}
-	if settings.StorageDir != filepath.Join(cwd, "tool-data", "plans") {
+	if settings.StorageDir != filepath.Join(cwd, "plans") {
 		t.Fatalf("task storage dir = %q", settings.StorageDir)
 	}
 	if len(settings.StateContext.Statuses) != 2 || settings.StateContext.Statuses[0] != "done" || settings.StateContext.Statuses[1] != "in-progress" || settings.StateContext.Limit != 2 {

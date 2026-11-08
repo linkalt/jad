@@ -162,7 +162,7 @@ hint: the complete output is in .bash-output/bash-c1.stdout.log; read or grep it
 | Returned bytes | `max_bytes` | 65536 | Ceiling the four stream budgets must fit inside. |
 | stdout window | `stdout.head_bytes` / `stdout.tail_bytes` | 16384 / 32768 | What the model sees of stdout: its start and its end. |
 | stderr window | `stderr.head_bytes` / `stderr.tail_bytes` | 4096 / 12288 | Same for stderr, which noise from stdout can no longer evict. |
-| Spill directory | `spill.storage_dir` | `.bash-output` | Relative paths resolve from the selected profile's `tool_storage` root, or the session cwd without a profile; absolute paths are used as-is. |
+| Spill directory | `spill.storage_dir` | `.bash-output` | A configured relative path resolves from the session cwd; the default is under the selected profile's `tool_storage` root (the cwd without a profile); absolute paths are used as-is. |
 | Spill file | `spill.cap_bytes` | 67108864 | Bytes per stream written to disk before the file is left incomplete. |
 | Spill retention | `spill.retention_days` | 14 | Expired spill files are pruned; 0 disables age-based pruning. |
 | Spill prune interval | `spill.prune_interval_seconds` | 3600 | Minimum seconds between prune scans of one spill directory, so a command does not list a large directory every time; 0 scans before every command. |
@@ -288,8 +288,8 @@ turn waits for `timeout_ms`. Wiring cancellation into `AgentSession.run` is a se
 }
 ```
 
-* `spill.storage_dir` is a plain directory path. Relative values resolve beneath the selected profile's
-  `tool_storage` root, or relative to the session cwd without a profile; absolute paths are accepted as-is.
+* `spill.storage_dir` is a plain directory path. A configured relative value resolves from the
+  session cwd; the default is beneath the selected profile's `tool_storage` root (the cwd without a profile); absolute paths are accepted as-is.
   The tool generates `bash-{call_id}.{stream}.log` names internally, encoding call IDs so they cannot
   introduce path separators and bounding very long names. `stdout_full`/`stderr_full` remain result
   metadata identifying retained files; they are no longer the normal configuration keys.

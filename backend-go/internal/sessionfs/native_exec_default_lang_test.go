@@ -174,8 +174,8 @@ func TestExecSpillStorageDirAndLegacyTemplatesStayConfigurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := filepath.Base(config.NativeExec.Child.Spill.StorageDir); got != "custom-out" {
-		t.Fatalf("exec storage_dir = %q, want custom-out", got)
+	if got, want := config.NativeExec.Child.Spill.StorageDir, filepath.Join(config.WorkingDir, "custom-out"); got != want {
+		t.Fatalf("exec storage_dir = %q, want %q (a configured relative path is from the cwd)", got, want)
 	}
 	config, err = loadSetting(t, nativeTools(map[string]any{
 		"exec": map[string]any{"spill": map[string]any{"storage_dir": ".exec-output", "stdout_full": "{cwd}/x/{call_id}.out", "stderr_full": "{cwd}/x/{call_id}.err"}},

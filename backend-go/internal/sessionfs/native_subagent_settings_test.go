@@ -61,7 +61,7 @@ func TestNormalizeNativeSubagentSettingsDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.ListMaxBytes != 0 || custom.KeepFinished != 7 || custom.MaxQueued != 0 || custom.StorageDir != "/w/.jad/tools/kids" {
+	if custom.ResultMaxBytes != 100 || custom.MaxConcurrent != 2 || custom.ListMaxBytes != 0 || custom.KeepFinished != 7 || custom.MaxQueued != 0 || custom.StorageDir != "/w/kids" {
 		t.Fatalf("custom = %+v", custom)
 	}
 	if custom.Agents[0].Name != "b" || custom.Agents[1].Name != "a" {

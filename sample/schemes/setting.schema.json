@@ -306,7 +306,7 @@
               "type": "string",
               "minLength": 1,
               "default": ".bash-output",
-              "description": "Directory for complete streams. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is. Generated filenames are unique per call and stream."
+              "description": "Directory for complete streams. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is, which is how profiles share one store. Generated filenames are unique per call and stream."
             },
             "stdout_full": {
               "type": "string",
@@ -1761,7 +1761,7 @@
                   "type": "string",
                   "pattern": "\\S",
                   "default": ".tasks",
-                  "description": "Persistent task-plan directory. The harness stores tasks.json inside it. Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; absolute paths are used as-is."
+                  "description": "Persistent task-plan directory. The harness stores tasks.json inside it. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is, which is how profiles share one store."
                 }
               },
               "additionalProperties": false
@@ -1775,7 +1775,7 @@
                 }
               ],
               "properties": {
-                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".code_context", "description": "Directory of the task files (<task>.json). Relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected; an absolute path is used as-is, which is how profiles share one task's entries."},
+                "storage_dir": {"type": "string", "pattern": "\\S", "default": ".code_context", "description": "Directory of the task files (<task>.json). A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is, which is how profiles share one task's entries."},
                 "max_entries": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 500, "description": "Most entries one task may hold."},
                 "max_description_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 4000, "description": "Longest description of one entry, or of a task (task_description), in characters."},
                 "max_range_lines": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 2000, "description": "Most lines one entry may read."},
@@ -1813,7 +1813,7 @@
                   "type": "string",
                   "pattern": "\\S",
                   "default": ".memory",
-                  "description": "Memory root directory; relative paths resolve from the selected profile's tool_storage root, or from setting.cwd when no profile is selected. Absolute paths are used as-is."
+                  "description": "Memory root directory. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is, which is how profiles share one store."
                 },
                 "max_types": {
                   "type": "integer",
@@ -2002,7 +2002,7 @@
                 "max_runs_per_session": {"type": "integer", "minimum": 1, "maximum": 1024, "default": 32, "description": "Most runs of one session, at any depth, that a start from inside a child may find going. A start beyond it is refused with subagent_limit_reached. A start from inside a child is never queued: with no free slot it is refused with subagent_busy. Not visible to the model."},
                 "changed_files_max": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 100, "description": "Most files a sub-agent run lists as changed by its write and edit in the result (written_files); more are only counted (written_files_omitted). 0 turns the list off. Changes made by bash or exec are not listed."},
                 "max_queued": {"type": "integer", "minimum": 0, "maximum": 1024, "default": 32, "description": "Runs that may wait for a free slot while max_concurrent are going. A start beyond it is refused with subagent_busy. 0 allows no waiting."},
-                "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. Relative paths resolve against the profile's tool storage, or the working directory without profiles."},
+                "storage_dir": {"type": "string", "minLength": 1, "default": ".subagents", "description": "Directory holding one transcript folder per child run. A configured relative path resolves from the session cwd (setting.cwd). When omitted, the default lives under the selected profile's tool_storage root (under the cwd when no profile is selected). An absolute path is used as-is, which is how profiles share one store."},
                 "worktree": {"type": "object", "additionalProperties": false, "description": "Git worktrees of the agents with isolation worktree.", "properties": {"dir": {"type": "string", "pattern": "\\S", "description": "Folder holding one worktree per running run. A relative path resolves from the session's cwd; ~ is expanded. Absent: a jad-worktrees folder inside the repository's git directory, where the session's own search tools never look."}, "branch_prefix": {"type": "string", "pattern": "^[^-/ ~^:?*\\[\\\\][^ ~^:?*\\[\\\\]*$", "default": "jad/", "description": "Start of each run's branch name; the run id follows it."}, "git": {"type": "string", "pattern": "\\S", "default": "git", "description": "The git executable: a name looked up in PATH, or a path."}, "author_name": {"type": "string", "pattern": "\\S", "default": "jad", "description": "Author name of the commit of a run's changes, used only when the repository has no user.name."}, "author_email": {"type": "string", "pattern": "\\S", "default": "jad@localhost", "description": "Author email of that commit, used only when the repository has no user.email."}, "commit_hooks": {"type": "boolean", "default": false, "description": "Run the repository's commit hooks for that commit; off commits with --no-verify, so a hook cannot keep a run's work out of its branch."}, "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000, "default": 60000, "description": "Limit of each git command."}}},
                 "statecontext": {
                   "type": "object",

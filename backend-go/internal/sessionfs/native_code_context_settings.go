@@ -2,8 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -36,8 +34,9 @@ var nativeCodeContextKeys = []string{"storage_dir", "paths", "max_entries", "max
 // NativeCodeContextSettings configure native.code_context: a per-task list of exact
 // source ranges, each with a description, that get reads back as code.
 type NativeCodeContextSettings struct {
-	// StorageDir holds one JSON file per task. Relative to the profile's tool_storage
-	// (or the cwd without a profile); an absolute directory shares it between profiles.
+	// StorageDir holds one JSON file per task. A configured relative directory is from the
+	// cwd; the default is under the profile's tool_storage (the cwd without a profile). An
+	// absolute directory shares it between profiles.
 	StorageDir string
 	// Policy is the tool's own read rules: which files a range may name.
 	Policy NativePathPolicy
@@ -131,27 +130,7 @@ func normalizeNativeCodeContextSettings(setting map[string]json.RawMessage, glob
 	return settings, nil
 }
 
-// normalizeNativeCodeContextStorageDir follows the task tool: a relative directory is
-// under the profile's tool_storage, or the cwd when no profile is selected.
+// normalizeNativeCodeContextStorageDir follows the task tool: see normalizeToolStorageSubdir.
 func normalizeNativeCodeContextStorageDir(fields map[string]json.RawMessage, cwd, toolStorageDir, settingPath string) (string, error) {
-	configured := defaultNativeCodeContextStorageDir
-	if raw, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(raw)) != "null" {
-		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-			return "", configError("%s: tools.native.code_context.storage_dir must be a non-empty string", settingPath)
-		}
-		configured = strings.TrimSpace(configured)
-	}
-	configured = expandHome(configured)
-	if !filepath.IsAbs(configured) {
-		base := cwd
-		if toolStorageDir != "" {
-			base = toolStorageDir
-		}
-		configured = filepath.Join(base, configured)
-	}
-	absolute, err := filepath.Abs(configured)
-	if err != nil {
-		return "", fmt.Errorf("resolve tools.native.code_context.storage_dir: %w", err)
-	}
-	return filepath.Clean(absolute), nil
+	return normalizeToolStorageSubdir(fields, defaultNativeCodeContextStorageDir, cwd, toolStorageDir, "tools.native.code_context.storage_dir", settingPath)
 }

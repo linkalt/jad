@@ -29,3 +29,32 @@ func normalizeToolStorageDir(
 	}
 	return filepath.Clean(absolute), nil
 }
+
+// normalizeToolStorageSubdir resolves a native tool's storage_dir. An omitted (or null)
+// value is fallback under the profile's tool storage (the cwd when toolStorageDir is
+// empty). A configured value is used as given when absolute and resolves from cwd when
+// relative. field names the setting in errors, e.g. tools.native.task.storage_dir.
+func normalizeToolStorageSubdir(fields map[string]json.RawMessage, fallback, cwd, toolStorageDir, field, settingPath string) (string, error) {
+	configured := fallback
+	explicit := false
+	if raw, exists := fields["storage_dir"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
+			return "", configError("%s: %s must be a non-empty string", settingPath, field)
+		}
+		configured = strings.TrimSpace(configured)
+		explicit = true
+	}
+	configured = expandHome(configured)
+	if !filepath.IsAbs(configured) {
+		base := cwd
+		if !explicit && toolStorageDir != "" {
+			base = toolStorageDir
+		}
+		configured = filepath.Join(base, configured)
+	}
+	absolute, err := filepath.Abs(configured)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", field, err)
+	}
+	return filepath.Clean(absolute), nil
+}
