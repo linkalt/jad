@@ -34,18 +34,18 @@ func TestNativeToolsAreEagerAtEveryNestingLevel(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); strings.Contains(out, "tool_not_loaded") || len(launcher.requests) != 1 {
+	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); strings.Contains(out, "lazy_tool_not_loaded") || len(launcher.requests) != 1 {
 		t.Fatalf("the parent's direct subagent call was refused or did not start the child: %s", out)
 	}
 	child := launcher.requests[0].Tools
-	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
+	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "lazy_tool_not_loaded") {
 		t.Fatalf("the child's direct read_image was refused as lazy: %s", out)
 	}
 	executeNamedCall(t, child, "subagent", `{"task":"y","agent":"explore"}`)
 	if len(launcher.requests) != 2 {
 		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
 	}
-	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
+	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "lazy_tool_not_loaded") {
 		t.Fatalf("the grandchild's direct read_image was refused as lazy: %s", out)
 	}
 }

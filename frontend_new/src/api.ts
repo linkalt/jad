@@ -300,6 +300,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** True for a lazy tool: the model does not have it in its tools array and runs it through load_tool. */
+  lazy?: boolean;
 }
 
 interface SseMessage {

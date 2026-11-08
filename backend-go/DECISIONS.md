@@ -2173,11 +2173,62 @@ The user accepted the design and D1 to D7 of T-102 (`missing.md`: a load broke t
 
 ### Open (T-102)
 
-- **Per-server MCP order.** `ListedDefinitions`/`ResponseTools` keep the registration order, and an MCP server's own tool order is kept as the server lists it (`toolsFromList` does not sort), so a server that reorders or adds an eager tool between runs still changes the tools prefix. Sorting per server would close it; not done.
-- **Tools route (D5).** The tools route shows only `load_tool` for lazy tools and has no `lazy` field. A follow-up would add a `lazy: true` row per lazy tool for the UI.
-- **`lazy_tools.json` cleanup (D4).** The file and `LazySet.Load*` are unused for behaviour. Removing them (and the fingerprint reset) is deferred; it would also need the profile-message and remote tests that read the file to go.
-- **`profile_message` and remote subagent** are verified by tests that read the state folder and run a scripted `load_tool run` through the app fixtures, not by a live second server. The checkpoint, plan-mode and `Only` behaviour is verified at catalog and session level, not through an end-to-end plan run.
-- **Accuracy unmeasured.** Whether models use list, describe, run as well as the old load-then-call flow is not measured; the description and the refusal text are the only guidance.
-- **`tool_smith` scripts** cannot reach a lazy tool any more (see above); closing it would mean the bridge sets `ViaRunner` for tools its allowlist names.
-- **`tool_not_loaded`** keeps its code though nothing is "loaded" now; renaming it touches clients and tests that match it.
-- **Race run of `tools/native`.** `go test -race` ran for `tools`, `session`, `app`, `sessionfs` in full and for `tools/native` with a `-run` filter on the lazy, load_tool, hook, tool_smith, subagent and nested tests (the whole package under `-race` exceeded the 10 minute default in an earlier run); one `TestToolSmithStandbyBridgeUsesTheStandbysToken` failure while two race runs shared the machine passed alone and on re-run, and does not touch this change.
+Closed by T-103 (2026-11-08); each line points at its entry below. One item stays, reworded as a non-goal.
+
+- ~~**Per-server MCP order.**~~ Closed: `toolsFromList` sorts each server's tools by name (T-103, "MCP order").
+- ~~**Tools route (D5).**~~ Closed: the route marks lazy tools with `lazy: true` (T-103, "Tools route").
+- ~~**`lazy_tools.json` cleanup (D4).**~~ Closed: the file, the fingerprint and `LazySet.Load*` are gone (T-103, "No state file").
+- ~~**`profile_message` and remote subagent** are verified by tests that read the state folder~~ Kept as a non-goal, see "Not closed" in T-103: the tests no longer read a state file (there is none); the second-server path is still not run live.
+- **Accuracy unmeasured.** Kept as a non-goal (T-103, "Not closed"): it needs live models.
+- ~~**`tool_smith` scripts** cannot reach a lazy tool any more~~ Closed: the bridge's dispatch is a runner's (T-103, "tool_smith scripts").
+- ~~**`tool_not_loaded`** keeps its code~~ Closed: renamed `lazy_tool_not_loaded` (T-103, "Refusal code").
+- ~~**Race run of `tools/native`.**~~ Closed: the whole package ran under `-race` once (T-103, "Race run").
+
+## `tools.lazy` is MCP and extension only; the T-102 gaps are closed; the fork memory test measures retained heap (Go, 2026-11-08; decided by the user; T-103)
+
+### Fork memory test measures retained heap
+
+- **Why it flaked.** `allocatedBy` sampled process-wide `HeapAlloc` every 100 us at GOGC 5 and subtracted the heap after one collection. `HeapAlloc` includes garbage not yet collected, so the number followed how fast the collector got CPU: idle the message fork read 4.3-4.8 MB of an 8.4 MB bound, with 12 CPU burners 5.9-6.6 MB, and it failed at 9.1 MB in the full suite.
+- **Rule now.** `retainedBy` (in `session_fork_memory_test.go`) takes a sample as the lowest `HeapAlloc` of three forced collections in a row, at GOGC 1 for the duration, and reports the highest sample above the starting one. What is left after a collection is what is reachable plus the garbage the running fork allocated during that mark (floating garbage); the lowest of three drops it, and GOGC 1 keeps the mutator from out-allocating a collection (a first version without the GOGC change read 14-20 MB for a clean fork under load; with GOGC 1 and one reading per sample, 2.4-8.6 MB). The test no longer holds the 16.8 MB source transcript while it measures (it reads it after), so the heap being collected is small. A fork that buffers the transcript keeps it reachable until it returns, so every sample sees it; a transient line buffer a streaming fork drops at once may fall between samples, which is the point: nothing is retained.
+- **Numbers (bytes, whole fork / message fork, bound 8,395,634).** Idle, 3 runs: 1.09-1.09 MB / 2.17-2.70 MB. Under 12 CPU burners, 10 runs in a row: 1.44-3.59 MB / 2.21-4.83 MB. `-race -count=3`: 1.08 MB / 2.16 MB. Mutations: the whole transcript copied into a slice in `writeFork`'s line visitor: 16.57 MB (whole) and 16.01 MB (by message); in `messageTurnCursor`'s read loop: 1.09 MB / 18.14 MB. Both CAUGHT by `mutate-check.sh`, about 2x over the bound against at most 0.6x clean under load.
+- **Code is right.** The message fork holds about one turn (raw records, their normalized messages, the decoded line: roughly 4.5 MB for a 512 KiB turn); it does not hold more than half the transcript, so only the test changed.
+
+### `tools.lazy` takes MCP and extension tools only
+
+- **Rule.** `tools.CanBeLazy(definition)` is true for `Source` `mcp` or `extension`. `LazyEntryMatches` (EntryMatches and CanBeLazy) is what `LazySet.isLazy`, `Bind`, `ProfileShows`/`lazyAllows` and the app's entry check use; `GateFor` also refuses a native definition. `EntryMatches` itself is unchanged, so `tools.allow` and `tools.deny` still name native tools. A native tool (`skill`, `subagent`, `task`, `exec`, `read_image`, `records`, `load_tool` and the rest, the late-built `transcript`, `transcripts`, `profile`, `profile_message` included) is always listed, called by its name, and `load_tool run <native tool>` answers `unknown_lazy_tool` ("is not a lazy tool of this profile").
+- **Breaking config change.** A profile whose `tools.lazy` names a native tool no longer loads: `paths.profiles.<name>.tools.lazy[<i>] "exec" is a native tool and cannot be lazy: tools.lazy takes MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (decide_systemone, web_search)`; `load_tool` keeps its own message (`... cannot be lazy: it is the tool that loads the others`). Fix: remove the native entries from `tools.lazy` (they stay in the tools array). `sample/schemes/profile.schema.json`'s lazy pattern is now `^(web_search|decide_systemone|mcp:...)$`, so an editor flags it too; a test pins schema and loader against every native name. The check on registered definitions (`checkLazyEntriesVisible`) also refuses a native entry, in case a definition reaches it some other way.
+- **Correction of the brief.** `*` and `mcp:*` were never valid `tools.lazy` entries (the loader refused them as "not a native tool", and `EntryMatches` never matched them); `*` is a `load_tool names` pattern only. Nothing was added: `load_tool names ["*"]` describes every bound lazy tool, which now means MCP and extension tools only (tests: `TestMatchStarSelectsOnlyBoundMCPAndExtensionTools`, `TestNativeToolStaysEagerBesideLazyExtensionAndMCPTools`).
+- **Removed.** `lazyLate` (late native tools are plain hooked tools), `NotLazyBindable`, the nested-subagent re-gate (`regateNestedSelf`; `nestedSelf` only hooks), and the native part of the lazy pass. The lazy pass in `buildNativeTools` stays for extension tools; MCP tools keep `GateLazyTools` and the children's `GateFor`.
+- **Text.** `load_tool`'s description (Go and `sample/tools/native/load_tool.json`), the `names` schema text, `setting.schema.json` (tools.native.load_tool), `agent.schema.json` and the profile schema's `lazy` text say it covers MCP and extension tools only.
+- **Tests.** Config refusal for every native name and acceptance of `web_search`, `decide_systemone`, `mcp:<server>:<tool>` and `mcp:<server>:*` (`TestProfileToolsRefusesANativeToolAsLazy`); `LazyEntryMatches`/`CanBeLazy`; a set handed native entries binds, gates and matches none (`TestANativeToolCanNeverBeLazy`, `TestGateForRefusesANativeToolWithABoundID`); late native tools, a child of a parent whose set is handed `profile_message`/`read_image`, and nested children keep native tools eager (`catalog_late_lazy_test.go`, `catalog_tool_hooks_test.go`, `subagent_depth_test.go`); an extension tool lazily listed, described and run through `load_tool`, with the tools array byte-identical (`TestLazyExtensionToolIsListedDescribedAndRunThroughLoadTool`); a native `skill` listed and called directly beside lazy tools; the `session` runner tests use MCP and extension targets. The `app` fixture gained `__web_search` (an extension `web_search` against a local searxng-style server). `catalog_filter_test.go` and `catalog_load_tool_test.go` needed no change.
+
+### No state file
+
+- `lazy_tools.json`, `lazyToolsState`, `LazyFingerprint`, `LazySet.Load`/`LoadAll`/`LoadMatches`/`Loaded` and the mutex are removed; `OpenLazySet(stateDir, ...)` became `NewLazySet(entries, summaryBytes, shown)`, which cannot fail and writes nothing. No file is created for a new session; an old `lazy_tools.json` is left where it is and never read. `Bind`, `Gate`, `GateFor`, `Entries`, `Match` and `SetLazy` stay. `tools.lazy` no longer needs a catalog layout (the state folder was its only reason), so a session without one opens a set like any other.
+- Tests that read the file now assert it does not exist (`requireNoLazyFile`, in the app, `profile_message` and remote subagent tests); `TestLazyLoadToolKeepsTheStateFileUnchanged` and the fingerprint, corrupt-file and reload tests went with the file.
+
+### MCP order
+
+- `toolsFromList` sorts each server's tools by name (stable, on a copy) before the deny list, duplicate and size checks; resource and prompt tools keep their fixed order after them. A server that lists in another order no longer changes the tools array. `TestToolsFromListSortsByNameWhateverTheServerOrder` encodes the array from a listing and its reverse and compares the bytes; with the sort removed it fails. Across servers the order is still the configured one.
+
+### Tools route
+
+- `GET /api/sessions/<ref>/tools` rows are `tools.RouteDefinition` (a `Definition` and `lazy`, omitted when false); `Catalog.RouteDefinitions()` lists the listed tools and the lazy ones in registry order, and `Resolver.ListTools` answers with it. `Tool.Lazy` (set by `WithLazyGate`) is the marker; it is not a field of `Definition`, and `ResponseTools` builds its own struct, so the provider payload is unchanged (`TestRouteDefinitionsMarkLazyToolsAndLeaveTheProviderArrayAlone` compares the array byte for byte against a catalog that never had the lazy tool; `TestToolsArrayIsByteIdenticalAcrossListDescribeAndRun` still holds). `hidden` is unchanged. The frontend type `ToolDefinition` gained an optional `lazy`; nothing reads it yet.
+
+### tool_smith scripts
+
+- `toolSmithBridge.handleFrame` dispatches with `ViaRunner` set, on a copy of the bridge's execution context and only there (`ForNested` still clears it). The gate is the allowlist (`byName`: `tools.native.tool_smith.tools`, minus `NativeToolSmithExcludedTools`, minus what the profile hides); `load_tool` stays excluded. So a script's call of a lazy extension tool it names runs; a lazy tool it does not name is refused as not allowed; the model's direct call is still refused (`TestToolSmithScriptRunsAnAllowlistedLazyExtensionToolOnly`; the mutation that drops `ViaRunner` fails it). Only extension tools can be reached: `tools.native.tool_smith.tools` still takes native and extension names, not MCP ids, as before T-102, so a lazy MCP tool is not reachable from a script and nothing was widened.
+
+### Refusal code
+
+- `tool_not_loaded` is now `lazy_tool_not_loaded` (producer in `tools/lazy.go`, the profile schema sentence, the design note, and every Go test that matched it). Nothing in the frontend or docs outside the repo notes consumed it. The older entries of this file keep the old name as history.
+
+### Race run
+
+- `go test -race -count=1 -timeout 25m ./internal/tools/native` ran the whole package once: exit 0, `ok ... 226.805s` (3:56 wall clock), on the final code of this change, so the old `-run` filter is no longer needed. The final verification also ran the other touched packages under `-race`.
+
+### Not closed
+
+- **Accuracy unmeasured (non-goal).** Whether models use list, describe, run as well as the old load-then-call flow cannot be measured without live models. The description and the refusal text are the only guidance. This is a decision not to measure it here, not a task left half done.
+- **`profile_message` and a remote subagent through a live second server** are still verified through the app fixtures only (a target profile and a remote subagent with their own lazy MCP tools, run through scripted providers). A live second server needs a deployment this suite does not have.
+- **A `load_tool run <exec>` is still judged as exec by the checkpoint.** `Catalog.ResolveCall` resolves the target by name in the catalog, so the checkpoint is taken for a `run` that the runner then refuses (a native tool is not lazy). It is the conservative direction (one extra snapshot, no lost one) and was not changed. Closing it would make `ResolveCall` skip a target that is not a lazy tool.

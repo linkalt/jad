@@ -173,7 +173,7 @@ func IsLazyPattern(name string) bool {
 // is the same whether or not the model uses the tool, and a provider's prompt cache is not
 // invalidated by a lazy tool. The model describes and runs it through load_tool, which dispatches
 // the call through the executing catalog with ExecutionContext.ViaRunner set. A call that is not
-// via the runner (the model naming the tool directly) is refused with tool_not_loaded, whatever its
+// via the runner (the model naming the tool directly) is refused with lazy_tool_not_loaded, whatever its
 // arguments: the check runs before the real schema, so the real schema is never run against a direct
 // call. A call via the runner runs through the real tool's own catalog, so validation and output
 // match an eager tool. The gate is applied to the raw tool, before the event hooks, so a refused call
@@ -182,6 +182,7 @@ func WithLazyGate(entry LazyEntry, _ *LazySet) Tool {
 	real := entry.Tool
 	gated := real
 	gated.Listed = func() bool { return false }
+	gated.Lazy = true
 	gated.Refused = func(execution ExecutionContext) bool { return !execution.ViaRunner }
 	// The real tool runs through a catalog of its own, so its validation against the real
 	// schema, its bound on the report and its output match what an eager tool would give.
@@ -190,7 +191,7 @@ func WithLazyGate(entry LazyEntry, _ *LazySet) Tool {
 		panic(fmt.Sprintf("lazy tool %s: %v", real.Definition.Name, err))
 	}
 	refused := func(execution ExecutionContext) string {
-		return ExecutionError(execution.CallID, StatusError, "tool_not_loaded",
+		return ExecutionError(execution.CallID, StatusError, "lazy_tool_not_loaded",
 			fmt.Sprintf("Tool %s is lazy: it is not called directly. Call %s with run %q and the tool's arguments in arguments; describe it first with %s names [%q]", real.Definition.Name, sessionfs.LoadToolName, real.Definition.Name, sessionfs.LoadToolName, real.Definition.Name),
 			Information{Key: "tool", Value: real.Definition.Name},
 			Information{Key: "run", Value: sessionfs.LoadToolName})

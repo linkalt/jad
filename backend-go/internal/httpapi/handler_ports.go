@@ -131,10 +131,11 @@ type SessionToolLister interface {
 // SessionTools is the answer of the session tools route. Tools is what the profile's
 // model sees. Hidden lists the registered tools the profile's tools.allow keeps from its
 // model; a sub-agent can still use them. Hidden is empty, and left out of the JSON, for a
-// profile without a tools block.
+// profile without a tools block. A row of Tools with lazy true is a lazy tool: the model does not
+// have it in its tools array and runs it through load_tool.
 type SessionTools struct {
-	Tools  []tools.Definition `json:"tools"`
-	Hidden []tools.Definition `json:"hidden,omitempty"`
+	Tools  []tools.RouteDefinition `json:"tools"`
+	Hidden []tools.Definition      `json:"hidden,omitempty"`
 }
 
 type SessionModelInfo struct {

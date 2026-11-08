@@ -4,8 +4,14 @@
 > tools array (so a load cannot change the provider's cached prefix). `load_tool` with no arguments lists,
 > with `names` describes (name, id, description, inputSchema), with `run` and `arguments` runs one lazy
 > tool by its exact name or `mcp:<server>:<tool>` through the executing catalog. A call that names a lazy
-> tool directly is refused (`tool_not_loaded`, pointing at `load_tool run`). The sections below that speak of
+> tool directly is refused (`lazy_tool_not_loaded`, pointing at `load_tool run`). The sections below that speak of
 > loading and of listing a loaded tool describe the previous behaviour; see `backend-go/DECISIONS.md`.
+>
+> **Superseded in part by T-103 (2026-11-09).** Only MCP tools and extension tools can be lazy; a native tool is
+> always listed, and a `tools.lazy` entry that names one fails the profile load. `lazy_tools.json`, the loaded
+> set and the fingerprint are gone: a lazy set keeps no file, so the sections below on the state file, on
+> loading, and on native lazy tools (including the late-built tools and a nested `subagent`) describe code that
+> no longer exists. The refusal code is now `lazy_tool_not_loaded`.
 
 Scope: `load_tool`, a native tool that lists a profile's lazy tools and shows, or loads, one of
 them by name. A lazy tool is absent from the tools array sent to the model until `load_tool` has
@@ -58,7 +64,7 @@ loaded it; after a load it is present with its real schema, from the next reques
   gating). The native pass binds its tools, gates the lazy ones, then wraps every native tool with
   its event hooks once. Subagent child catalogs are built from that gated list, so a child gets the
   owner's gate on its native lazy tools too: a child's call to an unloaded one is refused with
-  `tool_not_loaded`. The gate is one set for the owner and its children, so a load by either clears it.
+  `lazy_tool_not_loaded`. The gate is one set for the owner and its children, so a load by either clears it.
 - MCP lazy tools: `buildRegisteredCatalog` binds the MCP tools to the same set, gates the lazy ones,
   then applies `WithToolEventHooksAll`. The raw MCP list goes to `SubagentMCP.BindToolsets`. For each
   child, a session MCP tool is gated with the same set (`GateFor`) and then hooked with the owner's
@@ -73,7 +79,7 @@ loaded it; after a load it is present with its real schema, from the next reques
   batch rewrites that cache once, on the next request. Tools are added in place in catalog order and
   nothing is reordered, so only the request after a load pays this. The native and MCP entries are disjoint: an `mcp:` entry matches only MCP tools.
 - Order at call time: the loaded check, then the real schema, then the tool. An unloaded lazy call is
-  refused with `tool_not_loaded` whatever its arguments, and the real schema is never run against it.
+  refused with `lazy_tool_not_loaded` whatever its arguments, and the real schema is never run against it.
   The refusal runs inside the tool's own wrappers, so its pre_tool and post_tool hooks fire once, like
   any tool call. A loaded call is checked against the real schema as an eager tool would be.
 - The tools array is built per request: `Run` rebuilds the array in every round, and `ResponseTools`
@@ -130,7 +136,7 @@ loaded it; after a load it is present with its real schema, from the next reques
 
 ## Behaviour checked by tests
 
-- A refused call returns `tool_not_loaded` naming `load_tool`; a loaded call runs (native and MCP).
+- A refused call returns `lazy_tool_not_loaded` naming `load_tool`; a loaded call runs (native and MCP).
 - A refused call hands its wrappers the arguments the model sent, so a pre_tool command sees them. The
   arguments are not checked against the real schema, and a call whose arguments are not a JSON object
   gives its wrappers an empty map.
@@ -145,7 +151,7 @@ loaded it; after a load it is present with its real schema, from the next reques
 - A load result begins `Loaded. Available from the next request.`
 - A batch that matches nothing changes nothing: no write, no next-request sentence.
 - A call by name to an unloaded lazy tool (for example a name in history after a restart) gets
-  `tool_not_loaded`.
+  `lazy_tool_not_loaded`.
 - A restart over the same state folder restores the loaded set.
 - Each refused or loaded call fires its pre_tool hook exactly once, and a refused call also fires its
   post_tool hook. A refused call never runs the real tool. A child's refused call to an unloaded lazy session
@@ -157,12 +163,12 @@ loaded it; after a load it is present with its real schema, from the next reques
   stops it (`SubagentMCP.BindToolsets` hooks each child's session copy after the gate).
 - A denied tool stays out of the tools array; a lazy entry that the profile hides is a config error.
 - A child of a parent with lazy MCP tools gates its copy with the owner's set: an unloaded lazy MCP tool
-  is refused with `tool_not_loaded`, and the server does not run.
+  is refused with `lazy_tool_not_loaded`, and the server does not run.
 - A subagent child calls `load_tool` only when its owner has `tools.native.load_tool` and `tools.lazy`
   and the agent's tools list names it; its loads go to the owner's `lazy_tools.json`. A child of an owner
   without `tools.lazy` gets no `load_tool`, and its call is refused as `unknown_tool`.
 - A native lazy tool is gated for a child as well: a child's call to an unloaded one is refused with
-  `tool_not_loaded`, and the real schema is not run.
+  `lazy_tool_not_loaded`, and the real schema is not run.
 - `load_tool` is absent unless `tools.native.load_tool` is enabled, and the app never adds it.
 - `tools.lazy` without `tools.native.load_tool` is refused at load, and the error names both keys.
 - `tools.native.load_tool` with no `tools.lazy` is listed in the tools array and lists "No lazy tools.".

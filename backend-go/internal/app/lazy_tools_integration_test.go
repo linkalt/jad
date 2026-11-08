@@ -133,10 +133,10 @@ func TestLazyExtensionToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testin
 	if refused < 0 || ran < 0 {
 		t.Fatalf("the history lacks one of the two calls:\n%s", history)
 	}
-	if !strings.Contains(history[refused:ran], "tool_not_loaded") || !strings.Contains(history[refused:ran], "load_tool with run") {
+	if !strings.Contains(history[refused:ran], "lazy_tool_not_loaded") || !strings.Contains(history[refused:ran], "load_tool with run") {
 		t.Errorf("the direct call was not refused with the pointer to load_tool run:\n%s", history)
 	}
-	if strings.Contains(history[ran:], "tool_not_loaded") || !strings.Contains(history[ran:], "Lazy search hit") {
+	if strings.Contains(history[ran:], "lazy_tool_not_loaded") || !strings.Contains(history[ran:], "Lazy search hit") {
 		t.Errorf("the run did not run the tool:\n%s", history)
 	}
 	requireStableTools(t, parentRequests(f), "web_search")
@@ -153,7 +153,7 @@ func TestLazyMCPToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
 	f, calls := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if !strings.Contains(history, "tool_not_loaded") {
+	if !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("the direct MCP call was not refused:\n%s", history)
 	}
 	if calls.Load() != 2 || strings.Count(history, "MCP says answer is 99") != 2 {
@@ -212,14 +212,14 @@ func TestToolsArrayIsByteIdenticalAcrossListDescribeAndRun(t *testing.T) {
 }
 
 // Decider ruling (a): the loaded check runs before the real schema. An unloaded lazy native call
-// with arguments the real schema rejects is answered tool_not_loaded, not validation_failed, and
+// with arguments the real schema rejects is answered lazy_tool_not_loaded, not validation_failed, and
 // its pre_tool hook still fires once.
 func TestUnloadedLazyCallWithBadArgsIsRefusedBeforeValidation(t *testing.T) {
 	steps := []subagentStep{{"web_search", `{"query":5}`}}
 	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "web_search")
 	f.run(t)
 	history := lastRequestText(t, parentRequests(f))
-	if !strings.Contains(history, "tool_not_loaded") {
+	if !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("an unloaded call with bad args was not refused:\n%s", history)
 	}
 	if strings.Contains(history, "validation_failed") {
@@ -295,10 +295,10 @@ func TestLazyToolRunsThroughLoadToolAfterARestart(t *testing.T) {
 	if after < 0 {
 		t.Fatalf("the run after restart was not made:\n%s", history)
 	}
-	if strings.Contains(history[after:], "tool_not_loaded") || !strings.Contains(history[after:], "Lazy search hit") {
+	if strings.Contains(history[after:], "lazy_tool_not_loaded") || !strings.Contains(history[after:], "Lazy search hit") {
 		t.Errorf("the run was refused or did not run after restart:\n%s", history[after:])
 	}
-	if !strings.Contains(history, "tool_not_loaded") {
+	if !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("the direct call after restart was not refused:\n%s", history)
 	}
 }
@@ -342,7 +342,7 @@ func fires(t *testing.T, marker string) int {
 }
 
 // A refused lazy native call still fires its pre_tool hook, once per call, and then returns
-// tool_not_loaded. The hook is an ordinary tool-event hook, so refusal is visible to it.
+// lazy_tool_not_loaded. The hook is an ordinary tool-event hook, so refusal is visible to it.
 func TestRefusedLazyExtensionCallFiresItsHookOnce(t *testing.T) {
 	steps := []subagentStep{{"web_search", searchCall}}
 	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "web_search")
@@ -350,7 +350,7 @@ func TestRefusedLazyExtensionCallFiresItsHookOnce(t *testing.T) {
 	if got := fires(t, marker); got != 1 {
 		t.Fatalf("pre_tool fired %d times for one refused read, want 1", got)
 	}
-	if !strings.Contains(lastRequestText(t, parentRequests(f)), "tool_not_loaded") {
+	if !strings.Contains(lastRequestText(t, parentRequests(f)), "lazy_tool_not_loaded") {
 		t.Error("the call was not refused")
 	}
 }
@@ -485,7 +485,7 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 }
 
 // A child of a profile with tools.lazy gates its lazy MCP tools with the owning profile's set: its
-// call before a load is refused as tool_not_loaded, and the MCP server never runs.
+// call before a load is refused as lazy_tool_not_loaded, and the MCP server never runs.
 func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
@@ -500,7 +500,7 @@ func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 		t.Fatalf("child made %d requests", len(child))
 	}
 	history := child[len(child)-1].Text
-	if !strings.Contains(history, "tool_not_loaded") {
+	if !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("the child's call to the unloaded lazy tool was not refused:\n%s", history)
 	}
 	if calls.Load() != 0 {
@@ -508,7 +508,7 @@ func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	}
 }
 
-// A child of a profile with no tools.lazy gets the full, ungated definition: no tool_not_loaded,
+// A child of a profile with no tools.lazy gets the full, ungated definition: no lazy_tool_not_loaded,
 // and the real schema. The child's call with no "word" is rejected by the real schema as
 // validation_failed; a gate that did not check the real schema would have accepted it.
 func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
@@ -524,7 +524,7 @@ func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
 		t.Fatalf("child made %d requests", len(child))
 	}
 	history := child[len(child)-1].Text
-	if strings.Contains(history, "tool_not_loaded") {
+	if strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("the child was refused as a lazy tool:\n%s", history)
 	}
 	if !strings.Contains(history, "validation_failed") {
@@ -598,7 +598,7 @@ func TestLazyBatchOverTheLimitDescribesNothing(t *testing.T) {
 	if strings.Contains(history, "name: web_search") {
 		t.Errorf("a refused batch described a tool:\n%s", history)
 	}
-	if !strings.Contains(history, "tool_not_loaded") {
+	if !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("a direct call after a refused batch was not refused:\n%s", history)
 	}
 	requireNoLazyFile(t, f)
@@ -647,7 +647,7 @@ func TestLazyStarDescribesOnlyTheLazyToolsTheProfileListed(t *testing.T) {
 		t.Errorf("* did not describe read alone:\n%s", describe)
 	}
 	direct := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
-	if strings.Contains(direct, "tool_not_loaded") || calls.Load() != 1 {
+	if strings.Contains(direct, "lazy_tool_not_loaded") || calls.Load() != 1 {
 		t.Errorf("a tool the profile did not list as lazy was gated (MCP calls %d):\n%s", calls.Load(), direct)
 	}
 	if run := history[strings.Index(history, `"call_id":"call-step-3"`):]; !strings.Contains(run, "unknown_lazy_tool") {
@@ -686,7 +686,7 @@ func TestLazyPatternNeverDescribesOrRunsAToolTheProfileHides(t *testing.T) {
 		t.Errorf("the visible lazy tool is missing from the pattern output:\n%s", describe)
 	}
 	hiddenResult := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
-	if !strings.Contains(hiddenResult, "unknown_tool") || strings.Contains(hiddenResult, "tool_not_loaded") {
+	if !strings.Contains(hiddenResult, "unknown_tool") || strings.Contains(hiddenResult, "lazy_tool_not_loaded") {
 		t.Errorf("the hidden tool's call was not refused as unknown:\n%s", hiddenResult)
 	}
 	hiddenRun := history[strings.Index(history, `"call_id":"call-step-3"`):strings.Index(history, `"call_id":"call-step-4"`)]
@@ -773,7 +773,7 @@ func TestLazyMCPProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T) {
 	if len(child) < 2 {
 		t.Fatalf("child made %d requests", len(child))
 	}
-	if history := child[len(child)-1].Text; !strings.Contains(history, "tool_not_loaded") {
+	if history := child[len(child)-1].Text; !strings.Contains(history, "lazy_tool_not_loaded") {
 		t.Errorf("the child's call to the unloaded lazy MCP tool was not refused:\n%s", history)
 	}
 	if calls.Load() != 0 {

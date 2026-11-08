@@ -138,6 +138,10 @@ type Tool struct {
 	// the model sends does not depend on its use. Nil means always listed. It does not affect
 	// dispatch: a call by name still reaches the tool.
 	Listed func() bool
+	// Lazy marks a tool a lazy set gated (WithLazyGate): it is not in the tools array, and load_tool
+	// lists, describes and runs it. Only the tools route reads it (RouteDefinitions), so a client can
+	// show the tool as lazy; it is no part of Definition and never reaches the provider payload.
+	Lazy bool
 	// Refused, when set and true for a call, skips the argument checks (normalize and schema) so the
 	// call goes straight to the tool, whose own Execute refuses it. The refusal then runs inside the
 	// tool's wrappers, so its event hooks fire like any other call. A lazy tool refuses every call
@@ -284,6 +288,39 @@ func (c *Catalog) ListedDefinitions() []Definition {
 		definitions = append(definitions, definition)
 	}
 	return definitions
+}
+
+// RouteDefinition is one row of the tools route: a definition, and whether the tool is lazy. A
+// lazy tool is not in the tools array the model sees; the route lists it so a client can show it.
+type RouteDefinition struct {
+	Definition
+	Lazy bool `json:"lazy,omitempty"`
+}
+
+// RouteDefinitions returns the rows of the tools route, in the registry's stable order: the tools
+// that are listed now, as ListedDefinitions, and the lazy ones, marked lazy. It never changes what
+// ListedDefinitions or ResponseTools return.
+func (c *Catalog) RouteDefinitions() []RouteDefinition {
+	if c == nil {
+		return []RouteDefinition{}
+	}
+	rows := make([]RouteDefinition, 0, len(c.tools))
+	for _, tool := range c.tools {
+		if tool.Lazy {
+			rows = append(rows, RouteDefinition{Definition: cloneDefinition(tool.Definition), Lazy: true})
+			continue
+		}
+		if tool.Listed != nil && !tool.Listed() {
+			continue
+		}
+		rows = append(rows, RouteDefinition{Definition: cloneDefinition(tool.Definition)})
+	}
+	return rows
+}
+
+func cloneDefinition(definition Definition) Definition {
+	definition.InputSchema = append(json.RawMessage(nil), definition.InputSchema...)
+	return definition
 }
 
 // ResponseTools returns the function-tool objects accepted by the Responses

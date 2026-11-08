@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// sessionToolNames returns the names the session's tools endpoint lists for the profile.
-func sessionToolNames(t *testing.T, f subagentFixture) []string {
+// sessionToolRows returns the names the session's tools endpoint lists for the profile, split into the
+// tools the model sees and the lazy ones the route marks lazy.
+func sessionToolRows(t *testing.T, f subagentFixture) (eager, lazy []string) {
 	t.Helper()
 	status, body := f.sessionTools(t)
 	if status != 200 {
@@ -19,16 +20,27 @@ func sessionToolNames(t *testing.T, f subagentFixture) []string {
 	var listed struct {
 		Tools []struct {
 			Name string `json:"name"`
+			Lazy bool   `json:"lazy"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal([]byte(body), &listed); err != nil {
 		t.Fatalf("tools body %s: %v", body, err)
 	}
-	names := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
-		names = append(names, tool.Name)
+		if tool.Lazy {
+			lazy = append(lazy, tool.Name)
+		} else {
+			eager = append(eager, tool.Name)
+		}
 	}
-	return names
+	return eager, lazy
+}
+
+// sessionToolNames returns the names of the tools the model sees, which the route lists without a lazy mark.
+func sessionToolNames(t *testing.T, f subagentFixture) []string {
+	t.Helper()
+	eager, _ := sessionToolRows(t, f)
+	return eager
 }
 
 // load_tool is not added by the app: a profile without tools.native.load_tool has no load_tool. Its
@@ -89,7 +101,7 @@ func TestLoadToolIsListedWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestLazyRouteNeverListsALazyExtensionTool(t *testing.T) {
+func TestLazyRouteListsALazyExtensionToolAsLazyOnly(t *testing.T) {
 	steps := []subagentStep{runStep("web_search", searchCall)}
 	f, _ := lazyFixture(t, []string{"web_search"}, steps)
 	if names := sessionToolNames(t, f); slices.Contains(names, "web_search") || !slices.Contains(names, "load_tool") {
@@ -103,18 +115,20 @@ func TestLazyRouteNeverListsALazyExtensionTool(t *testing.T) {
 	}
 }
 
-func TestLazyRouteNeverListsALazyMCPTool(t *testing.T) {
+func TestLazyRouteListsALazyMCPToolAsLazyOnly(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{runStep("mcp:fixture:lookup", `{"word":"answer"}`)}
 	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	if names := sessionToolNames(t, f); slices.Contains(names, name) || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a run the route lists %v, want load_tool and no lazy %s", names, name)
-	}
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
-	if names := sessionToolNames(t, f); slices.Contains(names, name) {
-		t.Fatalf("after a run the route lists %v, want no lazy %s", names, name)
+	for _, when := range []string{"before", "after"} {
+		if when == "after" {
+			if body := f.run(t); !strings.Contains(body, "event: completed") {
+				t.Fatalf("run did not complete:\n%s", body)
+			}
+		}
+		eager, lazy := sessionToolRows(t, f)
+		if slices.Contains(eager, name) || !slices.Contains(eager, "load_tool") || !slices.Contains(lazy, name) {
+			t.Fatalf("%s a run the route lists %v and lazy %v, want load_tool eager and %s lazy", when, eager, lazy, name)
+		}
 	}
 }
 
@@ -156,11 +170,11 @@ func TestLazyExtensionToolIsListedDescribedAndRunThroughLoadTool(t *testing.T) {
 	if f.searchCalls.Load() != 1 {
 		t.Errorf("the search server saw %d requests, want 1: the run (the direct call is refused)", f.searchCalls.Load())
 	}
-	if !strings.Contains(history[strings.LastIndex(history, `"call_id":"call-step-4"`):], "tool_not_loaded") {
+	if !strings.Contains(history[strings.LastIndex(history, `"call_id":"call-step-4"`):], "lazy_tool_not_loaded") {
 		t.Errorf("the direct call of the lazy extension tool was not refused:\n%s", history)
 	}
-	if names := sessionToolNames(t, f); slices.Contains(names, "web_search") {
-		t.Errorf("the tools route lists the lazy extension tool: %v", names)
+	if eager, lazy := sessionToolRows(t, f); slices.Contains(eager, "web_search") || !slices.Contains(lazy, "web_search") {
+		t.Errorf("the tools route lists %v and lazy %v, want web_search as a lazy row only", eager, lazy)
 	}
 	requireNoLazyFile(t, f)
 }
@@ -178,7 +192,7 @@ func TestNativeToolStaysEagerBesideLazyExtensionAndMCPTools(t *testing.T) {
 	}
 	history := lastRequestText(t, parent)
 	call1 := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
-	if strings.Contains(call1, "tool_not_loaded") || !strings.Contains(call1, "the secret is 42") {
+	if strings.Contains(call1, "lazy_tool_not_loaded") || !strings.Contains(call1, "the secret is 42") {
 		t.Errorf("the direct call of the native skill did not run:\n%s", call1)
 	}
 	// "*" describes the lazy tools only: the extension and the MCP tool, never a native one.

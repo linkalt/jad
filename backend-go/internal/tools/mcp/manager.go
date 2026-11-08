@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -364,11 +365,26 @@ func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs
 	return append(loaded, features...), nil
 }
 
+// remoteToolName is the name a server gave a tool, empty for a missing entry.
+func remoteToolName(tool *mcpSDK.Tool) string {
+	if tool == nil {
+		return ""
+	}
+	return tool.Name
+}
+
 func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool) ([]tools.Tool, error) {
 	denied := make(map[string]struct{}, len(server.DenyTools))
 	for _, name := range server.DenyTools {
 		denied[name] = struct{}{}
 	}
+	// A server may list its tools in a different order from one discovery to the next. The tools
+	// go in the provider's tools array in this order, so they are sorted by name: the array's bytes,
+	// and the prompt cache over them, do not depend on the server's listing order.
+	remoteTools = slices.Clone(remoteTools)
+	slices.SortStableFunc(remoteTools, func(a, b *mcpSDK.Tool) int {
+		return strings.Compare(remoteToolName(a), remoteToolName(b))
+	})
 	seen := make(map[string]struct{}, len(remoteTools))
 	loaded := make([]tools.Tool, 0, len(remoteTools))
 	for _, remote := range remoteTools {

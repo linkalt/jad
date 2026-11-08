@@ -199,11 +199,11 @@ func TestLoadToolRunRefusesWhatIsNotOneExactLazyTool(t *testing.T) {
 func TestLazyToolDirectCallIsRefusedWithAPointerToLoadToolRun(t *testing.T) {
 	f := newRunnerFixture(t, sessionfs.HooksSettings{})
 	_, output := callEnvelope(t, f.catalog, "peek", `{}`, tools.ExecutionContext{})
-	if text := outputText(t, output); !strings.Contains(text, "tool_not_loaded") || !strings.Contains(text, "load_tool with run") {
+	if text := outputText(t, output); !strings.Contains(text, "lazy_tool_not_loaded") || !strings.Contains(text, "load_tool with run") {
 		t.Fatalf("a direct call = %s, want the refusal naming load_tool run", text)
 	}
 	_, output = callEnvelope(t, f.catalog, lookupName, `{"word":"x"}`, tools.ExecutionContext{})
-	if text := outputText(t, output); !strings.Contains(text, "tool_not_loaded") || f.lookup.count != 0 {
+	if text := outputText(t, output); !strings.Contains(text, "lazy_tool_not_loaded") || f.lookup.count != 0 {
 		t.Fatalf("a direct call of the MCP tool = %s (ran %d)", text, f.lookup.count)
 	}
 }

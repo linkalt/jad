@@ -267,7 +267,7 @@ func TestLazyGateRefusesADirectCallAndRunsAViaRunnerCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(direct), "tool_not_loaded") || !strings.Contains(string(direct), "load_tool with run") || ran != 0 {
+	if !strings.Contains(string(direct), "lazy_tool_not_loaded") || !strings.Contains(string(direct), "load_tool with run") || ran != 0 {
 		t.Fatalf("a direct call = %s (ran %d), want the refusal that points at load_tool run", direct, ran)
 	}
 	// Even a call that breaks the real schema is answered by the refusal, not by validation.
@@ -278,11 +278,66 @@ func TestLazyGateRefusesADirectCallAndRunsAViaRunnerCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(via), "tool_not_loaded") || !strings.Contains(string(via), "read it") || ran != 1 {
+	if strings.Contains(string(via), "lazy_tool_not_loaded") || !strings.Contains(string(via), "read it") || ran != 1 {
 		t.Fatalf("a via-runner call = %s (ran %d), want the tool's own result", via, ran)
 	}
 	invalid, _ := catalog.ExecuteFunctionCall(context.Background(), runnerCall("read", `{}`), ExecutionContext{ViaRunner: true})
 	if !strings.Contains(string(invalid), "validation_failed") || ran != 1 {
 		t.Fatalf("a via-runner call with bad arguments = %s, want the real schema's refusal and no run", invalid)
+	}
+}
+
+// The tools route lists a lazy tool, marked lazy, beside the eager ones; the provider's tools array holds the
+// eager ones only, byte for byte the same as a catalog that never had the lazy tool, and the lazy marker is no
+// part of Definition, so it cannot reach the payload.
+func TestRouteDefinitionsMarkLazyToolsAndLeaveTheProviderArrayAlone(t *testing.T) {
+	set := openSet(t, []string{"mcp:docs:search"}, 256)
+	eager := lazyTool(t, "native.bash", "native", "bash")
+	search := lazyTool(t, "mcp:docs:search", "mcp", "search")
+	fetch := lazyTool(t, "mcp:docs:fetch", "mcp", "fetch")
+	set.Bind([]Tool{search})
+	gated, ok := set.Gate(search)
+	if !ok {
+		t.Fatal("the set did not gate the lazy tool")
+	}
+	withLazy, err := NewCatalog([]Tool{eager, gated, fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := NewCatalog([]Tool{eager, fetch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := withLazy.ResponseTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := without.ResponseTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tools array has %d entries, want %d", len(got), len(want))
+	}
+	for index := range got {
+		if !bytes.Equal(got[index], want[index]) {
+			t.Errorf("tool %d differs from the catalog without the lazy tool:\n%s\n%s", index, got[index], want[index])
+		}
+	}
+	rows := withLazy.RouteDefinitions()
+	if len(rows) != 3 || rows[0].Lazy || !rows[1].Lazy || rows[1].ID != "mcp:docs:search" || rows[2].Lazy {
+		t.Fatalf("route rows = %+v, want bash, the lazy search, fetch in registry order", rows)
+	}
+	if listed := withLazy.ListedDefinitions(); len(listed) != 2 {
+		t.Fatalf("ListedDefinitions = %v, want the two eager tools", listed)
+	}
+	encoded, err := json.Marshal(search.Definition)
+	if err != nil || strings.Contains(string(encoded), "lazy") {
+		t.Fatalf("Definition encodes as %s (%v): the lazy flag must not be part of it", encoded, err)
+	}
+	eagerRow, _ := json.Marshal(rows[0])
+	lazyRow, _ := json.Marshal(rows[1])
+	if strings.Contains(string(eagerRow), `"lazy"`) || !strings.Contains(string(lazyRow), `"lazy":true`) {
+		t.Fatalf("rows encode as %s and %s", eagerRow, lazyRow)
 	}
 }

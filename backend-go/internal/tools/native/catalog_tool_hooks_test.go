@@ -133,7 +133,7 @@ func TestChildOfAParentNamingANativeToolLazyGetsItEager(t *testing.T) {
 		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
 	}
 	childRead := executeNamedCall(t, launcher.requests[0].Tools, "read_image", `{"path":"notes.png"}`)
-	if strings.Contains(childRead, "tool_not_loaded") {
+	if strings.Contains(childRead, "lazy_tool_not_loaded") {
 		t.Fatalf("the child's read_image was refused as lazy: %s", childRead)
 	}
 }
@@ -210,7 +210,7 @@ func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := executeNamedCall(t, catalog, "read_image", `{"path":"notes.png"}`)
-	if !strings.Contains(output, "tool_not_loaded") {
+	if !strings.Contains(output, "lazy_tool_not_loaded") {
 		t.Fatalf("output = %s, want the refusal", output)
 	}
 	if ran != 0 {

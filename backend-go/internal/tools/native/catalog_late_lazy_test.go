@@ -75,7 +75,7 @@ func TestLateNativeToolIsNeverLazy(t *testing.T) {
 			if len(set.Entries()) != 0 {
 				t.Fatalf("the set bound %v for the native tool %s", set.Entries(), name)
 			}
-			if direct := executeNamedCall(t, catalog, name, args); strings.Contains(direct, "tool_not_loaded") || strings.Contains(direct, "is lazy") {
+			if direct := executeNamedCall(t, catalog, name, args); strings.Contains(direct, "lazy_tool_not_loaded") || strings.Contains(direct, "is lazy") {
 				t.Fatalf("a direct call of the native tool %s was refused as lazy: %s", name, direct)
 			}
 			if via := executeThroughLoadTool(t, catalog, name, args); !strings.Contains(via, "is not a lazy tool of this profile") {
@@ -133,7 +133,7 @@ func TestChildOfAParentNamingProfileMessageLazyStillGetsItEager(t *testing.T) {
 		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
 	}
 	childCall := executeNamedCall(t, launcher.requests[0].Tools, "profile_message", `{"profile":"reviewer","message":"hi"}`)
-	if strings.Contains(childCall, "tool_not_loaded") {
+	if strings.Contains(childCall, "lazy_tool_not_loaded") {
 		t.Fatalf("the child's call to profile_message was refused as lazy: %s", childCall)
 	}
 	if messenger.target != "reviewer" {
@@ -175,7 +175,7 @@ func TestNestedChildHoldsNativeSubagentAndReadEager(t *testing.T) {
 		if name == "subagent" {
 			args = `{"task":"y","agent":"explore"}`
 		}
-		if got := executeNamedCall(t, child, name, args); strings.Contains(got, "tool_not_loaded") {
+		if got := executeNamedCall(t, child, name, args); strings.Contains(got, "lazy_tool_not_loaded") {
 			t.Fatalf("the nested child's direct call to %s was refused as lazy: %s", name, got)
 		}
 	}

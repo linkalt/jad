@@ -640,14 +640,21 @@ func TestNewHandlerValidatesToolStreamInterval(t *testing.T) {
 func TestSessionToolsRouteReturnsEffectiveDefinitionsForProfile(t *testing.T) {
 	resolver := &fakeToolLister{
 		fakeResolver: &fakeResolver{},
-		definitions: []tools.Definition{{
+		definitions: []tools.RouteDefinition{{Definition: tools.Definition{
 			ID:          "mcp.docs.search",
 			Source:      "mcp",
 			Server:      "docs",
 			Name:        "search",
 			Description: "Search documentation",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
-		}},
+		}}, {Definition: tools.Definition{
+			ID:          "mcp.docs.fetch",
+			Source:      "mcp",
+			Server:      "docs",
+			Name:        "fetch",
+			Description: "Fetch a page",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}, Lazy: true}},
 	}
 	handler := testHandler(t, resolver, Config{
 		APIToken:            testAPIToken,
@@ -670,6 +677,17 @@ func TestSessionToolsRouteReturnsEffectiveDefinitionsForProfile(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode tools response: %v", err)
 	}
+	// A lazy tool is a row with lazy true; an eager one has no lazy key at all.
+	var rows struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasLazy := rows.Tools[0]["lazy"]; len(rows.Tools) != 2 || hasLazy || rows.Tools[1]["lazy"] != true || rows.Tools[1]["id"] != "mcp.docs.fetch" {
+		t.Fatalf("tools rows = %v, want the eager row without lazy and the lazy row with lazy true", rows.Tools)
+	}
+	body.Tools = body.Tools[:1]
 	if len(body.Tools) != 1 || body.Tools[0].ID != "mcp.docs.search" || body.Tools[0].Server != "docs" || string(body.Tools[0].InputSchema) != `{"type":"object","properties":{"query":{"type":"string"}}}` {
 		t.Fatalf("tools response = %+v", body.Tools)
 	}
@@ -695,7 +713,7 @@ type fakeResolver struct {
 
 type fakeToolLister struct {
 	*fakeResolver
-	definitions []tools.Definition
+	definitions []tools.RouteDefinition
 	hidden      []tools.Definition
 	calls       [][2]string
 }
@@ -704,7 +722,7 @@ func (r *fakeToolLister) ListTools(_ context.Context, reference, profile string)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, [2]string{reference, profile})
-	return SessionTools{Tools: append([]tools.Definition(nil), r.definitions...), Hidden: r.hidden}, r.err
+	return SessionTools{Tools: append([]tools.RouteDefinition(nil), r.definitions...), Hidden: r.hidden}, r.err
 }
 
 func (r *fakeResolver) Resolve(_ context.Context, reference, profile, model string) (ResolvedSession, error) {

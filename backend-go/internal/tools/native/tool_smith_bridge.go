@@ -56,7 +56,8 @@ func (n *ToolSmithNested) Bind(available []tools.Tool, profile sessionfs.Profile
 
 // allowed is the native tools named in settings.Tools, in that order, minus the always
 // excluded ones and what the profile does not show the model (deny, or outside allow).
-// The lazy gate is already on each tool, so a lazy tool stays refused until it is loaded.
+// A lazy gate is already on each lazy tool; the bridge's dispatch is a runner's (ViaRunner), so a lazy
+// tool a script names runs, and one it does not name is not in the list at all.
 func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []tools.Tool {
 	if n == nil {
 		return nil
@@ -477,7 +478,13 @@ func (b *toolSmithBridge) handleFrame(line []byte) bridgeResponse {
 	if err != nil {
 		return bridgeFailure(id, "the call could not be encoded")
 	}
-	output, err := b.catalog.ExecuteFunctionCall(b.ctx, call, b.execution)
+	// The allowlist above (byName: the tools tools.native.tool_smith.tools names that the profile shows)
+	// is the gate, so a script's call is a runner's: a lazy tool in the list runs, as it did when a
+	// script could call a tool the model had loaded. A tool outside the list never gets here. Only this
+	// dispatch sets ViaRunner (ForNested clears it), and on a copy, so no other call inherits it.
+	execution := b.execution
+	execution.ViaRunner = true
+	output, err := b.catalog.ExecuteFunctionCall(b.ctx, call, execution)
 	response := bridgeResponse{ID: id, Info: map[string]any{}}
 	if err != nil {
 		response.Status = string(tools.StatusError)

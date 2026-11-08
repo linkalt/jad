@@ -615,7 +615,7 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 	if err != nil {
 		return httpapi.SessionTools{}, mapSessionError(err)
 	}
-	return httpapi.SessionTools{Tools: exposed.ListedDefinitions(), Hidden: hidden}, nil
+	return httpapi.SessionTools{Tools: exposed.RouteDefinitions(), Hidden: hidden}, nil
 }
 
 // buildToolCatalog is the catalog the profile's model sees: every registered tool, narrowed
