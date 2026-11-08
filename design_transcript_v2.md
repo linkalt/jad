@@ -21,7 +21,7 @@ messages.jsonl holds four kinds of items: user, assistant, tool (a `function_cal
     3.3 assistant: Done. I created…+310 bytes…tests pass.
 
 - user/assistant: the text, whitespace runs collapsed to one space (one line per step), cut to `preview_bytes`.
-- call: tool name, `ok`/`error` (the envelope `status` of the result: `ok` is ok, anything else error; `unknown` when it cannot be read; `no-result` when no result is in the file), result size in bytes, then the arguments as compact JSON: keys in full, each top-level value cut to `value_bytes` (a string is cut inside its quotes; an object/array value is cut as its compact text). Arguments that are not a JSON object are one value.
+- call: tool name, `ok`/`error` (the envelope `status` of the result: anything other than `ok` is error; a result without an envelope, including an empty one or content parts without a status, is ok; `no-result` when no result is in the file), result size in bytes, then the arguments as compact JSON: keys in full, each top-level value cut to `value_bytes` (a string is cut inside its quotes; an object/array value is cut as its compact text). Arguments that are not a JSON object are one value.
 - result: not listed (only the marker on the call line). Reasoning: nowhere.
 - Paging: at most `max_list_entries` steps and `response_max_bytes` per page; the cursor names the next (newest still unlisted) step, the byte range that was selected and the file identity; the next page continues toward older steps. The range end is fixed in the cursor, so steps appended between pages are never shown by it and never shift or duplicate the older pages. A page always holds at least one step.
 

@@ -55,7 +55,7 @@
             "type": "string"
           },
           "step": {
-            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which is returned oldest first. Step numbers come from the list. Not with turns, role, tool, search or context.",
+            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list, which starts at the newest step. Not with turns, role, tool, search or context.",
             "minLength": 1,
             "type": "string"
           },

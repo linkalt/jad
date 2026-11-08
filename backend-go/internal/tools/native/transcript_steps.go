@@ -182,14 +182,15 @@ func (w *transcriptWalk) result(record transcriptRecord) {
 }
 
 // transcriptResultStatus reads the status of a tool result envelope, whose first line is a JSON object
-// with a status; ok stays ok, any other status is an error, an unreadable one is unknown.
+// with a status; any status other than ok is an error. A result without an envelope (empty, plain text,
+// content parts) is ok, since the tool ran and recorded an output.
 func transcriptResultStatus(text string) string {
 	first, _, _ := strings.Cut(text, "\n")
 	var envelope struct {
 		Status string `json:"status"`
 	}
 	if json.Unmarshal([]byte(first), &envelope) != nil || envelope.Status == "" {
-		return "unknown"
+		return "ok"
 	}
 	if envelope.Status == "ok" {
 		return "ok"

@@ -240,7 +240,7 @@ func TestTranscriptListAndDetailReadWhileARunAppendsWithoutRaces(t *testing.T) {
 					t.Errorf("detail: %s", out)
 					return
 				}
-				if out := runTranscript(t, settings, path, map[string]any{"turns": "1"}); !strings.Contains(out, "1.2 call read unknown 2000B") {
+				if out := runTranscript(t, settings, path, map[string]any{"turns": "1"}); !strings.Contains(out, "1.2 call read ok 2000B") {
 					t.Errorf("list: %s", out)
 					return
 				}

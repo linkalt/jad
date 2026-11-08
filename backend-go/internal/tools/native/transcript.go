@@ -30,7 +30,7 @@ var transcriptInputSchema = json.RawMessage(`{
     "tool":{"type":"string","minLength":1,"description":"List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*)."},
     "search":{"type":"string","minLength":1,"description":"List mode: only steps whose whole text (a call's arguments and result too) contains this, case-insensitive; the line shows only the preview."},
     "context":{"type":"integer","minimum":0,"description":"With search: how many steps to list on each side of a match. Default 0."},
-    "step":{"type":"string","minLength":1,"description":"Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which is returned oldest first. Step numbers come from the list. Not with turns, role, tool, search or context."},
+    "step":{"type":"string","minLength":1,"description":"Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list, which starts at the newest step. Not with turns, role, tool, search or context."},
     "part":{"type":"string","enum":["call","result","both","reasoning"],"description":"With step: both (default) is a tool call and its result and the text of a message; call is the call and messages only, result the results only, reasoning the reasoning steps only (they are never listed)."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns, step or part."}
   },

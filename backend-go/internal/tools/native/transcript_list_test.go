@@ -127,13 +127,13 @@ func TestTranscriptMarksUnknownItemsAndUnreadableLinesAsSteps(t *testing.T) {
 	}
 }
 
-func TestTranscriptCallStatusReadsTheResultEnvelope(t *testing.T) {
+func TestTranscriptCallStatusIsOkUnlessTheEnvelopeSaysOtherwise(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("q"),
 		answerLine(1, 1, callItem("a", "t", `{}`), callItem("b", "t", `{}`), callItem("c", "t", `{}`)),
 		resultLine("a", envelope("ok", "x")), resultLine("b", envelope("timeout", "x")), resultLine("c", "plain text, no envelope"))
 	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
-	if !strings.HasPrefix(got[1], "1.1 call t ok ") || !strings.HasPrefix(got[2], "1.2 call t error ") || !strings.HasPrefix(got[3], "1.3 call t unknown 23B ") {
+	if !strings.HasPrefix(got[1], "1.1 call t ok ") || !strings.HasPrefix(got[2], "1.2 call t error ") || !strings.HasPrefix(got[3], "1.3 call t ok 23B ") {
 		t.Fatalf("lines = %q", got)
 	}
 }
@@ -374,5 +374,38 @@ func TestTranscriptRejectsTailWithAHint(t *testing.T) {
 	}
 	if hint := tool.RejectedProperties["tail"]; !strings.Contains(hint, "turns -N") {
 		t.Fatalf("hint = %q", hint)
+	}
+}
+
+func partsResultLine(id string, texts ...string) string {
+	parts := make([]any, 0, len(texts))
+	for _, text := range texts {
+		parts = append(parts, map[string]any{"type": "text", "text": text})
+	}
+	raw, _ := json.Marshal(map[string]any{"type": "function_call_output", "call_id": id, "output": parts})
+	return string(raw)
+}
+
+func TestTranscriptCallStatusOfResultsWithoutAnEnvelope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeTestTranscript(t, path, userLine("q"),
+		answerLine(1, 1, callItem("a", "t", `{}`), callItem("b", "t", `{}`), callItem("c", "t", `{}`), callItem("d", "t", `{}`)),
+		resultLine("a", ""), partsResultLine("b", "plain server text"),
+		partsResultLine("c", `{"status":"error","server":"s"}`), partsResultLine("d", `{"status":"ok"}`))
+	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	for index, want := range []string{"1.1 call t ok 0B ", "1.2 call t ok 17B ", "1.3 call t error ", "1.4 call t ok "} {
+		if !strings.HasPrefix(got[index+1], want) {
+			t.Fatalf("line %d = %q, want prefix %q", index+1, got[index+1], want)
+		}
+	}
+}
+
+func TestTranscriptCallWithoutArgumentsFieldIsOk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages.jsonl")
+	call := map[string]any{"type": "function_call", "call_id": "c", "name": "tool_name"}
+	writeTestTranscript(t, path, userLine("q"), answerLine(1, 1, call), resultLine("c", envelope("ok", "done")))
+	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	if len(got) != 2 || !strings.HasPrefix(got[1], "1.1 call tool_name ok ") || !strings.HasSuffix(got[1], " {}") || strings.Contains(got[1], "unknown") {
+		t.Fatalf("lines = %q", got)
 	}
 }

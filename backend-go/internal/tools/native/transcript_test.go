@@ -130,7 +130,7 @@ func TestTranscriptTurnRanges(t *testing.T) {
 		want      []string
 		not       []string
 	}{
-		{map[string]any{"turns": "1"}, []string{"1.0 user: first question", "1.2 call read unknown 9B {\"path\":\"a.go\"}", "1.3 assistant: first answer"}, []string{"second", "private musings", "package a", "1.1"}},
+		{map[string]any{"turns": "1"}, []string{"1.0 user: first question", "1.2 call read ok 9B {\"path\":\"a.go\"}", "1.3 assistant: first answer"}, []string{"second", "private musings", "package a", "1.1"}},
 		{map[string]any{"turns": "2-3"}, []string{"second answer", "third answer"}, []string{"first question", "first answer"}},
 		{map[string]any{"turns": "-2"}, []string{"second question", "third question"}, []string{"first question", "first answer"}},
 		{map[string]any{"turns": "2-"}, []string{"second question", "third answer"}, []string{"first question", "first answer"}},
