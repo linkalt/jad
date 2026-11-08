@@ -393,7 +393,7 @@ func (r *Resolver) ReadSessionSnapshot(ctx context.Context, reference, profile s
 	if err != nil {
 		return httpapi.CatalogResponse{}, fmt.Errorf("read session transcript %q: %w", location.Reference, err)
 	}
-	messages, page, err := r.readMessagePage(ctx, shared.store, index, options)
+	messages, page, err := r.readMessagePage(ctx, config, shared.store, index, options)
 	if err != nil {
 		return httpapi.CatalogResponse{}, err
 	}
@@ -414,7 +414,7 @@ func (r *Resolver) ReadSessionSnapshot(ctx context.Context, reference, profile s
 	return httpapi.CatalogResponse{Body: body, ETag: etag}, nil
 }
 
-func (r *Resolver) readMessagePage(ctx context.Context, store *transcript.TurnStore, index transcriptIndex, options httpapi.SnapshotOptions) ([]json.RawMessage, sessionPage, error) {
+func (r *Resolver) readMessagePage(ctx context.Context, config sessionfs.SessionConfig, store *transcript.TurnStore, index transcriptIndex, options httpapi.SnapshotOptions) ([]json.RawMessage, sessionPage, error) {
 	page := sessionPage{Generation: index.generation}
 	messages := make([]json.RawMessage, 0)
 	beforeIndex := len(index.starts)
@@ -481,7 +481,7 @@ func (r *Resolver) readMessagePage(ctx context.Context, store *transcript.TurnSt
 	if err != nil {
 		return nil, sessionPage{}, err
 	}
-	normalized = webui.CapMessages(normalized, r.catalog.MaxInlinePartBytes, nil)
+	normalized = webui.CapMessages(r.attachSubagentSnapshots(ctx, config, normalized), r.catalog.MaxInlinePartBytes, nil)
 	messages = make([]json.RawMessage, 0, len(normalized))
 	for _, message := range normalized {
 		encoded, err := json.Marshal(message)

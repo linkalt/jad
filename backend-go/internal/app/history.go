@@ -69,7 +69,7 @@ func (r *Resolver) historyResponse(ctx context.Context, config sessionfs.Session
 	if httpapi.ETagMatches(ifNoneMatch, etag) {
 		return httpapi.CatalogResponse{ETag: etag, NotModified: true}, nil
 	}
-	messages := webui.CapMessages(block.Messages, r.catalog.MaxInlinePartBytes, nil)
+	messages := webui.CapMessages(r.attachSubagentSnapshots(ctx, config, block.Messages), r.catalog.MaxInlinePartBytes, nil)
 	if messages == nil {
 		messages = []webui.Message{}
 	}
@@ -104,7 +104,7 @@ func (r *Resolver) ReadSessionMessage(ctx context.Context, reference, profile, m
 		}
 		for _, message := range block.Messages {
 			if message.ID == messageID {
-				return json.Marshal(message)
+				return json.Marshal(r.attachSubagentSnapshots(ctx, config, []webui.Message{message})[0])
 			}
 		}
 		return nil, &httpapi.StatusError{Code: 404, Message: "message not found"}
@@ -125,7 +125,7 @@ func (r *Resolver) ReadSessionMessage(ctx context.Context, reference, profile, m
 				// images are fetched by this cursor.
 				message.Cursor = cursor
 			}
-			return json.Marshal(message)
+			return json.Marshal(r.attachSubagentSnapshots(ctx, config, []webui.Message{message})[0])
 		}
 	}
 	return nil, &httpapi.StatusError{Code: 404, Message: "message not found"}

@@ -944,6 +944,34 @@ test('accepts a hosted_tool part and cited text, and drops a message whose hoste
   assert.deepEqual(parts, ['good:0:ws_2']);
 });
 
+test('a malformed subagent snapshot is dropped from a tool result that stays, a valid one is kept', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const snapshot = {agent: 'explore', steps: [{id: '1.1', status: 'completed', parts: [{type: 'text', text: 'child'}]}]};
+  const result = subagent => ({type: 'tool_result', callId: 'c', output: 'ok', status: 'success', ...(subagent === undefined ? {} : {subagent})});
+  const withPart = (id, part) => ({id, sender: 'assistant', status: 'streaming', text: 'x', timestamp: 't', parts: [part]});
+  responses.push(streamResponse([
+    {event: 'run', data: run},
+    {event: 'ui.message', data: {message: withPart('ok', result(snapshot))}},
+    {event: 'ui.message', data: {message: withPart('bad-steps', result({steps: 'no'}))}},
+    {event: 'ui.message', data: {message: withPart('bad-step', result({steps: [null]}))}},
+    {event: 'ui.message', data: {message: withPart('bad-part', result({steps: [{id: '1', status: 'completed', parts: [{type: 'text'}]}]}))}},
+    {event: 'ui.part', data: {id: 'ok', index: 1, part: result({agent: 3, steps: []})}},
+    {event: 'completed', data: {message: message('complete', 'done'), committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  const parts = [];
+  await streamSessionRun('session-1', 'hello', {
+    onMessage: value => seen.push([value.id, value.parts[0].subagent]),
+    onPart: (id, index, part) => parts.push(part),
+  });
+  assert.deepEqual(seen, [['ok', snapshot], ['bad-steps', undefined], ['bad-step', undefined], ['bad-part', undefined]]);
+  assert.deepEqual(parts, [result()]);
+  assert.equal('subagent' in parts[0], false);
+});
+
 test('an async_state event reaches the caller as counts, and a malformed one or an unknown event is ignored', async () => {
   requests.length = 0;
   responses.length = 0;

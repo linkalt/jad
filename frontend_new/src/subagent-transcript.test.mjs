@@ -24,3 +24,10 @@ test('only completed steps with parts are kept, in order', () => {
   });
   assert.deepEqual(steps.map(step => step.id), ['a', 'f']);
 });
+
+test('a malformed snapshot shows nothing instead of throwing', () => {
+  assert.deepEqual(completedSubagentSteps({steps: 'no'}), []);
+  assert.deepEqual(completedSubagentSteps({steps: [null]}), []);
+  assert.deepEqual(completedSubagentSteps({agent: 3, steps: [{id: 'a', status: 'completed', parts: text('x')}]}), []);
+  assert.deepEqual(completedSubagentSteps({steps: [{id: 'a', status: 'completed', parts: [{type: 'text'}]}]}), []);
+});

@@ -132,7 +132,7 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 			return emitter.push(message)
 		},
 		OnToolResult: func(item json.RawMessage) {
-			publishToolResult(run, normalizedRun, emitter, item, logger)
+			publishToolResult(run, normalizedRun, emitter, item, runner, logger)
 		},
 	})
 	// A run that failed before the session runner took its queue (a blocked prompt, a model
@@ -200,6 +200,12 @@ func publishRunUsage(run *activeRun, runner RunSession, ctx context.Context, met
 	if err := run.publish("usage", payload); err != nil {
 		logger.Warn("failed to publish usage summary", slog.Any("error", err))
 	}
+}
+
+// subagentSnapshotter is implemented by a run session that can show the completed steps of
+// a subagent's child. A session without one publishes subagent results as they are.
+type subagentSnapshotter interface {
+	SubagentSnapshot(webui.SubagentCall) *webui.SubagentSnapshot
 }
 
 // runErrorRecorder is implemented by a run session that keeps failed runs in a
@@ -323,10 +329,22 @@ func abortReason(ctx context.Context) string {
 // publishToolResult shows a tool result the runner just settled: its inline images are kept
 // for the live image route first, then the message part that counts them is published. One
 // projection serves both, so the images are kept under the call id the part reports.
-func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *messageStreamEmitter, item json.RawMessage, logger *slog.Logger) {
+//
+// The result of a subagent call also carries the steps its child has completed: a
+// synchronous call settles after the child ended, so they are all there; a call that left
+// the child running gets those written so far, and the open message does not change as
+// the child goes on (a later history read shows the rest).
+func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *messageStreamEmitter, item json.RawMessage, runner RunSession, logger *slog.Logger) {
 	part, ok := streaming.ProjectToolResult(item)
 	if !ok {
 		return
+	}
+	if snapshotter, ok := runner.(subagentSnapshotter); ok {
+		if call, isCall := streaming.ToolCall(part.CallID); isCall {
+			if described, isSubagent := webui.SubagentCallOf(call, part); isSubagent {
+				part.Subagent = snapshotter.SubagentSnapshot(described)
+			}
+		}
 	}
 	run.keepLiveImages(item, part)
 	if err := emitter.push(streaming.AddToolResultPart(part)); err != nil {

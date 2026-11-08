@@ -26,8 +26,8 @@ func TestToolResultImagesAreKeptUnderTheCallIDTheMessageShows(t *testing.T) {
 	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{7}, 24)...)
 	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 
-	publishToolResult(run, streaming, emitter, json.RawMessage(`{"type":"function_call_output","call_id":"first","output":"text"}`), nil)
-	publishToolResult(run, streaming, emitter, json.RawMessage(`{"type":"function_call_output","output":[{"type":"input_image","image_url":"`+url+`"},{"type":"input_image","image_url":"`+url+`"}]}`), nil)
+	publishToolResult(run, streaming, emitter, json.RawMessage(`{"type":"function_call_output","call_id":"first","output":"text"}`), nil, nil)
+	publishToolResult(run, streaming, emitter, json.RawMessage(`{"type":"function_call_output","output":[{"type":"input_image","image_url":"`+url+`"},{"type":"input_image","image_url":"`+url+`"}]}`), nil, nil)
 
 	if len(published) != 2 {
 		t.Fatalf("published %d messages, want 2", len(published))

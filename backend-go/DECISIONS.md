@@ -2346,4 +2346,32 @@ T-110 (frontend only). No payload carried a subagent's steps: the native subagen
                      {"type":"tool_call","callId":"…","name":"…","arguments":"{…}"}]}]}}
 ```
 
-`agent` is optional. `steps[].status` must be `completed` for a step to render; any other value (`running`, `pending`, …) is ignored, as are steps with no parts. `parts` use the existing webui part shapes; only text, reasoning and tool_call parts render (tool_result parts inside a step are accepted but not shown). The snapshot is one-shot: no streaming, no polling. A malformed `subagent` makes the frontend reject the part like any other malformed part, so emit it only when well-formed. Also open: no real-browser check; `npm run build` not run.
+`agent` is optional. `steps[].status` must be `completed` for a step to render; any other value (`running`, `pending`, …) is ignored, as are steps with no parts. `parts` use the existing webui part shapes; only text, reasoning and tool_call parts render (tool_result parts inside a step are accepted but not shown). The snapshot is one-shot: no streaming, no polling. A malformed `subagent` is dropped by the frontend and the `tool_result` part stays (T-111). Also open: no real-browser check; `npm run build` not run.
+
+## Subagent snapshot on the tool_result part: how it is built and what is still open (Go, 2026-05-20)
+
+T-111. The backend now emits the `subagent` field T-110 documented, from the child's own `messages.jsonl`.
+
+**Where.** `webui.Part.Subagent` (`*SubagentSnapshot{agent, steps[{id,status:"completed",parts}]}`, shared and never edited after it is built). `webui/subagent_snapshot.go` holds the pure part: `SubagentBuilder` (one `response.completed` line is one step, normalized by `NormalizeTranscript`, so no second transcript parser), `AttachSubagents`, `SubagentCallOf`, and the caps. `app/subagent_snapshot.go` reads the file, resolves the folder and caches. Replay attaches in `readMessagePage`, `historyResponse` and `ReadSessionMessage`, after normalizing and before `CapMessages`; live attaches in `publishToolResult` through the `subagentSnapshotter` interface that `boundRunner` implements.
+
+**Discriminator.** The tool name of the sibling `tool_call` part, `subagent` or `native.subagent`. `profile_message` prints the same `transcript:` line and never gets the field. A result with no tool_call part (orphan) gets none.
+
+**Resolution.** The folder `<storage_dir>/<sanitised call id>-<8 hex>` is found by name, because the 8 hex characters are random and a manifest is keyed by `sub_...`, not by call id. If no folder or more than one carries the call id, the `transcript:` line of the result is used. Either way the path is resolved with `EvalSymlinks` and must be `messages.jsonl` in a folder directly under the real storage dir, never `.runs`; anything else gives no field and no error. The storage dir is the session config's `tools.native.subagent.storage_dir`, so a call made under another profile's storage is not found.
+
+**Caps** (`webui.DefaultSubagentLimits`, `app.defaultSubagentSnapshotLimits`): 32 steps (the first ones; the scan stops there), 12 parts per step, 2048 bytes per text/reasoning/arguments (cut at a UTF-8 boundary, marked with `truncated.bytes`), 48 KiB of text in all, lines over 1 MiB skipped, 16 MiB scanned at most. `CapMessages` also cuts snapshot text to `max_inline_part_bytes` and gives the message its cursor. Only text, reasoning and tool_call parts are kept; a response whose `status` is present and not `completed` adds no step; an incomplete last line is never read.
+
+**Cache.** Process-wide LRU of 256 snapshots keyed by storage dir, call id, agent and transcript hint. A found transcript is valid while its size and mtime are unchanged; a missing one is remembered while the storage dir's mtime is unchanged. A hit costs one stat.
+
+**Measured** (Ryzen 5 3600, `go test -bench SubagentSnapshot ./internal/app`): a 7-round child with 14 KB results, 252 us cold, 1.6 us cached; a 40 MB hostile child 2.9 ms (stops at the scan cap). The real child of call `toolu_011fhsQnew2oxCCw45f8GbbB` gives 7 steps, 8.8 KB of JSON, 0.9 ms cold.
+
+**Cost on other paths.** Fork (`messageTurnCursor`) and the inline image route call `NormalizeTranscript` and never attach: no cost. The snapshot, history and one-message routes pay one stat per subagent tool result when warm, and one folder listing plus one bounded read when cold.
+
+Still open:
+
+- The limits are constants, not server settings (no `sample/schemes` key). Closing it needs a `server.*` block with defaults and tests.
+- A child still running when a result is served (a background call, `block_ms: 0`) shows the steps written so far. The live message does not change as the child goes on, and the snapshot and history ETags come from the parent's files, so a browser holding them gets 304 and does not see later steps until the parent changes. An open panel needs a history refetch. Closing it needs the child's stamp in the ETag, or an event.
+- A child that compacted its own transcript shows only the steps still in the file.
+- A call id carried by two folders gives no field unless the result's `transcript:` line names one.
+- A remote subagent (`subagent_remote.go`) has no local transcript and gets none.
+- The live snapshot is read synchronously inside `publishToolResult`, on the runner's tool-result callback; it is bounded (about 1 ms real, 3 ms worst case) but not asynchronous.
+- Not checked in a real browser or against the running server (it was not restarted).

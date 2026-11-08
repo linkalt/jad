@@ -254,6 +254,20 @@ func (r *StreamingRun) ProjectToolResult(raw json.RawMessage) (Part, bool) {
 	return ToolResultPart(raw, len(r.parts))
 }
 
+// ToolCall is the newest tool_call part the run shows for callID, which tells a caller
+// which tool a result belongs to: the persisted result item carries no tool name.
+func (r *StreamingRun) ToolCall(callID string) (Part, bool) {
+	if r == nil || callID == "" {
+		return Part{}, false
+	}
+	for index := len(r.parts) - 1; index >= 0; index-- {
+		if part := r.parts[index]; part.Type == "tool_call" && part.CallID == callID {
+			return part, true
+		}
+	}
+	return Part{}, false
+}
+
 // AddToolResultPart appends a part ProjectToolResult returned.
 func (r *StreamingRun) AddToolResultPart(part Part) Message {
 	if r == nil {

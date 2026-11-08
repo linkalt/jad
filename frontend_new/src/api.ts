@@ -1550,6 +1550,14 @@ function isWebUiSubagentTranscript(value: unknown): value is WebUiSubagentTransc
   );
 }
 
+/**
+ * The subagent snapshot of a tool result when it is well formed, otherwise `undefined`.
+ * Snapshots and history are not validated as a whole, so the renderer checks it too.
+ */
+export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript | undefined {
+  return isWebUiSubagentTranscript(value) ? value : undefined;
+}
+
 function isWebUiPart(value: unknown): value is WebUiPart {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
@@ -1587,6 +1595,10 @@ function isWebUiPart(value: unknown): value is WebUiPart {
     );
   }
   if (value.type === 'tool_result') {
+    // The snapshot is optional extra data: a malformed one is dropped and the result stays.
+    if (value.subagent !== undefined && !isWebUiSubagentTranscript(value.subagent)) {
+      delete value.subagent;
+    }
     return (
       typeof value.callId === 'string' &&
       typeof value.output === 'string' &&
@@ -1596,8 +1608,7 @@ function isWebUiPart(value: unknown): value is WebUiPart {
       (value.inlineImages === undefined ||
         (typeof value.inlineImages === 'number' &&
           Number.isInteger(value.inlineImages) &&
-          value.inlineImages >= 0)) &&
-      (value.subagent === undefined || isWebUiSubagentTranscript(value.subagent))
+          value.inlineImages >= 0))
     );
   }
   return false;

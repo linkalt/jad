@@ -6,7 +6,7 @@ import (
 )
 
 func TestPartsEqualCoversEveryPartField(t *testing.T) {
-	want := []string{"Type", "Text", "CallID", "Name", "Arguments", "Output", "Status", "Target", "Raw", "Citations", "Images", "InlineImages", "Files", "Partial", "Truncated"}
+	want := []string{"Type", "Text", "CallID", "Name", "Arguments", "Output", "Status", "Target", "Raw", "Citations", "Images", "InlineImages", "Files", "Partial", "Truncated", "Subagent"}
 	partType := reflect.TypeOf(Part{})
 	if partType.NumField() != len(want) {
 		t.Fatalf("Part has %d fields, partsEqual covers %d: compare the new field in partsEqual and update this list", partType.NumField(), len(want))
@@ -47,6 +47,14 @@ func partVariants() []Part {
 		{Truncated: &PartTruncation{Bytes: 5}},
 		{Truncated: &PartTruncation{Bytes: 5}},
 		{Type: "tool_call", CallID: "c", Name: "n", Arguments: str("{"), Partial: true},
+		{Subagent: &SubagentSnapshot{}},
+		{Subagent: &SubagentSnapshot{Steps: []SubagentStep{}}},
+		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}},
+		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}},
+		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "y"}}}}}},
+		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{}}}}},
+		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "running"}}}},
+		{Subagent: &SubagentSnapshot{Agent: "b", Steps: []SubagentStep{{ID: "1", Status: "running"}}}},
 	}
 }
 
