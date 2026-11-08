@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
-	"time"
 
 	"jad/backend-go/internal/imagestore"
 )
@@ -44,14 +44,28 @@ func growTranscript(t *testing.T, f *heldResetFixture, session string, turns, li
 	return info.Size()
 }
 
-// allocatedBy reports the highest live heap above the starting one while call ran, with the
-// collector run after every 5% of growth so garbage does not count.
-func allocatedBy(call func()) uint64 {
-	defer debug.SetGCPercent(debug.SetGCPercent(5))
-	runtime.GC()
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	base, peak := stats.HeapAlloc, stats.HeapAlloc
+// retainedBy reports the highest retained heap above the starting one while call ran.
+// A sample is the lowest HeapAlloc of three forced collections in a row: what a collection
+// leaves is what is reachable plus the garbage the running fork allocated while it marked
+// (floating garbage), and the lowest of three drops that, whose size follows the CPU the
+// collector gets and so the load of the machine. The collector runs at GOGC=1 meanwhile,
+// so the fork cannot out-allocate a collection by more than a sliver. A fork that buffers
+// a transcript keeps it reachable until it returns, so every sample sees it; a line buffer
+// a streaming fork drops at once may fall between samples, which is fine: it is not held.
+func retainedBy(call func()) uint64 {
+	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	live := func() uint64 {
+		low := uint64(math.MaxUint64)
+		for range 3 {
+			runtime.GC()
+			var stats runtime.MemStats
+			runtime.ReadMemStats(&stats)
+			low = min(low, stats.HeapAlloc)
+		}
+		return low
+	}
+	base := live()
+	peak := base
 	done := make(chan struct{})
 	sampled := make(chan uint64)
 	go func() {
@@ -62,10 +76,7 @@ func allocatedBy(call func()) uint64 {
 				return
 			default:
 			}
-			var stats runtime.MemStats
-			runtime.ReadMemStats(&stats)
-			peak = max(peak, stats.HeapAlloc)
-			time.Sleep(100 * time.Microsecond)
+			peak = max(peak, live())
 		}
 	}()
 	call()
@@ -81,22 +92,22 @@ func TestForkHoldsATurnInMemoryNotTheTranscript(t *testing.T) {
 	close(f.release)
 	f.runTurn("local:one", "first")
 	size := growTranscript(t, f, "one", 32, 512*1024)
-	source := f.transcript("one")
 	ids, _ := f.userMessages("local:one")
-	whole := allocatedBy(func() {
+	whole := retainedBy(func() {
 		if status, body := f.call(http.MethodPost, "/api/sessions/local:one/fork?profile=dev/coder", `{"session":"local:copy"}`); status != http.StatusCreated || !strings.Contains(body, `"turns":33`) {
 			t.Fatalf("whole fork: %d %s", status, body)
 		}
 	})
-	byMessage := allocatedBy(func() {
+	byMessage := retainedBy(func() {
 		if status, body := f.call(http.MethodPost, "/api/sessions/local:one/fork?profile=dev/coder", `{"session":"local:msg","message_id":"`+ids[len(ids)-1]+`","keep_turn":false}`); status != http.StatusCreated || !strings.Contains(body, `"turns":32`) {
 			t.Fatalf("message fork: %d %s", status, body)
 		}
 	})
-	t.Logf("transcript %d bytes; peak live heap of the whole fork %d, of the message fork %d", size, whole, byMessage)
+	t.Logf("transcript %d bytes; peak retained heap of the whole fork %d, of the message fork %d", size, whole, byMessage)
 	if limit := uint64(size / 2); whole > limit || byMessage > limit {
 		t.Fatalf("fork peak heap %d (whole) and %d (by message) for a %d byte transcript; want both under %d", whole, byMessage, size, limit)
 	}
+	source := f.transcript("one")
 	if !bytes.Equal(f.transcript("copy"), source) {
 		t.Fatal("the whole fork is not a byte copy of the source transcript")
 	}
