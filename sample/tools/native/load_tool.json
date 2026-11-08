@@ -5,7 +5,7 @@
       "id": "native.load_tool",
       "source": "native",
       "name": "load_tool",
-      "description": "List the lazy tools (name and one-line summary), or load the named lazy tools in one call. A loaded tool is in your tool list, with its full definition, from your next request; a call to a lazy tool before it is loaded is refused. Loading a tool does not enable it.",
+      "description": "Lazy tools are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -13,11 +13,21 @@
             "type": "array",
             "minItems": 1,
             "uniqueItems": true,
-            "description": "Tool names or tools.lazy-style patterns of the lazy tools to load, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Omit names to list the lazy tools. Each pattern is limited to lazy tools; the total of matched tools is limited by the profile's tools.lazy_load_max.",
+            "description": "Describe lazy tools: their tool names or tools.lazy-style patterns, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Returns each tool's name, id, description and inputSchema. Omit names and run to list the lazy tools. The total of matched tools is limited by the profile's tools.lazy_load_max. Not together with run.",
             "items": {
               "type": "string",
               "minLength": 1
             }
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Run one lazy tool: its exact tool name or mcp:<server>:<tool>, no pattern. Give its arguments in arguments, as its inputSchema says (see names). Not together with names."
+          },
+          "arguments": {
+            "type": "object",
+            "description": "The arguments of the tool named in run. Defaults to {}. Used only with run.",
+            "default": {}
           }
         },
         "additionalProperties": false

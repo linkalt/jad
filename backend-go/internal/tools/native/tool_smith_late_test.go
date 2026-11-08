@@ -59,13 +59,13 @@ func runScriptThroughCatalog(t *testing.T, catalog *tools.Catalog, root string, 
 }
 
 // A script can name a late tool the profile allows. A denied late tool is refused as not allowed, and a lazy
-// late tool is refused before the owner's set loads it.
+// late tool is refused: a script is not a runner (load_tool is excluded from it), so its calls never run a lazy tool.
 func TestToolSmithScriptReachesAnAllowedLateToolOnly(t *testing.T) {
 	root := shortTempDir(t)
 	catalog, set := lateToolSmithCatalog(t, root, []string{"read_image", "profile", "transcript"}, nil, []string{"transcript"}, []string{"profile"})
 	before := runScriptThroughCatalog(t, catalog, root, "profile", "transcript")
-	if !strings.Contains(before, "profile:error:Tool profile is lazy and not loaded yet") {
-		t.Fatalf("the lazy late tool profile was not refused before load: %s", before)
+	if !strings.Contains(before, "profile:error:Tool profile is lazy") {
+		t.Fatalf("the lazy late tool profile was not refused: %s", before)
 	}
 	if !strings.Contains(before, "transcript") || !strings.Contains(before, "not allowed") {
 		t.Fatalf("the denied late tool transcript was not refused as not allowed: %s", before)
@@ -74,8 +74,8 @@ func TestToolSmithScriptReachesAnAllowedLateToolOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := runScriptThroughCatalog(t, catalog, root, "profile")
-	if strings.Contains(after, "tool_not_loaded") || strings.Contains(after, "not allowed") {
-		t.Fatalf("the loaded allowed late tool profile was still refused: %s", after)
+	if !strings.Contains(after, "profile:error:Tool profile is lazy") || strings.Contains(after, "not allowed") {
+		t.Fatalf("a script's call of the lazy profile tool must stay refused as lazy, whatever the set holds: %s", after)
 	}
 }
 
@@ -98,21 +98,21 @@ func TestToolSmithScriptReachesOnlyWhatTheAllowListShows(t *testing.T) {
 	}
 }
 
-// The lazy gate still applies to an allowed tool: a late tool that allow shows but the owner has not loaded
-// is refused as not loaded, and runs once it is loaded.
-func TestToolSmithAllowedLazyLateToolWaitsForLoad(t *testing.T) {
+// The lazy gate still applies to an allowed tool: a late tool that allow shows but that is lazy is refused to a
+// script, whatever the set holds, because a script's call is not a runner's.
+func TestToolSmithAllowedLazyLateToolStaysRefused(t *testing.T) {
 	root := shortTempDir(t)
 	catalog, set := lateToolSmithCatalog(t, root, []string{"profile"}, []string{"tool_smith", "profile"}, nil, []string{"profile"})
 	before := runScriptThroughCatalog(t, catalog, root, "profile")
-	if !strings.Contains(before, "profile:error:Tool profile is lazy and not loaded yet") {
-		t.Fatalf("the allowed lazy profile was not refused before load: %s", before)
+	if !strings.Contains(before, "profile:error:Tool profile is lazy") {
+		t.Fatalf("the allowed lazy profile was not refused: %s", before)
 	}
 	if err := set.Load("profile"); err != nil {
 		t.Fatal(err)
 	}
 	after := runScriptThroughCatalog(t, catalog, root, "profile")
-	if strings.Contains(after, "lazy and not loaded") || strings.Contains(after, "not allowed") {
-		t.Fatalf("the loaded allowed lazy profile was still refused: %s", after)
+	if !strings.Contains(after, "profile:error:Tool profile is lazy") || strings.Contains(after, "not allowed") {
+		t.Fatalf("the allowed lazy profile ran for a script: %s", after)
 	}
 }
 

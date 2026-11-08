@@ -204,6 +204,9 @@ func roundChangesWorkspace(catalog *tools.Catalog, calls []json.RawMessage, run 
 		}
 	}
 	for _, call := range toRun {
+		// A call a runner tool (load_tool run) makes is judged as the tool it runs: a run of
+		// exec takes the checkpoint like exec, and a run of an MCP tool is judged by its source.
+		call = catalog.ResolveCall(call)
 		// A plan-mode guarded tool runs only its calls that change no file; the others are
 		// refused before they start, so neither kind needs a checkpoint. A tool an allow
 		// entry keeps whole is not guarded and still counts.

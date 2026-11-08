@@ -1,5 +1,12 @@
 # Design: lazy tool loading (load_tool)
 
+> **Superseded in part by T-102 (2026-11-08).** `load_tool` is now a runner: a lazy tool is never in the
+> tools array (so a load cannot change the provider's cached prefix). `load_tool` with no arguments lists,
+> with `names` describes (name, id, description, inputSchema), with `run` and `arguments` runs one lazy
+> tool by its exact name or `mcp:<server>:<tool>` through the executing catalog. A call that names a lazy
+> tool directly is refused (`tool_not_loaded`, pointing at `load_tool run`). The sections below that speak of
+> loading and of listing a loaded tool describe the previous behaviour; see `backend-go/DECISIONS.md`.
+
 Scope: `load_tool`, a native tool that lists a profile's lazy tools and shows, or loads, one of
 them by name. A lazy tool is absent from the tools array sent to the model until `load_tool` has
 loaded it; after a load it is present with its real schema, from the next request. Config:

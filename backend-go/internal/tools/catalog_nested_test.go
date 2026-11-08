@@ -26,6 +26,9 @@ func filledExecutionContext(t *testing.T) ExecutionContext {
 			field.SetBytes([]byte(`{"filled":true}`))
 		case reflect.Pointer:
 			field.Set(reflect.New(field.Type().Elem()))
+		case reflect.Interface:
+			// Dispatcher is the only interface field; a catalog implements it.
+			field.Set(reflect.ValueOf(&Catalog{}))
 		case reflect.Func:
 			function := field.Type()
 			field.Set(reflect.MakeFunc(function, func([]reflect.Value) []reflect.Value {

@@ -76,6 +76,20 @@ type ExecutionContext struct {
 	// that would wait long by default, like subagent and profile_message, then waits only
 	// the async default_block_ms, so it does not hold the rest of the response back.
 	BatchWaiting bool
+	// Dispatcher is the catalog that dispatches this call. The catalog sets it for every call
+	// it runs, so a runner tool (load_tool run) dispatches its target through the catalog the
+	// run executes with: a plan-mode or narrowed catalog refuses what it dropped.
+	Dispatcher Dispatcher
+	// ViaRunner says that a runner tool dispatches this call, not the model: a lazy tool
+	// accepts only such a call. The runner sets it on the call it dispatches.
+	ViaRunner bool
+}
+
+// Dispatcher is what a runner tool needs of the catalog that runs it: dispatch one call and
+// tell whether a tool is in the catalog. *Catalog implements it.
+type Dispatcher interface {
+	ExecuteFunctionCall(ctx context.Context, call json.RawMessage, execution ExecutionContext) (json.RawMessage, error)
+	Has(name string) bool
 }
 
 // executionContextPerCall names the fields of ExecutionContext that describe one call
@@ -83,7 +97,7 @@ type ExecutionContext struct {
 // so ForNested clears them; every other field carries over to the nested call.
 // TestForNestedKeepsEveryRunScopedField walks all the fields and fails when one is
 // neither copied nor listed here.
-var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments", "BatchWaiting"}
+var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments", "BatchWaiting", "Dispatcher", "ViaRunner"}
 
 // ForNested returns the context of a call made inside this one: a nested call of a
 // tool_smith script, or the tools of a sub-agent. The whole run scope carries over — above
@@ -97,6 +111,8 @@ func (e ExecutionContext) ForNested() ExecutionContext {
 	nested.ToolName = ""
 	nested.RawArguments = nil
 	nested.BatchWaiting = false
+	nested.Dispatcher = nil
+	nested.ViaRunner = false
 	return nested
 }
 
@@ -118,13 +134,14 @@ type Tool struct {
 	ExampleOperation     json.RawMessage
 	RequiresUserDecision bool
 	// Listed, when set, says whether the tool is in the tools array sent to the model right now.
-	// A lazy tool is listed only once it is loaded. Nil means always listed. It does not affect
+	// A lazy tool is never listed (WithLazyGate): load_tool describes and runs it, so the array
+	// the model sends does not depend on its use. Nil means always listed. It does not affect
 	// dispatch: a call by name still reaches the tool.
 	Listed func() bool
 	// Refused, when set and true for a call, skips the argument checks (normalize and schema) so the
 	// call goes straight to the tool, whose own Execute refuses it. The refusal then runs inside the
-	// tool's wrappers, so its event hooks fire like any other call. A lazy tool that is not loaded
-	// refuses every call. Nil never refuses.
+	// tool's wrappers, so its event hooks fire like any other call. A lazy tool refuses every call
+	// that a runner (load_tool run) does not dispatch. Nil never refuses.
 	Refused func(execution ExecutionContext) bool
 	// ReadOnly marks a tool that never changes state and depends on none, so its
 	// calls may run beside other calls of the same response. MayChangeFiles can
@@ -143,7 +160,14 @@ type Tool struct {
 	// PlanGuarded is set by Catalog.PlanMode on a tool whose calls that could change files
 	// are refused before they run (planModeGuard): no call of it changes files, so none
 	// takes the checkpoint.
-	PlanGuarded        bool
+	PlanGuarded bool
+	// Delegate, set on a runner tool (load_tool), parses the call's arguments into the tool
+	// it runs: the target as the model named it (a model-facing name or an ID), and the
+	// arguments for it. ok is false for a call that runs nothing (a list or a describe, or
+	// arguments that are not a run). It is a pure parse: it checks nothing against the
+	// catalog. The catalog judges a delegating call as its target (ResolveCall), and the
+	// event hooks of a delegating call are the target's, not the runner's.
+	Delegate           func(arguments map[string]any) (target string, targetArguments map[string]any, ok bool)
 	NormalizeArguments func(map[string]any) map[string]any
 	// RejectedProperties maps an argument name the schema no longer has to the message
 	// shown instead of "must NOT have additional properties".
@@ -159,6 +183,9 @@ type Tool struct {
 type Catalog struct {
 	tools  []Tool
 	byName map[string]Tool
+	// delegating is true when a tool has a Delegate, so ResolveCall has something to resolve;
+	// a catalog with none answers every judgment from the call's own name without parsing.
+	delegating bool
 	// encoded caches each tool's Responses definition, index-aligned with tools. A tool is
 	// encoded the first time it is listed, so the run loop does not re-marshal every schema on
 	// every round. The bytes are shared and must not be written to. Guarded by encodedMu.
@@ -186,6 +213,7 @@ func NewCatalog(tools []Tool) (*Catalog, error) {
 			return nil, fmt.Errorf("duplicate tool name %s", tool.Definition.Name)
 		}
 		catalog.byName[tool.Definition.Name] = tool
+		catalog.delegating = catalog.delegating || tool.Delegate != nil
 	}
 	return catalog, nil
 }
@@ -301,12 +329,101 @@ func (c *Catalog) ResponseTools() ([]json.RawMessage, error) {
 	return tools, nil
 }
 
+// Has reports whether the catalog holds a tool with this provider-facing name.
+func (c *Catalog) Has(name string) bool {
+	if c == nil {
+		return false
+	}
+	_, exists := c.byName[name]
+	return exists
+}
+
+// ResolveCall returns the call a runner tool's call stands for: the same call_id, the target
+// tool's name and its arguments, for a call of a tool with a Delegate that delegates to a tool of
+// this catalog (by name or by ID). Any other call comes back unchanged, and so does a call whose
+// target is not in the catalog or is itself a runner, so a call is resolved at most once.
+// The judgments below ask about the resolved call, so a run of exec takes the checkpoint like a
+// call of exec, and a run of an MCP tool is judged as that tool.
+func (c *Catalog) ResolveCall(call json.RawMessage) json.RawMessage {
+	if c == nil || !c.delegating {
+		return call
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(call, &fields) != nil {
+		return call
+	}
+	var name string
+	if json.Unmarshal(fields["name"], &name) != nil {
+		return call
+	}
+	runner, exists := c.byName[name]
+	if !exists || runner.Delegate == nil {
+		return call
+	}
+	var text string
+	if json.Unmarshal(fields["arguments"], &text) != nil {
+		return call
+	}
+	decoded, err := jsonschemaDecode([]byte(text))
+	if err != nil {
+		return call
+	}
+	arguments, isObject := decoded.(map[string]any)
+	if !isObject {
+		return call
+	}
+	if runner.NormalizeArguments != nil {
+		arguments = runner.NormalizeArguments(arguments)
+	}
+	target, targetArguments, ok := runner.Delegate(arguments)
+	if !ok {
+		return call
+	}
+	resolved, found := c.byTarget(target)
+	if !found || resolved.Delegate != nil {
+		return call
+	}
+	encoded, err := json.Marshal(targetArguments)
+	if err != nil {
+		return call
+	}
+	nameJSON, err := json.Marshal(resolved.Definition.Name)
+	if err != nil {
+		return call
+	}
+	argumentsJSON, err := json.Marshal(string(encoded))
+	if err != nil {
+		return call
+	}
+	fields["name"] = nameJSON
+	fields["arguments"] = argumentsJSON
+	rewritten, err := json.Marshal(fields)
+	if err != nil {
+		return call
+	}
+	return rewritten
+}
+
+// byTarget finds a tool by its provider-facing name or by its ID.
+func (c *Catalog) byTarget(target string) (Tool, bool) {
+	if tool, exists := c.byName[target]; exists {
+		return tool, true
+	}
+	for _, tool := range c.tools {
+		if tool.Definition.ID == target {
+			return tool, true
+		}
+	}
+	return Tool{}, false
+}
+
 // IsUserDecisionCall reports whether the call must be resolved before any
 // co-batched calls execute.
 func (c *Catalog) IsUserDecisionCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
+	call = c.ResolveCall(call)
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(call, &fields) != nil {
 		return false
@@ -325,6 +442,7 @@ func (c *Catalog) ChangesState(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
+	call = c.ResolveCall(call)
 	var fields struct {
 		Name string `json:"name"`
 	}
@@ -344,6 +462,7 @@ func (c *Catalog) IsLeafCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
+	call = c.ResolveCall(call)
 	var fields struct {
 		Name string `json:"name"`
 	}
@@ -360,6 +479,7 @@ func (c *Catalog) CallMayChangeFiles(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
+	call = c.ResolveCall(call)
 	var fields struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -391,6 +511,7 @@ func (c *Catalog) IsPlanGuardedCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
+	call = c.ResolveCall(call)
 	var fields struct {
 		Name string `json:"name"`
 	}
@@ -406,6 +527,7 @@ func (c *Catalog) SourceOf(call json.RawMessage) string {
 	if c == nil {
 		return ""
 	}
+	call = c.ResolveCall(call)
 	var fields struct {
 		Name string `json:"name"`
 	}
@@ -439,6 +561,7 @@ func (c *Catalog) ExecuteFunctionCall(ctx context.Context, call json.RawMessage,
 	}
 	execution.CallID = callID
 	execution.ToolName = tool.Definition.Name
+	execution.Dispatcher = c
 	if tool.Refused != nil && tool.Refused(execution) {
 		// The tool's own Execute refuses the call, so the arguments are not checked against the schema.
 		// The wrappers still see what the model sent, so a pre_tool command reports the real call.

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -47,15 +46,14 @@ func writeJSON(t *testing.T, path string, value any) {
 	writeFile(t, path, data)
 }
 
-// A remote subagent call on a target profile with tools.lazy: the child's request lists the lazy MCP
-// tool only after its load, the target's own lazy_tools.json holds it, and the caller profile's state
-// folder is never created.
-func TestRemoteSubagentGatesTheTargetsLazyToolFromItsOwnStateFolder(t *testing.T) {
+// A remote subagent call on a target profile with tools.lazy: the child's tools array never lists the lazy
+// MCP tool, its load_tool runs it, and the caller profile's state folder is never created.
+func TestRemoteSubagentRunsTheTargetsLazyToolThroughItsLoadTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	profileTools := map[string]any{"allow": []string{"subagent", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "description": "Finds facts.", "tools": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
-	f.provider.childFirstCall = [2]string{"load_tool", `{"names":["` + name + `"]}`}
+	f.provider.childFirstCall = [2]string{"load_tool", `{"run":"` + name + `","arguments":{"word":"answer"}}`}
 	callerState := addCallerProfile(t, f)
 	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
 	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
@@ -71,14 +69,12 @@ func TestRemoteSubagentGatesTheTargetsLazyToolFromItsOwnStateFolder(t *testing.T
 	if len(child) < 2 {
 		t.Fatalf("child made %d requests, want the load and the answer", len(child))
 	}
-	if slices.Contains(child[0].Tools, name) {
-		t.Fatalf("the lazy MCP tool was in the request before the load: %v", child[0].Tools)
+	requireStableTools(t, child, name)
+	if calls.Load() != 1 {
+		t.Errorf("the child's run reached the target's MCP server %d times, want 1", calls.Load())
 	}
-	if !slices.Contains(child[1].Tools, name) {
-		t.Fatalf("the loaded MCP tool was absent from the next request: %v", child[1].Tools)
-	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); !slices.Contains(loaded, "mcp:fixture:lookup") {
-		t.Errorf("the target's lazy_tools.json holds %v, want mcp:fixture:lookup", loaded)
+	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
+		t.Errorf("the target's lazy_tools.json holds %v, want no loads", loaded)
 	}
 	if _, err := os.Stat(filepath.Join(callerState, "lazy_tools.json")); !os.IsNotExist(err) {
 		t.Errorf("the caller's lazy_tools.json exists or could not be checked: %v", err)

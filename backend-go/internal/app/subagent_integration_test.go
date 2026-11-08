@@ -102,6 +102,9 @@ type providerRequest struct {
 	ToolTypes []string
 	// PromptCacheKey is the request's prompt_cache_key, "" when it has none.
 	PromptCacheKey string
+	// RawTools is every element of the request's tools array as the client sent it, byte for
+	// byte, so a test can compare the prefix a provider caches from one request to the next.
+	RawTools []string
 }
 
 func (p *subagentProvider) handler(t *testing.T) http.Handler {
@@ -129,6 +132,7 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 				Parameters  json.RawMessage `json:"parameters"`
 			}
 			_ = json.Unmarshal(tool, &named)
+			record.RawTools = append(record.RawTools, string(tool))
 			record.ToolTypes = append(record.ToolTypes, named.Type)
 			record.Tools = append(record.Tools, named.Name)
 			if record.Descriptions == nil {

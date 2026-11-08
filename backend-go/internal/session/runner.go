@@ -722,8 +722,8 @@ func (r *Runner) runRound(run *runRounds, round int) (done bool, err error) {
 	if err := r.storeSteerMessages(*options); err != nil {
 		return false, err
 	}
-	// The tools array is rebuilt every round: a lazy tool that load_tool loaded in the
-	// previous round is listed in this one.
+	// The tools array is rebuilt every round from the catalog. A lazy tool is never listed, so
+	// the bytes are the same in every round of a run and the provider's cache of them holds.
 	var responseTools []json.RawMessage
 	if options.ToolCatalog != nil {
 		responseTools, err = options.ToolCatalog.ResponseTools()

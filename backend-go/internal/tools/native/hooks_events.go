@@ -67,8 +67,20 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 		}
 		return report, blockedBy, arguments, execution
 	}
+	// A runner's call that runs another tool fires that tool's hooks, once, when the runner
+	// dispatches it, and not the runner's own.
+	delegating := func(arguments map[string]any) bool {
+		if tool.Delegate == nil {
+			return false
+		}
+		_, _, ok := tool.Delegate(arguments)
+		return ok
+	}
 	if inner := tool.Execute; inner != nil {
 		tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
+			if delegating(arguments) {
+				return inner(ctx, arguments, execution)
+			}
 			preReport, blockedBy, arguments, execution := firePre(ctx, arguments, execution)
 			if blockedBy != "" {
 				return blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport), nil
@@ -87,6 +99,9 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 	}
 	if inner := tool.ExecuteOutput; inner != nil {
 		tool.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
+			if delegating(arguments) {
+				return inner(ctx, arguments, execution)
+			}
 			preReport, blockedBy, arguments, execution := firePre(ctx, arguments, execution)
 			if blockedBy != "" {
 				return json.Marshal(blockedResult(execution.CallID, tool.Definition.Name, blockedBy, preReport))
@@ -95,7 +110,7 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 			if err != nil {
 				return output, err
 			}
-			postReport, _ := fire(ctx, hookEventPostTool, post, arguments, execution, string(output))
+			postReport, _ := fire(ctx, hookEventPostTool, post, arguments, execution, outputResultText(output))
 			report := joinHookReports(preReport, postReport)
 			if report == "" {
 				return output, nil
@@ -312,7 +327,30 @@ func resultStatus(result string) string {
 
 // appendOutputText adds a text part to a tool output that is a list of parts. Any other
 // shape is returned as it was, so a report can never corrupt an output.
+// outputResultText is the result a post_tool hook is told of: the text of a text output, and the
+// JSON of any other output value.
+func outputResultText(output json.RawMessage) string {
+	var text string
+	if json.Unmarshal(output, &text) == nil {
+		return text
+	}
+	return string(output)
+}
+
 func appendOutputText(output json.RawMessage, text string) json.RawMessage {
+	// A tool whose output value is a text (load_tool) gets the report the way a text tool does.
+	var result string
+	if json.Unmarshal(output, &result) == nil {
+		appended, err := tools.AppendContent(result, tools.Content{Text: text})
+		if err != nil {
+			return output
+		}
+		encoded, err := json.Marshal(appended)
+		if err != nil {
+			return output
+		}
+		return encoded
+	}
 	var parts []json.RawMessage
 	if json.Unmarshal(output, &parts) != nil || parts == nil {
 		return output

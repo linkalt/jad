@@ -38,8 +38,9 @@ var (
 	// defaultNativeToolSmithTools are the native tools a script may call without configuration:
 	// none. A script runs code itself; the tools list names the ones it may also call.
 	defaultNativeToolSmithTools = []string{}
-	// nativeToolSmithExcludedTools can never be called from a script.
-	nativeToolSmithExcludedTools = []string{"exec", "async", "subagent", "tool_smith", "task"}
+	// nativeToolSmithExcludedTools can never be called from a script. load_tool dispatches
+	// through the catalog that runs it, and a script has its own bridge to the tools.
+	nativeToolSmithExcludedTools = []string{"exec", "async", "subagent", "tool_smith", "task", "load_tool"}
 )
 
 // NativeToolSmithExcludedTools returns the native tools a script can never call.

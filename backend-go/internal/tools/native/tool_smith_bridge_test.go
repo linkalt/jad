@@ -107,7 +107,7 @@ return all.map((r) => r.content).join(',');`)
 func TestToolSmithBridgeRefusesToolsOutsideTheAllowlistAndTheExcludedOnes(t *testing.T) {
 	root := t.TempDir()
 	excluded := sessionfs.NativeToolSmithExcludedTools()
-	if len(excluded) != 5 {
+	if len(excluded) != 6 {
 		t.Fatalf("excluded list = %v", excluded)
 	}
 	list := []tools.Tool{bridgeTestTool(t, "read", true, func(map[string]any) string { return "r" }), bridgeTestTool(t, "write", false, func(map[string]any) string { return "w" })}
@@ -118,7 +118,7 @@ func TestToolSmithBridgeRefusesToolsOutsideTheAllowlistAndTheExcludedOnes(t *tes
 	settings := bridgeSettings(t, root, append([]string{"read"}, excluded...)...)
 	result := runWithBridge(context.Background(), root, settings, bridgeNested(list...), tools.ExecutionContext{}, `
 const out = [];
-for (const name of ['write', 'exec', 'async', 'subagent', 'tool_smith', 'task']) {
+for (const name of ['write', 'exec', 'async', 'subagent', 'tool_smith', 'task', 'load_tool']) {
   const r = await tools[name]({});
   out.push(name + ':' + r.status + ':' + r.ok + ':' + r.summary.includes('not allowed; allowed: read'));
 }

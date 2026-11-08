@@ -28,7 +28,8 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 		"profile_message": "profile_message.json",
 		"subagent":        "subagent.json",
 	}[name]
-	config.ToolDefinitionPaths = []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", manifest)}
+	config.ToolDefinitionPaths = []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", manifest), sampleLoadToolManifest}
+	config.NativeLoadTool = &sessionfs.NativeLoadToolSettings{}
 	if name == "subagent" {
 		config.ToolDefinitionPaths = append(config.ToolDefinitionPaths, filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "read_image.json"))
 	}
@@ -55,9 +56,9 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 	return catalog
 }
 
-// Each late-built native tool, and subagent, can be lazy: a call before its load is refused with
-// tool_not_loaded, and after the set loads it the call is not refused.
-func TestLateNativeToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
+// Each late-built native tool, and subagent, can be lazy: a call that names it is refused with
+// tool_not_loaded and a pointer to load_tool run, and load_tool run runs it.
+func TestLateNativeToolIsRefusedWhenCalledAndRunsThroughLoadTool(t *testing.T) {
 	arguments := map[string]string{"transcript": `{}`, "transcripts": `{}`, "profile": `{"action":"info"}`, "profile_message": `{"profile":"reviewer","message":"hi"}`, "subagent": `{"task":"x","agent":"explore"}`}
 	for name, args := range arguments {
 		t.Run(name, func(t *testing.T) {
@@ -66,22 +67,19 @@ func TestLateNativeToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
 				t.Fatal(err)
 			}
 			catalog := lateLazyCatalog(t, name, set, sessionfs.HooksSettings{})
-			if before := executeNamedCall(t, catalog, name, args); !strings.Contains(before, "tool_not_loaded") {
-				t.Fatalf("before load: want tool_not_loaded, got %s", before)
+			if direct := executeNamedCall(t, catalog, name, args); !strings.Contains(direct, "tool_not_loaded") || !strings.Contains(direct, "load_tool with run") {
+				t.Fatalf("a direct call: want tool_not_loaded and the pointer to load_tool run, got %s", direct)
 			}
-			if err := set.Load(name); err != nil {
-				t.Fatal(err)
-			}
-			if after := executeNamedCall(t, catalog, name, args); strings.Contains(after, "tool_not_loaded") {
-				t.Fatalf("after load: still refused: %s", after)
+			if via := executeThroughLoadTool(t, catalog, name, args); strings.Contains(via, "tool_not_loaded") || strings.Contains(via, "unknown_lazy_tool") {
+				t.Fatalf("load_tool run: still refused: %s", via)
 			}
 		})
 	}
 }
 
-// A late tool's pre_tool hook fires once per call: once for a refused call before load, and once more for
-// a loaded call after it. The gate sits under the hook, so a refusal is one hook firing and a loaded call
-// is not wrapped twice. TestLoadedLazyNativeCallFiresItsHookOnce is the app-level version of this check.
+// A late tool's pre_tool hook fires once per call: once for a refused direct call, and once more for
+// a load_tool run of it. The gate sits under the hook, so a refusal is one hook firing; the run fires the
+// target's hook at the nested dispatch and not load_tool's own, so it is not counted twice. TestLoadedLazyNativeCallFiresItsHookOnce is the app-level version of this check.
 // subagent is checked too, because its parent copy is hooked and gated like the late tools.
 func TestLateNativeToolHookFiresOncePerCallBeforeAndAfterLoad(t *testing.T) {
 	calls := map[string]string{"transcript": `{}`, "transcripts": `{}`, "profile": `{"action":"info"}`, "profile_message": `{"profile":"reviewer","message":"hi"}`, "subagent": `{"task":"x","agent":"explore"}`}
@@ -98,12 +96,9 @@ func TestLateNativeToolHookFiresOncePerCallBeforeAndAfterLoad(t *testing.T) {
 			if got := countLines(t, marker); got != 1 {
 				t.Fatalf("pre_tool fired %d times for one refused call, want 1", got)
 			}
-			if err := set.Load(name); err != nil {
-				t.Fatal(err)
-			}
-			executeNamedCall(t, catalog, name, args)
+			executeThroughLoadTool(t, catalog, name, args)
 			if got := countLines(t, marker); got != 2 {
-				t.Fatalf("pre_tool fired %d times after one refused and one loaded call, want 2", got)
+				t.Fatalf("pre_tool fired %d times after one refused call and one load_tool run, want 2", got)
 			}
 		})
 	}
@@ -147,7 +142,7 @@ func TestChildOfAParentWithALazyProfileMessageGetsTheGatedCopy(t *testing.T) {
 }
 
 // A nested subagent is the owner's subagent tool given to a child, one level down. The child's own catalog
-// holds a lazy copy of subagent and a lazy copy of read: both are refused until the owner's set loads them,
+// holds a lazy copy of subagent and a lazy copy of read: both are refused when named directly,
 // as the resolver wires it: the catalog is built, then SetLazy gives the set to the subagent tool.
 func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
 	set, err := tools.OpenLazySet(t.TempDir(), []string{"subagent", "read_image"}, 256, nil, nil)
@@ -186,15 +181,10 @@ func TestNestedChildGatesLazySubagentAndReadUntilLoaded(t *testing.T) {
 			t.Fatalf("the nested child's call to unloaded %s was not refused: %s", name, before)
 		}
 	}
-	for _, name := range []string{"read_image", "subagent"} {
-		if err := set.Load(name); err != nil {
-			t.Fatal(err)
-		}
+	if read := executeNamedCallViaRunner(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(read, "tool_not_loaded") {
+		t.Fatalf("the nested child's read run by a runner was refused: %s", read)
 	}
-	if read := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(read, "tool_not_loaded") {
-		t.Fatalf("the nested child's read after load was refused: %s", read)
-	}
-	if nested := executeNamedCall(t, child, "subagent", `{"task":"y","agent":"explore"}`); strings.Contains(nested, "tool_not_loaded") {
-		t.Fatalf("the nested child's subagent after load was refused: %s", nested)
+	if nested := executeNamedCallViaRunner(t, child, "subagent", `{"task":"y","agent":"explore"}`); strings.Contains(nested, "tool_not_loaded") {
+		t.Fatalf("the nested child's subagent run by a runner was refused: %s", nested)
 	}
 }

@@ -7,34 +7,30 @@ import (
 	"testing"
 )
 
-// A child of a profile with tools.lazy gets its lazy MCP tool gated with the owning profile's set:
-// absent from the child's first request, present from the next one after the child loads it, and
-// the load is written to the owning profile's lazy_tools.json. The caller's state is untouched.
-func TestChildOfAParentWithLazyToolsLoadsIntoTheOwningProfilesSet(t *testing.T) {
+func TestChildOfAParentWithLazyToolsRunsThemThroughItsLoadToolInTheOwningProfilesSet(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
 	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
-	f.provider.childFirstCall = [2]string{"load_tool", `{"names":["` + name + `"]}`}
+	f.provider.childFirstCall = [2]string{"load_tool", `{"run":"mcp:fixture:lookup","arguments":{"word":"answer"}}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
 	child := f.provider.forModel("child-model")
 	if len(child) < 2 {
-		t.Fatalf("child made %d requests, want the load and the answer", len(child))
-	}
-	if slices.Contains(child[0].Tools, name) {
-		t.Fatalf("the lazy MCP tool was in the child's first request: %v", child[0].Tools)
+		t.Fatalf("child made %d requests, want the run and the answer", len(child))
 	}
 	if !slices.Contains(child[0].Tools, "load_tool") {
 		t.Fatalf("the child's load_tool was absent from its first request: %v", child[0].Tools)
 	}
-	if !slices.Contains(child[1].Tools, name) {
-		t.Fatalf("the loaded MCP tool was absent from the child's next request: %v", child[1].Tools)
+	requireStableTools(t, child, name)
+	// The child's load_tool dispatched through the child's own catalog: the MCP server ran once.
+	if calls.Load() != 1 || !strings.Contains(child[len(child)-1].Text, "MCP says answer is 99") {
+		t.Errorf("the child's run reached the MCP server %d times; history:\n%s", calls.Load(), child[len(child)-1].Text)
 	}
-	// The owning profile's set holds the load; the caller of the remote path is not involved here.
-	if loaded := lazyFileLoaded(t, f.lazyFile()); !slices.Contains(loaded, "mcp:fixture:lookup") {
-		t.Errorf("the owning profile's lazy_tools.json holds %v, want mcp:fixture:lookup", loaded)
+	// Nothing was written to the owning profile's set, and the caller's is untouched.
+	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
+		t.Errorf("the owning profile's lazy_tools.json holds %v, want no loads", loaded)
 	}
 }
 

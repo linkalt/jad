@@ -209,37 +209,50 @@ func lazyFileNames(t *testing.T, dir string) []string {
 	return state.Loaded
 }
 
-// The target of a profile_message runs its own catalog: its load_tool is registered from its own
-// tools.lazy and writes to its own state folder. The caller's file is neither read nor rewritten.
-func TestProfileMessageTargetLoadsIntoItsOwnLazySet(t *testing.T) {
+func TestProfileMessageTargetRunsItsLazyToolThroughItsOwnLoadTool(t *testing.T) {
 	f := newProfileLazyFixture(t, []string{"mcp:fixture:*"}, []string{"mcp:fixture:*"}, false)
-	f.scripts["target-model"] = []string{functionCallItem("load_tool", `{"names":["mcp:fixture:*"]}`)}
+	f.scripts["target-model"] = []string{functionCallItem("load_tool", `{"run":"mcp:fixture:lookup","arguments":{"word":"x"}}`)}
 	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(f.callerContext(t), "local:demo\x00dev/coder", "review/reviewer", "hi", 0, false); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mcp:fixture:extra01", "mcp:fixture:extra02", "mcp:fixture:lookup"}
-	if got := lazyFileNames(t, f.targetDir); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("target loaded = %v, want %v", got, want)
+	if f.calls.Load() != 1 {
+		t.Errorf("the target's run reached the MCP server %d times, want 1", f.calls.Load())
+	}
+	if got := lazyFileNames(t, f.targetDir); len(got) != 0 {
+		t.Errorf("target loaded = %v, want no loads", got)
 	}
 	if got := lazyFileNames(t, f.callerDir); got != nil {
-		t.Errorf("the caller's lazy file was written by the target's load: %v", got)
+		t.Errorf("the caller's lazy file was written by the target's run: %v", got)
 	}
 	if !seenTool(f.seenRequests(), "target-model", "load_tool") {
 		t.Error("the target was not sent load_tool")
 	}
+	// The target's tools array is the same in each of its requests and never lists a lazy MCP tool.
+	targetTools := map[string]bool{}
+	for _, request := range f.seenRequests() {
+		if model, names, ok := strings.Cut(request, ": "); ok && model == "target-model" {
+			targetTools[names] = true
+			if strings.Contains(names, "mcp_fixture_") {
+				t.Errorf("the target was sent a lazy MCP tool: %s", names)
+			}
+		}
+	}
+	if len(targetTools) != 1 {
+		t.Errorf("the target's tools array differed between its requests: %v", slices.Collect(maps.Keys(targetTools)))
+	}
 }
 
-// A load by the caller does not change the target's loaded set, and a load by the target does
-// not change the caller's: the two profiles keep separate files, even with different tools.lazy.
-func TestProfileMessageLoadsStayInTheirOwnProfile(t *testing.T) {
+func TestProfileMessageRunsStayInTheirOwnProfile(t *testing.T) {
 	f := newProfileLazyFixture(t, []string{"mcp:fixture:*"}, []string{"mcp:fixture:lookup"}, false)
-	f.scripts["caller-model"] = []string{functionCallItem("load_tool", `{"names":["mcp:fixture:extra01"]}`)}
-	f.scripts["target-model"] = []string{functionCallItem("load_tool", `{"names":["mcp:fixture:lookup"]}`)}
+	f.scripts["target-model"] = []string{functionCallItem("load_tool", `{"run":"mcp:fixture:lookup","arguments":{"word":"x"}}`)}
 	if _, err := (profileMessenger{resolver: f.service.resolver}).Message(f.callerContext(t), "local:demo\x00dev/coder", "review/reviewer", "hi", 0, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := lazyFileNames(t, f.targetDir); strings.Join(got, ",") != "mcp:fixture:lookup" {
-		t.Errorf("target loaded = %v, want only its own lookup", got)
+	if f.calls.Load() != 1 {
+		t.Errorf("MCP calls = %d, want 1: the target's lookup", f.calls.Load())
+	}
+	if got := lazyFileNames(t, f.targetDir); len(got) != 0 {
+		t.Errorf("target loaded = %v, want no loads", got)
 	}
 	if got := lazyFileNames(t, f.callerDir); got != nil {
 		t.Errorf("the target's run changed the caller's loaded set: %v", got)

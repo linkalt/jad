@@ -491,7 +491,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		loaded = append(loaded, tool)
 	}
 	// Each native tool is gated and then hooked once, here. A child catalog is built from this gated list
-	// (childPool), so a child gets the owner's gate, and a lazy tool is refused to it until the owner's set has loaded it.
+	// (childPool), so a child gets the owner's gate, and a lazy tool is refused to it when named directly.
 	if lazy != nil {
 		lazy.Bind(loaded)
 		for index, tool := range loaded {

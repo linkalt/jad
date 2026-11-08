@@ -58,44 +58,6 @@ func runWithin(t *testing.T, name string, fn func()) {
 	}
 }
 
-// TestLazyLeafLoadedRunsThroughABatchWithBudgetOne: a loaded lazy leaf, gated by the
-// lazy set, takes one token in the batch and finishes; its inner catalog call takes none.
-func TestLazyLeafLoadedRunsThroughABatchWithBudgetOne(t *testing.T) {
-	budget := tools.NewLeafBudget(1)
-	release := make(chan struct{})
-	close(release)
-	executed := make(chan string, 4)
-	real := leafTool(t, release, executed)
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"leaf"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	set.Bind([]tools.Tool{real})
-	if err := set.Load("leaf"); err != nil {
-		t.Fatal(err)
-	}
-	gated, ok := set.GateFor(real)
-	if !ok {
-		t.Fatal("the lazy set did not gate the bound tool")
-	}
-	catalog, err := tools.NewCatalog([]tools.Tool{gated})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runWithin(t, "lazy leaf batch", func() {
-		round, err := executeToolRound(context.Background(), catalog, []json.RawMessage{leafCall("a"), leafCall("b")}, tools.ExecutionContext{}, 8, "", budget, nil)
-		if err != nil {
-			t.Error(err)
-		}
-		if len(round.Completed) != 2 {
-			t.Errorf("completed = %d, want 2", len(round.Completed))
-		}
-	})
-	if len(executed) != 2 {
-		t.Fatalf("executed %d leaf calls, want 2", len(executed))
-	}
-}
-
 // TestLeafHoldsATokenOnlyWhileItRuns: with budget 1 the second leaf starts only after
 // the first settles, so the token is given back when the call finishes.
 func TestLeafHoldsATokenOnlyWhileItRuns(t *testing.T) {

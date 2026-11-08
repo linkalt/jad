@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -348,9 +349,10 @@ func TestIsLazyPattern(t *testing.T) {
 	}
 }
 
-// The tools array keeps catalog order and holds a lazy tool only once it is loaded. A dispatch by
-// name still reaches an unloaded tool, which the gate refuses.
-func TestResponseToolsListsALazyToolOnlyOnceLoaded(t *testing.T) {
+// The tools array never holds a lazy tool, loaded or not, so the bytes the provider caches do not
+// change with the set. A dispatch by name still reaches the tool, which the gate refuses unless a
+// runner dispatches it.
+func TestResponseToolsNeverListsALazyTool(t *testing.T) {
 	dir := t.TempDir()
 	set := openSet(t, dir, []string{"read"}, 256)
 	native := lazyTool(t, "native.bash", "native", "bash")
@@ -378,17 +380,28 @@ func TestResponseToolsListsALazyToolOnlyOnceLoaded(t *testing.T) {
 		}
 		return out
 	}
+	before, err := catalog.ResponseTools()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := names(); strings.Join(got, ",") != "bash" {
 		t.Fatalf("before load = %v, want only bash", got)
 	}
 	if err := set.Load("read"); err != nil {
 		t.Fatal(err)
 	}
-	if got := names(); strings.Join(got, ",") != "bash,read" {
-		t.Fatalf("after load = %v, want bash then read in catalog order", got)
+	after, err := catalog.ResponseTools()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !set.Loaded("native.read") {
-		t.Fatal("the set did not record the load")
+	if got := names(); strings.Join(got, ",") != "bash" {
+		t.Fatalf("after load = %v, want only bash: a lazy tool is never listed", got)
+	}
+	if len(before) != len(after) || !bytes.Equal(before[0], after[0]) {
+		t.Fatalf("the tools array changed with the loaded set: %s then %s", before, after)
+	}
+	if listed := catalog.ListedDefinitions(); len(listed) != 1 || listed[0].Name != "bash" {
+		t.Fatalf("ListedDefinitions = %v, want only bash", listed)
 	}
 }
 
@@ -419,5 +432,58 @@ func TestRefusedCallPassesItsRealArgumentsToTheWrappers(t *testing.T) {
 	}
 	if seen["path"] != "notes.txt" {
 		t.Fatalf("the wrapper saw %v for a refused call, want the call's arguments {path: notes.txt}", seen)
+	}
+}
+
+// A lazy tool is refused when the model names it, with a pointer to load_tool run, and runs when
+// a runner dispatches it (ViaRunner). It is never listed, and a runner's call is checked against
+// the real schema like an eager tool's.
+func TestLazyGateRefusesADirectCallAndRunsAViaRunnerCall(t *testing.T) {
+	set := openSet(t, t.TempDir(), []string{"read"}, 256)
+	real := lazyTool(t, "native.read", "native", "read")
+	real.Definition.InputSchema = json.RawMessage(`{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}`)
+	validator, err := CompileSchema(real.Definition.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real.Validator = validator
+	ran := 0
+	real.Execute = func(context.Context, map[string]any, ExecutionContext) (string, error) {
+		ran++
+		return "read it", nil
+	}
+	set.Bind([]Tool{real})
+	gated, ok := set.Gate(real)
+	if !ok {
+		t.Fatal("the set did not gate the lazy tool")
+	}
+	if gated.Listed == nil || gated.Listed() {
+		t.Fatal("a lazy tool must never be listed")
+	}
+	catalog, err := NewCatalog([]Tool{gated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, err := catalog.ExecuteFunctionCall(context.Background(), runnerCall("read", `{"path":"a"}`), ExecutionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(direct), "tool_not_loaded") || !strings.Contains(string(direct), "load_tool with run") || ran != 0 {
+		t.Fatalf("a direct call = %s (ran %d), want the refusal that points at load_tool run", direct, ran)
+	}
+	// Even a call that breaks the real schema is answered by the refusal, not by validation.
+	if bad, _ := catalog.ExecuteFunctionCall(context.Background(), runnerCall("read", `{}`), ExecutionContext{}); strings.Contains(string(bad), "validation_failed") {
+		t.Errorf("a direct call with bad arguments reached the real schema: %s", bad)
+	}
+	via, err := catalog.ExecuteFunctionCall(context.Background(), runnerCall("read", `{"path":"a"}`), ExecutionContext{ViaRunner: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(via), "tool_not_loaded") || !strings.Contains(string(via), "read it") || ran != 1 {
+		t.Fatalf("a via-runner call = %s (ran %d), want the tool's own result", via, ran)
+	}
+	invalid, _ := catalog.ExecuteFunctionCall(context.Background(), runnerCall("read", `{}`), ExecutionContext{ViaRunner: true})
+	if !strings.Contains(string(invalid), "validation_failed") || ran != 1 {
+		t.Fatalf("a via-runner call with bad arguments = %s, want the real schema's refusal and no run", invalid)
 	}
 }

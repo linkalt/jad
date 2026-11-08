@@ -38,38 +38,28 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); !strings.Contains(out, "not loaded") || len(launcher.requests) != 0 {
-		t.Fatalf("the parent's call to the unloaded lazy subagent was not refused: %s", out)
+	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); !strings.Contains(out, "tool_not_loaded") || len(launcher.requests) != 0 {
+		t.Fatalf("the parent's direct call to the lazy subagent was not refused: %s", out)
 	}
-	if err := set.Load("subagent"); err != nil {
-		t.Fatal(err)
-	}
-	subagentCall(t, catalog, `{"task":"x","agent":"explore"}`)
+	executeNamedCallViaRunner(t, catalog, "subagent", `{"task":"x","agent":"explore"}`)
 	if len(launcher.requests) != 1 {
 		t.Fatalf("the child ran %d times, want 1", len(launcher.requests))
 	}
 	child := launcher.requests[0].Tools
-	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "not loaded") {
-		t.Fatalf("the child's read before load was not refused: %s", out)
+	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "tool_not_loaded") {
+		t.Fatalf("the child's direct read was not refused: %s", out)
 	}
 	// The grandchild is started while read is still unloaded: the read copy it holds is refused.
-	subagentCall(t, child, `{"task":"y","agent":"explore"}`)
+	executeNamedCallViaRunner(t, child, "subagent", `{"task":"y","agent":"explore"}`)
 	if len(launcher.requests) != 2 {
 		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
 	}
-	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "not loaded") {
-		t.Fatalf("the grandchild's read before load was not refused: %s", out)
+	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "tool_not_loaded") {
+		t.Fatalf("the grandchild's direct read was not refused: %s", out)
 	}
-	if err := set.Load("read_image"); err != nil {
-		t.Fatal(err)
-	}
-	// A grandchild started after the owner loads read may read.
-	subagentCall(t, child, `{"task":"z","agent":"explore"}`)
-	if len(launcher.requests) != 3 {
-		t.Fatalf("the second grandchild ran %d times in total, want 3", len(launcher.requests))
-	}
-	if out := executeNamedCall(t, launcher.requests[2].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "not loaded") {
-		t.Fatalf("the grandchild's read after load was refused: %s", out)
+	// A runner that dispatches the grandchild's read is not refused.
+	if out := executeNamedCallViaRunner(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
+		t.Fatalf("the grandchild's read run by a runner was refused: %s", out)
 	}
 }
 

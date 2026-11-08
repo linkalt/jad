@@ -21,7 +21,8 @@ import (
 )
 
 // lazyToolsFile is the file, in the session's state folder, that records which lazy tools
-// load_tool has loaded.
+// were loaded. Since load_tool became a runner nothing loads a tool, so the list stays empty;
+// the file is still opened and rewritten when the configuration changes.
 const lazyToolsFile = "lazy_tools.json"
 
 // lazyToolsState is the content of lazy_tools.json.
@@ -31,7 +32,7 @@ type lazyToolsState struct {
 }
 
 // LazyEntry is one lazy tool of a profile: the tool the session registered and the one-line
-// summary the model sees until load_tool loads it and the next request lists its full definition.
+// summary the model sees; load_tool describes it (full definition) and runs it on request.
 type LazyEntry struct {
 	Tool    Tool
 	Summary string
@@ -49,7 +50,7 @@ type LazySet struct {
 	bound        []LazyEntry
 	bindings     map[string]bool
 	gated        map[string]bool
-	// mu guards loaded: load_tool writes it while a lazy call and the per-request tool list read it.
+	// mu guards loaded: LoadMatches writes it while Loaded reads it.
 	mu     sync.Mutex
 	loaded map[string]bool
 	shown  func(Definition) bool
@@ -351,17 +352,20 @@ func (s *LazySet) save() error {
 }
 
 // WithLazyGate wraps a lazy tool for the session's catalog. Its schema, executor and report are the
-// real tool's. A call before load is refused with tool_not_loaded, whatever its arguments: the
-// loaded check runs before the real schema, so the real schema is never run against an unloaded
-// tool's call. A call after load runs through the real tool's own catalog, so validation and output
+// real tool's. The tool is never listed: the model's tools array does not hold it, so the array
+// is the same whether or not the model uses the tool, and a provider's prompt cache is not
+// invalidated by a lazy tool. The model describes and runs it through load_tool, which dispatches
+// the call through the executing catalog with ExecutionContext.ViaRunner set. A call that is not
+// via the runner (the model naming the tool directly) is refused with tool_not_loaded, whatever its
+// arguments: the check runs before the real schema, so the real schema is never run against a direct
+// call. A call via the runner runs through the real tool's own catalog, so validation and output
 // match an eager tool. The gate is applied to the raw tool, before the event hooks, so a refused call
-// still fires pre_tool and post_tool hooks like any tool. The tool is listed only while it is loaded
-// (see Listed).
-func WithLazyGate(entry LazyEntry, set *LazySet) Tool {
+// still fires pre_tool and post_tool hooks like any tool.
+func WithLazyGate(entry LazyEntry, _ *LazySet) Tool {
 	real := entry.Tool
 	gated := real
-	gated.Listed = func() bool { return set.Loaded(real.Definition.ID) }
-	gated.Refused = func(ExecutionContext) bool { return !set.Loaded(real.Definition.ID) }
+	gated.Listed = func() bool { return false }
+	gated.Refused = func(execution ExecutionContext) bool { return !execution.ViaRunner }
 	// The real tool runs through a catalog of its own, so its validation against the real
 	// schema, its bound on the report and its output match what an eager tool would give.
 	inner, err := NewCatalog([]Tool{real})
@@ -370,13 +374,13 @@ func WithLazyGate(entry LazyEntry, set *LazySet) Tool {
 	}
 	refused := func(execution ExecutionContext) string {
 		return ExecutionError(execution.CallID, StatusError, "tool_not_loaded",
-			fmt.Sprintf("Tool %s is lazy and not loaded yet", real.Definition.Name),
+			fmt.Sprintf("Tool %s is lazy: it is not called directly. Call %s with run %q and the tool's arguments in arguments; describe it first with %s names [%q]", real.Definition.Name, sessionfs.LoadToolName, real.Definition.Name, sessionfs.LoadToolName, real.Definition.Name),
 			Information{Key: "tool", Value: real.Definition.Name},
-			Information{Key: "load", Value: sessionfs.LoadToolName})
+			Information{Key: "run", Value: sessionfs.LoadToolName})
 	}
 	if real.ExecuteOutput != nil {
 		gated.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
-			if !set.Loaded(real.Definition.ID) {
+			if !execution.ViaRunner {
 				return json.Marshal(refused(execution))
 			}
 			return callInner(ctx, inner, arguments, execution)
@@ -384,7 +388,7 @@ func WithLazyGate(entry LazyEntry, set *LazySet) Tool {
 		return gated
 	}
 	gated.Execute = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (string, error) {
-		if !set.Loaded(real.Definition.ID) {
+		if !execution.ViaRunner {
 			return refused(execution), nil
 		}
 		output, err := callInner(ctx, inner, arguments, execution)
@@ -404,15 +408,23 @@ func WithLazyGate(entry LazyEntry, set *LazySet) Tool {
 // The catalog fills the call's name and call ID itself, so the envelope carries only the
 // arguments as the provider sends them: a JSON string.
 func callInner(ctx context.Context, inner *Catalog, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
+	return DispatchCall(ctx, inner, execution.ToolName, arguments, execution)
+}
+
+// DispatchCall runs one call of the tool named name through the dispatcher, with the given
+// arguments and the execution context as it is, and returns the output value of the
+// function_call_output the dispatcher answers with. The call keeps the call ID of the execution, so a
+// runner's nested call is the same call to the model.
+func DispatchCall(ctx context.Context, dispatcher Dispatcher, name string, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
 	encoded, err := json.Marshal(arguments)
 	if err != nil {
 		return nil, err
 	}
-	call, err := json.Marshal(map[string]string{"type": "function_call", "call_id": execution.CallID, "name": execution.ToolName, "arguments": string(encoded)})
+	call, err := json.Marshal(map[string]string{"type": "function_call", "call_id": execution.CallID, "name": name, "arguments": string(encoded)})
 	if err != nil {
 		return nil, err
 	}
-	envelope, err := inner.ExecuteFunctionCall(ctx, call, execution)
+	envelope, err := dispatcher.ExecuteFunctionCall(ctx, call, execution)
 	if err != nil {
 		return nil, err
 	}

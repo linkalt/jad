@@ -45,23 +45,26 @@ func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
 }
 
 // A tools.lazy entry is allowed without an allow entry, and so is load_tool while the profile has lazy
-// tools: an allow that names neither still lists load_tool, keeps the lazy read unlisted until it is
-// loaded, and lists it once load_tool loads it.
+// tools: an allow that names neither still lists load_tool, and the lazy skill is never listed, before or
+// after load_tool runs it.
 func TestLazyToolsNeedNoAllowEntry(t *testing.T) {
-	steps := []subagentStep{{"load_tool", `{"names":["skill"]}`}}
+	steps := []subagentStep{runStep("skill", notesCall)}
 	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"mcp:fixture:lookup"}, "lazy": []string{"skill"}}, nil, steps)
 	status, body := f.sessionTools(t)
 	if status != http.StatusOK {
 		t.Fatalf("a lazy profile whose allow names neither read nor load_tool was refused: %d %s", status, body)
 	}
 	if names := sessionToolNames(t, f); slices.Contains(names, "skill") || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded skill", names)
+		t.Fatalf("before a run the route lists %v, want load_tool and no lazy skill", names)
 	}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if names := sessionToolNames(t, f); !slices.Contains(names, "skill") {
-		t.Fatalf("after a load the route lists %v, want skill", names)
+	if names := sessionToolNames(t, f); slices.Contains(names, "skill") || !slices.Contains(names, "load_tool") {
+		t.Fatalf("after a run the route lists %v, want load_tool and still no lazy skill", names)
+	}
+	if got := lastRequestText(t, parentRequests(f)); !strings.Contains(got, "the secret is 42") {
+		t.Fatalf("load_tool did not run the lazy skill:\n%s", got)
 	}
 }
 
@@ -86,35 +89,32 @@ func TestLoadToolIsListedWhenEnabled(t *testing.T) {
 	}
 }
 
-// The tools route lists what the model sees: an unloaded lazy tool is absent until a load lists it.
-func TestLazyRouteListsOnlyTheLazyToolsTheModelSees(t *testing.T) {
-	steps := []subagentStep{{"load_tool", `{"names":["skill"]}`}}
+func TestLazyRouteNeverListsALazyTool(t *testing.T) {
+	steps := []subagentStep{runStep("skill", notesCall)}
 	f, _ := lazyFixture(t, []string{"skill"}, steps)
 	if names := sessionToolNames(t, f); slices.Contains(names, "skill") || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded skill", names)
+		t.Fatalf("before a run the route lists %v, want load_tool and no lazy skill", names)
 	}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if names := sessionToolNames(t, f); !slices.Contains(names, "skill") {
-		t.Fatalf("after a load the route lists %v, want skill", names)
+	if names := sessionToolNames(t, f); slices.Contains(names, "skill") {
+		t.Fatalf("after a run the route lists %v, want no lazy skill", names)
 	}
 }
 
-// The same route check for an MCP lazy tool: the unloaded mcp:fixture:lookup is absent until
-// load_tool loads it, and then the route lists its model-facing name.
-func TestLazyRouteListsAnUnloadedMCPLazyToolOnlyAfterLoad(t *testing.T) {
+func TestLazyRouteNeverListsALazyMCPTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
-	steps := []subagentStep{{"load_tool", `{"names":["` + name + `"]}`}}
+	steps := []subagentStep{runStep("mcp:fixture:lookup", `{"word":"answer"}`)}
 	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
 	if names := sessionToolNames(t, f); slices.Contains(names, name) || !slices.Contains(names, "load_tool") {
-		t.Fatalf("before a load the route lists %v, want load_tool and no unloaded %s", names, name)
+		t.Fatalf("before a run the route lists %v, want load_tool and no lazy %s", names, name)
 	}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	if names := sessionToolNames(t, f); !slices.Contains(names, name) {
-		t.Fatalf("after a load the route lists %v, want %s", names, name)
+	if names := sessionToolNames(t, f); slices.Contains(names, name) {
+		t.Fatalf("after a run the route lists %v, want no lazy %s", names, name)
 	}
 }
 

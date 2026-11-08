@@ -81,7 +81,7 @@
         },
         "lazy": {
           "type": "array",
-          "description": "Tools the model sees by name and one-line summary only; load_tool loads a tool, which is then listed with its full definition from the next request, and a call to a lazy tool before that is refused with tool_not_loaded. Same entries as allow, except load_tool, which is refused as a lazy entry. A lazy entry counts as allowed, so it need not be repeated in allow (a whole-server entry \"mcp:<server>:*\" only while allow names nothing of that server: otherwise allow decides which of its tools are shown, and the wildcard makes them lazy), and while the list is non-empty load_tool counts as allowed too; deny still wins, and a lazy entry that deny covers, or a deny that names load_tool, is a configuration error. Needs tools.native.load_tool, or the profile is refused at load. Needs a catalog layout (a session without one is a configuration error). A sub-agent, a nested subagent or profile_message child gets its owner's lazy tools gated with the same set (its loads go to the owner's lazy_tools.json, or to the target's own for profile_message), and load_tool only when the owner enables it and the agent lists it.",
+          "description": "Tools the model sees by name and one-line summary only, through load_tool: it lists them, describes them (full description and inputSchema) and runs one with run and arguments. A lazy tool is never in the tools array, and a call that names it directly is refused with tool_not_loaded and a pointer to load_tool run. Same entries as allow, except load_tool, which is refused as a lazy entry. A lazy entry counts as allowed, so it need not be repeated in allow (a whole-server entry \"mcp:<server>:*\" only while allow names nothing of that server: otherwise allow decides which of its tools are shown, and the wildcard makes them lazy), and while the list is non-empty load_tool counts as allowed too; deny still wins, and a lazy entry that deny covers, or a deny that names load_tool, is a configuration error. Needs tools.native.load_tool, or the profile is refused at load. Needs a catalog layout (a session without one is a configuration error). A sub-agent, a nested subagent or profile_message child gets its owner's lazy tools gated with the same set (its load_tool dispatches through its own catalog), and load_tool only when the owner enables it and the agent lists it.",
           "items": {
             "type": "string",
             "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|mcp:[A-Za-z0-9_-]+:\\S+)$"
@@ -93,14 +93,14 @@
           "minimum": 1,
           "maximum": 4096,
           "default": 256,
-          "description": "Largest size of the one-line summary the model sees for each lazy tool, cut at a character boundary. The full description is returned by load_tool."
+          "description": "Largest size of the one-line summary the model sees for each lazy tool, cut at a character boundary. The full description and inputSchema are returned by load_tool names."
         },
         "lazy_load_max": {
           "type": "integer",
           "minimum": 1,
           "maximum": 100,
           "default": 16,
-          "description": "Most names one load_tool call may load; a longer batch is refused and nothing is loaded."
+          "description": "Most lazy tools one load_tool describe call (names) may match; a longer batch is refused and nothing is described."
         }
       },
       "anyOf": [{"required": ["allow"]}, {"required": ["deny"]}],

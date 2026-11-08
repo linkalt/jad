@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -80,92 +79,145 @@ func lazyFileLoaded(t *testing.T, path string) []string {
 	return state.Loaded
 }
 
-// A native lazy tool is refused before load and runs after load_tool loads it.
-func TestLazyToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
+// runStep is the scripted call load_tool run target with arguments (a JSON object).
+func runStep(target, arguments string) subagentStep {
+	return subagentStep{"load_tool", `{"run":"` + target + `","arguments":` + arguments + `}`}
+}
+
+// describeStep is the scripted call load_tool names.
+func describeStep(names ...string) subagentStep {
+	encoded, _ := json.Marshal(names)
+	return subagentStep{"load_tool", `{"names":` + string(encoded) + `}`}
+}
+
+// requireStableTools fails unless every request carried the same tools array byte for byte, and
+// none of them names a tool in absent: the array a provider caches does not change with the use of
+// load_tool.
+func requireStableTools(t *testing.T, requests []providerRequest, absent ...string) {
+	t.Helper()
+	if len(requests) < 2 {
+		t.Fatalf("%d requests, want at least 2 to compare their tools arrays", len(requests))
+	}
+	first := requests[0].RawTools
+	if len(first) == 0 {
+		t.Fatal("the first request carried no tools")
+	}
+	for index, request := range requests {
+		if !slices.Equal(request.RawTools, first) {
+			t.Fatalf("the tools array of request %d differs from the first:\n%v\n%v", index, request.RawTools, first)
+		}
+		for _, name := range absent {
+			if slices.Contains(request.Tools, name) {
+				t.Fatalf("request %d lists the lazy tool %s: %v", index, name, request.Tools)
+			}
+		}
+	}
+}
+
+// Nothing writes the lazy set now: the file keeps the empty loaded list it was opened with.
+func requireNoLoads(t *testing.T, f subagentFixture) {
+	t.Helper()
+	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
+		t.Errorf("lazy_tools.json holds %v, want no loads: load_tool describes and runs, it does not load", loaded)
+	}
+}
+
+func requireCompleted(t *testing.T, f subagentFixture) {
+	t.Helper()
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+}
+
+func TestLazyToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
 	steps := []subagentStep{
 		{"skill", notesCall},
-		{"load_tool", `{"names":["skill"]}`},
-		{"skill", notesCall},
+		runStep("skill", notesCall),
 	}
 	f, _ := lazyFixture(t, []string{"skill"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
-	// The last request holds the whole history: the refused call, the load and the call after it.
+	requireCompleted(t, f)
+	// The last request holds the whole history: the refused direct call and the run.
 	history := lastRequestText(t, parentRequests(f))
 	refused := strings.Index(history, `"call_id":"call-step-1"`)
-	loaded := strings.Index(history, `"call_id":"call-step-2"`)
-	ran := strings.Index(history, `"call_id":"call-step-3"`)
-	if refused < 0 || loaded < 0 || ran < 0 {
-		t.Fatalf("the history lacks one of the three calls:\n%s", history)
+	ran := strings.Index(history, `"call_id":"call-step-2"`)
+	if refused < 0 || ran < 0 {
+		t.Fatalf("the history lacks one of the two calls:\n%s", history)
 	}
-	if !strings.Contains(history[refused:loaded], "tool_not_loaded") {
-		t.Errorf("the first read was not refused:\n%s", history)
+	if !strings.Contains(history[refused:ran], "tool_not_loaded") || !strings.Contains(history[refused:ran], "load_tool with run") {
+		t.Errorf("the direct call was not refused with the pointer to load_tool run:\n%s", history)
 	}
-	if strings.Contains(history[loaded:ran], "tool_not_loaded") {
-		t.Errorf("load_tool itself was refused:\n%s", history)
+	if strings.Contains(history[ran:], "tool_not_loaded") || !strings.Contains(history[ran:], "the secret is 42") {
+		t.Errorf("the run did not run the tool:\n%s", history)
 	}
-	if !strings.Contains(history[ran:], "the secret is 42") {
-		t.Errorf("the read after load did not run:\n%s", history)
-	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 || loaded[0] != "native.skill" {
-		t.Errorf("loaded set = %v, want [native.read]", loaded)
-	}
+	requireStableTools(t, parentRequests(f), "skill")
+	requireNoLoads(t, f)
 }
 
-// The MCP tool follows the same path: refused before load, run after.
-func TestLazyMCPToolIsRefusedBeforeLoadAndRunsAfter(t *testing.T) {
+func TestLazyMCPToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
 		{name, `{"word":"answer"}`},
-		{"load_tool", `{"names":["` + name + `"]}`},
-		{name, `{"word":"answer"}`},
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
+		runStep(name, `{"word":"answer"}`),
 	}
 	f, calls := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "tool_not_loaded") {
-		t.Errorf("the first MCP call was not refused:\n%s", history)
+		t.Errorf("the direct MCP call was not refused:\n%s", history)
 	}
-	if calls.Load() != 1 || !strings.Contains(history, "MCP says answer is 99") {
-		t.Errorf("the MCP server saw %d calls (want 1); the history:\n%s", calls.Load(), history)
+	if calls.Load() != 2 || strings.Count(history, "MCP says answer is 99") != 2 {
+		t.Errorf("the MCP server saw %d calls (want 2: a run by ID and a run by name); the history:\n%s", calls.Load(), history)
 	}
+	requireStableTools(t, parentRequests(f), name)
 }
 
-// A lazy tool is absent from the tools array before load and present, with its real schema, from
-// the next request after load_tool loaded it. load_tool is listed while a lazy tool is unloaded.
-func TestLazyMCPToolIsAbsentBeforeLoadAndPresentWithItsRealSchemaAfter(t *testing.T) {
+func TestLazyMCPToolIsNeverListedAndItsRealSchemaIsDescribedOnRequest(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["` + name + `"]}`},
-		{"load_tool", `{"names":["` + name + `"]}`},
+		describeStep(name),
+		runStep(name, `{"word":"answer"}`),
 	}
 	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	f.run(t)
+	requireCompleted(t, f)
 	parent := parentRequests(f)
 	if len(parent) < 3 {
 		t.Fatalf("parent made %d requests, want at least 3", len(parent))
 	}
-	if slices.Contains(parent[0].Tools, name) || !slices.Contains(parent[0].Tools, "load_tool") {
-		t.Fatalf("before load tools = %v, want load_tool and no %s", parent[0].Tools, name)
+	if !slices.Contains(parent[0].Tools, "load_tool") {
+		t.Fatalf("tools = %v, want load_tool", parent[0].Tools)
 	}
-	if !slices.Contains(parent[1].Tools, name) || !slices.Contains(parent[1].Tools, "load_tool") {
-		t.Errorf("after load tools = %v, want %s and load_tool (load_tool stays listed while enabled)", parent[1].Tools, name)
+	requireStableTools(t, parent, name)
+	// The describe result carries what the array no longer does: the real description and the server's inputSchema.
+	history := lastRequestText(t, parent)
+	describe := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
+	for _, want := range []string{"name: " + name, "id: mcp:fixture:lookup", "description: looks a word up", "inputSchema: ", "required", "additionalProperties"} {
+		if !strings.Contains(describe, want) {
+			t.Errorf("the describe result lacks %q:\n%s", want, describe)
+		}
 	}
-	if description := parent[1].Descriptions[name]; description != "looks a word up" {
-		t.Errorf("the listed MCP tool description = %q, want the real one (looks a word up)", description)
+	requireNoLoads(t, f)
+}
+
+// The tools array is the same bytes in every request of a run that lists, describes and runs a lazy tool:
+// nothing load_tool does adds to it, so a provider's prompt cache over the tools is not rewritten.
+func TestToolsArrayIsByteIdenticalAcrossListDescribeAndRun(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	steps := []subagentStep{
+		{"load_tool", `{}`},
+		describeStep("mcp:fixture:lookup"),
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
+		{"load_tool", `{}`},
 	}
-	// The schema the model is shown is the server's inputSchema, compared as parsed JSON because
-	// the SDK may re-encode it.
-	want := map[string]any{"type": "object", "properties": map[string]any{"word": map[string]any{"type": "string"}}, "required": []any{"word"}, "additionalProperties": false}
-	var got any
-	if err := json.Unmarshal(parent[1].Parameters[name], &got); err != nil {
-		t.Fatalf("decode the listed parameters %s: %v", parent[1].Parameters[name], err)
+	f, calls := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
+	requireCompleted(t, f)
+	parent := parentRequests(f)
+	if len(parent) != 5 {
+		t.Fatalf("parent made %d requests, want 5: one per scripted call and the answer", len(parent))
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("the listed MCP parameters = %v, want the server inputSchema %v", got, want)
+	requireStableTools(t, parent, name)
+	if calls.Load() != 1 || !strings.Contains(lastRequestText(t, parent), "MCP says answer is 99") {
+		t.Errorf("the run did not reach the MCP server (%d calls)", calls.Load())
 	}
 }
 
@@ -208,23 +260,19 @@ func TestLoadToolIsListedWhenNoLazyToolIsBound(t *testing.T) {
 	}
 }
 
-// The tools array keeps catalog order, and it is the same order after a restart over the same
-// state folder: a load adds its tool in place, it never reorders the rest.
-func TestLazyToolsArrayIsInCatalogOrderAfterARestart(t *testing.T) {
+func TestLazyToolsArrayIsTheSameAfterARestart(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["` + name + `"]}`},
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
 		{"skill", notesCall},
 	}
 	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	f.run(t)
+	requireCompleted(t, f)
 	parent := parentRequests(f)
-	if len(parent) < 2 {
-		t.Fatalf("parent made %d requests, want at least 2", len(parent))
-	}
-	before := parent[len(parent)-1].Tools
-	if slices.Index(before, name) < 0 || slices.Index(before, "read") > slices.Index(before, name) {
-		t.Fatalf("tools before restart = %v, want read before %s in catalog order", before, name)
+	requireStableTools(t, parent, name)
+	before := parent[len(parent)-1].RawTools
+	if slices.Index(parent[0].Tools, "skill") < 0 {
+		t.Fatalf("tools before restart = %v, want skill", parent[0].Tools)
 	}
 	f.provider.mu.Lock()
 	f.provider.parentSteps = []subagentStep{{"skill", notesCall}}
@@ -236,38 +284,32 @@ func TestLazyToolsArrayIsInCatalogOrderAfterARestart(t *testing.T) {
 	if len(after) == 0 {
 		t.Fatal("no request after restart")
 	}
-	if got := after[0].Tools; !slices.Equal(got, before) {
-		t.Errorf("tools after restart = %v, want the same catalog-ordered array %v", got, before)
+	if got := after[0].RawTools; !slices.Equal(got, before) {
+		t.Errorf("tools after restart = %v, want the same bytes %v", got, before)
 	}
 }
 
-// Restart over the same state folder restores the loaded set. The session's history persists
-// too, so the first run's results are still in it: the call after the restart is the fourth
-// scripted step, and it must run without a refusal.
-func TestLazyLoadIsRestoredAfterARestart(t *testing.T) {
-	steps := []subagentStep{
-		{"skill", notesCall},
-		{"load_tool", `{"names":["skill"]}`},
-		{"skill", notesCall},
-	}
+func TestLazyToolRunsThroughLoadToolAfterARestart(t *testing.T) {
+	steps := []subagentStep{runStep("skill", notesCall)}
 	f, _ := lazyFixture(t, []string{"skill"}, steps)
-	f.run(t)
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 {
-		t.Fatalf("before restart loaded = %v", loaded)
-	}
+	requireCompleted(t, f)
 	f.provider.mu.Lock()
-	f.provider.parentSteps = []subagentStep{{"skill", notesCall}, {"skill", notesCall}, {"skill", notesCall}, {"skill", notesCall}}
+	// The history persists, so the call after the restart is the second scripted step.
+	f.provider.parentSteps = []subagentStep{runStep("skill", notesCall), {"skill", notesCall}, runStep("skill", notesCall)}
 	f.provider.requests = nil
 	f.provider.mu.Unlock()
 	f.apiURL = f.restart(t, nil)
 	f.run(t)
 	history := lastRequestText(t, parentRequests(f))
-	after := strings.LastIndex(history, `"call_id":"call-step-4"`)
+	after := strings.LastIndex(history, `"call_id":"call-step-3"`)
 	if after < 0 {
-		t.Fatalf("the call after restart was not made:\n%s", history)
+		t.Fatalf("the run after restart was not made:\n%s", history)
 	}
 	if strings.Contains(history[after:], "tool_not_loaded") || !strings.Contains(history[after:], "the secret is 42") {
-		t.Errorf("the restored tool was refused or did not run after restart:\n%s", history[after:])
+		t.Errorf("the run was refused or did not run after restart:\n%s", history[after:])
+	}
+	if !strings.Contains(history, "tool_not_loaded") {
+		t.Errorf("the direct call after restart was not refused:\n%s", history)
 	}
 }
 
@@ -320,19 +362,26 @@ func TestRefusedLazyNativeCallFiresItsHookOnce(t *testing.T) {
 	}
 }
 
-// After load, a call to the lazy tool fires its hook exactly once: no double wrap.
-func TestLoadedLazyNativeCallFiresItsHookOnce(t *testing.T) {
-	steps := []subagentStep{
-		{"load_tool", `{"names":["skill"]}`},
-		{"skill", notesCall},
-	}
+func TestLazyNativeRunFiresTheTargetsHookOnce(t *testing.T) {
+	steps := []subagentStep{runStep("skill", notesCall)}
 	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "skill")
 	f.run(t)
 	if got := fires(t, marker); got != 1 {
-		t.Fatalf("pre_tool fired %d times for one loaded read, want 1", got)
+		t.Fatalf("pre_tool fired %d times for one run of the lazy skill, want 1", got)
 	}
 	if !strings.Contains(lastRequestText(t, parentRequests(f)), "the secret is 42") {
-		t.Error("the loaded read did not run")
+		t.Error("the run did not run the tool")
+	}
+}
+
+// With a hook on every tool, a list fires load_tool's own hook once, and a run fires the target's once and
+// not load_tool's: two calls, two firings.
+func TestLoadToolHooksFireForAListAndTheTargetOnlyForARun(t *testing.T) {
+	steps := []subagentStep{{"load_tool", `{}`}, runStep("skill", notesCall)}
+	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "*")
+	f.run(t)
+	if got := fires(t, marker); got != 2 {
+		t.Fatalf("pre_tool fired %d times for a list and a run, want 2", got)
 	}
 }
 
@@ -521,221 +570,180 @@ func TestOpenLazySetIsNilWithoutLazyEntries(t *testing.T) {
 	}
 }
 
-// A batch loads several lazy tools in one call. The file is written once, and the model's next
-// call to each of them validates against the real schema.
-func TestLazyBatchLoadsSeveralToolsInOneCall(t *testing.T) {
+func TestLazyBatchDescribesSeveralToolsInOneCall(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["skill","` + name + `"]}`},
-		{"skill", notesCall},
-		{name, `{"word":"answer"}`},
+		describeStep("skill", name),
+		runStep("skill", notesCall),
+		runStep(name, `{"word":"answer"}`),
 	}
 	f, calls := lazyFixture(t, []string{"skill", "mcp:fixture:lookup"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if strings.Contains(history, "tool_not_loaded") {
-		t.Errorf("a batched tool was still refused after the load:\n%s", history)
+	if !strings.Contains(history, "name: skill") || !strings.Contains(history, "name: "+name) {
+		t.Errorf("the batch did not describe both tools:\n%s", history)
 	}
 	if !strings.Contains(history, "the secret is 42") || calls.Load() != 1 {
-		t.Errorf("the batched tools did not run (MCP calls %d):\n%s", calls.Load(), history)
+		t.Errorf("the described tools did not run (MCP calls %d):\n%s", calls.Load(), history)
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 2 {
-		t.Errorf("loaded set = %v, want both tools", loaded)
-	}
+	requireStableTools(t, parentRequests(f), "skill", name)
+	requireNoLoads(t, f)
 }
 
-// An unknown name in a batch does not stop the valid ones, and gets its own section.
-func TestLazyBatchWithAnUnknownNameLoadsTheRest(t *testing.T) {
-	steps := []subagentStep{
-		{"load_tool", `{"names":["bogus","skill"]}`},
-		{"skill", notesCall},
-	}
+func TestLazyBatchWithAnUnknownNameDescribesTheRest(t *testing.T) {
+	steps := []subagentStep{describeStep("bogus", "skill")}
 	f, _ := lazyFixture(t, []string{"skill"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "bogus: not a lazy tool of this profile") {
 		t.Errorf("the unknown name has no section:\n%s", history)
 	}
-	if !strings.Contains(history, "the secret is 42") {
-		t.Errorf("the valid name did not load:\n%s", history)
+	if !strings.Contains(history, "name: skill") {
+		t.Errorf("the valid name was not described:\n%s", history)
 	}
 }
 
-// A batch over tools.lazy_load_max is refused, and nothing is loaded. The limit counts matched tools,
-// so the batch matches two lazy tools through one pattern.
-func TestLazyBatchOverTheLimitLoadsNothing(t *testing.T) {
+func TestLazyBatchOverTheLimitDescribesNothing(t *testing.T) {
 	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:fixture:*","skill"]}`},
+		describeStep("mcp:fixture:*", "skill"),
 		{"skill", notesCall},
 	}
 	f, _ := lazyFixtureWithMax(t, []string{"skill", "mcp:fixture:lookup"}, 1, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "matched 2 lazy tools, the limit is 1 (tools.lazy_load_max)") {
 		t.Errorf("the batch was not refused by the limit:\n%s", history)
 	}
+	if strings.Contains(history, "name: skill") {
+		t.Errorf("a refused batch described a tool:\n%s", history)
+	}
 	if !strings.Contains(history, "tool_not_loaded") {
-		t.Errorf("read was loaded by a refused batch:\n%s", history)
+		t.Errorf("a direct call after a refused batch was not refused:\n%s", history)
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
-		t.Errorf("loaded set = %v after a refused batch, want none", loaded)
-	}
+	requireNoLoads(t, f)
 }
 
-// A pattern expands to the lazy tools it selects: "mcp:fixture:*" loads the server's lazy tool,
-// and the call that follows validates against its real schema.
-func TestLazyPatternLoadsEveryLazyToolOfTheServer(t *testing.T) {
+func TestLazyPatternDescribesEveryLazyToolOfTheServer(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:fixture:*"]}`},
-		{name, `{"word":"answer"}`},
+		describeStep("mcp:fixture:*"),
+		runStep(name, `{"word":"answer"}`),
 	}
 	f, calls := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if strings.Contains(history, "tool_not_loaded") || calls.Load() != 1 {
-		t.Errorf("the pattern did not load the server's tool (MCP calls %d):\n%s", calls.Load(), history)
+	if !strings.Contains(history, "name: "+name) || calls.Load() != 1 {
+		t.Errorf("the pattern did not describe the server's tool, or the run failed (MCP calls %d):\n%s", calls.Load(), history)
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 || loaded[0] != "mcp:fixture:lookup" {
-		t.Errorf("loaded set = %v, want the one server tool", loaded)
-	}
+	requireNoLoads(t, f)
 }
 
-// A pattern that matches no lazy tool gets its own line; the other patterns still load, and an
-// all-no-match batch writes nothing.
-func TestLazyPatternWithNoMatchLoadsTheRest(t *testing.T) {
-	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:nothere:*","skill"]}`},
-		{"skill", notesCall},
-	}
+func TestLazyPatternWithNoMatchDescribesTheRest(t *testing.T) {
+	steps := []subagentStep{describeStep("mcp:nothere:*", "skill")}
 	f, _ := lazyFixture(t, []string{"skill"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "no lazy tool matches mcp:nothere:*") {
 		t.Errorf("the no-match pattern has no line:\n%s", history)
 	}
-	if !strings.Contains(history, "the secret is 42") {
-		t.Errorf("the other pattern did not load:\n%s", history)
+	if !strings.Contains(history, "name: skill") {
+		t.Errorf("the other pattern was not described:\n%s", history)
 	}
 }
 
-// A tool the profile does not list as lazy is not loaded by "*": the profile lists only read, so
-// "*" selects read alone, and the MCP lookup, which is not lazy, was never gated and still runs.
-func TestLazyStarLoadsOnlyTheLazyToolsTheProfileListed(t *testing.T) {
+func TestLazyStarDescribesOnlyTheLazyToolsTheProfileListed(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["*"]}`},
+		describeStep("*"),
 		{name, `{"word":"answer"}`},
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
 	}
-	f, _ := lazyFixture(t, []string{"skill"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	f, calls := lazyFixture(t, []string{"skill"}, steps)
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if strings.Contains(history, "tool_not_loaded") {
-		t.Errorf("a tool the profile did not list as lazy was gated:\n%s", history)
+	describe := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
+	if !strings.Contains(describe, "name: skill") || strings.Contains(describe, name) {
+		t.Errorf("* did not describe read alone:\n%s", describe)
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 || loaded[0] != "native.skill" {
-		t.Errorf("loaded set = %v, want read alone", loaded)
+	direct := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
+	if strings.Contains(direct, "tool_not_loaded") || calls.Load() != 1 {
+		t.Errorf("a tool the profile did not list as lazy was gated (MCP calls %d):\n%s", calls.Load(), direct)
+	}
+	if run := history[strings.Index(history, `"call_id":"call-step-3"`):]; !strings.Contains(run, "unknown_lazy_tool") {
+		t.Errorf("a run of a tool that is not lazy was not refused:\n%s", run)
 	}
 }
 
-// Overlapping patterns load a tool once: the file lists it once, and its line appears once, under
-// the first section, while the later section says it is already listed above. The result names the
-// tool; its definition is not repeated (the next request's tools array carries it).
-func TestLazyOverlappingPatternsShowAToolOnce(t *testing.T) {
-	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:fixture:*","mcp:fixture:lookup"]}`},
-	}
+func TestLazyOverlappingPatternsDescribeAToolOnce(t *testing.T) {
+	steps := []subagentStep{describeStep("mcp:fixture:*", "mcp:fixture:lookup")}
 	f, _ := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if strings.Count(history, mcpToolNameFor("fixture", "lookup")+" — ") != 1 || !strings.Contains(history, "already listed above") || strings.Contains(history, "inputSchema:") {
-		t.Errorf("the overlap was not shown once:\n%s", history)
-	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 {
-		t.Errorf("loaded set = %v, want one tool", loaded)
+	if strings.Count(history, "name: "+mcpToolNameFor("fixture", "lookup")) != 1 || !strings.Contains(history, "already described above") || strings.Count(history, "inputSchema:") != 1 {
+		t.Errorf("the overlap was not described once:\n%s", history)
 	}
 }
 
-// A profile that hides an MCP tool which a wildcard entry would match: the pattern loads only the
-// tool the profile shows, the hidden tool never reaches the file or the output, and its call is
-// refused as an unknown tool rather than as one not loaded.
-func TestLazyPatternNeverLoadsAToolTheProfileHides(t *testing.T) {
+func TestLazyPatternNeverDescribesOrRunsAToolTheProfileHides(t *testing.T) {
 	hidden := mcpToolNameFor("fixture", "hidden")
 	lookup := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:fixture:*"]}`},
+		describeStep("mcp:fixture:*"),
 		{hidden, `{"word":"answer"}`},
-		{lookup, `{"word":"answer"}`},
+		runStep("mcp:fixture:hidden", `{"word":"answer"}`),
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
 	}
 	profileTools := map[string]any{"allow": []string{"load_tool", "mcp:fixture:*"}, "deny": []string{"mcp:fixture:hidden"}, "lazy": []string{"mcp:fixture:*"}}
 	f, calls := lazyFixtureWithExtraTools(t, profileTools, []string{"hidden"}, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	loadResult := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
-	if strings.Contains(loadResult, hidden) || strings.Contains(loadResult, "mcp:fixture:hidden") {
-		t.Errorf("the pattern output names the hidden tool:\n%s", loadResult)
+	describe := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
+	if strings.Contains(describe, hidden) || strings.Contains(describe, "mcp:fixture:hidden") {
+		t.Errorf("the pattern output names the hidden tool:\n%s", describe)
 	}
-	if !strings.Contains(loadResult, lookup) {
-		t.Errorf("the visible lazy tool is missing from the pattern output:\n%s", loadResult)
+	if !strings.Contains(describe, lookup) {
+		t.Errorf("the visible lazy tool is missing from the pattern output:\n%s", describe)
 	}
 	hiddenResult := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
 	if !strings.Contains(hiddenResult, "unknown_tool") || strings.Contains(hiddenResult, "tool_not_loaded") {
 		t.Errorf("the hidden tool's call was not refused as unknown:\n%s", hiddenResult)
 	}
+	hiddenRun := history[strings.Index(history, `"call_id":"call-step-3"`):strings.Index(history, `"call_id":"call-step-4"`)]
+	if !strings.Contains(hiddenRun, "unknown_lazy_tool") {
+		t.Errorf("the run of the hidden tool was not refused:\n%s", hiddenRun)
+	}
 	if calls.Load() != 1 {
 		t.Errorf("MCP calls = %d, want 1: the visible lookup only", calls.Load())
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 || loaded[0] != "mcp:fixture:lookup" {
-		t.Errorf("loaded set = %v, want the visible lookup alone", loaded)
-	}
 }
 
-// A server with more lazy tools than tools.lazy_load_max: the wildcard over the server is refused
-// with nothing loaded, and the error names the limit and the match count. A narrower selection
-// within the limit loads and writes the file.
-func TestLazyPatternOverTheLimitOnALargeServerLoadsNothing(t *testing.T) {
+func TestLazyPatternOverTheLimitOnALargeServerDescribesNothing(t *testing.T) {
 	extra := make([]string, 0, 17)
 	for index := 1; index <= 17; index++ {
 		extra = append(extra, fmt.Sprintf("t%02d", index))
 	}
 	narrow := mcpToolNameFor("fixture", "t01")
 	steps := []subagentStep{
-		{"load_tool", `{"names":["mcp:fixture:*"]}`},
-		{"load_tool", `{"names":["mcp:fixture:t01"]}`},
-		{narrow, `{"word":"answer"}`},
+		describeStep("mcp:fixture:*"),
+		describeStep("mcp:fixture:t01"),
+		runStep("mcp:fixture:t01", `{"word":"answer"}`),
 	}
 	profileTools := map[string]any{"allow": []string{"load_tool", "mcp:fixture:*"}, "lazy": []string{"mcp:fixture:*"}}
 	f, calls := lazyFixtureWithExtraTools(t, profileTools, extra, steps)
-	if body := f.run(t); !strings.Contains(body, "event: completed") {
-		t.Fatalf("run did not complete:\n%s", body)
-	}
+	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	refused := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
 	if !strings.Contains(refused, "matched 18 lazy tools, the limit is 16 (tools.lazy_load_max)") {
 		t.Errorf("the wildcard was not refused by the limit:\n%s", refused)
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 1 || loaded[0] != "mcp:fixture:t01" {
-		t.Errorf("loaded set = %v, want the narrow selection alone", loaded)
+	described := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
+	if !strings.Contains(described, "name: "+narrow) {
+		t.Errorf("the narrow selection was not described:\n%s", described)
 	}
 	if calls.Load() != 1 {
 		t.Errorf("MCP calls = %d, want 1 for the narrow tool", calls.Load())
 	}
+	requireNoLoads(t, f)
 }
 
 // load_tool is not in a subagent child's catalog: the child is built from the parent's native tools
@@ -776,8 +784,8 @@ func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T
 	calls := &atomic.Int32{}
 	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"subagent", "mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
-	// The parent loads subagent first: a lazy subagent is refused until the owner's set loads it.
-	f.provider.parentSteps = []subagentStep{{"load_tool", `{"names":["subagent"]}`}, {"subagent", `{"task":"look it up","agent":"explore"}`}}
+	// The parent runs the lazy subagent through load_tool: a call that names subagent is refused.
+	f.provider.parentSteps = []subagentStep{runStep("subagent", `{"task":"look it up","agent":"explore"}`)}
 	f.provider.childFirstCall = [2]string{name, `{}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)

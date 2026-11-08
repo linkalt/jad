@@ -64,6 +64,25 @@ func executeNamedCall(t *testing.T, catalog *tools.Catalog, name, arguments stri
 	return string(raw)
 }
 
+// executeNamedCallViaRunner is executeNamedCall for a call a runner dispatches: the execution context
+// has ViaRunner, which is what lets a lazy tool run.
+func executeNamedCallViaRunner(t *testing.T, catalog *tools.Catalog, name, arguments string) string {
+	t.Helper()
+	call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c", "name": name, "arguments": arguments})
+	raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{SessionKey: testSessionKey, ViaRunner: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// executeThroughLoadTool calls name through load_tool run, with the given arguments object.
+func executeThroughLoadTool(t *testing.T, catalog *tools.Catalog, name, arguments string) string {
+	t.Helper()
+	encoded, _ := json.Marshal(map[string]any{"run": name, "arguments": json.RawMessage(arguments)})
+	return executeNamedCall(t, catalog, "load_tool", string(encoded))
+}
+
 // The pre_tool hook fires for the subagent call and for the profile_message call; each one
 // reports to the marker once.
 func TestPreToolHookFiresForSubagentAndProfileMessageCalls(t *testing.T) {

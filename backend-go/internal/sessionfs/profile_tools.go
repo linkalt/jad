@@ -25,16 +25,16 @@ type ProfileToolSettings struct {
 	// Deny lists what is taken away, in the same entry form. It wins over Allow, and
 	// it also limits the profile's sub-agents: a denied tool is in no child's catalog.
 	Deny []string
-	// Lazy lists the tools the model sees by name and summary only; load_tool loads a tool,
-	// which the next request lists with its full definition, and a call to it is refused
-	// until then. Same entry forms as Allow and Deny. A lazy entry counts as allowed, and
-	// so does load_tool while Lazy is non-empty, so neither needs an Allow entry; Deny
-	// still wins. Nil when the block has no lazy list.
+	// Lazy lists the tools the model sees by name and summary only, through load_tool: it
+	// describes a tool (full definition) and runs it; a call that names a lazy tool is refused.
+	// Same entry forms as Allow and Deny. A lazy entry counts as allowed, and so does
+	// load_tool while Lazy is non-empty, so neither needs an Allow entry; Deny still wins.
+	// Nil when the block has no lazy list.
 	Lazy []string
 	// LazySummaryBytes bounds the first line of a lazy tool's description that the
 	// model sees in place of the full description.
 	LazySummaryBytes int64
-	// LazyLoadMax bounds how many names one load_tool call may load.
+	// LazyLoadMax bounds how many lazy tools one load_tool describe call (names) may match.
 	LazyLoadMax int64
 }
 
@@ -49,14 +49,14 @@ const (
 	maxLazySummaryBytes     = 4096
 )
 
-// Bounds of tools.lazy_load_max, the most names one load_tool call may load.
+// Bounds of tools.lazy_load_max, the most lazy tools one load_tool describe call may match.
 const (
 	defaultLazyLoadMax = 16
 	minLazyLoadMax     = 1
 	maxLazyLoadMax     = 100
 )
 
-// LoadToolName is the native tool that loads a lazy tool, so its full definition is listed. It
+// LoadToolName is the native tool that lists, describes and runs the lazy tools. It
 // is enabled only by tools.native.load_tool, like every native tool; tools.lazy needs it
 // (checkLazyNeedsLoadTool).
 const LoadToolName = "load_tool"

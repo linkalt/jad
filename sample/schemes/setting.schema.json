@@ -1414,7 +1414,7 @@
                   "type": "array",
                   "uniqueItems": true,
                   "default": [],
-                  "description": "Native tools a script may call, in this order; none by default. exec, async, subagent, tool_smith and task can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself has exec/bash trust and may use raw fs, network and process APIs; only the sandbox setting (when its tools list tool_smith) limits it.",
+                  "description": "Native tools a script may call, in this order; none by default. exec, async, subagent, tool_smith, task and load_tool can never be called through the bridge. The profile's tools.allow and tools.deny also limit the bridge, so a script reaches only what the model sees. The script itself has exec/bash trust and may use raw fs, network and process APIs; only the sandbox setting (when its tools list tool_smith) limits it.",
                   "items": {
                     "type": "string",
                     "minLength": 1,
@@ -1679,7 +1679,7 @@
             },
             "load_tool": {
               "type": "object",
-              "description": "Go backend only. Lists the profile's tools.lazy tools (name and one-line summary), or loads the named ones; a loaded tool is listed with its full definition from the next request. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent gets it only when the owning profile has tools.lazy and the agent lists load_tool, and then it loads from the owner's lazy_tools.json.",
+              "description": "Go backend only. The runner for the profile's tools.lazy tools: with no arguments it lists them (name and one-line summary), with names it describes them (name, id, description, inputSchema), with run and arguments it runs one by its exact name or mcp:<server>:<tool>. A lazy tool is never in the model's tools array, so using load_tool never changes the array a provider caches. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent gets it only when the owning profile has tools.lazy and the agent lists load_tool, and then it describes and runs only the tools its own catalog holds.",
               "additionalProperties": false
             },
             "task": {
