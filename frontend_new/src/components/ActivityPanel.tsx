@@ -55,7 +55,7 @@ export function ActivityPanel({
       {detail.kind === 'reasoning' && <ReasoningDetail content={detail.content} steps={detail.steps} />}
       {detail.kind === 'tool' && (
         <ToolCallDetail call={detail.call} result={detail.result} source={detail.source}>
-          {detail.result?.subagent !== undefined && <SubagentTranscript subagent={detail.result.subagent} />}
+          {detail.result?.subagent !== undefined && <SubagentTranscript key={detail.key} subagent={detail.result.subagent} />}
         </ToolCallDetail>
       )}
       {detail.kind === 'hosted' && <HostedToolDetail part={detail.part} source={detail.source} />}

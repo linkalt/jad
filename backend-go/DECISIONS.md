@@ -2397,3 +2397,14 @@ Still open:
 - A result record over 1 MiB is skipped by the line scanner, so its call stays unpaired: the step is withheld while it is the last one in the file and is shown without that result once the child moved on. A call without a result renders settled (never running); the renderer cannot tell it from a call whose result was cut by the part limit.
 - Tool-result images of the child are not shown (the server strips them; the renderer would not resolve them against the parent's session).
 - The T-111 gaps stand unchanged: constants instead of settings, a still-running child is not refreshed in an open panel (and a 304 hides later steps), compacted children, duplicate call-id folders, remote subagents, the synchronous live read.
+
+## T-113: subagent transcript behind "Show Transcript", child summary not repeated (Go, 2026-11-08)
+
+Frontend only; no Go touched. The right panel shows a `Show Transcript` / `Hide Transcript` button below the tool result, closed on every open (`ActivityPanel` keys `SubagentTranscript` by the call's `detail.key`, so a switch to another call resets it and closing unmounts it). `subagentTranscriptMessages` drops the trailing completed step's text parts when the snapshot has a completed tool call, and drops that step if nothing is left; a tool-less snapshot is shown whole. The shared `ReadOnlyTranscript` and the backend payload are unchanged.
+
+Still open:
+
+- No DOM in the frontend suite and the browser tool could not reach a local dev server earlier (T-112), so the disclosure (closed default, toggle on click, reset on switching calls) is pinned at the source plus mutation-checked, not exercised in a rendered page. Closing it: a component test with a DOM, or a look in a real browser.
+- `aria-expanded` is passed to the Astryx `Button`; it type-checks but whether the component forwards it to the DOM was not checked.
+- The rule takes the last *completed* step as the trailing one. If a snapshot ever ends with a still-running step, the last completed step's text would be hidden although it is not the child's summary; today the snapshot is served only for a finished child (T-112), so this does not occur.
+- A trailing step that mixes text with tool calls loses its text (e.g. "running this now"): accepted by the rule, not distinguished from a summary.

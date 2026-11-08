@@ -100,13 +100,14 @@ test('the subagent snapshot becomes one assistant message with a range per compl
   assert.equal(messages.length, 1);
   const [only] = messages;
   assert.equal(only.role, 'assistant');
-  assert.equal(only.parts.length, 6);
+  // The trailing step's closing text is the tool result's output, so it is not shown.
+  assert.equal(only.parts.length, 5);
   assert.deepEqual(only.steps, [
     {id: '1.1', startPart: 0, endPart: 3, hasTools: true},
-    {id: '1.4', startPart: 3, endPart: 6, hasTools: true},
+    {id: '1.4', startPart: 3, endPart: 5, hasTools: true},
   ]);
   // The steps' calls pair with their own results and stay in their own step.
-  assert.deepEqual(shape(readOnlySegments(only)), ['reasoning tools[a+] tools[b+]', 'text']);
+  assert.deepEqual(shape(readOnlySegments(only)), ['reasoning tools[a+] tools[b+]']);
 });
 
 test('no completed step, no snapshot, or a malformed snapshot gives no message', () => {
@@ -125,8 +126,11 @@ test('an inline expand inside the snapshot opens no panel', () => {
   for (const name of ['ReadOnlyTranscript.tsx', 'SubagentTranscript.tsx']) {
     const source = code(component(name));
     assert.doesNotMatch(source, /ActivityPanelContext|ActivityRow|activity-panel|right-panel|useContext/, `${name} must not reach the panel`);
-    assert.doesNotMatch(source, /data-panel-toggle|onClick|onKeyDown|role="button"/, `${name} must not add its own click targets`);
+    assert.doesNotMatch(source, /data-panel-toggle|onKeyDown|role="button"/, `${name} must not add its own click targets`);
   }
+  // The transcript's only click target is the Show/Hide Transcript disclosure.
+  assert.doesNotMatch(code(component('ReadOnlyTranscript.tsx')), /onClick/);
+  assert.equal((code(component('SubagentTranscript.tsx')).match(/onClick/g) ?? []).length, 1);
   const renderer = code(component('ReadOnlyTranscript.tsx'));
   // Rows expand in place: every call and reasoning row carries its own detail.
   assert.equal((renderer.match(/resultDetail:/g) ?? []).length, 3);
@@ -141,4 +145,21 @@ test('the panel hosts the snapshot below the result and the shared body does not
   assert.match(panel, /<ToolCallDetail[^>]*>\s*\{detail\.result\?\.subagent !== undefined && <SubagentTranscript/);
   const parts = code(component('TranscriptParts.tsx'));
   assert.doesNotMatch(parts, /SubagentTranscript|ReadOnlyTranscript/, 'TranscriptParts must not import the read-only view (no cycle)');
+});
+
+test('the panel shows the transcript behind a disclosure that starts closed on every open', () => {
+  const view = code(component('SubagentTranscript.tsx'));
+  // Closed by default; one click flips it; the control names the action it will take.
+  assert.match(view, /useState\(false\)/);
+  assert.match(view, /label=\{isOpen \? 'Hide Transcript' : 'Show Transcript'\}/);
+  assert.match(view, /onClick=\{\(\) => setIsOpen\(open => !open\)\}/);
+  // Heading and transcript exist only inside the open branch; nothing renders when empty.
+  assert.match(view, /\{isOpen && \([\s\S]*Subagent transcript[\s\S]*<ReadOnlyTranscript messages=\{messages\} \/>[\s\S]*\)\}/);
+  assert.equal((view.match(/<ReadOnlyTranscript/g) ?? []).length, 1);
+  assert.match(view, /if \(messages\.length === 0\) \{\s*return null;/);
+  assert.ok(view.indexOf('return null') < view.indexOf('Show Transcript'));
+  // The panel stays mounted while its detail switches, so the call's key resets the state;
+  // closing the panel unmounts it, so reopening starts closed too.
+  const panel = code(component('ActivityPanel.tsx'));
+  assert.match(panel, /<SubagentTranscript key=\{detail\.key\} subagent=/);
 });
