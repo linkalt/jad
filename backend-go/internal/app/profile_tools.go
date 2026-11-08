@@ -2,14 +2,11 @@ package app
 
 import (
 	"fmt"
-	"log/slog"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
-	"jad/backend-go/internal/tools/native"
 )
 
 // applyProfileTools narrows the registered tools to what the selected profile's model
@@ -43,20 +40,16 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 	return exposed, hidden, nil
 }
 
-// openLazySet opens the profile's lazy set for one prepare, from its tools.lazy entries and
-// summary bound. It is nil when the profile has no lazy tools. The set lives in the profile's own
-// state folder, next to its transcript, so a profile_message target with its own tools.lazy never
-// reads or rewrites the caller's loaded set. Lazy tools need a catalog layout: a session without
-// a state folder is a configuration error.
-func openLazySet(config sessionfs.SessionConfig, logger *slog.Logger) (*tools.LazySet, error) {
+// openLazySet builds the profile's lazy set for one prepare, from its tools.lazy entries and
+// summary bound. It is nil when the profile has no lazy tools. The set lives in memory only (no state
+// file, so no catalog layout is needed), and each prepare builds its own, so a profile_message target
+// with its own tools.lazy never shares the caller's.
+func openLazySet(config sessionfs.SessionConfig) *tools.LazySet {
 	if len(config.ProfileTools.Lazy) == 0 {
-		return nil, nil
-	}
-	if config.StateDir == "" || config.MessagesPath == "" {
-		return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy needs a catalog layout; this session has no state folder", config.SettingPath, config.Profile)}
+		return nil
 	}
 	shown := func(definition tools.Definition) bool { return tools.ProfileShows(config.ProfileTools, definition) }
-	return tools.OpenLazySet(filepath.Dir(config.MessagesPath), config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown, logger)
+	return tools.NewLazySet(config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown)
 }
 
 // checkLazyLoadToolShown refuses a profile whose tools.lazy is set while its deny hides load_tool
@@ -77,16 +70,16 @@ func checkLazyLoadToolShown(config sessionfs.SessionConfig, settings sessionfs.P
 	return nil
 }
 
-// checkLazyEntriesVisible refuses a tools.lazy entry that names no tool the lazy pass can bind and
-// the profile shows: a lazy tool that is denied could never be loaded or called (a lazy entry needs
-// no allow entry: tools.ProfileShows counts it as allowed), and a tool the pass never binds would stay
-// in the array. Either way the entry
-// is a configuration error and not a tool that is quietly absent or quietly ignored.
+// checkLazyEntriesVisible refuses a tools.lazy entry that names no MCP or extension tool the profile
+// shows: a lazy tool that is denied could never be run (a lazy entry needs no allow entry:
+// tools.ProfileShows counts it as allowed), and a native tool is never lazy, so it would stay in
+// the array. Either way the entry is a configuration error and not a tool that is quietly absent
+// or quietly ignored.
 func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.ProfileToolSettings, registered []tools.Definition) error {
 	for index, entry := range settings.Lazy {
 		visible := false
 		for _, definition := range registered {
-			if tools.EntryMatches(entry, definition) && !native.NotLazyBindable(definition) && tools.ProfileShows(settings, definition) {
+			if tools.LazyEntryMatches(entry, definition) && tools.ProfileShows(settings, definition) {
 				visible = true
 				break
 			}
@@ -94,7 +87,7 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 		if visible {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no tool the profile shows that can be lazy (a denied tool or load_tool cannot be lazy)",
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no MCP or extension tool the profile shows (a denied tool cannot be lazy, and a native tool never is)",
 			config.SettingPath, config.Profile, index, entry)}
 	}
 	return nil

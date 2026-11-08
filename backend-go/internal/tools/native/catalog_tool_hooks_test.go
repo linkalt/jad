@@ -109,13 +109,10 @@ func TestBlockingPreToolStopsASubagentRun(t *testing.T) {
 	}
 }
 
-// A native lazy tool is gated for a child too: the child's copy of read is the gated one, so a child
-// calling it before a load is refused with tool_not_loaded, and the real schema is not run.
-func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+// A native tool is not gated for a child either, whatever the owner's lazy set is handed: the child's copy of
+// read_image runs when it is called, and is not refused as lazy.
+func TestChildOfAParentNamingANativeToolLazyGetsItEager(t *testing.T) {
+	set := tools.NewLazySet([]string{"read_image"}, 256, nil)
 	readerAgent := agentNamed("explore")
 	readerAgent.Tools, readerAgent.HasTools = []string{"read_image"}, true
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 1, Agents: []sessionfs.NativeSubagentAgent{readerAgent}}
@@ -136,32 +133,8 @@ func TestChildOfAParentWithANativeLazyToolGetsTheGatedCopy(t *testing.T) {
 		t.Fatalf("launcher ran %d times, want 1", len(launcher.requests))
 	}
 	childRead := executeNamedCall(t, launcher.requests[0].Tools, "read_image", `{"path":"notes.png"}`)
-	if !strings.Contains(childRead, "tool_not_loaded") {
-		t.Fatalf("the child's read of an unloaded lazy tool was not refused: %s", childRead)
-	}
-}
-
-// NotLazyBindable names exactly load_tool: the one native tool that can never be lazy. The late-built
-// transcript, transcripts, profile, profile_message and subagent tools are bound by lazyLate, and an
-// ordinary native tool, the extension decide_systemone and an MCP tool are bound by the lazy pass.
-func TestNotLazyBindableRefusesExactlyLoadTool(t *testing.T) {
-	if !NotLazyBindable(tools.Definition{ID: loadToolID, Source: "native"}) {
-		t.Errorf("%s can never be lazy but NotLazyBindable accepts it", loadToolID)
-	}
-	for _, definition := range []tools.Definition{
-		{ID: subagentToolID, Source: "native", Name: "subagent"},
-		{ID: transcriptToolID, Source: "native", Name: "transcript"},
-		{ID: transcriptsToolID, Source: "native", Name: "transcripts"},
-		{ID: profileToolID, Source: "native", Name: "profile"},
-		{ID: profileMessageToolID, Source: "native", Name: "profile_message"},
-		{ID: readImageToolID, Source: "native", Name: "read_image"},
-		{ID: execToolID, Source: "native", Name: "exec"},
-		{ID: "decide_systemone", Source: "extension", Name: "decide_systemone"},
-		{ID: "mcp:docs:search", Source: "mcp", Name: "search"},
-	} {
-		if NotLazyBindable(definition) {
-			t.Errorf("%s can be lazy but NotLazyBindable refuses it", definition.ID)
-		}
+	if strings.Contains(childRead, "tool_not_loaded") {
+		t.Fatalf("the child's read_image was refused as lazy: %s", childRead)
 	}
 }
 
@@ -212,17 +185,14 @@ func TestPreToolHookFiresForACallMadeByAChild(t *testing.T) {
 func TestRefusedLazyCallRunsNoToolAndStillFiresPostTool(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "post")
 	post := eventHook("log", "*", "echo fired >> "+marker)
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := tools.NewLazySet([]string{"mcp:docs:read_image"}, 256, nil)
 	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ran := 0
 	real := tools.Tool{
-		Definition: tools.Definition{ID: readImageToolID, Source: "native", Name: "read_image", Description: "read_image", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Definition: tools.Definition{ID: "mcp:docs:read_image", Source: "mcp", Name: "read_image", Description: "read_image", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Validator:  validator,
 		Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) {
 			ran++
@@ -275,10 +245,7 @@ func TestNestedCopyIsHookedBeforeAnyBindOrLazySet(t *testing.T) {
 	if err := mcp.BindToolsets(nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	set, err := tools.OpenLazySet(t.TempDir(), nil, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := tools.NewLazySet(nil, 256, nil)
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}

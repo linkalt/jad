@@ -94,12 +94,6 @@ func normalizeProfileTools(raw json.RawMessage, profilePath string) (ProfileTool
 		if settings.Lazy, err = normalizeProfileToolList(lazyRaw, "lazy", profilePath); err != nil {
 			return ProfileToolSettings{}, err
 		}
-		// load_tool is what shows a lazy tool, so it cannot itself wait to be loaded.
-		for index, entry := range settings.Lazy {
-			if entry == LoadToolName {
-				return ProfileToolSettings{}, configError("%s.tools.lazy[%d] %q cannot be lazy: it is the tool that loads the others", profilePath, index, LoadToolName)
-			}
-		}
 	}
 	if hasAllow {
 		if settings.Allow, err = normalizeProfileToolList(allowRaw, "allow", profilePath); err != nil {
@@ -141,12 +135,30 @@ func normalizeProfileToolList(raw json.RawMessage, name, profilePath string) ([]
 		if err := checkProfileToolEntry(entry); err != nil {
 			return nil, configError("%s.tools.%s[%d] %v", profilePath, name, index, err)
 		}
+		if name == "lazy" {
+			if err := checkLazyEntry(entry); err != nil {
+				return nil, configError("%s.tools.lazy[%d] %v", profilePath, index, err)
+			}
+		}
 		if containsString(entries, entry) {
 			return nil, configError("%s.tools.%s[%d] repeats %q", profilePath, name, index, entry)
 		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// checkLazyEntry refuses a tools.lazy entry that names a native tool: only MCP tools and extension
+// tools can be lazy, since a native tool is always in the model's tools array. load_tool is a native
+// tool and also the one that loads the others. The error text continues "lazy[i] ...".
+func checkLazyEntry(entry string) error {
+	switch {
+	case entry == LoadToolName:
+		return fmt.Errorf("%q cannot be lazy: it is the tool that loads the others", entry)
+	case containsString(nativeToolNames, entry):
+		return fmt.Errorf("%q is a native tool and cannot be lazy: tools.lazy takes MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (%s)", entry, strings.Join(extensionToolNames, ", "))
+	}
+	return nil
 }
 
 // CheckToolEntry checks one tools.allow entry: a native tool name, mcp:<server>:<tool> or

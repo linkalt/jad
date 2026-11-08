@@ -193,22 +193,6 @@ func dirFiles(t *testing.T, dir string) []string {
 	return names
 }
 
-// lazyFileNames reads the loaded list of one profile's lazy_tools.json, or nil when it has none.
-func lazyFileNames(t *testing.T, dir string) []string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, "lazy_tools.json"))
-	if err != nil {
-		return nil
-	}
-	var state struct {
-		Loaded []string `json:"loaded"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode %s: %v", dir, err)
-	}
-	return state.Loaded
-}
-
 func TestProfileMessageTargetRunsItsLazyToolThroughItsOwnLoadTool(t *testing.T) {
 	f := newProfileLazyFixture(t, []string{"mcp:fixture:*"}, []string{"mcp:fixture:*"}, false)
 	f.scripts["target-model"] = []string{functionCallItem("load_tool", `{"run":"mcp:fixture:lookup","arguments":{"word":"x"}}`)}
@@ -218,12 +202,8 @@ func TestProfileMessageTargetRunsItsLazyToolThroughItsOwnLoadTool(t *testing.T) 
 	if f.calls.Load() != 1 {
 		t.Errorf("the target's run reached the MCP server %d times, want 1", f.calls.Load())
 	}
-	if got := lazyFileNames(t, f.targetDir); len(got) != 0 {
-		t.Errorf("target loaded = %v, want no loads", got)
-	}
-	if got := lazyFileNames(t, f.callerDir); got != nil {
-		t.Errorf("the caller's lazy file was written by the target's run: %v", got)
-	}
+	requireNoLazyFileAt(t, filepath.Join(f.targetDir, "lazy_tools.json"))
+	requireNoLazyFileAt(t, filepath.Join(f.callerDir, "lazy_tools.json"))
 	if !seenTool(f.seenRequests(), "target-model", "load_tool") {
 		t.Error("the target was not sent load_tool")
 	}
@@ -251,12 +231,8 @@ func TestProfileMessageRunsStayInTheirOwnProfile(t *testing.T) {
 	if f.calls.Load() != 1 {
 		t.Errorf("MCP calls = %d, want 1: the target's lookup", f.calls.Load())
 	}
-	if got := lazyFileNames(t, f.targetDir); len(got) != 0 {
-		t.Errorf("target loaded = %v, want no loads", got)
-	}
-	if got := lazyFileNames(t, f.callerDir); got != nil {
-		t.Errorf("the target's run changed the caller's loaded set: %v", got)
-	}
+	requireNoLazyFileAt(t, filepath.Join(f.targetDir, "lazy_tools.json"))
+	requireNoLazyFileAt(t, filepath.Join(f.callerDir, "lazy_tools.json"))
 }
 
 // A target without tools.lazy gets no load_tool and no lazy file. Its tools array is the same
@@ -272,9 +248,7 @@ func TestProfileMessageTargetWithoutLazyGetsNoLoadTool(t *testing.T) {
 	if seenTool(f.seenRequests(), "target-model", "load_tool") {
 		t.Error("the target without tools.lazy was sent load_tool")
 	}
-	if _, err := os.Stat(filepath.Join(f.targetDir, "lazy_tools.json")); err == nil {
-		t.Error("a target without tools.lazy wrote a lazy file")
-	}
+	requireNoLazyFileAt(t, filepath.Join(f.targetDir, "lazy_tools.json"))
 	// The target's tools array in each of its requests must be the same string.
 	targetTools := map[string]bool{}
 	for _, request := range f.seenRequests() {

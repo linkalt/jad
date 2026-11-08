@@ -60,15 +60,12 @@ func newRunnerFixture(t *testing.T, hooks sessionfs.HooksSettings) runnerFixture
 				return json.RawMessage(`[{"type":"input_text","text":"found"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]`), nil
 			},
 		},
-		{Definition: tools.Definition{ID: "native.peek", Source: "native", Name: "peek", Description: "peeks.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), ReadOnly: true, Execute: text("peek")},
-		{Definition: tools.Definition{ID: "native.writer", Source: "native", Name: "writer", Description: "writes.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), Execute: text("writer")},
-		{Definition: tools.Definition{ID: "native.leaf", Source: "native", Name: "leaf", Description: "leafs.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), ReadOnly: true, LeafBudget: true, Execute: text("leaf")},
+		{Definition: tools.Definition{ID: "extension.peek", Source: "extension", Name: "peek", Description: "peeks.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), ReadOnly: true, Execute: text("peek")},
+		{Definition: tools.Definition{ID: "extension.writer", Source: "extension", Name: "writer", Description: "writes.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), Execute: text("writer")},
+		{Definition: tools.Definition{ID: "extension.leaf", Source: "extension", Name: "leaf", Description: "leafs.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: mustSchema(t, `{"type":"object"}`), ReadOnly: true, LeafBudget: true, Execute: text("leaf")},
 	}
 	dir := t.TempDir()
-	set, err := tools.OpenLazySet(dir, []string{"mcp:docs:lookup", "peek", "writer", "leaf"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := tools.NewLazySet([]string{"mcp:docs:lookup", "peek", "writer", "leaf"}, 256, nil)
 	set.Bind(lazy)
 	loadTool, err := NewLoadToolTool(set, 16)
 	if err != nil {

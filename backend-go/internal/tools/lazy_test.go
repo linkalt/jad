@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,24 +22,9 @@ func lazyTool(t *testing.T, id, source, name string) Tool {
 	}
 }
 
-func openSet(t *testing.T, dir string, entries []string, summary int) *LazySet {
+func openSet(t *testing.T, entries []string, summary int) *LazySet {
 	t.Helper()
-	set, err := OpenLazySet(dir, entries, summary, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return set
-}
-
-func TestLazyFingerprintIsOrderAndDuplicateFree(t *testing.T) {
-	a := LazyFingerprint([]string{"read", "mcp:docs:*", "read"}, 256)
-	b := LazyFingerprint([]string{"mcp:docs:*", "read"}, 256)
-	if a != b {
-		t.Fatal("fingerprint changed with order or a duplicate entry")
-	}
-	if LazyFingerprint([]string{"read"}, 256) == LazyFingerprint([]string{"read"}, 128) {
-		t.Fatal("fingerprint ignored the summary bound, which changes the summary the model sees")
-	}
+	return NewLazySet(entries, summary, nil)
 }
 
 func TestLazySummaryCutsOnARuneBoundary(t *testing.T) {
@@ -54,224 +37,77 @@ func TestLazySummaryCutsOnARuneBoundary(t *testing.T) {
 	}
 }
 
-// A native and an MCP entry each bind only their own kind, and a second bind of the same list
-// adds nothing, so no tool is listed or gated twice.
-func TestBindIsIdempotentAndKeepsNativeAndMCPApart(t *testing.T) {
-	set := openSet(t, t.TempDir(), []string{"read", "mcp:docs:*"}, 256)
+// An MCP and an extension entry bind their own tools, a native entry binds nothing, and a second bind of
+// the same list adds nothing, so no tool is listed or gated twice.
+func TestBindIsIdempotentAndBindsOnlyMCPAndExtensionTools(t *testing.T) {
+	set := openSet(t, []string{"read", "web_search", "mcp:docs:*"}, 256)
 	native := []Tool{lazyTool(t, "native.read", "native", "read"), lazyTool(t, "native.bash", "native", "bash")}
-	mcp := []Tool{lazyTool(t, "mcp:docs:search", "mcp", "search")}
+	rest := []Tool{lazyTool(t, "mcp:docs:search", "mcp", "search"), lazyTool(t, "extension.web_search", "extension", "web_search")}
 	set.Bind(native)
-	set.Bind(mcp)
-	set.Bind(mcp)
+	set.Bind(rest)
+	set.Bind(rest)
 	set.Bind(native)
 	if got := len(set.Entries()); got != 2 {
-		t.Fatalf("bound %d tools, want 2 (read and the MCP search)", got)
+		t.Fatalf("bound %d tools, want 2 (the extension web_search and the MCP search)", got)
 	}
 	for _, entry := range set.Entries() {
-		if entry.Tool.Definition.ID == "native.bash" {
-			t.Errorf("native.bash bound, but no entry names it")
+		if entry.Tool.Definition.Source == "native" {
+			t.Errorf("%s bound, but a native tool is never lazy", entry.Tool.Definition.ID)
 		}
 	}
 }
 
-// A wildcard entry that gains a tool refuses the new tool until it is loaded (rule 4a).
-func TestWildcardGainingAToolRefusesTheNewToolUntilLoaded(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"mcp:docs:*"}, 256)
+// A native tool is never bound, gated or matched, even when an entry names it exactly, the profile shows it
+// and something hands it to Bind, Gate or GateFor.
+func TestANativeToolCanNeverBeLazy(t *testing.T) {
+	set := openSet(t, []string{"read", "exec", "skill", "subagent", "load_tool"}, 256)
+	for _, name := range []string{"read", "exec", "skill", "subagent", "load_tool"} {
+		native := lazyTool(t, "native."+name, "native", name)
+		set.Bind([]Tool{native})
+		if gated, ok := set.Gate(native); ok || gated.Refused != nil {
+			t.Errorf("Gate(%s) gated a native tool", name)
+		}
+		if gated, ok := set.GateFor(native); ok || gated.Refused != nil {
+			t.Errorf("GateFor(%s) gated a native tool", name)
+		}
+		if matches := set.Match([]string{name, "*"}); len(matches[0]) != 0 || len(matches[1]) != 0 {
+			t.Errorf("Match selected the native tool %s: %v", name, matches)
+		}
+	}
+	if len(set.Entries()) != 0 {
+		t.Fatalf("bound %v, want nothing", set.Entries())
+	}
+}
+
+// A native tool handed over under an ID a bound tool has is not gated through that binding.
+func TestGateForRefusesANativeToolWithABoundID(t *testing.T) {
+	set := openSet(t, []string{"mcp:docs:search"}, 256)
 	set.Bind([]Tool{lazyTool(t, "mcp:docs:search", "mcp", "search")})
-	if err := set.Load("search"); err != nil {
-		t.Fatal(err)
-	}
-	// The server now exposes a second tool; the next prepare sees both, and the wildcard covers it.
-	reopened := openSet(t, dir, []string{"mcp:docs:*"}, 256)
-	reopened.Bind([]Tool{lazyTool(t, "mcp:docs:search", "mcp", "search"), lazyTool(t, "mcp:docs:fetch", "mcp", "fetch")})
-	if !reopened.Loaded("mcp:docs:search") {
-		t.Fatal("the loaded tool lost its state")
-	}
-	if reopened.Loaded("mcp:docs:fetch") {
-		t.Fatal("a tool the wildcard gained was loaded without a load_tool call")
+	impostor := lazyTool(t, "mcp:docs:search", "native", "search")
+	if _, ok := set.GateFor(impostor); ok {
+		t.Fatal("GateFor gated a native tool that carries a bound tool's ID")
 	}
 }
 
-// A changed config clears the loaded set and rewrites the file (rule 4b).
-func TestConfigChangeClearsTheLoadedSet(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	if err := set.Load("read"); err != nil {
-		t.Fatal(err)
-	}
-	changed := openSet(t, dir, []string{"read", "bash"}, 256)
-	changed.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	if changed.Loaded("native.read") {
-		t.Fatal("a changed tools.lazy kept the loaded set")
-	}
-	state, err := readLazyToolsState(filepath.Join(dir, lazyToolsFile))
-	if err != nil || len(state.Loaded) != 0 || state.Fingerprint != LazyFingerprint([]string{"read", "bash"}, 256) {
-		t.Fatalf("file after the change = %+v, %v; want empty loaded and the new fingerprint", state, err)
+// Without a state folder or a file: the set keeps nothing outside the process.
+func TestLazySetNeedsNoStateFolder(t *testing.T) {
+	set := NewLazySet([]string{"mcp:docs:search"}, 256, nil)
+	set.Bind([]Tool{lazyTool(t, "mcp:docs:search", "mcp", "search")})
+	if len(set.Entries()) != 1 {
+		t.Fatalf("bound %v, want the one MCP tool", set.Entries())
 	}
 }
 
-// A loaded ID whose tool no longer exists is kept in the file and ignored by the run (rule 4c).
-func TestLoadedIDThatNoLongerExistsDoesNotBreakTheRun(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"mcp:docs:*"}, 256)
-	set.Bind([]Tool{lazyTool(t, "mcp:docs:search", "mcp", "search"), lazyTool(t, "mcp:docs:gone", "mcp", "gone")})
-	if err := set.Load("gone"); err != nil {
-		t.Fatal(err)
-	}
-	// The server no longer lists "gone".
-	after := openSet(t, dir, []string{"mcp:docs:*"}, 256)
-	after.Bind([]Tool{lazyTool(t, "mcp:docs:search", "mcp", "search")})
-	if len(after.Entries()) != 1 {
-		t.Fatalf("bound %d tools, want 1", len(after.Entries()))
-	}
-	if err := after.Load("search"); err != nil {
-		t.Fatalf("a run with a stale loaded ID could not load a live tool: %v", err)
-	}
-	state, _ := readLazyToolsState(filepath.Join(dir, lazyToolsFile))
-	if !containsID(state.Loaded, "mcp:docs:gone") {
-		t.Errorf("the stale loaded ID was dropped from the file: %v", state.Loaded)
-	}
-}
-
-// Rule 2: a name no bound tool has is refused and nothing is written.
-func TestLoadRefusesAnUnknownNameWithoutWriting(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	before, err := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := set.Load("bash"); err == nil || !strings.Contains(err.Error(), "bash is not a lazy tool") {
-		t.Fatalf("Load(bash) = %v, want a refusal naming bash", err)
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if string(before) != string(after) {
-		t.Fatal("a refused load changed the file")
-	}
-}
-
-// Rule 6: a corrupt or missing file gives an empty set, and the file is rewritten from it.
-func TestCorruptFileFailsClosed(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, lazyToolsFile), []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	if set.Loaded("native.read") {
-		t.Fatal("a corrupt file loaded a tool")
-	}
-	state, err := readLazyToolsState(filepath.Join(dir, lazyToolsFile))
-	if err != nil || state.Fingerprint != LazyFingerprint([]string{"read"}, 256) {
-		t.Fatalf("file after a corrupt read = %+v, %v; want it rewritten with the current fingerprint", state, err)
-	}
-}
-
-func TestMissingFileGivesAnEmptySet(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	if set.Loaded("native.read") {
-		t.Fatal("a missing file loaded a tool")
-	}
-	if _, err := os.Stat(filepath.Join(dir, lazyToolsFile)); err != nil {
-		t.Fatalf("the file was not written for the empty set: %v", err)
-	}
-}
-
-// Without a state folder (no catalog layout) the set cannot be opened.
-func TestOpenLazySetNeedsAStateFolder(t *testing.T) {
-	if _, err := OpenLazySet("", []string{"read"}, 256, nil, nil); err == nil || !strings.Contains(err.Error(), "catalog layout") {
-		t.Fatalf("OpenLazySet with no state folder: %v, want the catalog-layout error", err)
-	}
-}
-
-func containsID(ids []string, id string) bool {
-	for _, value := range ids {
-		if value == id {
-			return true
-		}
-	}
-	return false
-}
-
-// Batch load: every matched name is loaded with one write, and an unknown name is left out
-// without stopping the others.
-func TestLoadAllLoadsEveryMatchedNameOnce(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read", "mcp:docs:search", "bash"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read"), lazyTool(t, "mcp:docs:search", "mcp", "search"), lazyTool(t, "native.bash", "native", "bash")})
-	matched, err := set.LoadAll([]string{"search", "nope", "read"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(matched) != 3 || !matched[0] || matched[1] || !matched[2] {
-		t.Fatalf("matched = %v, want [true false true]", matched)
-	}
-	state, err := readLazyToolsState(filepath.Join(dir, lazyToolsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Loaded) != 2 || state.Loaded[0] != "mcp:docs:search" || state.Loaded[1] != "native.read" {
-		t.Fatalf("loaded = %v, want the two matched IDs in sorted order", state.Loaded)
-	}
-}
-
-// An all-unknown batch writes nothing.
-func TestLoadAllWritesNothingWhenNoNameMatches(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	before, err := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	matched, err := set.LoadAll([]string{"bash", "grep"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if matched[0] || matched[1] {
-		t.Fatalf("matched = %v, want none", matched)
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if string(before) != string(after) {
-		t.Fatal("an all-unknown batch changed the file")
-	}
-}
-
-// A name that is already loaded still matches, and the file is not rewritten for it.
-func TestLoadAllReloadingWritesNothing(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
-	set.Bind([]Tool{lazyTool(t, "native.read", "native", "read")})
-	if _, err := set.LoadAll([]string{"read"}); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	matched, err := set.LoadAll([]string{"read"})
-	if err != nil || !matched[0] {
-		t.Fatalf("LoadAll again: matched %v, err %v", matched, err)
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if string(before) != string(after) {
-		t.Fatal("reloading an already loaded name changed the file")
-	}
-}
-
-// lazySetWithFour binds a native read and bash, and two MCP tools of server docs, search and
-// fetch, with the entries given. The profile shows every tool unless shown says otherwise.
-func lazySetWithFour(t *testing.T, dir string, entries []string, shown func(Definition) bool) *LazySet {
+// lazySetWithFive binds a native read and bash (which no entry can make lazy), an extension web_search, and two
+// MCP tools of server docs, search and fetch, with the entries given. The profile shows every tool unless
+// shown says otherwise.
+func lazySetWithFive(t *testing.T, entries []string, shown func(Definition) bool) *LazySet {
 	t.Helper()
-	set, err := OpenLazySet(dir, entries, 256, shown, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := NewLazySet(entries, 256, shown)
 	set.Bind([]Tool{
 		lazyTool(t, "native.read", "native", "read"),
 		lazyTool(t, "native.bash", "native", "bash"),
+		lazyTool(t, "extension.web_search", "extension", "web_search"),
 		lazyTool(t, "mcp:docs:search", "mcp", "search"),
 		lazyTool(t, "mcp:docs:fetch", "mcp", "fetch"),
 	})
@@ -279,9 +115,9 @@ func lazySetWithFour(t *testing.T, dir string, entries []string, shown func(Defi
 }
 
 // Expansion: mcp:<server>:* selects every bound lazy tool of that server, sorted by ID, and nothing
-// from another server or a native tool.
+// from another server, an extension tool or a native tool.
 func TestMatchExpandsAServerPattern(t *testing.T) {
-	set := lazySetWithFour(t, t.TempDir(), []string{"read", "bash", "mcp:docs:*"}, nil)
+	set := lazySetWithFive(t, []string{"read", "bash", "web_search", "mcp:docs:*"}, nil)
 	matches := set.Match([]string{"mcp:docs:*"})
 	if len(matches) != 1 || len(matches[0]) != 2 {
 		t.Fatalf("matches = %v, want the two docs tools", matches)
@@ -291,52 +127,18 @@ func TestMatchExpandsAServerPattern(t *testing.T) {
 	}
 }
 
-// "*" alone selects every bound lazy tool; a non-lazy or hidden tool is never bound, so never matched.
-func TestMatchStarSelectsOnlyBoundLazyTools(t *testing.T) {
+// "*" alone selects every bound lazy tool, MCP and extension; a native, non-lazy or hidden tool is never
+// bound, so never matched.
+func TestMatchStarSelectsOnlyBoundMCPAndExtensionTools(t *testing.T) {
 	hidden := func(definition Definition) bool { return definition.ID != "mcp:docs:fetch" }
-	set := lazySetWithFour(t, t.TempDir(), []string{"read", "mcp:docs:search", "mcp:docs:fetch"}, hidden)
+	set := lazySetWithFive(t, []string{"read", "bash", "web_search", "mcp:docs:search", "mcp:docs:fetch"}, hidden)
 	matches := set.Match([]string{"*"})
-	if got := len(matches[0]); got != 2 {
-		t.Fatalf("* selected %d tools, want 2 (read and search; fetch is hidden, bash is not lazy)", got)
-	}
+	got := map[string]bool{}
 	for _, entry := range matches[0] {
-		if entry.Tool.Definition.ID == "native.bash" || entry.Tool.Definition.ID == "mcp:docs:fetch" {
-			t.Errorf("* selected %s, which is not a lazy tool the profile shows", entry.Tool.Definition.ID)
-		}
+		got[entry.Tool.Definition.ID] = true
 	}
-}
-
-// Overlap: two patterns that select the same tool load it once in one write, and the matched count
-// counts it once.
-func TestLoadMatchesCountsAnOverlapOnce(t *testing.T) {
-	dir := t.TempDir()
-	set := lazySetWithFour(t, dir, []string{"mcp:docs:*", "mcp:docs:search"}, nil)
-	matches := set.Match([]string{"mcp:docs:*", "mcp:docs:search"})
-	added, err := set.LoadMatches(matches)
-	if err != nil || added != 2 {
-		t.Fatalf("LoadMatches = %d, %v; want 2 new tools", added, err)
-	}
-	state, err := readLazyToolsState(filepath.Join(dir, lazyToolsFile))
-	if err != nil || len(state.Loaded) != 2 {
-		t.Fatalf("file = %+v, %v; want two loaded IDs once each", state, err)
-	}
-}
-
-// A pattern that selects nothing loads nothing and writes nothing.
-func TestLoadMatchesWritesNothingWhenNothingIsSelected(t *testing.T) {
-	dir := t.TempDir()
-	set := lazySetWithFour(t, dir, []string{"read"}, nil)
-	before, err := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	added, err := set.LoadMatches(set.Match([]string{"mcp:docs:*"}))
-	if err != nil || added != 0 {
-		t.Fatalf("LoadMatches = %d, %v; want 0 and no error", added, err)
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, lazyToolsFile))
-	if string(before) != string(after) {
-		t.Fatal("a pattern that selected nothing changed the file")
+	if len(got) != 2 || !got["extension.web_search"] || !got["mcp:docs:search"] {
+		t.Fatalf("* selected %v, want the extension web_search and the MCP search (fetch is hidden; read and bash are native)", got)
 	}
 }
 
@@ -353,13 +155,12 @@ func TestIsLazyPattern(t *testing.T) {
 // change with the set. A dispatch by name still reaches the tool, which the gate refuses unless a
 // runner dispatches it.
 func TestResponseToolsNeverListsALazyTool(t *testing.T) {
-	dir := t.TempDir()
-	set := openSet(t, dir, []string{"read"}, 256)
+	set := openSet(t, []string{"mcp:docs:search"}, 256)
 	native := lazyTool(t, "native.bash", "native", "bash")
-	read := lazyTool(t, "native.read", "native", "read")
-	set.Bind([]Tool{read})
-	gatedRead, _ := set.Gate(read)
-	catalog, err := NewCatalog([]Tool{native, gatedRead})
+	search := lazyTool(t, "mcp:docs:search", "mcp", "search")
+	set.Bind([]Tool{search})
+	gatedSearch, _ := set.Gate(search)
+	catalog, err := NewCatalog([]Tool{native, gatedSearch})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,20 +186,18 @@ func TestResponseToolsNeverListsALazyTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := names(); strings.Join(got, ",") != "bash" {
-		t.Fatalf("before load = %v, want only bash", got)
+		t.Fatalf("before = %v, want only bash", got)
 	}
-	if err := set.Load("read"); err != nil {
-		t.Fatal(err)
-	}
+	set.Bind([]Tool{search})
 	after, err := catalog.ResponseTools()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := names(); strings.Join(got, ",") != "bash" {
-		t.Fatalf("after load = %v, want only bash: a lazy tool is never listed", got)
+		t.Fatalf("after a second bind = %v, want only bash: a lazy tool is never listed", got)
 	}
 	if len(before) != len(after) || !bytes.Equal(before[0], after[0]) {
-		t.Fatalf("the tools array changed with the loaded set: %s then %s", before, after)
+		t.Fatalf("the tools array changed with the set: %s then %s", before, after)
 	}
 	if listed := catalog.ListedDefinitions(); len(listed) != 1 || listed[0].Name != "bash" {
 		t.Fatalf("ListedDefinitions = %v, want only bash", listed)
@@ -408,8 +207,8 @@ func TestResponseToolsNeverListsALazyTool(t *testing.T) {
 // A refused call hands the gate's own wrappers the arguments the model sent, so a pre_tool
 // command sees them. The arguments are not checked against the real schema.
 func TestRefusedCallPassesItsRealArgumentsToTheWrappers(t *testing.T) {
-	set := openSet(t, t.TempDir(), []string{"read"}, 256)
-	real := lazyTool(t, "native.read", "native", "read")
+	set := openSet(t, []string{"mcp:docs:read"}, 256)
+	real := lazyTool(t, "mcp:docs:read", "mcp", "read")
 	real.Definition.InputSchema = json.RawMessage(`{"type":"object","required":["path"]}`)
 	set.Bind([]Tool{real})
 	var seen map[string]any
@@ -439,8 +238,8 @@ func TestRefusedCallPassesItsRealArgumentsToTheWrappers(t *testing.T) {
 // a runner dispatches it (ViaRunner). It is never listed, and a runner's call is checked against
 // the real schema like an eager tool's.
 func TestLazyGateRefusesADirectCallAndRunsAViaRunnerCall(t *testing.T) {
-	set := openSet(t, t.TempDir(), []string{"read"}, 256)
-	real := lazyTool(t, "native.read", "native", "read")
+	set := openSet(t, []string{"mcp:docs:read"}, 256)
+	real := lazyTool(t, "mcp:docs:read", "mcp", "read")
 	real.Definition.InputSchema = json.RawMessage(`{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}`)
 	validator, err := CompileSchema(real.Definition.InputSchema)
 	if err != nil {

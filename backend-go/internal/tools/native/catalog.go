@@ -114,7 +114,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if config.NativeTranscripts != nil {
 		definition, err := requireNativeDefinition(config, definitions, "transcripts", transcriptsToolID, transcriptsInputSchema)
@@ -132,7 +132,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if config.NativeProfile != nil {
 		definition, err := requireNativeDefinition(config, definitions, "profile", profileToolID, profileInputSchema)
@@ -150,7 +150,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
-		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	// profile_message is built before the subagent tool so an agent can list it, but it is
 	// added to the catalog after the subagent tool, where it always was.
@@ -173,7 +173,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
-		hooked := WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv)
+		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}
 	// Last, because a child gets the read-only tools that are already enabled here.
@@ -208,14 +208,14 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		// of the manifest's text and not replaced by it. The tool's own description is the code's
 		// text plus the list, whose markers depend on which agents may run in the background.
 		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, WithToolEventHooks(lazyLate(tool, lazy), config.Hooks, config.Model.APIKeyEnv))
+		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
 	}
 	if profileMessageTool != nil {
 		loaded = append(loaded, *profileMessageTool)
 	}
 	// load_tool is last, after the subagent tool, so it is not in the child pool: a child gets it only
-	// through SetLazy, from the owner, so its loads write the owner's lazy set. It lists the lazy tools bound in lazy, which is nil or
-	// empty when the profile has none; it then lists nothing and loads nothing.
+	// through SetLazy, from the owner, so it runs the owner's lazy tools. It lists the lazy tools bound in lazy, which is nil or
+	// empty when the profile has none; it then lists nothing and runs nothing.
 	if config.NativeLoadTool != nil {
 		definition, err := requireNativeDefinition(config, definitions, "load_tool", loadToolID, loadToolInputSchema)
 		if err != nil {
@@ -237,38 +237,13 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 }
 
 // gateLazy returns the lazy gate of tool when the set has bound it and not yet gated it, and
-// tool itself otherwise. Exported so the app can gate the MCP tools with the same set.
+// tool itself otherwise. The set binds only MCP and extension tools, so a native tool is returned as it is.
 func gateLazy(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
 	if lazy == nil {
 		return tool
 	}
 	gated, _ := lazy.Gate(tool)
 	return gated
-}
-
-// lazyLate binds a late-built native tool to the lazy set and returns its gate. Late tools are
-// transcript, transcripts, profile, profile_message and subagent: they are built after buildNativeTools has
-// bound its list, so each one is bound here, before its gate and before any hook wraps it. A subagent's
-// nested copies are gated by SetLazy, not here.
-func lazyLate(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
-	if lazy == nil {
-		return tool
-	}
-	lazy.Bind([]tools.Tool{tool})
-	return gateLazy(tool, lazy)
-}
-
-// NotLazyBindable reports whether a native tool can never be lazy: load_tool. It shows the lazy tools, so a
-// lazy copy of it would hide the only tool that loads them. The other late-built tools are bound by lazyLate.
-func NotLazyBindable(definition tools.Definition) bool {
-	if definition.Source != "native" {
-		return false
-	}
-	switch definition.ID {
-	case loadToolID:
-		return true
-	}
-	return false
 }
 
 // GateLazyTools gates the lazy tools of a list with the set, before the event hooks wrap them.
@@ -490,8 +465,9 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		tool.Definition = definition
 		loaded = append(loaded, tool)
 	}
-	// Each native tool is gated and then hooked once, here. A child catalog is built from this gated list
-	// (childPool), so a child gets the owner's gate, and a lazy tool is refused to it when named directly.
+	// Each early tool is gated and then hooked once, here. Only an extension tool can be lazy (the set binds no
+	// native tool). A child catalog is built from this gated list (childPool), so a child gets the owner's gate,
+	// and a lazy tool is refused to it when named directly.
 	if lazy != nil {
 		lazy.Bind(loaded)
 		for index, tool := range loaded {

@@ -73,12 +73,8 @@ func TestRemoteSubagentRunsTheTargetsLazyToolThroughItsLoadTool(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Errorf("the child's run reached the target's MCP server %d times, want 1", calls.Load())
 	}
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
-		t.Errorf("the target's lazy_tools.json holds %v, want no loads", loaded)
-	}
-	if _, err := os.Stat(filepath.Join(callerState, "lazy_tools.json")); !os.IsNotExist(err) {
-		t.Errorf("the caller's lazy_tools.json exists or could not be checked: %v", err)
-	}
+	requireNoLazyFile(t, f)
+	requireNoLazyFileAt(t, filepath.Join(callerState, "lazy_tools.json"))
 	if _, err := os.Stat(callerState); !os.IsNotExist(err) {
 		t.Errorf("the caller's state folder was created or could not be checked: %v", err)
 	}

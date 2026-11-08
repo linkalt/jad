@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,11 +34,12 @@ func lazyFixtureWithProfile(t *testing.T, profileTools map[string]any, steps []s
 }
 
 // lazyFixtureWithExtraTools is lazyFixtureWithProfile with more tools on the MCP server, each
-// answering like lookup.
+// answering like lookup. The extension web_search tool is enabled too, answering from a local
+// server (f.searchCalls counts its requests), so a profile can make an extension tool lazy.
 func lazyFixtureWithExtraTools(t *testing.T, profileTools map[string]any, extra []string, steps []subagentStep) (subagentFixture, *atomic.Int32) {
 	t.Helper()
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls, extra: extra})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools), "__load_tool": true, "__web_search": &atomic.Int32{}}, false, nil, &mcpFixture{calls: calls, extra: extra})
 	f.provider.parentSteps = steps
 	return f, calls
 }
@@ -58,25 +58,17 @@ func lastRequestText(t *testing.T, requests []providerRequest) string {
 	return requests[len(requests)-1].Text
 }
 
-// lazyFile is the state file of the profile's lazy set: the profile's own state folder.
+// lazyFile is the path lazy_tools.json had in the profile's own state folder. Nothing writes it now.
 func (f subagentFixture) lazyFile() string {
 	return filepath.Join(f.stateDir, "lazy_tools.json")
 }
 
-// lazyFileLoaded reads the loaded list the state file records.
-func lazyFileLoaded(t *testing.T, path string) []string {
+// requireNoLazyFileAt fails when path exists: a lazy set keeps no state file.
+func requireNoLazyFileAt(t *testing.T, path string) {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s exists or could not be checked (%v): a lazy set keeps no state file", path, err)
 	}
-	var state struct {
-		Loaded []string `json:"loaded"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode %s: %v", path, err)
-	}
-	return state.Loaded
 }
 
 // runStep is the scripted call load_tool run target with arguments (a JSON object).
@@ -114,12 +106,10 @@ func requireStableTools(t *testing.T, requests []providerRequest, absent ...stri
 	}
 }
 
-// Nothing writes the lazy set now: the file keeps the empty loaded list it was opened with.
-func requireNoLoads(t *testing.T, f subagentFixture) {
+// A lazy set keeps no file: the session's state folder has no lazy_tools.json.
+func requireNoLazyFile(t *testing.T, f subagentFixture) {
 	t.Helper()
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
-		t.Errorf("lazy_tools.json holds %v, want no loads: load_tool describes and runs, it does not load", loaded)
-	}
+	requireNoLazyFileAt(t, f.lazyFile())
 }
 
 func requireCompleted(t *testing.T, f subagentFixture) {
@@ -129,12 +119,12 @@ func requireCompleted(t *testing.T, f subagentFixture) {
 	}
 }
 
-func TestLazyToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
+func TestLazyExtensionToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
 	steps := []subagentStep{
-		{"skill", notesCall},
-		runStep("skill", notesCall),
+		{"web_search", searchCall},
+		runStep("web_search", searchCall),
 	}
-	f, _ := lazyFixture(t, []string{"skill"}, steps)
+	f, _ := lazyFixture(t, []string{"web_search"}, steps)
 	requireCompleted(t, f)
 	// The last request holds the whole history: the refused direct call and the run.
 	history := lastRequestText(t, parentRequests(f))
@@ -146,11 +136,11 @@ func TestLazyToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
 	if !strings.Contains(history[refused:ran], "tool_not_loaded") || !strings.Contains(history[refused:ran], "load_tool with run") {
 		t.Errorf("the direct call was not refused with the pointer to load_tool run:\n%s", history)
 	}
-	if strings.Contains(history[ran:], "tool_not_loaded") || !strings.Contains(history[ran:], "the secret is 42") {
+	if strings.Contains(history[ran:], "tool_not_loaded") || !strings.Contains(history[ran:], "Lazy search hit") {
 		t.Errorf("the run did not run the tool:\n%s", history)
 	}
-	requireStableTools(t, parentRequests(f), "skill")
-	requireNoLoads(t, f)
+	requireStableTools(t, parentRequests(f), "web_search")
+	requireNoLazyFile(t, f)
 }
 
 func TestLazyMCPToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {
@@ -196,7 +186,7 @@ func TestLazyMCPToolIsNeverListedAndItsRealSchemaIsDescribedOnRequest(t *testing
 			t.Errorf("the describe result lacks %q:\n%s", want, describe)
 		}
 	}
-	requireNoLoads(t, f)
+	requireNoLazyFile(t, f)
 }
 
 // The tools array is the same bytes in every request of a run that lists, describes and runs a lazy tool:
@@ -225,8 +215,8 @@ func TestToolsArrayIsByteIdenticalAcrossListDescribeAndRun(t *testing.T) {
 // with arguments the real schema rejects is answered tool_not_loaded, not validation_failed, and
 // its pre_tool hook still fires once.
 func TestUnloadedLazyCallWithBadArgsIsRefusedBeforeValidation(t *testing.T) {
-	steps := []subagentStep{{"skill", `{"name":5}`}}
-	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "skill")
+	steps := []subagentStep{{"web_search", `{"query":5}`}}
+	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "web_search")
 	f.run(t)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "tool_not_loaded") {
@@ -290,12 +280,12 @@ func TestLazyToolsArrayIsTheSameAfterARestart(t *testing.T) {
 }
 
 func TestLazyToolRunsThroughLoadToolAfterARestart(t *testing.T) {
-	steps := []subagentStep{runStep("skill", notesCall)}
-	f, _ := lazyFixture(t, []string{"skill"}, steps)
+	steps := []subagentStep{runStep("web_search", searchCall)}
+	f, _ := lazyFixture(t, []string{"web_search"}, steps)
 	requireCompleted(t, f)
 	f.provider.mu.Lock()
 	// The history persists, so the call after the restart is the second scripted step.
-	f.provider.parentSteps = []subagentStep{runStep("skill", notesCall), {"skill", notesCall}, runStep("skill", notesCall)}
+	f.provider.parentSteps = []subagentStep{runStep("web_search", searchCall), {"web_search", searchCall}, runStep("web_search", searchCall)}
 	f.provider.requests = nil
 	f.provider.mu.Unlock()
 	f.apiURL = f.restart(t, nil)
@@ -305,13 +295,16 @@ func TestLazyToolRunsThroughLoadToolAfterARestart(t *testing.T) {
 	if after < 0 {
 		t.Fatalf("the run after restart was not made:\n%s", history)
 	}
-	if strings.Contains(history[after:], "tool_not_loaded") || !strings.Contains(history[after:], "the secret is 42") {
+	if strings.Contains(history[after:], "tool_not_loaded") || !strings.Contains(history[after:], "Lazy search hit") {
 		t.Errorf("the run was refused or did not run after restart:\n%s", history[after:])
 	}
 	if !strings.Contains(history, "tool_not_loaded") {
 		t.Errorf("the direct call after restart was not refused:\n%s", history)
 	}
 }
+
+// searchCall is a valid call of the extension web_search tool.
+const searchCall = `{"query":"go"}`
 
 // lazyHookFixture is lazyFixture plus a pre_tool hook on match that appends one line to a
 // marker file for every fire, so a test can count the fires of each call.
@@ -330,7 +323,7 @@ func lazyHookFixture(t *testing.T, lazy []string, steps []subagentStep, match st
 	}
 	session["__profile_extra"] = map[string]any{"tools": profileTools}
 	calls := &atomic.Int32{}
-	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": session, "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
+	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": session, "__load_tool": true, "__web_search": &atomic.Int32{}}, false, nil, &mcpFixture{calls: calls})
 	f.provider.parentSteps = steps
 	return f, marker
 }
@@ -350,9 +343,9 @@ func fires(t *testing.T, marker string) int {
 
 // A refused lazy native call still fires its pre_tool hook, once per call, and then returns
 // tool_not_loaded. The hook is an ordinary tool-event hook, so refusal is visible to it.
-func TestRefusedLazyNativeCallFiresItsHookOnce(t *testing.T) {
-	steps := []subagentStep{{"skill", notesCall}}
-	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "skill")
+func TestRefusedLazyExtensionCallFiresItsHookOnce(t *testing.T) {
+	steps := []subagentStep{{"web_search", searchCall}}
+	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "web_search")
 	f.run(t)
 	if got := fires(t, marker); got != 1 {
 		t.Fatalf("pre_tool fired %d times for one refused read, want 1", got)
@@ -362,14 +355,14 @@ func TestRefusedLazyNativeCallFiresItsHookOnce(t *testing.T) {
 	}
 }
 
-func TestLazyNativeRunFiresTheTargetsHookOnce(t *testing.T) {
-	steps := []subagentStep{runStep("skill", notesCall)}
-	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "skill")
+func TestLazyExtensionRunFiresTheTargetsHookOnce(t *testing.T) {
+	steps := []subagentStep{runStep("web_search", searchCall)}
+	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "web_search")
 	f.run(t)
 	if got := fires(t, marker); got != 1 {
-		t.Fatalf("pre_tool fired %d times for one run of the lazy skill, want 1", got)
+		t.Fatalf("pre_tool fired %d times for one run of the lazy web_search, want 1", got)
 	}
-	if !strings.Contains(lastRequestText(t, parentRequests(f)), "the secret is 42") {
+	if !strings.Contains(lastRequestText(t, parentRequests(f)), "Lazy search hit") {
 		t.Error("the run did not run the tool")
 	}
 }
@@ -377,8 +370,8 @@ func TestLazyNativeRunFiresTheTargetsHookOnce(t *testing.T) {
 // With a hook on every tool, a list fires load_tool's own hook once, and a run fires the target's once and
 // not load_tool's: two calls, two firings.
 func TestLoadToolHooksFireForAListAndTheTargetOnlyForARun(t *testing.T) {
-	steps := []subagentStep{{"load_tool", `{}`}, runStep("skill", notesCall)}
-	f, marker := lazyHookFixture(t, []string{"skill"}, steps, "*")
+	steps := []subagentStep{{"load_tool", `{}`}, runStep("web_search", searchCall)}
+	f, marker := lazyHookFixture(t, []string{"web_search"}, steps, "*")
 	f.run(t)
 	if got := fires(t, marker); got != 2 {
 		t.Fatalf("pre_tool fired %d times for a list and a run, want 2", got)
@@ -409,15 +402,15 @@ func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	}
 	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
 	for name, settings := range map[string]sessionfs.ProfileToolSettings{
-		"deny names it":           {Restricted: true, Deny: []string{"load_tool"}, Lazy: []string{"skill"}},
-		"deny names it, allow it": {Restricted: true, HasAllow: true, Allow: []string{"load_tool"}, Deny: []string{"load_tool"}, Lazy: []string{"skill"}},
+		"deny names it":           {Restricted: true, Deny: []string{"load_tool"}, Lazy: []string{"mcp:fixture:lookup"}},
+		"deny names it, allow it": {Restricted: true, HasAllow: true, Allow: []string{"load_tool"}, Deny: []string{"load_tool"}, Lazy: []string{"mcp:fixture:lookup"}},
 	} {
 		err := checkLazyLoadToolShown(config, settings, registered)
 		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.lazy") || !strings.Contains(err.Error(), "tools.deny") {
 			t.Errorf("%s: err = %v, want the refusal naming tools.lazy and load_tool", name, err)
 		}
 	}
-	shown := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill", "load_tool"}, Lazy: []string{"skill"}}
+	shown := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill", "load_tool"}, Lazy: []string{"mcp:fixture:lookup"}}
 	if err := checkLazyLoadToolShown(config, shown, registered); err != nil {
 		t.Errorf("allow that shows load_tool: %v", err)
 	}
@@ -427,10 +420,10 @@ func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	}
 	// A deny that names another tool, or a deny-only list, leaves load_tool shown, so the profile loads.
 	for name, valid := range map[string]sessionfs.ProfileToolSettings{
-		"deny names another tool": {Restricted: true, Deny: []string{"mcp:fixture:hidden"}, Lazy: []string{"skill"}},
-		"allow with a wildcard":   {Restricted: true, HasAllow: true, Allow: []string{"skill", "mcp:fixture:*", "load_tool"}, Lazy: []string{"skill"}},
-		"allow omits load_tool":   {Restricted: true, HasAllow: true, Allow: []string{"skill"}, Lazy: []string{"skill"}},
-		"empty allow":             {Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"skill"}},
+		"deny names another tool": {Restricted: true, Deny: []string{"mcp:fixture:hidden"}, Lazy: []string{"mcp:fixture:lookup"}},
+		"allow with a wildcard":   {Restricted: true, HasAllow: true, Allow: []string{"skill", "mcp:fixture:*", "load_tool"}, Lazy: []string{"mcp:fixture:lookup"}},
+		"allow omits load_tool":   {Restricted: true, HasAllow: true, Allow: []string{"skill"}, Lazy: []string{"mcp:fixture:lookup"}},
+		"empty allow":             {Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"mcp:fixture:lookup"}},
 	} {
 		if err := checkLazyLoadToolShown(config, valid, registered); err != nil {
 			t.Errorf("%s: a valid profile was refused: %v", name, err)
@@ -438,51 +431,45 @@ func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	}
 }
 
-// A lazy entry the lazy pass can never bind is a configuration error too. load_tool is never bound, so a
-// lazy entry that names it would be accepted and do nothing: the tool would stay in the array. The late
-// transcript, profile, profile_message and subagent tools are bound, not refused.
-func TestLazyEntryNamingAToolTheLazyPassCannotBindIsAConfigError(t *testing.T) {
-	registered := []tools.Definition{
-		{ID: "native.skill", Source: "native", Name: "skill"},
-		{ID: "native.subagent", Source: "native", Name: "subagent"},
-		{ID: "native.load_tool", Source: "native", Name: "load_tool"},
-	}
+// A native tool can never be lazy, so a lazy entry that names one names nothing the profile shows: every native
+// tool is refused, and an extension tool and an MCP tool are accepted. The loader refuses such an entry earlier
+// (sessionfs); this is the check on the registered definitions.
+func TestLazyEntryNamingANativeToolIsAConfigError(t *testing.T) {
 	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
-	for _, name := range []string{"load_tool"} {
+	for _, name := range []string{"skill", "subagent", "load_tool", "profile_message", "exec"} {
 		settings := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
-		err := checkLazyEntriesVisible(config, settings, registered)
-		if err == nil || !strings.Contains(err.Error(), `tools.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "cannot be lazy") {
+		err := checkLazyEntriesVisible(config, settings, []tools.Definition{{ID: "native." + name, Source: "native", Name: name}})
+		if err == nil || !strings.Contains(err.Error(), `tools.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "a native tool never is") {
 			t.Errorf("%s: err = %v, want the lazy-entry refusal naming it", name, err)
 		}
-		if err != nil && (strings.Contains(err.Error(), `"subagent"`) || strings.Contains(err.Error(), `"profile_message"`) || strings.Contains(err.Error(), `"transcript"`) || strings.Contains(err.Error(), `"profile"`)) {
-			t.Errorf("%s: the refusal names a tool that can be lazy: %v", name, err)
-		}
 	}
-	// profile_message and subagent are bound by the late pass, so a lazy entry naming either is accepted.
-	for _, name := range []string{"profile_message", "subagent"} {
-		accepted := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
-		if err := checkLazyEntriesVisible(config, accepted, []tools.Definition{{ID: "native." + name, Source: "native", Name: name}}); err != nil {
-			t.Errorf("%s: lazy entry refused: %v", name, err)
+	for entry, definition := range map[string]tools.Definition{
+		"web_search":      {ID: "extension.web_search", Source: "extension", Name: "web_search"},
+		"mcp:docs:search": {ID: "mcp:docs:search", Source: "mcp", Name: "mcp__docs__search"},
+	} {
+		settings := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{entry}}
+		if err := checkLazyEntriesVisible(config, settings, []tools.Definition{definition}); err != nil {
+			t.Errorf("%s: lazy entry refused: %v", entry, err)
 		}
 	}
 }
 
 func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 	registered := []tools.Definition{
-		{ID: "native.skill", Source: "native", Name: "skill"},
-		{ID: "native.exec", Source: "native", Name: "exec"},
+		{ID: "extension.web_search", Source: "extension", Name: "web_search"},
+		{ID: "mcp:fixture:lookup", Source: "mcp", Name: "mcp__fixture__lookup"},
 	}
 	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev"}
 	for name, tc := range map[string]struct {
 		settings sessionfs.ProfileToolSettings
 		want     string
 	}{
-		"denied":          {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"skill"}, Deny: []string{"skill"}}, `tools.lazy[0] lists "skill"`},
-		"denied, allowed": {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill"}, Lazy: []string{"skill"}, Deny: []string{"skill"}}, `tools.lazy[0] lists "skill"`},
-		"outside allow":   {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"exec"}, Lazy: []string{"skill"}}, ""},
-		"empty allow":     {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"skill"}}, ""},
-		"visible":         {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill"}, Lazy: []string{"skill"}}, ""},
-		"no allow, shown": {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"exec"}}, ""},
+		"denied":          {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.lazy[0] lists "web_search"`},
+		"denied, allowed": {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"web_search"}, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.lazy[0] lists "web_search"`},
+		"outside allow":   {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:fixture:lookup"}, Lazy: []string{"web_search"}}, ""},
+		"empty allow":     {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"web_search"}}, ""},
+		"visible":         {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"web_search"}, Lazy: []string{"web_search"}}, ""},
+		"no allow, shown": {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"mcp:fixture:lookup"}}, ""},
 	} {
 		err := checkLazyEntriesVisible(config, tc.settings, registered)
 		if tc.want == "" {
@@ -548,79 +535,73 @@ func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
 	}
 }
 
-// tools.lazy with no catalog layout (no state folder) is a configuration error: the session
-// has nowhere to keep the loaded set, so a load would fail closed.
-func TestOpenLazySetWithoutAStateFolderIsAConfigError(t *testing.T) {
-	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev", StateDir: "", ProfileTools: sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill"}, Lazy: []string{"skill"}, LazySummaryBytes: 256}}
-	set, err := openLazySet(config, nil)
-	if set != nil || err == nil || !strings.Contains(err.Error(), "catalog layout") {
-		t.Fatalf("openLazySet with no state folder = %v, %v; want the catalog-layout error", set, err)
-	}
-	var configError *sessionfs.ConfigError
-	if !errors.As(err, &configError) {
-		t.Errorf("the error is not a configuration error: %T", err)
+// tools.lazy needs no catalog layout: the lazy set keeps nothing in a state folder, so a session without one
+// opens a set like any other.
+func TestOpenLazySetNeedsNoStateFolder(t *testing.T) {
+	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev", StateDir: "", ProfileTools: sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:fixture:lookup"}, Lazy: []string{"mcp:fixture:lookup"}, LazySummaryBytes: 256}}
+	if set := openLazySet(config); set == nil {
+		t.Fatal("openLazySet with no state folder = nil, want a set")
 	}
 }
 
 // A profile without tools.lazy opens no set at all, so its tools array is what it was.
 func TestOpenLazySetIsNilWithoutLazyEntries(t *testing.T) {
-	set, err := openLazySet(sessionfs.SessionConfig{StateDir: t.TempDir()}, nil)
-	if set != nil || err != nil {
-		t.Fatalf("openLazySet with no lazy entries = %v, %v; want nil, nil", set, err)
+	if set := openLazySet(sessionfs.SessionConfig{StateDir: t.TempDir()}); set != nil {
+		t.Fatalf("openLazySet with no lazy entries = %v; want nil", set)
 	}
 }
 
 func TestLazyBatchDescribesSeveralToolsInOneCall(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	steps := []subagentStep{
-		describeStep("skill", name),
-		runStep("skill", notesCall),
+		describeStep("web_search", name),
+		runStep("web_search", searchCall),
 		runStep(name, `{"word":"answer"}`),
 	}
-	f, calls := lazyFixture(t, []string{"skill", "mcp:fixture:lookup"}, steps)
+	f, calls := lazyFixture(t, []string{"web_search", "mcp:fixture:lookup"}, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
-	if !strings.Contains(history, "name: skill") || !strings.Contains(history, "name: "+name) {
+	if !strings.Contains(history, "name: web_search") || !strings.Contains(history, "name: "+name) {
 		t.Errorf("the batch did not describe both tools:\n%s", history)
 	}
-	if !strings.Contains(history, "the secret is 42") || calls.Load() != 1 {
+	if !strings.Contains(history, "Lazy search hit") || calls.Load() != 1 {
 		t.Errorf("the described tools did not run (MCP calls %d):\n%s", calls.Load(), history)
 	}
-	requireStableTools(t, parentRequests(f), "skill", name)
-	requireNoLoads(t, f)
+	requireStableTools(t, parentRequests(f), "web_search", name)
+	requireNoLazyFile(t, f)
 }
 
 func TestLazyBatchWithAnUnknownNameDescribesTheRest(t *testing.T) {
-	steps := []subagentStep{describeStep("bogus", "skill")}
-	f, _ := lazyFixture(t, []string{"skill"}, steps)
+	steps := []subagentStep{describeStep("bogus", "web_search")}
+	f, _ := lazyFixture(t, []string{"web_search"}, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "bogus: not a lazy tool of this profile") {
 		t.Errorf("the unknown name has no section:\n%s", history)
 	}
-	if !strings.Contains(history, "name: skill") {
+	if !strings.Contains(history, "name: web_search") {
 		t.Errorf("the valid name was not described:\n%s", history)
 	}
 }
 
 func TestLazyBatchOverTheLimitDescribesNothing(t *testing.T) {
 	steps := []subagentStep{
-		describeStep("mcp:fixture:*", "skill"),
-		{"skill", notesCall},
+		describeStep("mcp:fixture:*", "web_search"),
+		{"web_search", searchCall},
 	}
-	f, _ := lazyFixtureWithMax(t, []string{"skill", "mcp:fixture:lookup"}, 1, steps)
+	f, _ := lazyFixtureWithMax(t, []string{"web_search", "mcp:fixture:lookup"}, 1, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "matched 2 lazy tools, the limit is 1 (tools.lazy_load_max)") {
 		t.Errorf("the batch was not refused by the limit:\n%s", history)
 	}
-	if strings.Contains(history, "name: skill") {
+	if strings.Contains(history, "name: web_search") {
 		t.Errorf("a refused batch described a tool:\n%s", history)
 	}
 	if !strings.Contains(history, "tool_not_loaded") {
 		t.Errorf("a direct call after a refused batch was not refused:\n%s", history)
 	}
-	requireNoLoads(t, f)
+	requireNoLazyFile(t, f)
 }
 
 func TestLazyPatternDescribesEveryLazyToolOfTheServer(t *testing.T) {
@@ -635,18 +616,18 @@ func TestLazyPatternDescribesEveryLazyToolOfTheServer(t *testing.T) {
 	if !strings.Contains(history, "name: "+name) || calls.Load() != 1 {
 		t.Errorf("the pattern did not describe the server's tool, or the run failed (MCP calls %d):\n%s", calls.Load(), history)
 	}
-	requireNoLoads(t, f)
+	requireNoLazyFile(t, f)
 }
 
 func TestLazyPatternWithNoMatchDescribesTheRest(t *testing.T) {
-	steps := []subagentStep{describeStep("mcp:nothere:*", "skill")}
-	f, _ := lazyFixture(t, []string{"skill"}, steps)
+	steps := []subagentStep{describeStep("mcp:nothere:*", "web_search")}
+	f, _ := lazyFixture(t, []string{"web_search"}, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	if !strings.Contains(history, "no lazy tool matches mcp:nothere:*") {
 		t.Errorf("the no-match pattern has no line:\n%s", history)
 	}
-	if !strings.Contains(history, "name: skill") {
+	if !strings.Contains(history, "name: web_search") {
 		t.Errorf("the other pattern was not described:\n%s", history)
 	}
 }
@@ -658,11 +639,11 @@ func TestLazyStarDescribesOnlyTheLazyToolsTheProfileListed(t *testing.T) {
 		{name, `{"word":"answer"}`},
 		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
 	}
-	f, calls := lazyFixture(t, []string{"skill"}, steps)
+	f, calls := lazyFixture(t, []string{"web_search"}, steps)
 	requireCompleted(t, f)
 	history := lastRequestText(t, parentRequests(f))
 	describe := history[strings.Index(history, `"call_id":"call-step-1"`):strings.Index(history, `"call_id":"call-step-2"`)]
-	if !strings.Contains(describe, "name: skill") || strings.Contains(describe, name) {
+	if !strings.Contains(describe, "name: web_search") || strings.Contains(describe, name) {
 		t.Errorf("* did not describe read alone:\n%s", describe)
 	}
 	direct := history[strings.Index(history, `"call_id":"call-step-2"`):strings.Index(history, `"call_id":"call-step-3"`)]
@@ -743,7 +724,7 @@ func TestLazyPatternOverTheLimitOnALargeServerDescribesNothing(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Errorf("MCP calls = %d, want 1 for the narrow tool", calls.Load())
 	}
-	requireNoLoads(t, f)
+	requireNoLazyFile(t, f)
 }
 
 // load_tool is not in a subagent child's catalog: the child is built from the parent's native tools
@@ -767,9 +748,7 @@ func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
 	}
 	// The parent's set is opened when its run is prepared, so the file exists with an empty loaded
 	// list; the child's refused call must not have added to it.
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
-		t.Errorf("the child loaded lazy tools for the parent: %v", loaded)
-	}
+	requireNoLazyFile(t, f)
 	if calls.Load() != 0 {
 		t.Errorf("the child reached the MCP server through load_tool's refusal (%d calls)", calls.Load())
 	}
@@ -777,15 +756,15 @@ func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
 
 // The resolver gives the owning profile's lazy set to the subagent tool (SetLazy) before it binds the MCP
 // tools into the children (BindToolsets). The order is pinned here: a profile with a lazy subagent whose child
-// lists a lazy MCP tool must refuse that child's call until the owner loads it. If BindToolsets ran first, the
-// child's copy would be built with no set and would run, so this test would fail.
-func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T) {
+// lists a lazy MCP tool must refuse that child's direct call. The subagent tool itself is native, so it is eager and
+// the parent calls it directly. If BindToolsets ran first, the child's copy would be built with no set and would
+// run, so this test would fail.
+func TestLazyMCPProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
 	calls := &atomic.Int32{}
-	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"subagent", "mcp:fixture:lookup"}}
+	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "mcp:fixture:lookup"}, "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
-	// The parent runs the lazy subagent through load_tool: a call that names subagent is refused.
-	f.provider.parentSteps = []subagentStep{runStep("subagent", `{"task":"look it up","agent":"explore"}`)}
+	f.provider.parentSteps = []subagentStep{{"subagent", `{"task":"look it up","agent":"explore"}`}}
 	f.provider.childFirstCall = [2]string{name, `{}`}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
@@ -806,7 +785,7 @@ func TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP(t *testing.T
 // child copy is gated when BindToolsets builds it, so a reversed order builds every child copy with no set.
 // This test fails under that order, and the message names the order, so a reversal is not read as a mystery.
 // It reads resolver.go as text, so it breaks on a rename or reformat of those two calls; then update the names here.
-// The real check is the behavioural test TestLazySubagentProfileGivesTheChildItsLazySetBeforeBindingMCP.
+// The real check is the behavioural test TestLazyMCPProfileGivesTheChildItsLazySetBeforeBindingMCP.
 func TestResolverGivesTheSubagentItsLazySetBeforeItBindsMCPTools(t *testing.T) {
 	src, err := os.ReadFile("resolver.go")
 	if err != nil {

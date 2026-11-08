@@ -639,12 +639,9 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	taskStore := r.sharedTaskStore(config)
 	recordsStore := r.sharedRecordsStore(config)
 	subagentMCP := native.NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
-	// One lazy set per prepare: read from the state folder once, and passed to both the native
-	// pass and the MCP pass below. Nil when the profile has no tools.lazy.
-	lazy, err := openLazySet(config, r.logger)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
+	// One lazy set per prepare, passed to both the native pass (extension tools) and the MCP pass
+	// below. Nil when the profile has no tools.lazy.
+	lazy := openLazySet(config)
 	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, taskStore, recordsStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)

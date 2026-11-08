@@ -29,9 +29,7 @@ func TestChildOfAParentWithLazyToolsRunsThemThroughItsLoadToolInTheOwningProfile
 		t.Errorf("the child's run reached the MCP server %d times; history:\n%s", calls.Load(), child[len(child)-1].Text)
 	}
 	// Nothing was written to the owning profile's set, and the caller's is untouched.
-	if loaded := lazyFileLoaded(t, f.lazyFile()); len(loaded) != 0 {
-		t.Errorf("the owning profile's lazy_tools.json holds %v, want no loads", loaded)
-	}
+	requireNoLazyFile(t, f)
 }
 
 // An owner with no tools.lazy gives its children no load_tool, even when the agent names it: load_tool

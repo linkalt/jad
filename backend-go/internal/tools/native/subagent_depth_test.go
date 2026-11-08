@@ -9,15 +9,11 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// A child of a child: the owner's lazy set gates the copies at every level. One set serves all three levels,
-// so a tool the owner has not loaded is refused wherever it is listed. The parent refuses subagent until the
-// owner loads it; the child refuses its lazy read until the owner loads read; the grandchild, started by the
-// child's nested subagent, refuses its read the same way.
-func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read_image", "subagent"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+// A child of a child: a native tool is eager at every level, even when the owner's lazy set is handed an entry that
+// names it (the loader refuses such an entry). The parent's subagent call starts the child, the child's read_image
+// is not refused, and the grandchild started by the child's nested subagent holds an eager read_image too.
+func TestNativeToolsAreEagerAtEveryNestingLevel(t *testing.T) {
+	set := tools.NewLazySet([]string{"read_image", "subagent"}, 256, nil)
 	childAgent := nestingAgent("explore", "read_image", "subagent")
 	subagent := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 3, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	config := sessionfs.SessionConfig{
@@ -38,45 +34,30 @@ func TestGrandchildGatesALazyReadUntilTheOwnerLoadsIt(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); !strings.Contains(out, "tool_not_loaded") || len(launcher.requests) != 0 {
-		t.Fatalf("the parent's direct call to the lazy subagent was not refused: %s", out)
-	}
-	executeNamedCallViaRunner(t, catalog, "subagent", `{"task":"x","agent":"explore"}`)
-	if len(launcher.requests) != 1 {
-		t.Fatalf("the child ran %d times, want 1", len(launcher.requests))
+	if out := subagentCall(t, catalog, `{"task":"x","agent":"explore"}`); strings.Contains(out, "tool_not_loaded") || len(launcher.requests) != 1 {
+		t.Fatalf("the parent's direct subagent call was refused or did not start the child: %s", out)
 	}
 	child := launcher.requests[0].Tools
-	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "tool_not_loaded") {
-		t.Fatalf("the child's direct read was not refused: %s", out)
+	if out := executeNamedCall(t, child, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
+		t.Fatalf("the child's direct read_image was refused as lazy: %s", out)
 	}
-	// The grandchild is started while read is still unloaded: the read copy it holds is refused.
-	executeNamedCallViaRunner(t, child, "subagent", `{"task":"y","agent":"explore"}`)
+	executeNamedCall(t, child, "subagent", `{"task":"y","agent":"explore"}`)
 	if len(launcher.requests) != 2 {
 		t.Fatalf("the grandchild ran %d times in total, want 2", len(launcher.requests))
 	}
-	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); !strings.Contains(out, "tool_not_loaded") {
-		t.Fatalf("the grandchild's direct read was not refused: %s", out)
-	}
-	// A runner that dispatches the grandchild's read is not refused.
-	if out := executeNamedCallViaRunner(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
-		t.Fatalf("the grandchild's read run by a runner was refused: %s", out)
+	if out := executeNamedCall(t, launcher.requests[1].Tools, "read_image", `{"path":"notes.png"}`); strings.Contains(out, "tool_not_loaded") {
+		t.Fatalf("the grandchild's direct read_image was refused as lazy: %s", out)
 	}
 }
 
-// The nested subagent copy a child holds is gated with the owner's set when it is built: its Refused is set
-// while the owner has not loaded subagent, and the copy the child holds is the gated one. This pins the
-// gate on the nested copy directly, because a call to it can only be made once the owner loads subagent.
-func TestNestedSubagentCopyIsGatedBeforeTheOwnerLoadsIt(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"subagent"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+// The nested subagent copy a child holds is never gated, even when the owner's set is handed an entry that
+// names subagent: the set binds no native tool, so the copy has no Refused rule.
+func TestNestedSubagentCopyIsNeverGated(t *testing.T) {
+	set := tools.NewLazySet([]string{"subagent"}, 256, nil)
 	childAgent := nestingAgent("explore", "read_image", "subagent")
 	settings := sessionfs.NativeSubagentSettings{ResultMaxBytes: 1024, MaxConcurrent: 2, ListMaxBytes: 4096, KeepFinished: 10, MaxQueued: 4, StorageDir: t.TempDir(), MaxDepth: 2, Agents: []sessionfs.NativeSubagentAgent{childAgent}}
 	mcp := NewSubagentMCP(sessionfs.HooksSettings{}, "")
 	parent := withExecutors(t, readOnlyTool("read_image"))
-	// The owner's subagent tool is built first, then bound, as BuildCatalogWithAsync does: a lazy copy needs a
-	// real definition, validator and executor.
 	owner, err := newSubagentToolAsync(settings, parent, nil, &fakeLauncher{}, mcp, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -85,10 +66,18 @@ func TestNestedSubagentCopyIsGatedBeforeTheOwnerLoadsIt(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, tool := range mcp.tool.agents[0].nativeTools {
-		if tool.Definition.ID == subagentToolID && (tool.Refused == nil || !tool.Refused(tools.ExecutionContext{})) {
-			t.Fatal("the nested subagent copy is not refused before the owner loads subagent")
+		if tool.Definition.ID != subagentToolID {
+			continue
 		}
+		found = true
+		if tool.Refused != nil {
+			t.Fatal("the nested subagent copy has a Refused rule: a native tool is never lazy")
+		}
+	}
+	if !found {
+		t.Fatal("the child holds no nested subagent copy")
 	}
 }
 

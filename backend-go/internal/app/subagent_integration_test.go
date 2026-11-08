@@ -340,6 +340,8 @@ type subagentFixture struct {
 	// childProvider is the child's own server when the fixture was built with
 	// newSplitSubagentFixture; it is nil when both models share provider.
 	childProvider *subagentProvider
+	// searchCalls counts the searches the fixture's extension web_search tool made; nil without __web_search.
+	searchCalls *atomic.Int32
 	// restart stops the service, runs between (when not nil) while nothing is running,
 	// and starts a new service over the same directories, as a server restart does. It
 	// returns the new API address.
@@ -430,6 +432,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	if withLoadTool {
 		definitions = append(definitions, sampleTool("load_tool.json"))
 	}
+	// __web_search enables the extension web_search tool against a local searxng-style server that
+	// counts its requests and answers one result titled "Lazy search hit".
+	searchCalls, withSearch := agentSetting["__web_search"].(*atomic.Int32)
+	delete(agentSetting, "__web_search")
+	if withSearch {
+		definitions = append(definitions, filepath.Join(filepath.Dir(sampleTool("skill.json")), "..", "extension", "web_search.json"))
+	}
 	// __toolsets writes extra toolset files (id -> file content) and __session_without
 	// removes tools from the session's own toolset, so a test can give a tool to an
 	// agent's toolset only.
@@ -516,6 +525,15 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	if withLoadTool {
 		spec.Native["load_tool"] = map[string]any{}
+	}
+	if withSearch {
+		searchServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			searchCalls.Add(1)
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"results":[{"title":"Lazy search hit","url":"https://example.com/hit","content":"found by the extension tool"}]}`))
+		}))
+		t.Cleanup(searchServer.Close)
+		spec.Extension = map[string]any{"web_search": map[string]any{"provider": "searxng", "base_url": searchServer.URL + "/search"}}
 	}
 	if withExec {
 		execTool := map[string]any{"spill": map[string]any{"enabled": false}}
@@ -622,7 +640,8 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 	profileState := filepath.Join(layout.StateDir, "demo", "dev", "coder")
 	return subagentFixture{
-		workspace: workspace, sessionFile: layout.SessionFile, sessionDir: layout.SessionStateDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
+		searchCalls: searchCalls,
+		workspace:   workspace, sessionFile: layout.SessionFile, sessionDir: layout.SessionStateDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
 		stateDir: profileState, toolDir: filepath.Join(workspace, ".jad", "state", "demo", "dev", "coder", "tools"),
 		modelsDir: filepath.Join(layout.Root, "models", "openai"), config: config,
 	}

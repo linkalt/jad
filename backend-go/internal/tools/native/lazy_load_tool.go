@@ -26,7 +26,7 @@ var loadToolInputSchema = json.RawMessage(`{
       "type":"array",
       "minItems":1,
       "uniqueItems":true,
-      "description":"Describe lazy tools: their tool names or tools.lazy-style patterns, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or *. Returns each tool's name, id, description and inputSchema. Omit names and run to list the lazy tools. The total of matched tools is limited by the profile's tools.lazy_load_max. Not together with run.",
+      "description":"Describe lazy tools: their tool names or patterns, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or * (every lazy tool). Returns each tool's name, id, description and inputSchema. Omit names and run to list the lazy tools. The total of matched tools is limited by the profile's tools.lazy_load_max. Not together with run.",
       "items":{"type":"string","minLength":1}
     },
     "run":{
@@ -120,7 +120,7 @@ func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 	}, nil
 }
 
-const loadToolDescription = "Lazy tools are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+const loadToolDescription = "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
 
 // loadToolDelegate is Tool.Delegate of load_tool: a call with run (and no names) runs the tool
 // run names with the arguments in arguments, none being {}. Anything else runs nothing.

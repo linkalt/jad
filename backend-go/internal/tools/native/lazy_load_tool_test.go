@@ -42,15 +42,11 @@ func TestLoadToolShippedDefinitionMatchesTheInCodeTool(t *testing.T) {
 	}
 }
 
-// newTestLazySet opens an empty lazy set in a fresh state folder, enough for a tool that only
+// newTestLazySet builds a lazy set naming the MCP tool docs:read, enough for a tool that only
 // needs the set to exist.
 func newTestLazySet(t *testing.T) *tools.LazySet {
 	t.Helper()
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return set
+	return tools.NewLazySet([]string{"mcp:docs:read"}, 256, nil)
 }
 
 // The shipped schema is flat (no oneOf or anyOf: the Anthropic adapter strips them from the top level) and
@@ -119,17 +115,14 @@ func runLoadTool(t *testing.T, tool tools.Tool, arguments map[string]any, execut
 
 // A describe batch over the limit is refused with the configured limit named, and nothing is described.
 func TestLoadToolRefusesABatchOverTheLimit(t *testing.T) {
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"read", "grep"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := tools.NewLazySet([]string{"mcp:docs:read", "mcp:docs:grep"}, 256, nil)
 	validator, err := tools.CompileSchema([]byte(`{"type":"object"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	set.Bind([]tools.Tool{
-		{Definition: tools.Definition{ID: "native.read", Source: "native", Name: "read", Description: "read a file.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: validator, Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil }},
-		{Definition: tools.Definition{ID: "native.grep", Source: "native", Name: "grep", Description: "grep a file.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: validator, Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil }},
+		{Definition: tools.Definition{ID: "mcp:docs:read", Source: "mcp", Name: "read", Description: "read a file.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: validator, Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil }},
+		{Definition: tools.Definition{ID: "mcp:docs:grep", Source: "mcp", Name: "grep", Description: "grep a file.", InputSchema: json.RawMessage(`{"type":"object"}`)}, Validator: validator, Execute: func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil }},
 	})
 	tool, err := NewLoadToolTool(set, 1)
 	if err != nil {
@@ -139,9 +132,6 @@ func TestLoadToolRefusesABatchOverTheLimit(t *testing.T) {
 	output := runLoadTool(t, tool, map[string]any{"names": []any{"*"}}, tools.ExecutionContext{CallID: "call-1"})
 	if !strings.Contains(output, "matched 2 lazy tools, the limit is 1 (tools.lazy_load_max)") || !strings.Contains(output, "batch_too_large") {
 		t.Fatalf("output = %s, want the limit refusal", output)
-	}
-	if set.Loaded("native.read") {
-		t.Fatal("a refused batch loaded a tool")
 	}
 }
 
@@ -192,7 +182,7 @@ func TestLoadToolValidatorRefusesWhatTheSchemaDoesNotHave(t *testing.T) {
 	}
 }
 
-// newTestLazySetWithTool opens a lazy set that binds one native tool, "read".
+// newTestLazySetWithTool builds a lazy set that binds one MCP tool, docs:read (provider name "read").
 func newTestLazySetWithTool(t *testing.T) *tools.LazySet {
 	t.Helper()
 	set := newTestLazySet(t)
@@ -201,7 +191,7 @@ func newTestLazySetWithTool(t *testing.T) *tools.LazySet {
 		t.Fatal(err)
 	}
 	set.Bind([]tools.Tool{{
-		Definition: tools.Definition{ID: "native.read", Source: "native", Name: "read", Description: "read a file.", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Definition: tools.Definition{ID: "mcp:docs:read", Source: "mcp", Name: "read", Description: "read a file.", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Validator:  validator,
 		Execute:    func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil },
 	}})
@@ -221,48 +211,16 @@ func TestLoadToolListsAndDescribes(t *testing.T) {
 		t.Fatalf("list = %q, want %q", list, want)
 	}
 	described := runLoadTool(t, tool, map[string]any{"names": []any{"read", "nothing", "*"}}, tools.ExecutionContext{CallID: "call-2"})
-	for _, want := range []string{"name: read\nid: native.read\ndescription: read a file.\ninputSchema: {\"type\":\"object\"}", "nothing: not a lazy tool of this profile", "read: already described above", loadToolUsage} {
+	for _, want := range []string{"name: read\nid: mcp:docs:read\ndescription: read a file.\ninputSchema: {\"type\":\"object\"}", "nothing: not a lazy tool of this profile", "read: already described above", loadToolUsage} {
 		if !strings.Contains(described, want) {
 			t.Errorf("describe = %q, missing %q", described, want)
 		}
 	}
-	if strings.Contains(described, "Loaded") || set.Loaded("native.read") {
-		t.Error("a describe loaded a tool or said so")
+	if strings.Contains(described, "Loaded") {
+		t.Error("a describe said it loaded a tool")
 	}
 	if none := runLoadTool(t, tool, map[string]any{"names": []any{"bash", "grep"}}, tools.ExecutionContext{CallID: "call-3"}); strings.Contains(none, "name: ") || strings.Contains(none, loadToolUsage) {
 		t.Errorf("a describe that matched nothing = %q, want only the no-match lines", none)
-	}
-}
-
-// A list and a describe leave the lazy set's state file byte for byte as it was.
-func TestLoadToolListAndDescribeWriteNothing(t *testing.T) {
-	dir := t.TempDir()
-	set, err := tools.OpenLazySet(dir, []string{"read"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	validator, _ := tools.CompileSchema([]byte(`{"type":"object"}`))
-	set.Bind([]tools.Tool{{
-		Definition: tools.Definition{ID: "native.read", Source: "native", Name: "read", Description: "read a file.", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		Validator:  validator,
-		Execute:    func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "", nil },
-	}})
-	tool, err := NewLoadToolTool(set, 16)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(dir, "lazy_tools.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	runLoadTool(t, tool, map[string]any{}, tools.ExecutionContext{CallID: "1"})
-	runLoadTool(t, tool, map[string]any{"names": []any{"*"}}, tools.ExecutionContext{CallID: "2"})
-	after, err := os.ReadFile(filepath.Join(dir, "lazy_tools.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatalf("lazy_tools.json changed:\n%s\nthen\n%s", before, after)
 	}
 }
 

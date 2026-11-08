@@ -25,6 +25,19 @@ func EntryMatches(entry string, definition Definition) bool {
 	return definition.ID == entry
 }
 
+// CanBeLazy reports whether a tool may be lazy: only an MCP tool or an extension tool. A native
+// tool is always in the model's tools array, so load_tool never lists, describes or runs one.
+func CanBeLazy(definition Definition) bool {
+	return definition.Source == "mcp" || definition.Source == "extension"
+}
+
+// LazyEntryMatches reports whether one entry of a profile's tools.lazy names the definition: it
+// is EntryMatches, and only for a tool that can be lazy (CanBeLazy). A native tool is never named
+// by a lazy entry, whatever the entry says.
+func LazyEntryMatches(entry string, definition Definition) bool {
+	return CanBeLazy(definition) && EntryMatches(entry, definition)
+}
+
 // AnyEntryMatches reports whether at least one entry covers the definition.
 func AnyEntryMatches(entries []string, definition Definition) bool {
 	for _, entry := range entries {
@@ -59,7 +72,7 @@ func ProfileShows(settings sessionfs.ProfileToolSettings, definition Definition)
 // allowed shows the same tools).
 func lazyAllows(settings sessionfs.ProfileToolSettings, definition Definition) bool {
 	for _, entry := range settings.Lazy {
-		if !EntryMatches(entry, definition) {
+		if !LazyEntryMatches(entry, definition) {
 			continue
 		}
 		server, wildcard := strings.CutSuffix(entry, ":*")

@@ -282,11 +282,11 @@ func TestProfileToolsSchemaMatchesTheLoader(t *testing.T) {
 
 // lazy lists tools shown by name and summary; lazy_summary_bytes is its bound, with a default.
 func TestProfileToolsLazyLoadsWithItsSummaryBound(t *testing.T) {
-	config, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec", "mcp:docs:search"}, "lazy": []any{"exec", "mcp:docs:search"}, "lazy_summary_bytes": 64}}, map[string]any{"load_tool": map[string]any{}})
+	config, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec", "mcp:docs:search"}, "lazy": []any{"web_search", "mcp:docs:search"}, "lazy_summary_bytes": 64}}, map[string]any{"load_tool": map[string]any{}})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read_image", "exec", "mcp:docs:search"}, Lazy: []string{"exec", "mcp:docs:search"}, LazySummaryBytes: 64, LazyLoadMax: defaultLazyLoadMax}
+	want := ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"read_image", "exec", "mcp:docs:search"}, Lazy: []string{"web_search", "mcp:docs:search"}, LazySummaryBytes: 64, LazyLoadMax: defaultLazyLoadMax}
 	if !reflect.DeepEqual(config.ProfileTools, want) {
 		t.Fatalf("ProfileTools = %+v, want %+v", config.ProfileTools, want)
 	}
@@ -321,9 +321,28 @@ func TestProfileToolsLazyLoadMaxBounds(t *testing.T) {
 
 // load_tool is the tool that shows the lazy ones, so it cannot be lazy itself.
 func TestProfileToolsRefusesLoadToolAsLazy(t *testing.T) {
-	_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"load_tool", "read_image"}, "lazy": []any{"read_image", "load_tool"}}})
+	_, err := loadProfileTools(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"load_tool", "read_image"}, "lazy": []any{"mcp:docs:search", "load_tool"}}})
 	if err == nil || !strings.Contains(err.Error(), `tools.lazy[1] "load_tool" cannot be lazy`) {
 		t.Fatalf("err = %v, want the load_tool refusal naming tools.lazy[1]", err)
+	}
+}
+
+// A native tool is always listed, so a tools.lazy entry that names one is refused at load, whichever native tool
+// it is: the error names the entry and the kinds that can be lazy. MCP tools and the extension tools load.
+func TestProfileToolsRefusesANativeToolAsLazy(t *testing.T) {
+	for _, name := range nativeToolNames {
+		_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{name}, "lazy": []any{"mcp:docs:search", name}}}, map[string]any{"load_tool": map[string]any{}})
+		if err == nil || !strings.Contains(err.Error(), `tools.lazy[1] "`+name+`"`) || !strings.Contains(err.Error(), "cannot be lazy") {
+			t.Fatalf("lazy entry %s: err = %v, want a refusal naming tools.lazy[1] and %q", name, err, name)
+		}
+		if name != LoadToolName && (!strings.Contains(err.Error(), "is a native tool") || !strings.Contains(err.Error(), "mcp:<server>:<tool>") || !strings.Contains(err.Error(), "decide_systemone, web_search")) {
+			t.Errorf("lazy entry %s: err = %v, want the accepted kinds named", name, err)
+		}
+	}
+	for _, entry := range []string{"web_search", "decide_systemone", "mcp:docs:search", "mcp:docs:*"} {
+		if _, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"allow": []any{"exec"}, "lazy": []any{entry}}}, map[string]any{"load_tool": map[string]any{}}); err != nil {
+			t.Errorf("lazy entry %s: %v, want it accepted", entry, err)
+		}
 	}
 }
 
@@ -349,7 +368,7 @@ func TestNativeLoadToolIsEnabledOnlyByItsKey(t *testing.T) {
 // A profile with tools.lazy is refused at load when tools.native.load_tool is not enabled, and
 // the error names both keys. With the key enabled the same profile loads.
 func TestLazyWithoutNativeLoadToolIsRefusedAtLoad(t *testing.T) {
-	lazy := map[string]any{"tools": map[string]any{"allow": []any{"read_image", "exec"}, "lazy": []any{"exec"}}}
+	lazy := map[string]any{"tools": map[string]any{"allow": []any{"read_image", "mcp:docs:search"}, "lazy": []any{"mcp:docs:search"}}}
 	_, err := loadProfileTools(t, "lean", lazy)
 	if err == nil || !strings.Contains(err.Error(), "tools.lazy") || !strings.Contains(err.Error(), "tools.native.load_tool") {
 		t.Fatalf("err = %v, want a refusal naming tools.lazy and tools.native.load_tool", err)
@@ -393,9 +412,9 @@ func TestProfileToolsLazyEntriesUseTheAllowSyntax(t *testing.T) {
 	}
 }
 
-// The lazy entries are refused for load_tool, so the schema refuses it too: its pattern is the
-// allow and deny pattern without load_tool. allow and deny still take it.
-func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
+// The schema's lazy pattern admits exactly what the loader accepts as a lazy entry: the extension tools and MCP
+// entries, and no native tool at all, load_tool included. allow and deny still take every native tool.
+func TestProfileToolsSchemaLazyPatternAgreesWithTheLoader(t *testing.T) {
 	data, err := os.ReadFile("../../../sample/schemes/profile.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -417,52 +436,18 @@ func TestProfileToolsSchemaRefusesLoadToolAsALazyEntry(t *testing.T) {
 	properties := schema.Properties.Tools.Properties
 	lazy := regexp.MustCompile(properties["lazy"].Items.Pattern)
 	allow := regexp.MustCompile(properties["allow"].Items.Pattern)
-	if lazy.MatchString(LoadToolName) {
-		t.Errorf("the schema's lazy pattern admits %q, which the loader refuses as a lazy entry", LoadToolName)
-	}
-	if !allow.MatchString(LoadToolName) {
-		t.Errorf("the schema's allow pattern refuses %q, which the loader accepts", LoadToolName)
-	}
-	for _, entry := range []string{"read_image", "exec", "decide_systemone", "mcp:docs:search", "mcp:docs:*"} {
-		if !lazy.MatchString(entry) {
-			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts", entry)
-		}
-	}
-	// The late-built tools and subagent are bound by the lazy pass, so the loader accepts them as lazy entries.
-	for _, entry := range []string{"subagent", "profile_message", "transcript", "transcripts", "profile"} {
-		if !lazy.MatchString(entry) {
-			t.Errorf("the schema's lazy pattern refuses %q, which the loader accepts as a lazy entry", entry)
-		}
-	}
-}
-
-// The schema's lazy pattern admits exactly the native names the loader accepts as lazy entries: every native
-// tool except load_tool. A name added to nativeToolNames must reach the lazy pattern too, or this fails.
-func TestProfileToolsSchemaLazyPatternAgreesWithTheLoaderForEveryNativeName(t *testing.T) {
-	data, err := os.ReadFile("../../../sample/schemes/profile.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema struct {
-		Properties struct {
-			Tools struct {
-				Properties map[string]struct {
-					Items struct {
-						Pattern string `json:"pattern"`
-					} `json:"items"`
-				} `json:"properties"`
-			} `json:"tools"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatal(err)
-	}
-	lazy := regexp.MustCompile(schema.Properties.Tools.Properties["lazy"].Items.Pattern)
 	for _, name := range nativeToolNames {
-		admitted := lazy.MatchString(name)
-		want := name != LoadToolName
-		if admitted != want {
-			t.Errorf("native tool %q: the schema's lazy pattern admits it = %v, the loader wants %v", name, admitted, want)
+		if lazy.MatchString(name) {
+			t.Errorf("native tool %q: the schema's lazy pattern admits it, the loader refuses it", name)
+		}
+		if !allow.MatchString(name) {
+			t.Errorf("native tool %q: the schema's allow pattern refuses it, the loader accepts it", name)
+		}
+	}
+	for _, entry := range []string{"decide_systemone", "web_search", "mcp:docs:search", "mcp:docs:*", "mcp:docs", "mcp:docs:", "raed", ""} {
+		loaderOK := checkProfileToolEntry(entry) == nil && checkLazyEntry(entry) == nil
+		if got := lazy.MatchString(entry); got != loaderOK {
+			t.Errorf("lazy entry %q: schema pattern says %v, loader says %v", entry, got, loaderOK)
 		}
 	}
 }
@@ -470,7 +455,7 @@ func TestProfileToolsSchemaLazyPatternAgreesWithTheLoaderForEveryNativeName(t *t
 // A tools block with lazy and neither allow nor deny is refused by the loader, as the schema's
 // anyOf refuses it: the block must say which tools it shows.
 func TestLazyOnlyToolsBlockIsRefusedLikeTheSchema(t *testing.T) {
-	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"lazy": []any{"exec"}}}, map[string]any{"load_tool": map[string]any{}})
+	_, err := loadProfileToolsWithNative(t, "lean", map[string]any{"tools": map[string]any{"lazy": []any{"mcp:docs:search"}}}, map[string]any{"load_tool": map[string]any{}})
 	if err == nil || !strings.Contains(err.Error(), "needs allow or deny") {
 		t.Fatalf("err = %v, want the loader to refuse a lazy-only tools block", err)
 	}

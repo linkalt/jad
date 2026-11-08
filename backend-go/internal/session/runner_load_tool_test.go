@@ -28,22 +28,21 @@ func loadToolCatalog(t *testing.T, release <-chan struct{}, executed chan<- stri
 		t.Fatal(err)
 	}
 	execute := func(context.Context, map[string]any, tools.ExecutionContext) (string, error) { return "ran", nil }
+	leaf := leafTool(t, release, executed)
+	leaf.Definition.ID, leaf.Definition.Source = "extension.leaf", "extension"
 	lazy := []tools.Tool{
-		{Definition: tools.Definition{ID: "native.exec", Source: "native", Name: "exec", Description: "Run.", InputSchema: schema}, Validator: validator, ReadOnly: true, Execute: execute},
 		{Definition: tools.Definition{ID: "mcp:docs:write", Source: "mcp", Server: "docs", Name: "mcp_docs_write_0123456789", Description: "Write.", InputSchema: schema}, Validator: validator, Execute: execute},
-		{Definition: tools.Definition{ID: "native.peek", Source: "native", Name: "peek", Description: "Peek.", InputSchema: schema}, Validator: validator, ReadOnly: true, PlanGuarded: true, Execute: execute},
-		leafTool(t, release, executed),
+		{Definition: tools.Definition{ID: "extension.peek", Source: "extension", Name: "peek", Description: "Peek.", InputSchema: schema}, Validator: validator, ReadOnly: true, PlanGuarded: true, Execute: execute},
+		leaf,
 	}
-	set, err := tools.OpenLazySet(t.TempDir(), []string{"exec", "mcp:docs:write", "peek", "leaf"}, 256, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := tools.NewLazySet([]string{"mcp:docs:write", "peek", "leaf"}, 256, nil)
 	set.Bind(lazy)
 	loadTool, err := native.NewLoadToolTool(set, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered := []tools.Tool{loadTool}
+	// exec is a native tool: always listed, never lazy, so it is registered as it is.
+	registered := []tools.Tool{loadTool, {Definition: tools.Definition{ID: "native.exec", Source: "native", Name: "exec", Description: "Run.", InputSchema: schema}, Validator: validator, ReadOnly: true, Execute: execute}}
 	for _, tool := range lazy {
 		gated, ok := set.GateFor(tool)
 		if !ok {
@@ -63,9 +62,9 @@ func loadToolCall(id, arguments string) json.RawMessage {
 	return encoded
 }
 
-// A load_tool run is judged as the tool it runs: a run of exec takes the checkpoint by the name
-// exec, a run of an MCP tool by its source under checkpoint.include_mcp_tools, and a list, a describe, a
-// pattern or a plan-guarded target does not.
+// A load_tool run is judged as the tool it runs: a run of an MCP tool by its source under
+// checkpoint.include_mcp_tools, and a list, a describe, a pattern or a plan-guarded target does not.
+// A native tool such as exec is never lazy, so it is called directly and judged by its own name.
 func TestRoundChangesWorkspaceJudgesALoadToolRunByItsTarget(t *testing.T) {
 	catalog := loadToolCatalog(t, nil, nil)
 	for _, includeMCP := range []bool{true, false} {
@@ -77,11 +76,10 @@ func TestRoundChangesWorkspaceJudgesALoadToolRunByItsTarget(t *testing.T) {
 			call json.RawMessage
 			want bool
 		}{
-			"run exec":           {loadToolCall("c1", `{"run":"exec","arguments":{}}`), true},
 			"run mcp write":      {loadToolCall("c2", `{"run":"mcp:docs:write"}`), includeMCP},
 			"run mcp by name":    {loadToolCall("c3", `{"run":"mcp_docs_write_0123456789"}`), includeMCP},
 			"list":               {loadToolCall("c4", `{}`), false},
-			"describe":           {loadToolCall("c5", `{"names":["exec"]}`), false},
+			"describe":           {loadToolCall("c5", `{"names":["peek"]}`), false},
 			"run a pattern":      {loadToolCall("c6", `{"run":"*"}`), false},
 			"run a server glob":  {loadToolCall("c7", `{"run":"mcp:docs:*"}`), false},
 			"run a plain target": {loadToolCall("c8", `{"run":"peek"}`), false},
