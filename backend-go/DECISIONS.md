@@ -2329,3 +2329,7 @@ T-108, frontend only; it replaces the grouped panel of T-107.
 - The group header is built by hand: the latest call through `ChatToolCalls`, plus a wrench, the count and a chevron. It looks close to the old Astryx header but is not pixel-identical.
 - Nothing was checked in a real browser.
 - Orphan results and a group that grows from one call to two still switch row type, so the state of the first row is lost.
+
+## Single-pane right panel starts below the pane header: browser check open (Go, 2026-05-20)
+
+T-109 (frontend only). The window-edge panel (`position: fixed`, inset-block-start 0, z 3) was painted over at its top by the full-width pane header (z 4). It now starts at the header's measured bottom (`--pane-panel-top`, `edgePanelTop` in `panel-layers.ts`). Still open: no real-browser check was done (only source-pinning tests, `npm run typecheck`, `npm test`); the offset, the close/resize reach at narrow widths and the panel height need a visual check. `npm run build` was not run (forbidden for this role). Closing it: the user's visual check on the four panels in single-pane mode.

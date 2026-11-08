@@ -22,11 +22,13 @@ const styles = stylex.create({
    * The right window of the whole app, as the single-pane app has it: pinned to
    * the viewport's right edge instead of to the pane's. One conversation keeps
    * the centred lane, so a pane-anchored panel would put its scrollbar in the
-   * middle of the screen; the window edge is where that scrollbar belongs.
+   * middle of the screen; the window edge is where that scrollbar belongs. It
+   * starts below the pane's title strip, whose bottom edge ViewPane publishes
+   * (edgePanelTop in panel-layers.ts), and at the window top without a strip.
    */
   viewportEndEdge: {
     position: 'fixed',
-    insetBlockStart: 0,
+    insetBlockStart: 'var(--pane-panel-top, 0px)',
     insetBlockEnd: 0,
     insetInlineEnd: 0,
   },
@@ -203,7 +205,9 @@ export function FloatingPanel({
       align="stretch"
       gap={0}
       width={region.size}
-      height="100%"
+      // A fixed panel is sized by its two insets; 100% would be a full viewport
+      // height pushed down by the strip, and run off the window's bottom.
+      height={side === 'end' && isEdgeFixed ? undefined : '100%'}
       maxWidth="100%"
       role="complementary"
       aria-label={label}

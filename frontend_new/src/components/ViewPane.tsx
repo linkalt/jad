@@ -17,7 +17,7 @@ import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {Fragment, useCallback, useMemo, useRef, useState, type ReactNode} from 'react';
+import {Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type WebUiMessage} from '../api';
 import {type MessageRecord, type RunRetryState, type Session} from '../app-types';
 import appConfig from '../config.json';
@@ -25,6 +25,7 @@ import {type HistoryBlocks} from '../history-blocks';
 import {type AttachedFile, type AttachedImage} from '../image-attachments';
 import {paneTitleParts} from '../pane-title';
 import {PANE_HEADER_Z_INDEX} from '../panel-layers';
+import {edgePanelTop, PANE_PANEL_TOP_VAR} from '../panel-layers';
 import {activityClickOutcome, conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
@@ -366,6 +367,26 @@ export function ViewPane({
    */
   const [activity, setActivity] = useState<ActivityDetail | null>(null);
   const activityOpenerRef = useRef<HTMLElement | null>(null);
+  // Bottom edge of the title strip, so a panel pinned to the window edge starts
+  // below it instead of under it.
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [headerBottom, setHeaderBottom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!isPanelAtWindowEdge || header === null) {
+      setHeaderBottom(null);
+      return;
+    }
+    const measure = () => setHeaderBottom(header.getBoundingClientRect().bottom);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [isPanelAtWindowEdge, showHeader]);
   const closeActivity = useCallback(() => {
     setPanel(null);
     const opener = activityOpenerRef.current;
@@ -479,7 +500,11 @@ export function ViewPane({
       height="100%"
       width="100%"
       xstyle={[styles.pane, isDivided ? styles.paneDivided : undefined, isHidden ? styles.paneHidden : undefined]}
-      style={{flex: '1 1 0', minWidth: 0}}
+      style={{
+        flex: '1 1 0',
+        minWidth: 0,
+        [PANE_PANEL_TOP_VAR]: edgePanelTop(isPanelAtWindowEdge, headerBottom),
+      } as CSSProperties}
       onClick={onFocus}
       role="group"
       aria-label={`Conversation pane: ${label}`}
@@ -500,6 +525,7 @@ export function ViewPane({
       )}
       {showHeader && (
         <HStack
+          ref={headerRef}
           align="center"
           justify="between"
           gap={2}
