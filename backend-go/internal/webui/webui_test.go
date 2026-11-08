@@ -183,6 +183,12 @@ func TestSubagentBuilderKeepsCompletedStepsWithTheirPairedResults(t *testing.T) 
 	if len(second.Parts) != 1 || second.Parts[0].Text != "final" {
 		t.Fatalf("second step parts = %+v", second.Parts)
 	}
+	// The child's last record is a response with nothing to keep (step 4): it is newer than
+	// the last step shown and the snapshot cannot tell it from a final text it left out, so
+	// it says so. Showing a text twice is the price; a text shown nowhere is not paid.
+	if !snapshot.MayHaveNewer {
+		t.Fatalf("a refused response after the last step must set MayHaveNewer: %+v", snapshot)
+	}
 	if NewSubagentBuilder("x", SubagentLimits{}).Snapshot() != nil {
 		t.Fatal("a builder that saw no step produced a snapshot")
 	}
@@ -254,12 +260,18 @@ func TestSubagentBuilderLeavesOutAStepThatStillWaitsForAResult(t *testing.T) {
 	if snapshot == nil || len(snapshot.Steps) != 1 || snapshot.Steps[0].ID != "1.1" {
 		t.Fatalf("a running tool's step must not be reported: %+v", snapshot)
 	}
+	if !snapshot.MayHaveNewer {
+		t.Fatalf("a withheld step is a newer response than the last one shown: %+v", snapshot)
+	}
 	// Once the child moves on past it without a result (a lost record), the step is
 	// reported with the results it has: the child's own next response shows it finished.
 	addAll(builder, responseLine(3, `{"type":"message","content":[{"type":"output_text","text":"end"}]}`))
 	snapshot = builder.Snapshot()
 	if len(snapshot.Steps) != 3 || partTypes(snapshot.Steps[1].Parts) != "tool_call:b,tool_call:c,tool_result:b" {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if snapshot.MayHaveNewer {
+		t.Fatalf("the last step shown is the newest response again: %+v", snapshot)
 	}
 }
 
@@ -323,22 +335,124 @@ func TestSubagentBuilderStopsAtItsLimits(t *testing.T) {
 		return []byte(`{"type":"response.completed","session_turn":1,"session_step":` + string(rune('0'+step)) + `,"response":{"id":"r","output":[{"type":"message","content":[{"type":"output_text","text":"` + text + `"}]},{"type":"reasoning","summary":[{"type":"summary_text","text":"more"}]}]}}`)
 	}
 	builder := NewSubagentBuilder("", SubagentLimits{MaxSteps: 2, MaxPartsPerStep: 1, MaxPartBytes: 3, MaxTotalBytes: 100})
-	if !builder.Add(0, line(1, "abcdef")) || builder.Add(1, line(2, "xyz")) {
-		t.Fatal("Add must report false exactly when the step limit is reached")
+	// At the step limit the builder keeps reading, but only to see whether a newer response
+	// exists: it asks for more lines until the first one, and then stops.
+	if !builder.Add(0, line(1, "abcdef")) || !builder.Add(1, line(2, "xyz")) {
+		t.Fatal("Add must go on after the step limit, until it has seen whether the child went on")
 	}
-	if builder.Add(2, line(3, "late")) {
+	if got := builder.Snapshot(); got == nil || got.MayHaveNewer {
+		t.Fatalf("at the limit and with no line after it the last step is the newest: %+v", got)
+	}
+	if !builder.Add(2, []byte(`{"type":"function_call_output","call_id":"x","output":"late result"}`)) {
+		t.Fatal("a line that is no response must not end the look-ahead")
+	}
+	if builder.Add(3, line(3, "late")) {
+		t.Fatal("the first response after the limit must end the look-ahead")
+	}
+	if builder.Add(4, line(4, "later")) {
 		t.Fatal("a finished builder accepted a line")
 	}
 	snapshot := builder.Snapshot()
+	if !snapshot.MayHaveNewer {
+		t.Fatalf("a response after the step limit must set MayHaveNewer: %+v", snapshot)
+	}
 	if len(snapshot.Steps) != 2 || len(snapshot.Steps[0].Parts) != 1 || snapshot.Steps[0].Parts[0].Text != "abc" || snapshot.Steps[0].Parts[0].Truncated == nil || snapshot.Steps[0].Parts[0].Truncated.Bytes != 6 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 
 	budget := NewSubagentBuilder("", SubagentLimits{MaxPartBytes: 100, MaxTotalBytes: 5})
 	budget.Add(0, line(1, "abcdefgh"))
+	if got := budget.Snapshot(); got == nil || got.MayHaveNewer {
+		t.Fatalf("the budget ran out inside the last response, which is the newest: %+v", got)
+	}
 	budget.Add(1, line(2, "zzz"))
-	if got := budget.Snapshot(); got == nil || len(got.Steps) != 1 || got.Steps[0].Parts[0].Text != "abcde" {
+	if got := budget.Snapshot(); got == nil || len(got.Steps) != 1 || got.Steps[0].Parts[0].Text != "abcde" || !got.MayHaveNewer {
 		t.Fatalf("total budget: %+v", got)
+	}
+}
+
+// TestSubagentSnapshotSaysItsLastStepMayNotBeTheNewestResponse: MayHaveNewer is set when a
+// response.completed record follows the last step the snapshot shows and the snapshot does
+// not show it, and only then; a step added later clears it, a skipped line sets it.
+func TestSubagentSnapshotSaysItsLastStepMayNotBeTheNewestResponse(t *testing.T) {
+	text := func(step int, text string) []byte {
+		return responseLine(step, `{"type":"message","content":[{"type":"output_text","text":"`+text+`"}]}`)
+	}
+	run := func(limits SubagentLimits, lines ...[]byte) *SubagentSnapshot {
+		builder := NewSubagentBuilder("", limits)
+		addAll(builder, lines...)
+		return builder.Snapshot()
+	}
+	incomplete := []byte(`{"type":"response.completed","session_turn":1,"session_step":9,"response":{"id":"r9","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"cut off"}]}]}}`)
+	unreadable := []byte(`{"type":"response.completed","session_turn":1,"session_step":9,"response":"not an object"}`)
+	cases := []struct {
+		name   string
+		limits SubagentLimits
+		lines  [][]byte
+		want   bool
+	}{
+		{"an ordinary child", SubagentLimits{}, [][]byte{text(1, "a"), text(2, "b")}, false},
+		{"a tool result after the last step", SubagentLimits{}, [][]byte{responseLine(1, callItem("a")), outputLine("a", "ok")}, false},
+		{"the step limit with nothing after it", SubagentLimits{MaxSteps: 2}, [][]byte{text(1, "a"), text(2, "b")}, false},
+		{"the step limit with a response after it", SubagentLimits{MaxSteps: 2}, [][]byte{text(1, "a"), text(2, "b"), outputLine("x", "r"), text(3, "c")}, true},
+		{"the step limit reached by a result", SubagentLimits{MaxSteps: 1}, [][]byte{responseLine(1, callItem("a")), outputLine("a", "ok"), text(2, "c")}, true},
+		{"the step limit reached by the next response", SubagentLimits{MaxSteps: 1}, [][]byte{responseLine(1, callItem("a")), text(2, "c")}, true},
+		{"the byte budget with a response after it", SubagentLimits{MaxTotalBytes: 1}, [][]byte{text(1, "abc"), text(2, "c")}, true},
+		{"the byte budget with nothing after it", SubagentLimits{MaxTotalBytes: 1}, [][]byte{text(1, "abc")}, false},
+		{"a response that is not completed", SubagentLimits{}, [][]byte{text(1, "a"), incomplete}, true},
+		{"a response that cannot be read", SubagentLimits{}, [][]byte{text(1, "a"), unreadable}, true},
+		{"a response with nothing to keep", SubagentLimits{}, [][]byte{text(1, "a"), responseLine(2, "")}, true},
+		{"a refused response and a step after it", SubagentLimits{}, [][]byte{text(1, "a"), incomplete, text(3, "c")}, false},
+		{"a step that still waits for a result", SubagentLimits{}, [][]byte{text(1, "a"), responseLine(2, callItem("b"))}, true},
+	}
+	for _, tc := range cases {
+		snapshot := run(tc.limits, tc.lines...)
+		if snapshot == nil || snapshot.MayHaveNewer != tc.want {
+			t.Errorf("%s: snapshot = %+v, want MayHaveNewer %v", tc.name, snapshot, tc.want)
+		}
+	}
+
+	// A line the reader skipped may have been a response; one before a later step does not
+	// matter, one after the last step does.
+	builder := NewSubagentBuilder("", SubagentLimits{})
+	addAll(builder, text(1, "a"))
+	builder.Unseen()
+	if got := builder.Snapshot(); !got.MayHaveNewer {
+		t.Fatalf("a skipped line after the last step: %+v", got)
+	}
+	addAll(builder, text(2, "b"))
+	if got := builder.Snapshot(); got.MayHaveNewer {
+		t.Fatalf("a step after the skipped line is newer than it: %+v", got)
+	}
+	// A line skipped between a step's response and its result is newer than that step, which
+	// joins the snapshot only when its result arrives.
+	skipped := NewSubagentBuilder("", SubagentLimits{})
+	addAll(skipped, responseLine(1, callItem("a")))
+	skipped.Unseen()
+	addAll(skipped, outputLine("a", "ok"))
+	if got := skipped.Snapshot(); got == nil || len(got.Steps) != 1 || !got.MayHaveNewer {
+		t.Fatalf("a skipped line after a pending step's response: %+v", got)
+	}
+	// At a limit the look-ahead is over once a line was skipped: it cannot be told apart.
+	limited := NewSubagentBuilder("", SubagentLimits{MaxSteps: 1})
+	addAll(limited, text(1, "a"))
+	limited.Unseen()
+	if limited.Add(0, text(2, "b")) || !limited.Snapshot().MayHaveNewer {
+		t.Fatalf("a skipped line after the step limit: %+v", limited.Snapshot())
+	}
+
+	// It is not part of what a tool result carries of the child.
+	snapshot := &SubagentSnapshot{Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}, MayHaveNewer: true}
+	if summary := snapshot.Summary(); *summary != (SubagentSummary{Steps: 1}) {
+		t.Fatalf("summary = %+v", summary)
+	}
+	encoded, _ := json.Marshal(snapshot)
+	if !strings.Contains(string(encoded), `"mayHaveNewer":true`) {
+		t.Fatalf("snapshot = %s", encoded)
+	}
+	snapshot.MayHaveNewer = false
+	if encoded, _ = json.Marshal(snapshot); strings.Contains(string(encoded), "mayHaveNewer") {
+		t.Fatalf("an ordinary snapshot carries the bit: %s", encoded)
 	}
 }
 

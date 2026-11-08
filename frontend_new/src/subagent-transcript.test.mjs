@@ -138,3 +138,29 @@ test('nothing surviving gives no message, so no button renders', () => {
   // Running steps do not count as tool calls: the completed text-only snapshot stays whole.
   assert.deepEqual(shown([step('1', text('x')), {id: '2', status: 'running', parts: [call('a')]}]), text('x'));
 });
+
+// The snapshot's own bit (webui.SubagentSnapshot.MayHaveNewer): its last step may not be the
+// child's newest response, so the result's text may belong to a step it does not show.
+const shownWith = (steps, mayHaveNewer, result) =>
+  subagentTranscriptMessages(mayHaveNewer === undefined ? {steps} : {steps, mayHaveNewer}, result).flatMap(message => message.parts);
+
+test('a snapshot that may have a newer response keeps its last step\'s text, whatever the result holds', () => {
+  // The snapshot stopped at its step limit (or byte budget, or withheld a step): the result's
+  // text is a later step's, so step 2's text is shown nowhere else.
+  const steps = [step('1', [call('a'), result('a')]), step('2', [...text('step two notes'), call('b'), result('b')])];
+  const all = [call('a'), result('a'), ...text('step two notes'), call('b'), result('b')];
+  assert.deepEqual(shownWith(steps, true, finished), all);
+  assert.deepEqual(shownWith(steps, true, omitsLastText), all);
+  const textOnly = [step('1', [call('a'), result('a')]), step('2', text('last shown'))];
+  assert.deepEqual(shownWith(textOnly, true, finished), [call('a'), result('a'), ...text('last shown')]);
+});
+
+test('a snapshot that does not say so keeps the old rule, bit absent or false', () => {
+  const steps = [step('1', [call('a'), result('a')]), step('2', [...text('final'), reasoning('r')])];
+  for (const bit of [undefined, false]) {
+    assert.deepEqual(shownWith(steps, bit, finished), [call('a'), result('a'), reasoning('r')], String(bit));
+    assert.deepEqual(shownWith(steps, bit, omitsLastText), [call('a'), result('a'), ...text('final'), reasoning('r')], String(bit));
+  }
+  // A malformed bit that reaches the mapper unchecked keeps text rather than hiding it.
+  assert.deepEqual(shownWith(steps, 'yes', finished), [call('a'), result('a'), ...text('final'), reasoning('r')]);
+});

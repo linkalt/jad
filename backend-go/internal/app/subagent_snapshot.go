@@ -216,9 +216,13 @@ func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall
 		return nil, true, fmt.Errorf("subagent transcript %s is not a regular file", path)
 	}
 	builder := webui.NewSubagentBuilder(call.Agent, limits.steps)
-	err = native.ScanTranscriptLines(ctx, file, min(info.Size(), limits.maxScan), limits.maxLine, builder.Add)
+	err = native.ScanTranscriptLinesSkipping(ctx, file, min(info.Size(), limits.maxScan), limits.maxLine, builder.Add, func(int64) { builder.Unseen() })
 	if err != nil {
 		return nil, true, err
+	}
+	if info.Size() > limits.maxScan {
+		// The file goes on past the window; what it holds there is unknown.
+		builder.Unseen()
 	}
 	snapshot := builder.Snapshot()
 	subagentSnapshots.put(key, subagentSnapshotEntry{path: path, size: info.Size(), modTime: info.ModTime(), snapshot: snapshot}, limits.cacheEntries)

@@ -41,6 +41,19 @@ test('the transcript is fetched by session, call id and profile, and nothing bef
   assert.equal(url(requests[1]).search, '');
 });
 
+test('the bit that the last step may not be the newest response survives validation, and absent stays absent', async () => {
+  const steps = transcript.steps;
+  reply = () => new Response(JSON.stringify({subagent: {steps, mayHaveNewer: true}}), {status: 200});
+  assert.deepEqual(await fetchSubagentTranscript('s', 'c'), {steps, mayHaveNewer: true});
+  // The server omits it when false; an explicit false is read as absent, a stray value as set.
+  reply = () => new Response(JSON.stringify({subagent: {agent: 'a', steps, mayHaveNewer: false}}), {status: 200});
+  assert.deepEqual(await fetchSubagentTranscript('s', 'c'), {agent: 'a', steps});
+  reply = () => new Response(JSON.stringify({subagent: {steps, mayHaveNewer: 'yes'}}), {status: 200});
+  assert.deepEqual(await fetchSubagentTranscript('s', 'c'), {steps, mayHaveNewer: true});
+  reply = () => new Response(JSON.stringify({subagent: transcript}), {status: 200});
+  assert.deepEqual(await fetchSubagentTranscript('s', 'c'), transcript);
+});
+
 test('a server error and a malformed body are errors, not a broken transcript', async () => {
   reply = () => new Response(JSON.stringify({error: 'subagent transcript not found'}), {status: 404});
   await assert.rejects(() => fetchSubagentTranscript('s', 'unknown'), /subagent transcript not found/);

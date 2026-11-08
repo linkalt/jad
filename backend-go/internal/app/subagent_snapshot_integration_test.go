@@ -155,10 +155,53 @@ func TestSubagentToolResultCarriesOnlyASummaryAndTheRouteServesTheSteps(t *testi
 		t.Fatalf("route body has no call/result pair or no answer: %s", body)
 	}
 
+	// A child that ended with its last response shown has nothing newer, so the body stays
+	// what it was before the bit existed.
+	if strings.Contains(body, "mayHaveNewer") {
+		t.Fatalf("an ordinary finished child carries the bit: %s", body)
+	}
+
 	// An unknown call id is a 404 with a message, not an empty snapshot.
 	status, body = f.get(t, "/subagents/no-such-call")
 	if status != http.StatusNotFound || !strings.Contains(body, "subagent transcript not found") {
 		t.Fatalf("unknown call id: status %d, body %s", status, body)
+	}
+}
+
+// TestSubagentRouteSaysWhenTheLastStepMayNotBeTheNewestResponse: the bit is in the route
+// body once the child's transcript holds a response newer than the last step shown (here a
+// record the provider did not complete), and it is not in the summary a tool result carries.
+func TestSubagentRouteSaysWhenTheLastStepMayNotBeTheNewestResponse(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	if live := f.run(t); !strings.Contains(live, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", live)
+	}
+	served := f.sessionSnapshot(t)
+	ids := subagentCallIDs(t, served)
+	transcripts, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
+	if len(ids) != 1 || err != nil || len(transcripts) != 1 {
+		t.Fatalf("subagent calls %v, child transcripts %v (%v)", ids, transcripts, err)
+	}
+	status, before := f.get(t, "/subagents/"+ids[0])
+	if status != http.StatusOK || strings.Contains(before, "mayHaveNewer") {
+		t.Fatalf("finished child: status %d, body %s", status, before)
+	}
+	file, err := os.OpenFile(transcripts[0], os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString(`{"type":"response.completed","session_turn":9,"session_step":9,"response":{"id":"r9","status":"incomplete","output":[]}}` + "\n")
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	status, after := f.get(t, "/subagents/"+ids[0])
+	if status != http.StatusOK || !strings.Contains(after, `"mayHaveNewer":true`) || !strings.Contains(after, "the answer is 42") {
+		t.Fatalf("child with a newer refused response: status %d, body %s", status, after)
+	}
+	// The summary of the result keeps its two keys; the bit is not part of it.
+	summaries, _ := subagentSnapshotOf(t, f.sessionSnapshot(t))
+	if len(summaries) != 1 || len(summaries[0]) != 2 {
+		t.Fatalf("served summaries = %v, want only agent and steps", summaries)
 	}
 }
 

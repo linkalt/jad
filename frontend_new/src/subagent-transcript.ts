@@ -12,8 +12,9 @@
  *
  * The child's last text is the content of a result that came back with it whole, so the
  * read-only message leaves it out there (see `subagentTranscriptMessages`); a result that
- * does not hold it whole (`omitsLastText` on its summary: handed off, cut, failed, lost)
- * gets nothing left out. The snapshot and the shared renderer stay whole.
+ * does not hold it whole (`omitsLastText` on its summary: handed off, cut, failed, lost),
+ * or whose snapshot says its last step may not be the child's newest response
+ * (`mayHaveNewer`), gets nothing left out. The snapshot and the shared renderer stay whole.
  */
 import {validSubagentTranscript, type WebUiMessageStep, type WebUiPart, type WebUiSubagentStep, type WebUiSubagentTranscript} from './api.ts';
 import type {ReadOnlyMessage} from './read-only-transcript.ts';
@@ -35,6 +36,11 @@ export interface SubagentResultShape {
   omitsLastText?: boolean;
 }
 
+/** Whether the snapshot says its last step may not be the newest response; read as `validSubagentTranscript` does. */
+function mayHaveNewer(subagent: WebUiSubagentTranscript | undefined): boolean {
+  return subagent?.mayHaveNewer !== undefined && subagent.mayHaveNewer !== false;
+}
+
 /**
  * The steps to show: the completed steps without the child's last text, which the tool
  * result above already shows. When the result holds that text whole and the snapshot has a
@@ -42,15 +48,19 @@ export interface SubagentResultShape {
  * and a trailing step left empty goes with them. A result that omits it (`omitsLastText`)
  * gets its snapshot shown whole: it holds a run id (the child is still going, or ended after
  * the result was served), only the head of the text (cut), no text (failed), or text that
- * can be a step the snapshot leaves out (lost). A snapshot without any tool call is shown
- * whole too, since there the text is all the child did.
+ * can be a step the snapshot leaves out (lost). A snapshot that says its last step may not
+ * be the child's newest response (`mayHaveNewer`: it stopped at a limit, refused or withheld
+ * a later response) is shown whole as well, since the result's text may belong to a step the
+ * snapshot does not show; that text can then appear twice, which is the cheaper mistake. A
+ * snapshot without any tool call is shown whole too, since there the text is all the child
+ * did.
  */
 function shownSubagentSteps(
   subagent: WebUiSubagentTranscript | undefined,
   result: SubagentResultShape,
 ): WebUiSubagentStep[] {
   const steps = completedSubagentSteps(subagent);
-  if (result.omitsLastText === true || !steps.some(step => step.parts.some(isToolCall))) return steps;
+  if (result.omitsLastText === true || mayHaveNewer(subagent) || !steps.some(step => step.parts.some(isToolCall))) return steps;
   const last = steps[steps.length - 1];
   const parts = last.parts.filter(part => part.type !== 'text');
   return parts.length === 0 ? steps.slice(0, -1) : [...steps.slice(0, -1), {...last, parts}];
@@ -61,7 +71,8 @@ function shownSubagentSteps(
  * steps' parts in order, with a step range for each, so the transcript renders as the
  * conversation does (tool runs end at a step boundary, rows of different steps stack
  * tight). Empty when nothing survives. `result` is the tool result's summary (only its
- * `omitsLastText` is read); without it the result is taken to hold the child's last text.
+ * `omitsLastText` is read; the transcript carries its own `mayHaveNewer`); without it the
+ * result is taken to hold the child's last text.
  */
 export function subagentTranscriptMessages(
   subagent: WebUiSubagentTranscript | undefined,

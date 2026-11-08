@@ -68,6 +68,15 @@ func TestSubagentSnapshotNeverClaimsAnUnfinishedStepCompleted(t *testing.T) {
 	if snapshot == nil || snapshotText(snapshot) != "done" {
 		t.Fatalf("snapshot = %+v, want only the complete step", snapshot)
 	}
+	// The response the provider did not complete is a newer one than the step shown, whose
+	// text may be the child's; the torn line is not (it is not a record yet).
+	if !snapshot.MayHaveNewer {
+		t.Fatalf("snapshot = %+v, want MayHaveNewer for the refused response", snapshot)
+	}
+	childFolder(t, root, "c3-0a1b2c3d", completedLine(1, 1, "done")+torn)
+	if got := readSnapshotOf(t, root, "c3", defaultSubagentSnapshotLimits); got == nil || got.MayHaveNewer {
+		t.Fatalf("a torn last line alone is no newer response: %+v", got)
+	}
 	// A child that has written nothing complete yet has nothing to show.
 	childFolder(t, root, "c2-0a1b2c3d", childUserLine+torn)
 	if got := readSubagentSnapshot(context.Background(), root, webui.SubagentCall{CallID: "c2"}, defaultSubagentSnapshotLimits); got != nil {
@@ -138,8 +147,8 @@ func TestSubagentSnapshotCapsStepsPartsAndBytesAndSkipsHostileLines(t *testing.T
 	limits := defaultSubagentSnapshotLimits
 	limits.steps = webui.SubagentLimits{MaxSteps: 3, MaxPartsPerStep: 1, MaxPartBytes: 11, MaxTotalBytes: 1000}
 	snapshot := readSubagentSnapshot(context.Background(), root, webui.SubagentCall{CallID: "big"}, limits)
-	if snapshot == nil || len(snapshot.Steps) != 3 {
-		t.Fatalf("snapshot = %+v, want 3 steps", snapshot)
+	if snapshot == nil || len(snapshot.Steps) != 3 || !snapshot.MayHaveNewer {
+		t.Fatalf("snapshot = %+v, want 3 steps and MayHaveNewer (the child wrote 10)", snapshot)
 	}
 	part := snapshot.Steps[0].Parts[0]
 	if part.Text != strings.Repeat("é", 5) || part.Truncated == nil || part.Truncated.Bytes != 100 {
@@ -151,15 +160,60 @@ func TestSubagentSnapshotCapsStepsPartsAndBytesAndSkipsHostileLines(t *testing.T
 	limits = defaultSubagentSnapshotLimits
 	limits.maxLine = 300
 	snapshot = readSubagentSnapshot(context.Background(), root, webui.SubagentCall{CallID: "long"}, limits)
-	if snapshot == nil || snapshotText(snapshot) != "kept" {
-		t.Fatalf("snapshot = %+v, want only the line within the limit", snapshot)
+	if snapshot == nil || snapshotText(snapshot) != "kept" || snapshot.MayHaveNewer {
+		t.Fatalf("snapshot = %+v, want only the line within the limit, and a skipped line before the last step is no newer one", snapshot)
 	}
 	childFolder(t, root, "scan-0a1b2c3d", completedLine(1, 1, "head")+completedLine(1, 2, "beyond the scan limit"))
 	limits = defaultSubagentSnapshotLimits
 	limits.maxScan = int64(len(completedLine(1, 1, "head")))
 	snapshot = readSubagentSnapshot(context.Background(), root, webui.SubagentCall{CallID: "scan"}, limits)
-	if snapshot == nil || snapshotText(snapshot) != "head" {
-		t.Fatalf("snapshot = %+v, want only what the scan limit covers", snapshot)
+	if snapshot == nil || snapshotText(snapshot) != "head" || !snapshot.MayHaveNewer {
+		t.Fatalf("snapshot = %+v, want only what the scan limit covers, and MayHaveNewer", snapshot)
+	}
+}
+
+func readSnapshotOf(t *testing.T, root, callID string, limits subagentSnapshotLimits) *webui.SubagentSnapshot {
+	t.Helper()
+	snapshot, found, err := readSubagentSteps(context.Background(), root, webui.SubagentCall{CallID: callID}, limits)
+	if !found || err != nil {
+		t.Fatalf("read of %s: found %v, err %v", callID, found, err)
+	}
+	return snapshot
+}
+
+// TestSubagentSnapshotSaysWhatTheReaderCutAndTheBuilderCannotSee: the scan window and the
+// line limit are the reader's cuts. A file over the window may hold a newer response past
+// it (exact would mean reading it), so it says so; a skipped line says so unless a step
+// follows it; a file that fits the window and has no skipped line does not.
+func TestSubagentSnapshotSaysWhatTheReaderCutAndTheBuilderCannotSee(t *testing.T) {
+	root := t.TempDir()
+	first, second := completedLine(1, 1, "head"), completedLine(1, 2, "tail")
+	childFolder(t, root, "fits-0a1b2c3d", first+second)
+	childFolder(t, root, "window-0a1b2c3d", first+second)
+	childFolder(t, root, "skiplast-0a1b2c3d", first+completedLine(1, 2, strings.Repeat("b", 500)))
+	childFolder(t, root, "skipmid-0a1b2c3d", first+completedLine(1, 2, strings.Repeat("b", 500))+completedLine(1, 3, "c"))
+
+	limits := defaultSubagentSnapshotLimits
+	if got := readSnapshotOf(t, root, "fits", limits); got == nil || got.MayHaveNewer {
+		t.Fatalf("a file inside the window: %+v", got)
+	}
+	// The window ends exactly after the first line: the second is out of it.
+	limits.maxScan = int64(len(first))
+	if got := readSnapshotOf(t, root, "window", limits); got == nil || snapshotText(got) != "head" || !got.MayHaveNewer {
+		t.Fatalf("a file over the window: %+v", got)
+	}
+	// The window covers the file exactly: nothing is cut.
+	limits.maxScan = int64(len(first + second))
+	if got := readSnapshotOf(t, root, "fits", limits); got == nil || got.MayHaveNewer {
+		t.Fatalf("a window that covers the file: %+v", got)
+	}
+	limits = defaultSubagentSnapshotLimits
+	limits.maxLine = 300
+	if got := readSnapshotOf(t, root, "skiplast", limits); got == nil || snapshotText(got) != "head" || !got.MayHaveNewer {
+		t.Fatalf("a skipped last line: %+v", got)
+	}
+	if got := readSnapshotOf(t, root, "skipmid", limits); got == nil || snapshotText(got) != "head|c" || got.MayHaveNewer {
+		t.Fatalf("a skipped line before the last step: %+v", got)
 	}
 }
 

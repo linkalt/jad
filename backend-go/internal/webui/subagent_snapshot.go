@@ -20,6 +20,16 @@ const SubagentStepCompleted = "completed"
 type SubagentSnapshot struct {
 	Agent string         `json:"agent,omitempty"`
 	Steps []SubagentStep `json:"steps"`
+	// MayHaveNewer is set when the last step shown may not be the child's newest response:
+	// a response.completed record follows it that the snapshot does not show (a limit
+	// ended the snapshot, the response was refused, or its calls still wait for a result),
+	// or the reader could not give the builder every line (a line over its length limit,
+	// a file over its scan limit). The browser then keeps that step's text, which the
+	// result above may not hold. It errs towards true: a step's text shown twice costs a
+	// line, a text shown nowhere costs the user a part of what the child said. It is a fact
+	// about this read of the snapshot, so it belongs to the route body and is not part of
+	// the Summary a tool result carries.
+	MayHaveNewer bool `json:"mayHaveNewer,omitempty"`
 }
 
 // SubagentSummary is what a tool result carries of its child: the agent and how many
@@ -250,6 +260,11 @@ type SubagentBuilder struct {
 	// result; it joins the snapshot when the last result arrives, or when the child moves
 	// on without one. A child that is still running a tool leaves it unreported.
 	pending *pendingStep
+	// newer is set when a response.completed record (or a line the reader skipped) came
+	// after the last step the snapshot holds and is not part of it; a response taken as a
+	// step later clears it, since that one is newer (a skipped line after it sets it again). Once a limit has ended the snapshot it is the
+	// only thing the lines left still decide.
+	newer bool
 }
 
 type pendingStep struct {
@@ -292,10 +307,22 @@ type subagentHead struct {
 }
 
 // Add takes one complete line of the child's transcript and reports whether more lines
-// can still change the snapshot: false once a limit is reached.
+// can still change the snapshot: false once a limit is reached and the first
+// response.completed record after it has been seen, which is all a snapshot at its limit
+// still wants to know (whether the child went on). The look-ahead costs the lines up to
+// that record, or to the end of the caller's input when the child wrote none, and no
+// parsing but of the lines that name a response.completed; a caller that bounds its input
+// bounds it too.
 func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
 	if b.done {
-		return false
+		if !b.newer && bytes.Contains(line, completedMarker) {
+			var head subagentHead
+			// A line that names a response and cannot be read may be one the child wrote.
+			if json.Unmarshal(line, &head) != nil || head.Type == "response.completed" {
+				b.newer = true
+			}
+		}
+		return !b.newer
 	}
 	// The markers only decide whether a line is worth parsing; the record's own type decides
 	// what it is, since a tool output may well contain the words of a marker.
@@ -304,6 +331,10 @@ func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
 	}
 	var head subagentHead
 	if json.Unmarshal(line, &head) != nil {
+		// Not a record the builder can read; one that names a response may still be one.
+		if bytes.Contains(line, completedMarker) {
+			b.newer = true
+		}
 		return true
 	}
 	switch {
@@ -316,23 +347,38 @@ func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
 	case head.Type == "message" && head.Role == "user":
 		b.closePending()
 	}
-	return !b.done
+	return !(b.done && b.newer)
 }
 
+// Unseen tells the builder that the reader did not give it everything after the lines it
+// has had: a line over the reader's length limit was skipped, or the input ended at the
+// reader's scan limit. Either may hold a response newer than the last step, so the
+// snapshot says so (MayHaveNewer) unless a response that follows becomes a step.
+func (b *SubagentBuilder) Unseen() {
+	b.newer = true
+}
+
+// addResponse starts the step of a response.completed record. A record it refuses (a
+// limit is reached, the provider did not complete it, it cannot be read or has nothing
+// to keep) is still a response the child wrote after the last step, so it sets newer.
 func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHead) {
 	if b.done {
+		b.newer = true
 		return
 	}
 	// A response the provider reports as anything but completed is not a completed step.
 	if head.Response.Status != "" && head.Response.Status != "completed" {
+		b.newer = true
 		return
 	}
 	messages, err := NormalizeTranscript([]TranscriptRecord{{Offset: offset, Prefix: "o", Raw: line}})
 	if err != nil || len(messages) == 0 {
+		b.newer = true
 		return
 	}
 	parts := b.keep(messages[0].Parts)
 	if len(parts) == 0 {
+		b.newer = true
 		return
 	}
 	id := strings.TrimPrefix(messages[0].ID, "session-assistant-")
@@ -346,6 +392,8 @@ func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHe
 		}
 	}
 	b.pending = pending
+	// This response is the newest now; what is refused or skipped from here on is newer still.
+	b.newer = false
 	// A step with no call has nothing to wait for; so does one the byte budget cut short.
 	if len(pending.open) == 0 || b.done {
 		b.closePending()
@@ -400,12 +448,14 @@ func (b *SubagentBuilder) closePending() {
 }
 
 // Snapshot is what the lines added so far completed, nil when no step was. A step whose
-// calls still wait for a result at the end of the lines is not completed and is left out.
+// calls still wait for a result at the end of the lines is not completed and is left out;
+// that withheld step is a newer response, so the snapshot says it may have one.
 func (b *SubagentBuilder) Snapshot() *SubagentSnapshot {
 	if len(b.snapshot.Steps) == 0 {
 		return nil
 	}
 	snapshot := b.snapshot
+	snapshot.MayHaveNewer = b.newer || b.pending != nil
 	return &snapshot
 }
 

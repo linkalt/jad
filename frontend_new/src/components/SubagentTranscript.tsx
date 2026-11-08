@@ -115,6 +115,8 @@ function OpenSubagentTranscript({
     };
   }, [key, sessionRef, callId, profile, attempt]);
   const transcript = load.state === 'ready' ? load.transcript : undefined;
+  // The snapshot's own `mayHaveNewer` rides inside `transcript`, so a refetched snapshot
+  // (a new object) re-maps without a dependency of its own.
   const messages = useMemo(
     () => (transcript === undefined ? [] : subagentTranscriptMessages(transcript, {omitsLastText})),
     [transcript, omitsLastText],

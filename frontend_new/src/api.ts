@@ -122,6 +122,13 @@ export interface WebUiSubagentSummary {
 export interface WebUiSubagentTranscript {
   agent?: string;
   steps: WebUiSubagentStep[];
+  /**
+   * Set when the last step may not be the child's newest response (the snapshot hit a limit,
+   * left a response out, or could not read all of the child's transcript), so that step's
+   * text is not shown as a copy of the result above it. Absent when the last step is the
+   * newest response, and from an older server.
+   */
+  mayHaveNewer?: boolean;
 }
 
 export type WebUiPart =
@@ -1622,7 +1629,11 @@ export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript
     }
     steps.push({id: step.id, status: step.status, parts: (step.parts as unknown[]).filter(isWebUiPart)});
   }
-  return agent === undefined ? {steps} : {agent, steps};
+  // The bit only ever keeps text on screen, so anything but an explicit false or an absent
+  // field (a non-boolean from a newer or broken server) counts as set.
+  const {mayHaveNewer} = value;
+  const named = agent === undefined ? {steps} : {agent, steps};
+  return mayHaveNewer === undefined || mayHaveNewer === false ? named : {...named, mayHaveNewer: true};
 }
 
 function isWebUiPart(value: unknown): value is WebUiPart {
