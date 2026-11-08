@@ -90,7 +90,21 @@ export interface WebUiToolResultPart {
   images?: string[];
   /** How many images of this result are still inline in the transcript; fetch them with `fetchMessageImage`. */
   inlineImages?: number;
+  /** Optional one-shot snapshot of the subagent run this result came from. */
+  subagent?: WebUiSubagentTranscript;
   truncated?: WebUiPartTruncation;
+}
+
+/** One step of a subagent run; only `completed` steps are ever shown. */
+export interface WebUiSubagentStep {
+  id: string;
+  status: 'completed' | 'running' | 'pending' | string;
+  parts: WebUiPart[];
+}
+
+export interface WebUiSubagentTranscript {
+  agent?: string;
+  steps: WebUiSubagentStep[];
 }
 
 export type WebUiPart =
@@ -1520,6 +1534,22 @@ function isWebUiCitation(value: unknown): value is WebUiCitation {
   );
 }
 
+function isWebUiSubagentTranscript(value: unknown): value is WebUiSubagentTranscript {
+  return (
+    isRecord(value) &&
+    (value.agent === undefined || typeof value.agent === 'string') &&
+    Array.isArray(value.steps) &&
+    value.steps.every(
+      step =>
+        isRecord(step) &&
+        typeof step.id === 'string' &&
+        typeof step.status === 'string' &&
+        Array.isArray(step.parts) &&
+        step.parts.every(isWebUiPart),
+    )
+  );
+}
+
 function isWebUiPart(value: unknown): value is WebUiPart {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
@@ -1566,7 +1596,8 @@ function isWebUiPart(value: unknown): value is WebUiPart {
       (value.inlineImages === undefined ||
         (typeof value.inlineImages === 'number' &&
           Number.isInteger(value.inlineImages) &&
-          value.inlineImages >= 0))
+          value.inlineImages >= 0)) &&
+      (value.subagent === undefined || isWebUiSubagentTranscript(value.subagent))
     );
   }
   return false;

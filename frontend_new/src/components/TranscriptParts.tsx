@@ -3,10 +3,11 @@ import {borderVars, colorVars, radiusVars, sizeVars, spacingVars, typeScaleVars}
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
 import {activityRefsChanged} from '../right-panel';
-import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart} from '../api';
+import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart, type WebUiSubagentTranscript} from '../api';
 import {type MessageRecord, type ReasoningStep, type TraceState} from '../app-types';
 import appConfig from '../config.json';
 import {cutRowText, oneLine, toolTitleBudgetPx} from '../row-text';
+import {completedSubagentSteps} from '../subagent-transcript';
 import {hasToolResultImages, toolResultText} from '../tool-result-view';
 import {hostedToolStatus} from '../web-search-view';
 import {hiddenWebUiStepIds, isWebUiPartHidden, visibleWebUiItems, webUiStepAtPartIndex} from '../web-ui-steps';
@@ -547,6 +548,48 @@ export function ToolCallDetail({
       {result?.truncated !== undefined && (
         <TruncatedNotice bytes={result.truncated.bytes} source={source} />
       )}
+      {result?.subagent !== undefined && <SubagentTranscript subagent={result.subagent} />}
+    </VStack>
+  );
+}
+
+/** The completed steps of a subagent run, below its tool result; a static snapshot. */
+function SubagentTranscript({subagent}: {subagent: WebUiSubagentTranscript}) {
+  const steps = completedSubagentSteps(subagent);
+  if (steps.length === 0) {
+    return null;
+  }
+  return (
+    <VStack gap={2} width="100%">
+      <Text type="supporting" color="secondary">
+        {subagent.agent ? `Subagent transcript · ${subagent.agent}` : 'Subagent transcript'}
+      </Text>
+      {steps.map(step => (
+        <VStack key={step.id} gap={1} width="100%">
+          {step.parts.map((part, index) => {
+            if (part.type === 'text') {
+              return (
+                <MarkdownText key={index} density="compact" contentWidth="100%" headingLevelStart={4}>
+                  {part.text}
+                </MarkdownText>
+              );
+            }
+            if (part.type === 'reasoning') {
+              return (
+                <Text key={index} type="supporting" color="secondary">{part.text}</Text>
+              );
+            }
+            if (part.type === 'tool_call') {
+              return (
+                <Text key={index} type="supporting" color="secondary">
+                  {`Tool: ${part.name}`}
+                </Text>
+              );
+            }
+            return null;
+          })}
+        </VStack>
+      ))}
     </VStack>
   );
 }

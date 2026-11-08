@@ -2333,3 +2333,17 @@ T-108, frontend only; it replaces the grouped panel of T-107.
 ## Single-pane right panel starts below the pane header: browser check open (Go, 2026-05-20)
 
 T-109 (frontend only). The window-edge panel (`position: fixed`, inset-block-start 0, z 3) was painted over at its top by the full-width pane header (z 4). It now starts at the header's measured bottom (`--pane-panel-top`, `edgePanelTop` in `panel-layers.ts`). Still open: no real-browser check was done (only source-pinning tests, `npm run typecheck`, `npm test`); the offset, the close/resize reach at narrow widths and the panel height need a visual check. `npm run build` was not run (forbidden for this role). Closing it: the user's visual check on the four panels in single-pane mode.
+
+## Subagent transcript in the right panel: backend field not emitted yet (Go, 2026-05-20)
+
+T-110 (frontend only). No payload carried a subagent's steps: the native subagent tool result only has `information {key:"transcript", value:"<path>/messages.jsonl"}`, a `run` id and the final answer, `webui.Part` has no subagent field, and the frontend never fetches a child transcript. The frontend now accepts an optional field on a `tool_result` part and shows it below the result in `ToolCallDetail`; absent, the panel is unchanged. Still open: the backend does not emit it. Expected JSON on the `tool_result` part:
+
+```json
+{"type":"tool_result","callId":"…","output":"…","status":"success",
+ "subagent":{"agent":"researcher",
+  "steps":[{"id":"s1","status":"completed",
+            "parts":[{"type":"text","text":"…"},{"type":"reasoning","text":"…"},
+                     {"type":"tool_call","callId":"…","name":"…","arguments":"{…}"}]}]}}
+```
+
+`agent` is optional. `steps[].status` must be `completed` for a step to render; any other value (`running`, `pending`, …) is ignored, as are steps with no parts. `parts` use the existing webui part shapes; only text, reasoning and tool_call parts render (tool_result parts inside a step are accepted but not shown). The snapshot is one-shot: no streaming, no polling. A malformed `subagent` makes the frontend reject the part like any other malformed part, so emit it only when well-formed. Also open: no real-browser check; `npm run build` not run.
