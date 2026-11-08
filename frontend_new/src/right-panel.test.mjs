@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {conversationPanelAfterToggle} from './right-panel.ts';
+import {activityClickOutcome, conversationPanelAfterToggle} from './right-panel.ts';
 
 test('a pane toggles its own right-edge panel', () => {
   assert.equal(conversationPanelAfterToggle(null, 'inspector'), 'inspector');
@@ -11,4 +11,12 @@ test('a pane toggles its own right-edge panel', () => {
   assert.equal(conversationPanelAfterToggle('prompts', 'prompts'), null);
   assert.equal(conversationPanelAfterToggle('inspector', 'prompts'), 'prompts');
   assert.equal(conversationPanelAfterToggle('prompts', 'inspector'), 'inspector');
+});
+
+test('a transcript block opens the activity panel and a second click on it closes it', () => {
+  assert.equal(activityClickOutcome(null, undefined, 'a'), 'open');
+  assert.equal(activityClickOutcome('activity', 'a', 'a'), 'close');
+  assert.equal(activityClickOutcome('activity', 'a', 'b'), 'open');
+  // Another panel on the edge: the block takes it over even with a stale key.
+  assert.equal(activityClickOutcome('prompts', 'a', 'a'), 'open');
 });

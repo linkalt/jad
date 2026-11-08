@@ -1,7 +1,7 @@
 import {Badge, Button, Card, type ChatToolCallItem, ChatToolCalls, CodeBlock, HStack, Icon, StatusDot, type StatusDotVariant, Text, VStack} from '@astryxdesign/core';
 import {borderVars, colorVars, radiusVars, sizeVars, spacingVars, typeScaleVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {Fragment, useLayoutEffect, useRef, useState} from 'react';
+import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart} from '../api';
 import {type MessageRecord, type ReasoningStep, type TraceState} from '../app-types';
 import appConfig from '../config.json';
@@ -9,6 +9,7 @@ import {cutRowText, oneLine, toolTitleBudgetPx} from '../row-text';
 import {hasToolResultImages, toolResultText} from '../tool-result-view';
 import {hostedToolStatus} from '../web-search-view';
 import {hiddenWebUiStepIds, isWebUiPartHidden, visibleWebUiItems, webUiStepAtPartIndex} from '../web-ui-steps';
+import {type ActivityDetail, ActivityPanelContext} from './activity-panel';
 import {CitationList} from './CitationList';
 import {MarkdownText} from './MarkdownText';
 import {InlineImages, StoredImages} from './StoredImages';
@@ -28,6 +29,14 @@ const styles = stylex.create({
   },
   toolCallsFlush: {
     marginBlockStart: spacingVars['--spacing-0'],
+  },
+  activityTrigger: {
+    cursor: 'pointer',
+    borderRadius: radiusVars['--radius-inner'],
+    outlineStyle: {default: 'none', ':focus-visible': 'solid'},
+    outlineWidth: '2px',
+    outlineColor: colorVars['--color-accent'],
+    outlineOffset: '-2px',
   },
   traceCopy: {
     minWidth: 0,
@@ -90,13 +99,81 @@ function getStatusLabel(status: TraceState): string {
   return 'Queued';
 }
 
+/**
+ * A reasoning or tool row. It opens the pane's right-edge panel instead of
+ * expanding inline; while the panel shows this row, the row hands it the latest
+ * data whenever `refs` change, so a streaming block updates the open panel.
+ */
+function ActivityRow({
+  detail,
+  refs,
+  children,
+}: {
+  detail: ActivityDetail;
+  /** The values `detail` is built from; a change refreshes the open panel. */
+  refs: unknown[];
+  children: ReactNode;
+}) {
+  const control = useContext(ActivityPanelContext);
+  const isOpen = control !== null && control.openKey === detail.key;
+  const update = control?.update;
+  useEffect(() => {
+    if (isOpen) {
+      update?.(detail);
+    }
+    // `detail` is rebuilt on every render; `refs` say when its data changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, update, ...refs]);
+
+  if (control === null) {
+    return <>{children}</>;
+  }
+  const open = (element: HTMLElement) => control.toggle(detail, element);
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    // Dragging across the row's text selects it; that is not a request to open.
+    const selection = window.getSelection();
+    if (
+      selection !== null &&
+      !selection.isCollapsed &&
+      event.currentTarget.contains(selection.anchorNode)
+    ) {
+      return;
+    }
+    open(event.currentTarget);
+  };
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      open(event.currentTarget);
+    }
+  };
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={isOpen}
+      // Part of the panel's own toggle set: pressing the open block must not
+      // dismiss the panel on pointerdown and then reopen it on click.
+      data-panel-toggle=""
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      {...stylex.props(styles.activityTrigger)}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function ReasoningBlock({
   steps,
   content = '',
   rowWidthPx,
   isFlush = false,
   isStreaming = false,
+  activityKey,
 }: {
+  /** Identifies this block to the panel that shows it; unique per message. */
+  activityKey: string;
   steps: ReasoningStep[];
   content?: string;
   /** Width available to the row; the title is cut to it so the name stays whole. */
@@ -114,8 +191,6 @@ export function ReasoningBlock({
       '',
     toolTitleBudgetPx(rowWidthPx, REASONING_ROW_NAME),
   );
-  const completedSteps = steps.filter(step => step.status === 'complete').length;
-
   if (!hasContent && !hasSteps) {
     return null;
   }
@@ -125,57 +200,75 @@ export function ReasoningBlock({
     name: REASONING_ROW_NAME,
     status: isStreaming ? 'running' : 'complete',
     target: title || undefined,
-    resultDetail: (
-      <VStack gap={2} width="100%">
-        {hasContent && (
-          <MarkdownText
-            density="compact"
-            contentWidth="100%"
-            xstyle={styles.reasoningContent}
-          >
-            {content}
-          </MarkdownText>
-        )}
-        {hasSteps && (
-          <>
-            <Text type="supporting" color="secondary">
-              {completedSteps}/{steps.length} steps
-            </Text>
-            <VStack as="ol" gap={1} xstyle={styles.traceList}>
-              {steps.map(step => (
-                <HStack as="li" key={step.label} align="start" gap={2} xstyle={styles.traceRow}>
-                  <HStack align="center" justify="center" xstyle={styles.traceMarker}>
-                    <StatusDot
-                      variant={getStatusDotVariant(step.status)}
-                      label={getStatusLabel(step.status)}
-                      isPulsing={step.status === 'running'}
-                      icon={
-                        step.status === 'complete' ? (
-                          <Icon icon="check" size="xsm" />
-                        ) : undefined
-                      }
-                    />
-                  </HStack>
-                  <VStack gap={0.5} xstyle={styles.traceCopy}>
-                    <Text type="label">{step.label}</Text>
-                    <Text type="supporting" color="secondary">
-                      {step.detail}
-                    </Text>
-                  </VStack>
-                </HStack>
-              ))}
-            </VStack>
-          </>
-        )}
-      </VStack>
-    ),
   };
 
   return (
-    <ChatToolCalls
-      calls={[item]}
-      xstyle={isFlush ? styles.toolCallsFlush : undefined}
-    />
+    <ActivityRow
+      detail={{key: activityKey, kind: 'reasoning', content, steps, isStreaming}}
+      refs={[content, steps.length, isStreaming]}
+    >
+      <ChatToolCalls
+        calls={[item]}
+        xstyle={isFlush ? styles.toolCallsFlush : undefined}
+      />
+    </ActivityRow>
+  );
+}
+
+/** The reasoning text and steps, as the panel shows them. */
+export function ReasoningDetail({
+  content,
+  steps,
+}: {
+  content: string;
+  steps: ReasoningStep[];
+}) {
+  const hasContent = content.trim().length > 0;
+  const hasSteps = steps.length > 0;
+  const completedSteps = steps.filter(step => step.status === 'complete').length;
+  return (
+    <VStack gap={2} width="100%">
+      {hasContent && (
+        <MarkdownText
+          density="compact"
+          contentWidth="100%"
+          xstyle={styles.reasoningContent}
+        >
+          {content}
+        </MarkdownText>
+      )}
+      {hasSteps && (
+        <>
+          <Text type="supporting" color="secondary">
+            {completedSteps}/{steps.length} steps
+          </Text>
+          <VStack as="ol" gap={1} xstyle={styles.traceList}>
+            {steps.map(step => (
+              <HStack as="li" key={step.label} align="start" gap={2} xstyle={styles.traceRow}>
+                <HStack align="center" justify="center" xstyle={styles.traceMarker}>
+                  <StatusDot
+                    variant={getStatusDotVariant(step.status)}
+                    label={getStatusLabel(step.status)}
+                    isPulsing={step.status === 'running'}
+                    icon={
+                      step.status === 'complete' ? (
+                        <Icon icon="check" size="xsm" />
+                      ) : undefined
+                    }
+                  />
+                </HStack>
+                <VStack gap={0.5} xstyle={styles.traceCopy}>
+                  <Text type="label">{step.label}</Text>
+                  <Text type="supporting" color="secondary">
+                    {step.detail}
+                  </Text>
+                </VStack>
+              </HStack>
+            ))}
+          </VStack>
+        </>
+      )}
+    </VStack>
   );
 }
 
@@ -301,7 +394,7 @@ function visibleToolOutput(output: string): string {
 }
 
 /** The message a truncated part came from, with the action that loads it whole. */
-interface TruncatedSource {
+export interface TruncatedSource {
   message: MessageRecord;
   onLoadFull: (message: MessageRecord) => void | Promise<void>;
 }
@@ -387,7 +480,6 @@ function toolCallItem(
   call: WebUiToolCall,
   result: WebUiToolResult | undefined,
   rowWidthPx: number,
-  source?: TruncatedSource,
 ): ChatToolCallItem {
   const resultStatus = result?.status;
   const titleBudgetPx = toolTitleBudgetPx(rowWidthPx, call.name);
@@ -402,42 +494,82 @@ function toolCallItem(
       ? partialToolTarget(call.arguments, titleBudgetPx)
       : toolTarget(call.arguments, titleBudgetPx),
     errorMessage: resultStatus === 'error' ? 'The tool returned an error.' : undefined,
-    resultDetail: (
-      <VStack gap={2} width="100%">
-        {result && (
-          <HStack align="center" gap={2}>
-            <Badge
-              label={toolResultLabel(result.status)}
-              variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
-            />
-          </HStack>
-        )}
+  };
+}
+
+/** One tool call with its arguments and result, as the panel shows them. */
+export function ToolCallDetail({
+  call,
+  result,
+  source,
+}: {
+  call: WebUiToolCall;
+  result?: WebUiToolResult;
+  source?: TruncatedSource;
+}) {
+  return (
+    <VStack gap={2} width="100%">
+      {result && (
+        <HStack align="center" gap={2}>
+          <Badge
+            label={toolResultLabel(result.status)}
+            variant={result.status === 'error' ? 'error' : result.status === 'success' ? 'success' : 'neutral'}
+          />
+        </HStack>
+      )}
+      <CodeBlock
+        code={prettyToolArguments(call.arguments)}
+        language="json"
+        size="sm"
+        width="100%"
+        container="card"
+        maxHeight={appConfig.tool_arguments_max_height_px}
+        hasCopyButton
+      />
+      {result && resultText(result) !== undefined && (
         <CodeBlock
-          code={prettyToolArguments(call.arguments)}
+          code={visibleToolOutput(resultText(result) ?? '')}
+          language="text"
+          size="sm"
+          width="100%"
+          container="card"
+          maxHeight={appConfig.tool_result_max_height_px}
+          hasCopyButton
+        />
+      )}
+      {result?.truncated !== undefined && (
+        <TruncatedNotice bytes={result.truncated.bytes} source={source} />
+      )}
+    </VStack>
+  );
+}
+
+/** The raw item a provider-run tool reported, as the panel shows it. */
+export function HostedToolDetail({
+  part,
+  source,
+}: {
+  part: WebUiHostedToolPart;
+  source?: TruncatedSource;
+}) {
+  return (
+    <VStack gap={2} width="100%">
+      {part.raw !== undefined && (
+        <CodeBlock
+          code={prettyToolArguments(part.raw)}
           language="json"
           size="sm"
           width="100%"
           container="card"
-          maxHeight={appConfig.tool_arguments_max_height_px}
+          maxHeight={appConfig.tool_result_max_height_px}
           hasCopyButton
         />
-        {result && resultText(result) !== undefined && (
-          <CodeBlock
-            code={visibleToolOutput(resultText(result) ?? '')}
-            language="text"
-            size="sm"
-            width="100%"
-            container="card"
-            maxHeight={appConfig.tool_result_max_height_px}
-            hasCopyButton
-          />
-        )}
-        {result?.truncated !== undefined && (
-          <TruncatedNotice bytes={result.truncated.bytes} source={source} />
-        )}
-      </VStack>
-    ),
-  };
+      )}
+      {part.truncated !== undefined && (
+        <TruncatedNotice bytes={part.truncated.bytes} source={source} />
+      )}
+    </VStack>
+  );
 }
 
 function OrphanToolResultBlock({
@@ -641,11 +773,13 @@ function segmentWebUiGroups(groups: WebUiPartGroup[]): WebUiSegment[] {
 
 function WebUiActivityGroup({
   group,
+  scope,
   rowWidthPx,
   isStreaming,
   source,
 }: {
   group: WebUiActivityGroupPart;
+  scope: string;
   rowWidthPx: number;
   isStreaming: boolean;
   source?: TruncatedSource;
@@ -656,6 +790,7 @@ function WebUiActivityGroup({
       <VStack gap={1} width="100%">
         <ReasoningBlock
           steps={[]}
+          activityKey={`${scope}:reasoning:${group.item.index}`}
           content={part.text}
           rowWidthPx={rowWidthPx}
           isFlush
@@ -672,64 +807,50 @@ function WebUiActivityGroup({
     const {part} = group.item;
     const status = hostedToolStatus(part.status);
     // The provider ran this tool itself, so there is no client result to wait
-    // for. The row shows what the provider reported; expanding it shows the raw
+    // for. The row shows what the provider reported; the panel shows the raw
     // item, like any other tool.
     return (
       <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
-        <ChatToolCalls
-          calls={[
-            {
-              key: `hosted-${part.callId}`,
-              name: part.name,
-              status,
-              target: part.target ?? '',
-              errorMessage: status === 'error' ? 'The provider tool failed.' : undefined,
-              resultDetail:
-                part.raw === undefined ? undefined : (
-                  <VStack gap={2} width="100%">
-                    <CodeBlock
-                      code={prettyToolArguments(part.raw)}
-                      language="json"
-                      size="sm"
-                      width="100%"
-                      container="card"
-                      maxHeight={appConfig.tool_result_max_height_px}
-                      hasCopyButton
-                    />
-                    {part.truncated !== undefined && (
-                      <TruncatedNotice bytes={part.truncated.bytes} source={source} />
-                    )}
-                  </VStack>
-                ),
-            },
-          ]}
-          xstyle={styles.toolCallsFlush}
-        />
+        <ActivityRow
+          detail={{
+            key: `hosted-${part.callId}`,
+            kind: 'hosted',
+            name: part.name,
+            target: part.target,
+            part,
+            source,
+          }}
+          refs={[part]}
+        >
+          <ChatToolCalls
+            calls={[
+              {
+                key: `hosted-${part.callId}`,
+                name: part.name,
+                status,
+                target: part.target ?? '',
+                errorMessage: status === 'error' ? 'The provider tool failed.' : undefined,
+              },
+            ]}
+            xstyle={styles.toolCallsFlush}
+          />
+        </ActivityRow>
         {part.images !== undefined && <StoredImages names={part.images} />}
       </VStack>
     );
   }
 
-  const toolCallItems = group.items
+  const resultFor = (call: WebUiToolCall, itemIndex: number) =>
+    group.items
+      .slice(itemIndex + 1)
+      .map(item => item.part)
+      .find(
+        (candidate): candidate is WebUiToolResult =>
+          candidate.type === 'tool_result' && candidate.callId === call.callId,
+      );
+  const lastToolCallIndex = group.items
     .filter(({part}) => part.type === 'tool_call')
-    .map(({part, index}) => {
-      if (part.type !== 'tool_call') {
-        return undefined;
-      }
-      const itemIndex = group.items.findIndex(item => item.index === index);
-      const result = group.items
-        .slice(itemIndex + 1)
-        .map(item => item.part)
-        .find(
-          (candidate): candidate is WebUiToolResult =>
-            candidate.type === 'tool_result' && candidate.callId === part.callId,
-        );
-      return toolCallItem(part, result, rowWidthPx, source);
-    })
-    .filter((item): item is ChatToolCallItem => item !== undefined);
-  const firstToolCallIndex = group.items.find(
-    ({part}) => part.type === 'tool_call',
-  )?.index;
+    .pop()?.index;
   const callIds = new Set(
     group.items.flatMap(({part}) => (part.type === 'tool_call' ? [part.callId] : [])),
   );
@@ -741,10 +862,25 @@ function WebUiActivityGroup({
     <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
       {group.items.map(({part, index}, itemIndex) => {
         if (part.type === 'tool_call') {
-          return index === firstToolCallIndex ? (
-            <Fragment key={`tool-calls-${index}`}>
-              <ChatToolCalls calls={toolCallItems} xstyle={styles.toolCallsFlush} />
-              {toolCallResults.some(hasToolResultImages) && (
+          const result = resultFor(part, itemIndex);
+          const item = toolCallItem(part, result, rowWidthPx);
+          return (
+            <Fragment key={`tool-call-${index}`}>
+              <ActivityRow
+                detail={{
+                  key: item.key ?? `tool-${part.callId}`,
+                  kind: 'tool',
+                  name: part.name,
+                  target: item.target,
+                  call: part,
+                  result,
+                  source,
+                }}
+                refs={[part, result]}
+              >
+                <ChatToolCalls calls={[item]} xstyle={styles.toolCallsFlush} />
+              </ActivityRow>
+              {index === lastToolCallIndex && toolCallResults.some(hasToolResultImages) && (
                 <HStack gap={2} wrap="wrap" align="start">
                   {toolCallResults.map(result => (
                     <ToolResultImages key={result.callId} result={result} source={source} />
@@ -752,7 +888,7 @@ function WebUiActivityGroup({
                 </HStack>
               )}
             </Fragment>
-          ) : null;
+          );
         }
         const hasCall = group.items
           .slice(0, itemIndex)
@@ -778,7 +914,10 @@ export function WebUiParts({
   rowWidthPx,
   isStreaming = false,
   source,
+  scope,
 }: {
+  /** Names the message these parts belong to, so its blocks have their own panel keys. */
+  scope: string;
   parts: WebUiPart[];
   steps?: WebUiMessageStep[];
   rowWidthPx: number;
@@ -876,6 +1015,7 @@ export function WebUiParts({
               <WebUiActivityGroup
                 key={webUiGroupKey(group, index)}
                 group={group}
+                scope={scope}
                 rowWidthPx={rowWidthPx}
                 isStreaming={
                   isStreaming && webUiGroupIndex(group) === lastPartIndex

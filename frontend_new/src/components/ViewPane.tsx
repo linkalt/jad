@@ -17,7 +17,7 @@ import {pixel} from '@astryxdesign/core/Resizable/utils';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {Fragment, useMemo, useRef, useState, type ReactNode} from 'react';
+import {Fragment, useCallback, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type WebUiMessage} from '../api';
 import {type MessageRecord, type RunRetryState, type Session} from '../app-types';
 import appConfig from '../config.json';
@@ -25,7 +25,7 @@ import {type HistoryBlocks} from '../history-blocks';
 import {type AttachedFile, type AttachedImage} from '../image-attachments';
 import {paneTitleParts} from '../pane-title';
 import {PANE_HEADER_Z_INDEX} from '../panel-layers';
-import {conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
+import {activityClickOutcome, conversationPanelAfterToggle, type ConversationPanelId} from '../right-panel';
 import {type SlashCommand, type SlashCommandName} from '../slash-commands';
 import {deferredRowStyle, useRowHeightRef} from '../row-defer';
 import {answersOfCompactedTurns, forkPointMessage} from '../session-fork';
@@ -37,6 +37,8 @@ import {type ComposerInsertActions, type ComposerSubmitOptions, ComposerPane} fr
 import {ComposerErrorBoundary} from './ComposerErrorBoundary';
 import {JadReadme} from './JadReadme';
 import {MarkdownText} from './MarkdownText';
+import {ActivityPanel} from './ActivityPanel';
+import {type ActivityDetail, ActivityPanelContext, type ActivityPanelControl} from './activity-panel';
 import {PromptLibraryPanel} from './PromptLibraryPanel';
 import {ResourceWatchPanel} from './ResourceWatchPanel';
 import {ProviderRetryNotice} from './ProviderRetryNotice';
@@ -358,6 +360,36 @@ export function ViewPane({
     setPanel(current => conversationPanelAfterToggle(current, target));
   };
   /**
+   * A reasoning or tool block of the transcript shows in the same panel (the
+   * `activity` entry), so it replaces whatever else is on the edge. The block
+   * that opened it takes focus back when the panel closes.
+   */
+  const [activity, setActivity] = useState<ActivityDetail | null>(null);
+  const activityOpenerRef = useRef<HTMLElement | null>(null);
+  const closeActivity = useCallback(() => {
+    setPanel(null);
+    const opener = activityOpenerRef.current;
+    activityOpenerRef.current = null;
+    if (opener?.isConnected) {
+      opener.focus({preventScroll: true});
+    }
+  }, []);
+  const activityKey = panel === 'activity' ? activity?.key : undefined;
+  const activityControl = useMemo<ActivityPanelControl>(() => ({
+    openKey: activityKey,
+    toggle: (detail, opener) => {
+      if (activityClickOutcome(activityKey === undefined ? null : 'activity', activityKey, detail.key) === 'close') {
+        activityOpenerRef.current = null;
+        setPanel(null);
+        return;
+      }
+      activityOpenerRef.current = opener;
+      setActivity(detail);
+      setPanel('activity');
+    },
+    update: detail => setActivity(current => (current?.key === detail.key ? detail : current)),
+  }), [activityKey]);
+  /**
    * This pane's composer. `ComposerPane` owns its input and keys drafts by
    * `draftKey`, so one per pane is what makes four panes typable at once; the
    * drawers and the handler toolbar arrive only for the focused pane.
@@ -441,6 +473,7 @@ export function ViewPane({
   const detailText = titleParts.slice(1).map(part => part.label).join(' · ');
 
   return (
+    <ActivityPanelContext value={activityControl}>
     <VStack
       gap={0}
       height="100%"
@@ -634,6 +667,7 @@ export function ViewPane({
                           <WebUiParts
                             parts={streamingMessage.parts}
                             steps={streamingMessage.steps}
+                            scope="live"
                             rowWidthPx={liveBubbleWidthPx}
                             isStreaming={isStreaming}
                           />
@@ -678,6 +712,14 @@ export function ViewPane({
           onClose={() => setPanel(null)}
         />
       )}
+      {panel === 'activity' && activity !== null && (
+        <ActivityPanel
+          detail={activity}
+          region={panelRegion}
+          isEdgeFixed={isPanelAtWindowEdge}
+          onClose={closeActivity}
+        />
+      )}
       {panel === 'prompts' && (
         <PromptLibraryPanel
           region={panelRegion}
@@ -699,5 +741,6 @@ export function ViewPane({
       )}
       </VStack>
     </VStack>
+    </ActivityPanelContext>
   );
 }

@@ -2295,3 +2295,15 @@ Closes the open item of T-104 with its Option A: the owner's `tools.lazy` govern
 - **The toolset's own profile `tools.lazy` is not consulted for its tool.** Only the owner's set decides, as decided. A toolset tool with a lazy entry only in the toolset's profile stays eager in the child.
 - **The app test tells the copies apart by hooks, not by connection.** The fixture server is one in-process server both managers connect to, so the connection itself is pinned only by the unit tests' counters. Closing it would need a fixture server that records which manager connected.
 - **Toolset hooks and the owner's differ only in one layout.** A toolset that sets `hooks` while the settings also set them is a load error, so the toolset's hooks differ from the owner's only when the owner's hooks come from its own toolset file (the test's layout). Not a gap in the change, noted because it limits how often the case occurs.
+
+## Reasoning and tool blocks open the right panel (Go, 2026-05-20)
+
+T-106, frontend only. A reasoning or tool block no longer expands inline; it opens the pane's `FloatingPanel` through a new `activity` entry of `ConversationPanelId`, so one `panel` state still holds the single open panel.
+
+### Left open
+
+- **No live browser check.** Typecheck and `npm test` ran (only the pre-existing `composer-triggers` failure); layout, focus return and scrolling in a real browser were not exercised. Close it by opening a conversation with a tool call and a reasoning block and trying click, Enter, Space, Escape and a text drag.
+- **A reasoning block loses its link to the open panel when its live message is committed.** Its panel key is `scope:reasoning:index` and the live message's scope (`live`) differs from the committed id, so the panel keeps the last streamed text instead of following to the committed copy. Tool blocks key on `callId` and follow. Closing it needs a message id on the live message.
+- **Inline images stay under the tool row** and are not repeated in the panel (the old inline expand did not show them either).
+- **`message.tools` (legacy `ChatToolCalls defaultIsExpanded` in `AssistantMessage`) and the run inspector's `ChatToolCalls` still expand inline.** They are not the transcript's reasoning/tool blocks from parts; changing them was out of scope.
+- **Several tool calls of one group are now separate rows** instead of Astryx's collapsible group summary, because the library's group header only toggles inline.

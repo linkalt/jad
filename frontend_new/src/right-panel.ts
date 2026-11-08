@@ -6,7 +6,7 @@
  * The activity panels (notifications, checkpoints) are the app's own, and they
  * show in the left window — see `left-panel.ts`.
  */
-export type ConversationPanelId = 'inspector' | 'prompts' | 'resources';
+export type ConversationPanelId = 'inspector' | 'prompts' | 'resources' | 'activity';
 
 /**
  * A pane's own right-edge toggle: it closes the panel it already shows, and any
@@ -17,4 +17,17 @@ export function conversationPanelAfterToggle(
   target: ConversationPanelId,
 ): ConversationPanelId | null {
   return current === target ? null : target;
+}
+
+/**
+ * A reasoning or tool block of the transcript opens the pane's right-edge panel
+ * (`activity`). Clicking the block that is already open closes the panel; any
+ * other block takes it over.
+ */
+export function activityClickOutcome(
+  current: ConversationPanelId | null,
+  openKey: string | undefined,
+  key: string,
+): 'open' | 'close' {
+  return current === 'activity' && openKey === key ? 'close' : 'open';
 }

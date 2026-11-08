@@ -201,6 +201,7 @@ export function AssistantMessage({
             <WebUiParts
               parts={message.parts}
               steps={message.steps}
+              scope={message.id}
               rowWidthPx={rowWidthPx}
               source={onLoadFull === undefined ? undefined : {message, onLoadFull}}
             />
@@ -210,6 +211,7 @@ export function AssistantMessage({
                 <ReasoningBlock
                   steps={message.reasoning ?? []}
                   content={message.reasoningContent}
+                  activityKey={`${message.id}:reasoning`}
                   rowWidthPx={rowWidthPx}
                   isFlush
                 />
