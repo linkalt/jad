@@ -127,7 +127,9 @@ func TestNativeTaskActionErrorsLimitsAndCorruptStorage(t *testing.T) {
 		t.Fatalf("capacity error output:\n%s", output)
 	}
 	list := runTaskTool(t, store, settings, 4, map[string]any{"status": "all"})
-	if !strings.Contains(list, "has_more: true") || strings.Contains(list, "--- CONTENT") {
+	// One line is over the 20-byte budget; the first line of a page is shown anyway, so
+	// the page is never empty while matches remain (see TestNativeTaskListNeverStalls).
+	if taskInfoLine(list, "count") != "1" || taskInfoLine(list, "has_more") != "" || !strings.Contains(taskContent(list), id) {
 		t.Fatalf("bounded task list output:\n%s", list)
 	}
 	if output := runTaskTool(t, store, settings, 5, map[string]any{"id": id, "documents": []any{"a.md", "b.md", "c.md", "d.md", "e.md"}}); !strings.Contains(output, "error_code: invalid_documents") {

@@ -9,6 +9,11 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
+// taskBatchOverBudget ends the header of a list section that matched tasks but could
+// not show one of them because earlier sections spent the shared max_list_bytes. The
+// text is fixed: it is the only marker of that case, and no next_offset follows it.
+const taskBatchOverBudget = ", over budget, ask again alone"
+
 // taskBatchLimit is the most ops one call may hold. Settings built by hand without
 // the limit get the default.
 func taskBatchLimit(settings sessionfs.NativeTaskSettings) int {
@@ -66,8 +71,12 @@ func executeTaskBatch(arguments map[string]any, execution tools.ExecutionContext
 	}
 
 	// List sections share max_list_bytes; the line of an op that changed a task is
-	// never cut, because the model needs every id and every outcome.
+	// never cut, because the model needs every id and every outcome. The first list line
+	// of the call is shown even when it alone is over the budget, so a list that is the
+	// only one of its call always moves next_offset past at least one task. A later section that
+	// gets no line says "over budget" and prints no next_offset.
 	remaining := settings.MaxListBytes
+	listShown := false
 	lines := make([]string, 0, len(ops))
 	for index, result := range outcome.Results {
 		call := calls[index]
@@ -84,15 +93,23 @@ func executeTaskBatch(arguments map[string]any, execution tools.ExecutionContext
 			shown := make([]string, 0, len(result.List.Tasks))
 			for _, listed := range result.List.Tasks {
 				line := "  " + taskListLine(listed, call.detail)
-				if int64(len(line)+1) > remaining {
+				size := int64(len(line) + 1)
+				if size > remaining && listShown {
 					break
 				}
-				remaining -= int64(len(line) + 1)
+				remaining = max(remaining-size, 0)
+				listShown = true
 				shown = append(shown, line)
 			}
 			header := fmt.Sprintf("%d list %d of %d", number, len(shown), result.List.Total)
 			if next := call.op.Filter.Offset + len(shown); next < result.List.Total {
-				header += fmt.Sprintf(", next_offset %d", next)
+				if len(shown) == 0 {
+					// The shared budget was spent: next_offset would equal this
+					// section's offset, a pointer that does not move. Say so instead.
+					header += taskBatchOverBudget
+				} else {
+					header += fmt.Sprintf(", next_offset %d", next)
+				}
 			}
 			lines = append(lines, header)
 			lines = append(lines, shown...)

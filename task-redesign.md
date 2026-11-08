@@ -88,7 +88,7 @@ next_offset: 100
 - `total` is the number of matches before the window. `has_more` and `next_offset` appear only when more remain.
 - `offset` beyond `total` gives `0 tasks listed`, with `total` shown and no `has_more`.
 - `detail:true` turns the documents segment into ` | documents: a.md,b.md` and appends ` | updated: 2026-05-01T10:00:00.000Z`.
-- The byte budget `max_list_bytes` still truncates, and then `next_offset` is `offset + count`.
+- The byte budget `max_list_bytes` still truncates, and then `next_offset` is `offset + count`. The first line of a flat list, or the first list line of a batch call, is always shown, so a budget smaller than one line cannot make `next_offset` equal `offset` there. A later list section of a batch that finds the shared budget spent shows no line and ends its header with `, over budget, ask again alone` instead of a `next_offset`.
 
 Batch success (`ops` present):
 ```
@@ -108,7 +108,7 @@ count: 4
 - The summary is `N ops applied` if any op mutates, otherwise `N ops run`.
 - Mutation lines omit the title and tags because the model just sent them. This also keeps their size bounded.
 - A `get` op prints the full list-style line: `5 get T-001 | todo | normal | Title | tags: x`.
-- A `list` op prints `6 list 2 of 7, next_offset 2`, then its task lines indented by two spaces. List sections share the `max_list_bytes` budget. Mutation lines are never cut.
+- A `list` op prints `6 list 2 of 7, next_offset 2`, then its task lines indented by two spaces. List sections share the `max_list_bytes` budget. Mutation lines are never cut. A section the spent budget leaves without a line says `, over budget, ask again alone`, not a `next_offset`.
 
 Batch failure (nothing written):
 ```

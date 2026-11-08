@@ -402,46 +402,56 @@ func taskMiss(document *taskDocument, limit int64) *TaskMiss {
 	return miss
 }
 
-func (s *TaskStore) Create(input TaskInput, policy sessionfs.NativeTaskSettings) (TaskRecord, error) {
-	outcome, err := s.Apply([]TaskOp{{Action: taskActionAdd, Input: input}}, policy)
-	if err != nil || len(outcome.Results) != 1 {
-		return TaskRecord{}, err
+// oneTaskResult reads the outcome of an Apply of exactly one operation. found is false
+// when that operation named an id that does not exist (Apply reports it as a miss). A
+// store that returns neither a miss nor exactly one result breaks the Apply contract;
+// that is an error here, never an index out of range.
+func oneTaskResult(outcome TaskApplyResult, err error) (result TaskOpResult, found bool, resultErr error) {
+	if err != nil {
+		return TaskOpResult{}, false, err
 	}
-	return outcome.Results[0].Task, nil
+	if outcome.Failed >= 0 {
+		if outcome.Miss == nil {
+			return TaskOpResult{}, false, &TaskStoreError{Message: "task storage reported a failed operation without a reason"}
+		}
+		return TaskOpResult{}, false, nil
+	}
+	if len(outcome.Results) != 1 {
+		return TaskOpResult{}, false, &TaskStoreError{Message: "task storage returned an unexpected number of results"}
+	}
+	return outcome.Results[0], true, nil
+}
+
+func (s *TaskStore) applyOne(op TaskOp, policy sessionfs.NativeTaskSettings) (TaskOpResult, bool, error) {
+	outcome, err := s.Apply([]TaskOp{op}, policy)
+	return oneTaskResult(outcome, err)
+}
+
+func (s *TaskStore) Create(input TaskInput, policy sessionfs.NativeTaskSettings) (TaskRecord, error) {
+	result, _, err := s.applyOne(TaskOp{Action: taskActionAdd, Input: input}, policy)
+	return result.Task, err
 }
 
 func (s *TaskStore) Get(id string) (TaskRecord, bool, error) {
-	outcome, err := s.Apply([]TaskOp{{Action: taskActionGet, ID: id}}, sessionfs.NativeTaskSettings{})
-	if err != nil || outcome.Failed >= 0 {
-		return TaskRecord{}, false, err
-	}
-	return outcome.Results[0].Task, true, nil
+	result, found, err := s.applyOne(TaskOp{Action: taskActionGet, ID: id}, sessionfs.NativeTaskSettings{})
+	return result.Task, found, err
 }
 
 // List returns one page of the tasks that match filter, in list order. Total counts the
 // matches before the page: Offset of them are skipped and Limit are returned.
 func (s *TaskStore) List(filter TaskListFilter) (TaskListResult, error) {
-	outcome, err := s.Apply([]TaskOp{{Action: taskActionList, Filter: filter}}, sessionfs.NativeTaskSettings{})
-	if err != nil || len(outcome.Results) != 1 {
-		return TaskListResult{}, err
-	}
-	return outcome.Results[0].List, nil
+	result, _, err := s.applyOne(TaskOp{Action: taskActionList, Filter: filter}, sessionfs.NativeTaskSettings{})
+	return result.List, err
 }
 
 func (s *TaskStore) Update(id string, patch TaskPatch, policy sessionfs.NativeTaskSettings) (TaskRecord, bool, error) {
-	outcome, err := s.Apply([]TaskOp{{Action: taskActionUpdate, ID: id, Patch: patch}}, policy)
-	if err != nil || outcome.Failed >= 0 {
-		return TaskRecord{}, false, err
-	}
-	return outcome.Results[0].Task, true, nil
+	result, found, err := s.applyOne(TaskOp{Action: taskActionUpdate, ID: id, Patch: patch}, policy)
+	return result.Task, found, err
 }
 
 func (s *TaskStore) Delete(id string, policy sessionfs.NativeTaskSettings) (bool, error) {
-	outcome, err := s.Apply([]TaskOp{{Action: taskActionDelete, ID: id}}, policy)
-	if err != nil || outcome.Failed >= 0 {
-		return false, err
-	}
-	return true, nil
+	_, found, err := s.applyOne(TaskOp{Action: taskActionDelete, ID: id}, policy)
+	return found, err
 }
 
 // sortedTasks returns pointers into document of the tasks that match filter, in list
@@ -536,14 +546,15 @@ func taskContainsTerms(task *TaskRecord, terms []string) bool {
 }
 
 // locked holds the store's in-process mutex and the lock file beside tasks.json, so
-// another process that shares the directory cannot load or write in between. A read of
-// a directory that does not exist yet takes no lock file: there is nothing to protect
-// and a read must not create the directory.
+// another process that shares the directory cannot load or write in between. A read
+// while tasks.json does not exist yet takes no lock file: there is nothing to protect
+// (a writer publishes the file by an atomic rename) and a read must not create the
+// directory or the lock file, which statecontext reads on every run would otherwise do.
 func (s *TaskStore) locked(read bool, operation func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if read {
-		if _, err := os.Stat(s.storageDir); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(s.path()); errors.Is(err, os.ErrNotExist) {
 			return operation()
 		}
 	}

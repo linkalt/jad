@@ -283,13 +283,13 @@ func executeNativeTask(
 	}
 	op := call.op
 	outcome, err := store.Apply([]TaskOp{op}, settings)
+	result, found, err := oneTaskResult(outcome, err)
 	if err != nil {
 		return taskStorageError(execution.CallID, err), nil
 	}
-	if outcome.Miss != nil {
+	if !found {
 		return taskNotFound(execution.CallID, op.ID, outcome.Miss), nil
 	}
-	result := outcome.Results[0]
 	switch op.Action {
 	case taskActionList:
 		return renderTaskList(execution.CallID, result.List, op.Filter.Offset, call.detail, settings)
@@ -518,7 +518,8 @@ func taskListLine(task TaskRecord, detail bool) string {
 
 // renderTaskList is the result of a flat list call: the lines that fit max_list_bytes,
 // and, when matches remain (cut by the limit or by the bytes), has_more and the offset
-// of the next page.
+// of the next page. The first line is always shown, even when it alone is over the
+// budget, so next_offset always moves past it and paging cannot stall.
 func renderTaskList(callID string, listed TaskListResult, offset int, detail bool, settings sessionfs.NativeTaskSettings) (string, error) {
 	lines := make([]string, 0, len(listed.Tasks))
 	lineBytes := 0
@@ -528,7 +529,7 @@ func renderTaskList(callID string, listed TaskListResult, offset int, detail boo
 		if len(lines) > 0 {
 			nextBytes++
 		}
-		if int64(nextBytes) > settings.MaxListBytes {
+		if len(lines) > 0 && int64(nextBytes) > settings.MaxListBytes {
 			break
 		}
 		lines = append(lines, line)
