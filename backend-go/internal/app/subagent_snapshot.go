@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,7 +127,12 @@ func (r *Resolver) ReadSubagentSnapshot(ctx context.Context, reference, profile,
 	if callID == "" || config.NativeSubagent == nil || config.NativeSubagent.StorageDir == "" {
 		return nil, notFound
 	}
-	snapshot, found := readSubagentSteps(ctx, config.NativeSubagent.StorageDir, webui.SubagentCall{CallID: callID}, defaultSubagentSnapshotLimits)
+	snapshot, found, err := readSubagentSteps(ctx, config.NativeSubagent.StorageDir, webui.SubagentCall{CallID: callID}, defaultSubagentSnapshotLimits)
+	if err != nil {
+		// A child that is there but cannot be read is not a missing one; the client gets
+		// the generic 500 and the cause (with its path) stays in the server log.
+		return nil, err
+	}
 	if !found {
 		return nil, notFound
 	}
@@ -160,22 +167,23 @@ func (r boundRunner) SubagentSnapshot(call webui.SubagentCall) *webui.SubagentSn
 // readSubagentSnapshot reads the completed steps of the child behind call, from the cache
 // when the child's transcript is unchanged.
 func readSubagentSnapshot(ctx context.Context, root string, call webui.SubagentCall, limits subagentSnapshotLimits) *webui.SubagentSnapshot {
-	snapshot, _ := readSubagentSteps(ctx, root, call, limits)
+	snapshot, _, _ := readSubagentSteps(ctx, root, call, limits)
 	return snapshot
 }
 
 // readSubagentSteps is readSubagentSnapshot that also says whether the child's transcript
 // was found: a found child with no completed step yet (or no transcript file yet) gives
-// (nil, true).
-func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall, limits subagentSnapshotLimits) (*webui.SubagentSnapshot, bool) {
+// (nil, true, nil). A transcript that was found but could not be read gives (nil, true,
+// err), so a caller can tell it from a missing child; a failed read is never cached.
+func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall, limits subagentSnapshotLimits) (*webui.SubagentSnapshot, bool, error) {
 	key := root + "\x00" + call.CallID + "\x00" + call.Agent + "\x00" + call.Transcript
 	if cached, ok := subagentSnapshots.get(key); ok {
 		if cached.absent {
 			if info, err := os.Stat(root); err == nil && info.ModTime().Equal(cached.rootModTime) {
-				return nil, false
+				return nil, false, nil
 			}
 		} else if info, err := os.Stat(cached.path); err == nil && info.Size() == cached.size && info.ModTime().Equal(cached.modTime) {
-			return cached.snapshot, true
+			return cached.snapshot, true, nil
 		}
 	}
 	path := resolveSubagentTranscript(root, call)
@@ -184,30 +192,37 @@ func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall
 		// yet. Creating the file does not change the storage directory's modification time,
 		// so remembering the call as absent would hide the child for good.
 		if subagentFolderFor(root, call.CallID) != "" {
-			return nil, true
+			return nil, true, nil
 		}
 		if info, err := os.Stat(root); err == nil {
 			subagentSnapshots.put(key, subagentSnapshotEntry{absent: true, rootModTime: info.ModTime()}, limits.cacheEntries)
 		}
-		return nil, false
+		return nil, false, nil
 	}
 	file, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// The child was removed since its folder was found.
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, false
+		return nil, true, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, false
+	if err != nil {
+		return nil, true, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, true, fmt.Errorf("subagent transcript %s is not a regular file", path)
 	}
 	builder := webui.NewSubagentBuilder(call.Agent, limits.steps)
 	err = native.ScanTranscriptLines(ctx, file, min(info.Size(), limits.maxScan), limits.maxLine, builder.Add)
 	if err != nil {
-		return nil, false
+		return nil, true, err
 	}
 	snapshot := builder.Snapshot()
 	subagentSnapshots.put(key, subagentSnapshotEntry{path: path, size: info.Size(), modTime: info.ModTime(), snapshot: snapshot}, limits.cacheEntries)
-	return snapshot, true
+	return snapshot, true, nil
 }
 
 // resolveSubagentTranscript finds the messages.jsonl of a call's child, always inside

@@ -342,6 +342,25 @@ func TestSubagentBuilderStopsAtItsLimits(t *testing.T) {
 	}
 }
 
+// TestSubagentBuilderKeepsAResultThatPrintedNothing pins the wire shape the browser reads: a
+// tool that printed nothing still pairs its call, and the JSON part has no output member
+// (Output is omitempty), so the client must read a missing output as empty.
+func TestSubagentBuilderKeepsAResultThatPrintedNothing(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{})
+	addAll(builder, responseLine(1, callItem("k1")), outputLine("k1", ""))
+	snapshot := builder.Snapshot()
+	if snapshot == nil || len(snapshot.Steps) != 1 || partTypes(snapshot.Steps[0].Parts) != "tool_call:k1,tool_result:k1" {
+		t.Fatalf("snapshot = %+v, want the call paired with its empty result", snapshot)
+	}
+	encoded, err := json.Marshal(snapshot.Steps[0].Parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"type":"tool_result","callId":"k1","status":"unknown"}` {
+		t.Fatalf("empty result JSON = %s", encoded)
+	}
+}
+
 func TestAttachSubagentsOnlyTouchesSubagentToolResults(t *testing.T) {
 	snapshot := &SubagentSnapshot{Agent: "explore", Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}
 	var asked []SubagentCall
@@ -405,6 +424,70 @@ func TestSubagentSummaryIsTheAgentAndTheStepCountOnly(t *testing.T) {
 	encoded, _ = json.Marshal(Part{Type: "tool_result", Subagent: (&SubagentSnapshot{Steps: snapshot.Steps[:1]}).Summary()})
 	if !strings.Contains(string(encoded), `"subagent":{"steps":1}`) {
 		t.Fatalf("unnamed agent: %s", encoded)
+	}
+}
+
+// handedOffOutput is the result the subagent tool gives a call it hands off: the run id
+// and the run's state (queued or running) next to it, and no answer.
+func handedOffOutput(state string) string {
+	return "{\"id\":\"c1\",\"status\":\"ok\",\"summary\":\"Agent explore is still " + state + " (run sub_0a1b2c3d)\"}\n\n--- INFORMATION ---\nrun: sub_0a1b2c3d\nstate: " + state + "\nelapsed_ms: 12\nlimit_ms: 600000\ntranscript: /store/c1-0a1b2c3d/messages.jsonl\n"
+}
+
+// TestSubagentSummarySaysWhetherTheResultOmitsTheLastText: a result omits the child's last
+// text unless it came back with it whole: one that names the run's state (handed off), one
+// that names truncated (cut), and one with an error code other than subagent_timeout
+// (failed, empty, lost) omit it; a finished, stopped or timed-out result does not. A
+// "state:" or "truncated:" line in the content is the child's text, not the result's
+// information. The flag is on the summary only, set by the replay through the same
+// function as the live run, and absent from JSON when false.
+func TestSubagentSummarySaysWhetherTheResultOmitsTheLastText(t *testing.T) {
+	snapshot := &SubagentSnapshot{Agent: "explore", Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}
+	stopped := "{\"id\":\"c1\",\"status\":\"ok\",\"summary\":\"Agent explore was stopped (run sub_0a1b2c3d)\"}\n\n--- INFORMATION ---\nrounds: 1\ntokens: 9\npartial: true\n\n--- CONTENT token=t encoding=utf8 ---\nhalf done\n--- END CONTENT token=t ---\n"
+	errorOutput := func(code, extra string) string {
+		return "{\"id\":\"c1\",\"status\":\"error\",\"summary\":\"Agent explore did not end well\"}\n\n--- INFORMATION ---\nerror_type: execution\nerror_code: " + code + "\nagent: explore\n" + extra + "\n--- CONTENT token=t encoding=utf8 ---\nhalf done\n--- END CONTENT token=t ---\n"
+	}
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{"finished", subagentOutput(""), false},
+		{"finished and cut", subagentOutput("truncated: true\n"), true},
+		{"running", handedOffOutput("running"), true},
+		{"queued", handedOffOutput("queued"), true},
+		{"stopped", stopped, false},
+		{"stopped and cut", strings.Replace(stopped, "partial: true\n", "partial: true\ntruncated: true\n", 1), true},
+		{"timed out", errorOutput("subagent_timeout", "partial: true\n"), false},
+		{"timed out and cut", errorOutput("subagent_timeout", "partial: true\ntruncated: true\n"), true},
+		{"lost", errorOutput("subagent_lost", "partial: true\n"), true},
+		{"failed", errorOutput("subagent_failed", ""), true},
+		{"empty", errorOutput("subagent_empty_result", ""), true},
+		{"state in content", strings.Replace(subagentOutput(""), "the answer", "state: running", 1), false},
+		{"truncated in content", strings.Replace(subagentOutput(""), "the answer", "truncated: true", 1), false},
+		{"no information", "plain output", false},
+	}
+	for _, tc := range cases {
+		message := toolMessage("subagent", `{"agent":"explore"}`, tc.output)
+		call, ok := SubagentCallOf(message.Parts[0], message.Parts[1])
+		if !ok || call.OmitsLastText != tc.want {
+			t.Errorf("%s: call = %+v, %v; want omits last text %v", tc.name, call, ok, tc.want)
+		}
+		attached := AttachSubagents([]Message{message}, func(SubagentCall) *SubagentSnapshot { return snapshot })
+		want := SubagentSummary{Agent: "explore", Steps: 1, OmitsLastText: tc.want}
+		if got := attached[0].Parts[1].Subagent; got == nil || *got != want {
+			t.Errorf("%s: replay summary = %+v, want %+v", tc.name, got, want)
+		}
+	}
+	if SubagentSummaryOf(SubagentCall{OmitsLastText: true}, nil) != nil || SubagentSummaryOf(SubagentCall{OmitsLastText: true}, &SubagentSnapshot{}) != nil {
+		t.Fatal("a child with no step has a summary")
+	}
+	encoded, _ := json.Marshal(Part{Type: "tool_result", Subagent: SubagentSummaryOf(SubagentCall{OmitsLastText: true}, snapshot)})
+	if !strings.Contains(string(encoded), `"subagent":{"agent":"explore","steps":1,"omitsLastText":true}`) {
+		t.Fatalf("summary JSON of a result that omits the last text = %s", encoded)
+	}
+	encoded, _ = json.Marshal(Part{Type: "tool_result", Subagent: SubagentSummaryOf(SubagentCall{}, snapshot)})
+	if strings.Contains(string(encoded), "omitsLastText") {
+		t.Fatalf("a finished result's summary names omitsLastText: %s", encoded)
 	}
 }
 

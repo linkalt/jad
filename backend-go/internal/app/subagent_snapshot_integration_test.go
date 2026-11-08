@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +181,41 @@ func TestSubagentRouteReadsAChildThatIsStillRunning(t *testing.T) {
 	}
 	if status != http.StatusOK || !strings.Contains(body, `"subagent":{"steps":[]}`) {
 		t.Fatalf("running child: status %d, body %s", status, body)
+	}
+}
+
+// TestSubagentRouteSaysAnUnreadableChildIsAnErrorNotMissing: a child whose transcript exists
+// but cannot be read answers 500 (the browser shows the error with a retry), not the 404 of
+// an unknown call id, and the body does not name the file.
+func TestSubagentRouteSaysAnUnreadableChildIsAnErrorNotMissing(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	if live := f.run(t); !strings.Contains(live, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", live)
+	}
+	ids := subagentCallIDs(t, f.sessionSnapshot(t))
+	transcripts, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
+	if len(ids) != 1 || err != nil || len(transcripts) != 1 {
+		t.Fatalf("subagent calls %v, child transcripts %v (%v)", ids, transcripts, err)
+	}
+	path := transcripts[0]
+	// The child writes once more (so the cached read is stale), then its file is unreadable.
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString("\n")
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("a mode 0 file is still readable here (running as root?)")
+	}
+	status, body := f.get(t, "/subagents/"+ids[0])
+	if status != http.StatusInternalServerError || strings.Contains(body, "not found") || strings.Contains(body, "messages.jsonl") || strings.Contains(body, f.toolDir) {
+		t.Fatalf("unreadable child: status %d, body %s; want a 500 that names no file", status, body)
 	}
 }

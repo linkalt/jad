@@ -272,24 +272,50 @@ func TestReadSubagentStepsSaysWhetherTheChildWasFound(t *testing.T) {
 	root := t.TempDir()
 	childFolder(t, root, "young-0a1b2c3d", childUserLine)
 	call := func(id string) webui.SubagentCall { return webui.SubagentCall{CallID: id} }
-	if snapshot, found := readSubagentSteps(context.Background(), root, call("young"), defaultSubagentSnapshotLimits); !found || snapshot != nil {
+	if snapshot, found, _ := readSubagentSteps(context.Background(), root, call("young"), defaultSubagentSnapshotLimits); !found || snapshot != nil {
 		t.Fatalf("child with no step: %+v, found %v", snapshot, found)
 	}
-	if snapshot, found := readSubagentSteps(context.Background(), root, call("nobody"), defaultSubagentSnapshotLimits); found || snapshot != nil {
+	if snapshot, found, _ := readSubagentSteps(context.Background(), root, call("nobody"), defaultSubagentSnapshotLimits); found || snapshot != nil {
 		t.Fatalf("unknown call: %+v, found %v", snapshot, found)
 	}
 	// Still running: two steps written, the third line torn. The steps so far are served,
 	// and a read after the child wrote more sees them (the cache follows the file).
 	path := childFolder(t, root, "busy-0a1b2c3d", childUserLine+completedLine(1, 1, "a")+completedLine(1, 2, "b")+`{"type":"response.compl`)
-	snapshot, found := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits)
+	snapshot, found, _ := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits)
 	if !found || snapshot == nil || len(snapshot.Steps) != 2 || snapshot.Agent != "" {
 		t.Fatalf("running child: %+v, found %v", snapshot, found)
 	}
 	if err := os.WriteFile(path, []byte(childUserLine+completedLine(1, 1, "a")+completedLine(1, 2, "b")+completedLine(1, 3, "c")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot, _ := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits); snapshot == nil || len(snapshot.Steps) != 3 {
+	if snapshot, _, _ := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits); snapshot == nil || len(snapshot.Steps) != 3 {
 		t.Fatalf("after the child wrote more: %+v", snapshot)
+	}
+}
+
+// TestReadSubagentStepsTellsAnUnreadableChildFromAMissingOne: a child whose transcript is
+// there but cannot be read is an error, not "no child" (the route must not answer 404),
+// and the failure is not cached: once readable, the steps are served.
+func TestReadSubagentStepsTellsAnUnreadableChildFromAMissingOne(t *testing.T) {
+	root := t.TempDir()
+	path := childFolder(t, root, "locked-0a1b2c3d", childUserLine+completedLine(1, 1, "a"))
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("a mode 0 file is still readable here (running as root?)")
+	}
+	call := webui.SubagentCall{CallID: "locked"}
+	if snapshot, found, err := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits); err == nil || !found || snapshot != nil {
+		t.Fatalf("unreadable child: %+v, found %v, err %v; want an error", snapshot, found, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, found, err := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits)
+	if err != nil || !found || snapshot == nil || snapshotText(snapshot) != "a" {
+		t.Fatalf("readable again: %+v, found %v, err %v", snapshot, found, err)
 	}
 }
 
@@ -302,11 +328,11 @@ func TestChildFolderWithoutItsTranscriptYetIsNotRememberedAsAbsent(t *testing.T)
 		t.Fatal(err)
 	}
 	call := webui.SubagentCall{CallID: "early"}
-	if snapshot, found := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits); !found || snapshot != nil {
+	if snapshot, found, _ := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits); !found || snapshot != nil {
 		t.Fatalf("folder without transcript: %+v, found %v", snapshot, found)
 	}
 	childFolder(t, root, "early-0a1b2c3d", childUserLine+completedLine(1, 1, "now"))
-	snapshot, found := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits)
+	snapshot, found, _ := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits)
 	if !found || snapshot == nil || snapshotText(snapshot) != "now" {
 		t.Fatalf("after the transcript appeared: %+v, found %v", snapshot, found)
 	}

@@ -20,10 +20,11 @@ after(() => {
 
 const url = request => new URL(request.url, 'http://localhost');
 
-test('the summary is the agent and a count of at least one step', () => {
+test('the summary is the agent, a count of at least one step and whether the result omits the child\'s last text', () => {
   assert.deepEqual(validSubagentSummary({agent: 'explore', steps: 7}), {agent: 'explore', steps: 7});
   assert.deepEqual(validSubagentSummary({steps: 1}), {steps: 1});
-  for (const bad of [undefined, null, 'x', {}, {steps: 0}, {steps: -1}, {steps: 1.5}, {steps: '7'}, {agent: 3, steps: 2}, {steps: [{id: 'a', status: 'completed', parts: []}]}]) {
+  assert.deepEqual(validSubagentSummary({steps: 2, omitsLastText: true}), {steps: 2, omitsLastText: true});
+  for (const bad of [undefined, null, 'x', {}, {steps: 0}, {steps: -1}, {steps: 1.5}, {steps: '7'}, {agent: 3, steps: 2}, {steps: [{id: 'a', status: 'completed', parts: []}]}, {steps: 2, omitsLastText: 'yes'}]) {
     assert.equal(validSubagentSummary(bad), undefined, JSON.stringify(bad));
   }
 });
@@ -47,6 +48,30 @@ test('a server error and a malformed body are errors, not a broken transcript', 
     reply = () => new Response(JSON.stringify(body), {status: 200});
     await assert.rejects(() => fetchSubagentTranscript('s', 'c'), /invalid subagent transcript/, JSON.stringify(body));
   }
+  reply = () => new Response(JSON.stringify({subagent: transcript}), {status: 200});
+});
+
+test('a result that printed nothing and one malformed part do not take the transcript down', async () => {
+  // Go omits an empty output (`omitempty`), so a call whose tool printed nothing has a
+  // result without `output`. A part the client cannot read is dropped; its step stays.
+  const call = {type: 'tool_call', callId: 'k1', name: 'bash', arguments: '{}'};
+  reply = () =>
+    new Response(
+      JSON.stringify({
+        subagent: {
+          steps: [
+            {id: '1.1', status: 'completed', parts: [call, {type: 'tool_result', callId: 'k1', status: 'success'}]},
+            {id: '1.2', status: 'completed', parts: [{type: 'text'}, {type: 'text', text: 'kept'}]},
+          ],
+        },
+      }),
+      {status: 200},
+    );
+  const answer = await fetchSubagentTranscript('s', 'c');
+  assert.deepEqual(answer.steps.map(step => step.parts), [
+    [call, {type: 'tool_result', callId: 'k1', status: 'success', output: ''}],
+    [{type: 'text', text: 'kept'}],
+  ]);
   reply = () => new Response(JSON.stringify({subagent: transcript}), {status: 200});
 });
 
@@ -125,6 +150,9 @@ test('closed, the section is one button: no fetch, no mapping and no transcript 
   const closed = view.slice(view.indexOf('export function SubagentTranscript('), view.indexOf('type Load'));
   assert.doesNotMatch(closed, /fetchSubagentTranscript|subagentTranscriptMessages|<ReadOnlyTranscript|transcriptStore|useEffect|validSubagentTranscript/);
   assert.match(closed, /useState\(false\)/);
+  // History is not validated part by part, so the section checks the summary itself: a
+  // malformed one (null, a zero or fractional count) renders nothing instead of throwing.
+  assert.match(closed, /if \(sessionRef === undefined \|\| validSubagentSummary\(summary\) === undefined\) \{\s*return null;/);
   // The label reads the summary's count, and the toggle flips it.
   assert.match(closed, /\$\{isOpen \? 'Hide' : 'Show'\} Transcript · \$\{summary\.steps\} \$\{summary\.steps === 1 \? 'step' : 'steps'\}/);
   assert.match(closed, /onClick=\{\(\) => setIsOpen\(open => !open\)\}/);
@@ -133,7 +161,9 @@ test('closed, the section is one button: no fetch, no mapping and no transcript 
   assert.match(closed, /\{isOpen && \(\s*<OpenSubagentTranscript/);
   const open = view.slice(view.indexOf('function OpenSubagentTranscript'));
   assert.match(open, /fetchSubagentTranscript\(sessionRef, callId, profile\)/);
-  assert.match(open, /subagentTranscriptMessages\(transcript\)/);
+  // The tool result says whether it omits the child's last text; only then is that text kept.
+  assert.match(open, /subagentTranscriptMessages\(transcript, \{omitsLastText\}\)/);
+  assert.match(closed, /omitsLastText=\{summary\.omitsLastText === true\}/);
   assert.equal((open.match(/<ReadOnlyTranscript/g) ?? []).length, 1);
   // The fetch is one load per key, with a retry button on failure and no timer.
   assert.match(open, /transcriptStore\s*\.load\(key/);

@@ -66,3 +66,48 @@ func TestLiveSubagentResultCarriesTheSummaryAndNoOtherToolDoes(t *testing.T) {
 		t.Fatalf("session asked %+v", runner.asked)
 	}
 }
+
+// TestLiveSubagentResultSaysWhetherItOmitsTheLastText: a result that handed the child off
+// (it names the run's state next to the run id) or cut its answer (it names truncated) is
+// published with a summary marked as omitting the child's last text, so the browser keeps
+// that text; the result of a child that ended with its answer whole is not marked. The
+// replay sets the summary with the same function (webui.SubagentSummaryOf).
+func TestLiveSubagentResultSaysWhetherItOmitsTheLastText(t *testing.T) {
+	registry := newRunRegistry(time.Minute, 1<<30, 0)
+	run, err := registry.begin("key", "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published []webui.Message
+	emitter := newMessageStreamEmitter(0, func(message webui.Message) error { published = append(published, message); return nil })
+	streaming := webui.NewStreamingRun("turn", "now")
+	streaming.Complete(json.RawMessage(`{"type":"response.completed","response":{"id":"r","output":[
+		{"type":"function_call","call_id":"handed","name":"subagent","arguments":"{}"},
+		{"type":"function_call","call_id":"ended","name":"subagent","arguments":"{}"},
+		{"type":"function_call","call_id":"cut","name":"subagent","arguments":"{}"}]}}`))
+	outputs := map[string]string{
+		"handed": "{\"id\":\"handed\",\"status\":\"ok\",\"summary\":\"Agent explore is still running (run sub_0a1b2c3d)\"}\n\n--- INFORMATION ---\nrun: sub_0a1b2c3d\nstate: running\nelapsed_ms: 5\nlimit_ms: 600000\n",
+		"ended":  "{\"id\":\"ended\",\"status\":\"ok\",\"summary\":\"Agent explore finished\"}\n\n--- INFORMATION ---\nagent: explore\nrounds: 2\n\n--- CONTENT token=t encoding=utf8 ---\nthe answer\n--- END CONTENT token=t ---\n",
+		"cut":    "{\"id\":\"cut\",\"status\":\"ok\",\"summary\":\"Agent explore finished\"}\n\n--- INFORMATION ---\nagent: explore\nrounds: 2\ntruncated: true\n\n--- CONTENT token=t encoding=utf8 ---\nthe head of the ans\n--- END CONTENT token=t ---\n",
+	}
+	runner := &snapshotRunner{}
+	for _, callID := range []string{"handed", "ended", "cut"} {
+		item, _ := json.Marshal(map[string]string{"type": "function_call_output", "call_id": callID, "output": outputs[callID]})
+		publishToolResult(run, streaming, emitter, item, runner, nil)
+	}
+	summaries := map[string]*webui.SubagentSummary{}
+	for _, part := range published[len(published)-1].Parts {
+		if part.Type == "tool_result" {
+			summaries[part.CallID] = part.Subagent
+		}
+	}
+	if got := summaries["handed"]; got == nil || *got != (webui.SubagentSummary{Steps: 1, OmitsLastText: true}) {
+		t.Fatalf("handed-off result summary = %+v", got)
+	}
+	if got := summaries["cut"]; got == nil || *got != (webui.SubagentSummary{Agent: "explore", Steps: 1, OmitsLastText: true}) {
+		t.Fatalf("cut finished result summary = %+v", got)
+	}
+	if got := summaries["ended"]; got == nil || *got != (webui.SubagentSummary{Agent: "explore", Steps: 1}) {
+		t.Fatalf("finished result summary = %+v", got)
+	}
+}

@@ -332,9 +332,10 @@ func abortReason(ctx context.Context) string {
 //
 // The result of a subagent call also carries the summary of its child (agent and the
 // number of steps it has completed): a synchronous call settles after the child ended, so
-// all of them are counted; a call that left the child running gets the count so far, and
-// the open message does not change as the child goes on. The steps are not published; the
-// browser reads them from the subagent route when asked.
+// all of them are counted; a call that left the child running gets the count so far. Either
+// way the summary says whether the result omits the child's last text
+// (webui.SubagentSummaryOf), and the open message does not change as the child goes on. The steps are not published; the browser reads them from the subagent route
+// when asked.
 func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *messageStreamEmitter, item json.RawMessage, runner RunSession, logger *slog.Logger) {
 	part, ok := streaming.ProjectToolResult(item)
 	if !ok {
@@ -343,7 +344,7 @@ func publishToolResult(run *activeRun, streaming *webui.StreamingRun, emitter *m
 	if snapshotter, ok := runner.(subagentSnapshotter); ok {
 		if call, isCall := streaming.ToolCall(part.CallID); isCall {
 			if described, isSubagent := webui.SubagentCallOf(call, part); isSubagent {
-				part.Subagent = snapshotter.SubagentSnapshot(described).Summary()
+				part.Subagent = webui.SubagentSummaryOf(described, snapshotter.SubagentSnapshot(described))
 			}
 		}
 	}

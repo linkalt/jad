@@ -109,6 +109,13 @@ export interface WebUiSubagentStep {
 export interface WebUiSubagentSummary {
   agent?: string;
   steps: number;
+  /**
+   * Set when the result does not hold, whole, the text of the child's last completed step
+   * (it handed the child off, cut that text, holds none, or the child was lost), so that
+   * text is shown rather than left out as the copy above it. Absent for a result that came
+   * back with that text uncut, and from an older server.
+   */
+  omitsLastText?: boolean;
 }
 
 /** The completed steps of one subagent run, as `fetchSubagentTranscript` returns them. */
@@ -1573,29 +1580,14 @@ function isWebUiCitation(value: unknown): value is WebUiCitation {
   );
 }
 
-function isWebUiSubagentTranscript(value: unknown): value is WebUiSubagentTranscript {
-  return (
-    isRecord(value) &&
-    (value.agent === undefined || typeof value.agent === 'string') &&
-    Array.isArray(value.steps) &&
-    value.steps.every(
-      step =>
-        isRecord(step) &&
-        typeof step.id === 'string' &&
-        typeof step.status === 'string' &&
-        Array.isArray(step.parts) &&
-        step.parts.every(isWebUiPart),
-    )
-  );
-}
-
 function isWebUiSubagentSummary(value: unknown): value is WebUiSubagentSummary {
   return (
     isRecord(value) &&
     (value.agent === undefined || typeof value.agent === 'string') &&
     typeof value.steps === 'number' &&
     Number.isInteger(value.steps) &&
-    value.steps >= 1
+    value.steps >= 1 &&
+    (value.omitsLastText === undefined || typeof value.omitsLastText === 'boolean')
   );
 }
 
@@ -1609,11 +1601,28 @@ export function validSubagentSummary(value: unknown): WebUiSubagentSummary | und
 }
 
 /**
- * The steps of a subagent run when they are well formed, otherwise `undefined`. They come
- * from `fetchSubagentTranscript` and are checked again where they are mapped.
+ * The transcript when its frame is well formed: an optional agent and steps with an id, a
+ * status and a list of parts. A part the client cannot read is dropped from its step, so one
+ * bad part does not hide the rest of the child's work; a bad frame is no transcript
+ * (`undefined`). The steps come from `fetchSubagentTranscript` and are checked again where
+ * they are mapped.
  */
 export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript | undefined {
-  return isWebUiSubagentTranscript(value) ? value : undefined;
+  if (!isRecord(value) || !Array.isArray(value.steps)) {
+    return undefined;
+  }
+  const {agent} = value;
+  if (agent !== undefined && typeof agent !== 'string') {
+    return undefined;
+  }
+  const steps: WebUiSubagentStep[] = [];
+  for (const step of value.steps as unknown[]) {
+    if (!isRecord(step) || typeof step.id !== 'string' || typeof step.status !== 'string' || !Array.isArray(step.parts)) {
+      return undefined;
+    }
+    steps.push({id: step.id, status: step.status, parts: (step.parts as unknown[]).filter(isWebUiPart)});
+  }
+  return agent === undefined ? {steps} : {agent, steps};
 }
 
 function isWebUiPart(value: unknown): value is WebUiPart {
@@ -1656,6 +1665,11 @@ function isWebUiPart(value: unknown): value is WebUiPart {
     // The summary is optional extra data: a malformed one is dropped and the result stays.
     if (value.subagent !== undefined && !isWebUiSubagentSummary(value.subagent)) {
       delete value.subagent;
+    }
+    // The server omits an empty output (Go `omitempty`): a tool that printed nothing still
+    // gave a result, so it is read as the empty output it is.
+    if (value.output === undefined) {
+      value.output = '';
     }
     return (
       typeof value.callId === 'string' &&

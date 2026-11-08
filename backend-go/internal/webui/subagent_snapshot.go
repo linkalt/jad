@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -28,6 +29,11 @@ type SubagentSnapshot struct {
 type SubagentSummary struct {
 	Agent string `json:"agent,omitempty"`
 	Steps int    `json:"steps"`
+	// OmitsLastText is set when the result does not hold, whole, the text of the last step the
+	// child completed (SubagentCall.OmitsLastText), so the browser shows that text instead of
+	// leaving it out as the copy the result already shows. Absent (false) for a result that
+	// came back with that text uncut, and from a server that predates it.
+	OmitsLastText bool `json:"omitsLastText,omitempty"`
 }
 
 // Summary is the descriptor of a snapshot, nil for a missing or empty one, so a result
@@ -37,6 +43,17 @@ func (s *SubagentSnapshot) Summary() *SubagentSummary {
 		return nil
 	}
 	return &SubagentSummary{Agent: s.Agent, Steps: len(s.Steps)}
+}
+
+// SubagentSummaryOf is what the tool result of call carries of its child: the summary of
+// snapshot, marked when the result omits the child's last text. Every path that sets a
+// result's summary (the live run and the replay) builds it here, so they cannot differ.
+func SubagentSummaryOf(call SubagentCall, snapshot *SubagentSnapshot) *SubagentSummary {
+	summary := snapshot.Summary()
+	if summary != nil {
+		summary.OmitsLastText = call.OmitsLastText
+	}
+	return summary
 }
 
 // SubagentStep is one completed step of the child, as the parts of a message step: text,
@@ -79,6 +96,16 @@ type SubagentCall struct {
 	// Transcript is the child's transcript path as the result printed it, empty when it
 	// printed none. It is only a hint: a reader must confine it before it opens it.
 	Transcript string
+	// OmitsLastText is set when the result does not hold, whole, the text of the last step
+	// the child completed, so that text is shown rather than left out as the result's copy.
+	// The native tool (renderRun) puts that text in the content of a finished, stopped or
+	// timed-out result, which name no state and no error code but subagent_timeout; any
+	// other result omits it: a handed-off one names the run's state and holds a run id, a
+	// cut one names truncated, a failed or empty one holds no text, and a lost one holds the
+	// newest text the child wrote, which can be that of a step whose tool results were never
+	// written and which the snapshot therefore leaves out. It is not part of what identifies
+	// the child, so a reader does not key on it.
+	OmitsLastText bool
 }
 
 // IsSubagentTool reports whether a tool call name is the native subagent tool. It is the
@@ -95,7 +122,8 @@ func SubagentCallOf(call, result Part) (SubagentCall, bool) {
 	if call.Type != "tool_call" || result.Type != "tool_result" || !IsSubagentTool(call.Name) || call.CallID == "" || call.CallID != result.CallID {
 		return SubagentCall{}, false
 	}
-	agent, transcript := subagentInformation(result.Output)
+	information := subagentInformation(result.Output)
+	agent := information.agent
 	if agent == "" && call.Arguments != nil {
 		var arguments struct {
 			Agent string `json:"agent"`
@@ -104,15 +132,24 @@ func SubagentCallOf(call, result Part) (SubagentCall, bool) {
 			agent = strings.TrimSpace(arguments.Agent)
 		}
 	}
-	return SubagentCall{CallID: call.CallID, Agent: agent, Transcript: transcript}, true
+	omits := information.state != "" || information.truncated || (information.errorCode != "" && information.errorCode != "subagent_timeout")
+	return SubagentCall{CallID: call.CallID, Agent: agent, Transcript: information.transcript, OmitsLastText: omits}, true
 }
 
-// subagentInformation reads the agent and transcript lines of a tool result's
-// INFORMATION section: "key: value" lines after the marker, up to the first blank line.
-func subagentInformation(output string) (agent, transcript string) {
+// subagentResultInformation is what the reader takes from a subagent result's information.
+type subagentResultInformation struct {
+	agent, transcript, state, errorCode string
+	truncated                           bool
+}
+
+// subagentInformation reads the agent, transcript, state, error_code and truncated lines of
+// a tool result's INFORMATION section: "key: value" lines after the marker, up to the first
+// blank line. The first non-empty value of a key counts.
+func subagentInformation(output string) subagentResultInformation {
+	var information subagentResultInformation
 	_, section, found := strings.Cut(output, "\n--- INFORMATION ---\n")
 	if !found {
-		return "", ""
+		return information
 	}
 	for len(section) > 0 {
 		var line string
@@ -120,18 +157,22 @@ func subagentInformation(output string) (agent, transcript string) {
 		if line == "" {
 			break
 		}
-		switch key, value, _ := strings.Cut(line, ": "); key {
+		key, value, _ := strings.Cut(line, ": ")
+		value = strings.TrimSpace(value)
+		switch key {
 		case "agent":
-			if agent == "" {
-				agent = strings.TrimSpace(value)
-			}
+			information.agent = cmp.Or(information.agent, value)
 		case "transcript":
-			if transcript == "" {
-				transcript = strings.TrimSpace(value)
-			}
+			information.transcript = cmp.Or(information.transcript, value)
+		case "state":
+			information.state = cmp.Or(information.state, value)
+		case "error_code":
+			information.errorCode = cmp.Or(information.errorCode, value)
+		case "truncated":
+			information.truncated = information.truncated || value == "true"
 		}
 	}
-	return agent, transcript
+	return information
 }
 
 // AttachSubagents sets Subagent, the summary of the snapshot lookup answers, on the tool
@@ -167,7 +208,7 @@ func AttachSubagents(messages []Message, lookup func(SubagentCall) *SubagentSnap
 			if !ok {
 				continue
 			}
-			summary := lookup(call).Summary()
+			summary := SubagentSummaryOf(call, lookup(call))
 			if summary == nil {
 				continue
 			}

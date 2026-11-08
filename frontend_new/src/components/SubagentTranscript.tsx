@@ -17,7 +17,12 @@
  */
 import {useEffect, useMemo, useState} from 'react';
 import {Button, Text, VStack} from '@astryxdesign/core';
-import {fetchSubagentTranscript, type WebUiSubagentSummary, type WebUiSubagentTranscript} from '../api';
+import {
+  fetchSubagentTranscript,
+  validSubagentSummary,
+  type WebUiSubagentSummary,
+  type WebUiSubagentTranscript,
+} from '../api';
 import appConfig from '../config.json';
 import {subagentTranscriptMessages} from '../subagent-transcript';
 import {createSubagentTranscriptStore, subagentTranscriptKey} from '../subagent-transcript-store';
@@ -35,8 +40,9 @@ export interface SubagentTranscriptProps {
 
 export function SubagentTranscript({summary, sessionRef, profile, callId}: SubagentTranscriptProps) {
   const [isOpen, setIsOpen] = useState(false);
-  // The panel without a session has nowhere to read the steps from.
-  if (sessionRef === undefined || typeof summary.steps !== 'number') {
+  // The panel without a session has nowhere to read the steps from. History is not
+  // validated part by part, so a malformed summary (null, a count below one) shows nothing.
+  if (sessionRef === undefined || validSubagentSummary(summary) === undefined) {
     return null;
   }
   const label = `${isOpen ? 'Hide' : 'Show'} Transcript · ${summary.steps} ${summary.steps === 1 ? 'step' : 'steps'}`;
@@ -53,6 +59,7 @@ export function SubagentTranscript({summary, sessionRef, profile, callId}: Subag
         <OpenSubagentTranscript
           agent={summary.agent}
           steps={summary.steps}
+          omitsLastText={summary.omitsLastText === true}
           sessionRef={sessionRef}
           profile={profile}
           callId={callId}
@@ -70,12 +77,15 @@ type Load =
 function OpenSubagentTranscript({
   agent,
   steps,
+  omitsLastText,
   sessionRef,
   profile,
   callId,
 }: {
   agent?: string;
   steps: number;
+  /** The result does not hold the child's last text whole, so it is not left out here. */
+  omitsLastText: boolean;
   sessionRef: string;
   profile?: string;
   callId: string;
@@ -106,8 +116,8 @@ function OpenSubagentTranscript({
   }, [key, sessionRef, callId, profile, attempt]);
   const transcript = load.state === 'ready' ? load.transcript : undefined;
   const messages = useMemo(
-    () => (transcript === undefined ? [] : subagentTranscriptMessages(transcript)),
-    [transcript],
+    () => (transcript === undefined ? [] : subagentTranscriptMessages(transcript, {omitsLastText})),
+    [transcript, omitsLastText],
   );
   return (
     <VStack gap={2} width="100%">

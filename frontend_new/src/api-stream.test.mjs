@@ -957,6 +957,8 @@ test('a malformed subagent summary is dropped from a tool result that stays, a v
     {event: 'ui.message', data: {message: withPart('bad-steps', result({steps: 'no'}))}},
     {event: 'ui.message', data: {message: withPart('bad-step', result({steps: [null]}))}},
     {event: 'ui.message', data: {message: withPart('bad-count', result({steps: 0}))}},
+    {event: 'ui.message', data: {message: withPart('omits-last-text', result({agent: 'explore', steps: 2, omitsLastText: true}))}},
+    {event: 'ui.message', data: {message: withPart('bad-omits', result({steps: 2, omitsLastText: 'yes'}))}},
     {event: 'ui.part', data: {id: 'ok', index: 1, part: result({agent: 3, steps: 2})}},
     {event: 'completed', data: {message: message('complete', 'done'), committed: true}},
     {event: 'done', data: {}},
@@ -967,9 +969,38 @@ test('a malformed subagent summary is dropped from a tool result that stays, a v
     onMessage: value => seen.push([value.id, value.parts[0].subagent]),
     onPart: (id, index, part) => parts.push(part),
   });
-  assert.deepEqual(seen, [['ok', snapshot], ['bad-steps', undefined], ['bad-step', undefined], ['bad-count', undefined]]);
+  assert.deepEqual(seen, [
+    ['ok', snapshot],
+    ['bad-steps', undefined],
+    ['bad-step', undefined],
+    ['bad-count', undefined],
+    ['omits-last-text', {agent: 'explore', steps: 2, omitsLastText: true}],
+    ['bad-omits', undefined],
+  ]);
   assert.deepEqual(parts, [result()]);
   assert.equal('subagent' in parts[0], false);
+});
+
+test('a tool result with no output (Go omits an empty one) is a result with empty output', async () => {
+  requests.length = 0;
+  responses.length = 0;
+  const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
+  const silent = {type: 'tool_result', callId: 'c', status: 'success'};
+  responses.push(streamResponse([
+    {event: 'run', data: run},
+    {event: 'ui.message', data: {message: {id: 'm', sender: 'assistant', status: 'streaming', text: '', timestamp: 't', parts: [{...silent}]}}},
+    {event: 'ui.part', data: {id: 'm', index: 0, part: {...silent}}},
+    {event: 'completed', data: {message: message('complete', 'done'), committed: true}},
+    {event: 'done', data: {}},
+  ]));
+  const seen = [];
+  const parts = [];
+  await streamSessionRun('session-1', 'hello', {
+    onMessage: value => seen.push(value.parts[0]),
+    onPart: (id, index, part) => parts.push(part),
+  });
+  assert.deepEqual(seen, [{...silent, output: ''}]);
+  assert.deepEqual(parts, [{...silent, output: ''}]);
 });
 
 test('an async_state event reaches the caller as counts, and a malformed one or an unknown event is ignored', async () => {

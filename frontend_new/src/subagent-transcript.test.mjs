@@ -36,9 +36,15 @@ const reasoning = value => ({type: 'reasoning', text: value});
 const call = callId => ({type: 'tool_call', callId, name: 'read', arguments: '{}'});
 const result = callId => ({type: 'tool_result', callId, output: 'ok', status: 'success'});
 const step = (id, parts) => ({id, status: 'completed', parts});
-const shown = steps => subagentTranscriptMessages({steps}).flatMap(message => message.parts);
+const shown = (steps, result) => subagentTranscriptMessages({steps}, result).flatMap(message => message.parts);
+// What the tool result says of the child's last text (the server sets the flag from the
+// result's own information, webui.SubagentCallOf): a finished, stopped or timed-out result
+// holds it whole and sends no flag (an older server sends none either, and reads the same);
+// a handed-off, cut, failed or lost result does not hold it whole and says so.
+const finished = {};
+const omitsLastText = {omitsLastText: true};
 
-test('with a tool call, the trailing text-only step (the summary) is dropped whole', () => {
+test('finished: with a tool call, the trailing text-only step (the answer the result shows) is dropped whole', () => {
   const [message] = subagentTranscriptMessages({
     steps: [step('1', [call('a'), result('a')]), step('2', text('final summary'))],
   });
@@ -46,7 +52,7 @@ test('with a tool call, the trailing text-only step (the summary) is dropped who
   assert.deepEqual(message.steps, [{id: '1', startPart: 0, endPart: 2, hasTools: true}]);
 });
 
-test('with a tool call, the trailing step keeps its reasoning and loses only its text', () => {
+test('finished: with a tool call, the trailing step keeps its reasoning and loses only its text', () => {
   const [message] = subagentTranscriptMessages({
     steps: [step('1', [call('a'), result('a')]), step('2', [reasoning('wrap up'), ...text('final summary')])],
   });
@@ -57,20 +63,72 @@ test('with a tool call, the trailing step keeps its reasoning and loses only its
   ]);
 });
 
-test('only the trailing step loses its text; earlier text stays', () => {
+test('finished: only the trailing step loses its text; earlier text stays', () => {
   assert.deepEqual(
     shown([step('1', [...text('plan'), call('a'), result('a')]), step('2', text('summary'))]),
     [...text('plan'), call('a'), result('a')],
   );
 });
 
-test('a snapshot with a single tool step and its text keeps the calls, drops the text', () => {
+test('finished: a snapshot with a single tool step and its text keeps the calls, drops the text', () => {
   assert.deepEqual(shown([step('1', [call('a'), result('a'), ...text('done')])]), [call('a'), result('a')]);
+  assert.deepEqual(shown([step('1', [call('a'), result('a'), ...text('done')])], {omitsLastText: false}), [call('a'), result('a')]);
 });
 
-test('without any tool call the snapshot is shown whole, summary included', () => {
-  assert.deepEqual(shown([step('1', [reasoning('think')]), step('2', text('answer'))]), [reasoning('think'), ...text('answer')]);
-  assert.deepEqual(shown([step('1', text('answer'))]), text('answer'));
+test('still running: a handed-off child keeps the text of its last completed step, which is not its end', () => {
+  // The child is between steps: its last completed step said what it does next and the
+  // result above holds only the run id, so that text is nowhere else.
+  const steps = [step('1', [...text('reading the config'), call('a'), result('a')]), step('2', [...text('now the tests'), call('b'), result('b')])];
+  assert.deepEqual(shown(steps, omitsLastText), [...text('reading the config'), call('a'), result('a'), ...text('now the tests'), call('b'), result('b')]);
+  assert.deepEqual(shown(steps, finished), [...text('reading the config'), call('a'), result('a'), call('b'), result('b')]);
+});
+
+test('handed off: a child that ended after its result was served keeps its answer, which the result never held', () => {
+  const steps = [step('1', [call('a'), result('a')]), step('2', [reasoning('wrap up'), ...text('final summary')])];
+  const [message] = subagentTranscriptMessages({steps}, omitsLastText);
+  assert.deepEqual(message.parts, [call('a'), result('a'), reasoning('wrap up'), ...text('final summary')]);
+  assert.deepEqual(message.steps.map(s => [s.id, s.startPart, s.endPart, s.hasTools]), [
+    ['1', 0, 2, true],
+    ['2', 2, 4, false],
+  ]);
+  // The same snapshot under a result that came back with the child's end loses that text.
+  assert.deepEqual(shown(steps, finished), [call('a'), result('a'), reasoning('wrap up')]);
+});
+
+test('finished and cut: a result that holds only the head of the answer leaves the whole answer in the transcript', () => {
+  // The result names truncated: it shows the first bytes of the answer, the transcript holds it whole.
+  const steps = [step('1', [call('a'), result('a')]), step('2', text('the whole answer, past the cut'))];
+  assert.deepEqual(shown(steps, omitsLastText), [call('a'), result('a'), ...text('the whole answer, past the cut')]);
+  assert.deepEqual(shown(steps, finished), [call('a'), result('a')]);
+});
+
+test('failed: a result that holds no text of the child leaves its last text in the transcript', () => {
+  // A failed result carries only the reason; what the child last wrote is only in the transcript.
+  const steps = [step('1', [...text('trying the build'), call('a'), result('a')])];
+  assert.deepEqual(shown(steps, omitsLastText), [...text('trying the build'), call('a'), result('a')]);
+  assert.deepEqual(shown(steps, finished), [call('a'), result('a')]);
+});
+
+test('lost: a result whose text can be a step the snapshot withholds leaves the shown last text in place', () => {
+  // The server died while step 3 ran its tool: the result holds step 3's text, the snapshot
+  // ends at step 2, whose text is nowhere else.
+  const steps = [step('1', [call('a'), result('a')]), step('2', [...text('step two notes'), call('b'), result('b')])];
+  assert.deepEqual(shown(steps, omitsLastText), [call('a'), result('a'), ...text('step two notes'), call('b'), result('b')]);
+});
+
+test('stopped and timed out: a result that holds the child\'s last text whole reads like a finished one', () => {
+  // Their content is the newest text of a committed step (app/subagent.go:128), and the
+  // runner writes a result for every call a cancelled round leaves (session/runner.go:1121),
+  // so that step closes and is the snapshot's last one with text.
+  const steps = [step('1', [call('a'), result('a')]), step('2', [...text('half done'), call('b'), result('b')])];
+  assert.deepEqual(shown(steps, finished), [call('a'), result('a'), call('b'), result('b')]);
+});
+
+test('without any tool call the snapshot is shown whole, summary included, however the result left the child', () => {
+  for (const shape of [finished, omitsLastText]) {
+    assert.deepEqual(shown([step('1', [reasoning('think')]), step('2', text('answer'))], shape), [reasoning('think'), ...text('answer')]);
+    assert.deepEqual(shown([step('1', text('answer'))], shape), text('answer'));
+  }
 });
 
 test('nothing surviving gives no message, so no button renders', () => {
