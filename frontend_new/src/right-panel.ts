@@ -31,3 +31,17 @@ export function activityClickOutcome(
 ): 'open' | 'close' {
   return current === 'activity' && openKey === key ? 'close' : 'open';
 }
+
+/** Whether a block's source values differ from the ones the open panel last got. */
+export function activityRefsChanged(previous: readonly unknown[] | undefined, next: readonly unknown[]): boolean {
+  return (
+    previous === undefined ||
+    previous.length !== next.length ||
+    next.some((value, index) => !Object.is(value, previous[index]))
+  );
+}
+
+/** Stable panel key of a multi-call tool group: its scope and its first part's index. */
+export function toolGroupActivityKey(scope: string, firstPartIndex: number): string {
+  return `${scope}:tools:${firstPartIndex}`;
+}

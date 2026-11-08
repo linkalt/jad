@@ -27,6 +27,16 @@ export type ActivityDetail =
       source?: TruncatedSource;
     }
   | {
+      /** Several calls of one tool group, in transcript order. */
+      key: string;
+      kind: 'tools';
+      items: {
+        call: Extract<WebUiPart, {type: 'tool_call'}>;
+        result?: Extract<WebUiPart, {type: 'tool_result'}>;
+        source?: TruncatedSource;
+      }[];
+    }
+  | {
       key: string;
       kind: 'hosted';
       name: string;

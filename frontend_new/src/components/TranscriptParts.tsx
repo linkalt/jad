@@ -2,6 +2,7 @@ import {Badge, Button, Card, type ChatToolCallItem, ChatToolCalls, CodeBlock, HS
 import {borderVars, colorVars, radiusVars, sizeVars, spacingVars, typeScaleVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {activityRefsChanged, toolGroupActivityKey} from '../right-panel';
 import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart} from '../api';
 import {type MessageRecord, type ReasoningStep, type TraceState} from '../app-types';
 import appConfig from '../config.json';
@@ -117,13 +118,19 @@ function ActivityRow({
   const control = useContext(ActivityPanelContext);
   const isOpen = control !== null && control.openKey === detail.key;
   const update = control?.update;
+  const pushedRefs = useRef<unknown[] | undefined>(undefined);
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) {
+      pushedRefs.current = undefined;
+      return;
+    }
+    // `detail` is rebuilt on every render; `refs` say when its data changed
+    // (a group's length varies, so they are compared rather than used as deps).
+    if (activityRefsChanged(pushedRefs.current, refs)) {
+      pushedRefs.current = refs;
       update?.(detail);
     }
-    // `detail` is rebuilt on every render; `refs` say when its data changed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, update, ...refs]);
+  });
 
   if (control === null) {
     return <>{children}</>;
@@ -858,9 +865,42 @@ function WebUiActivityGroup({
     part.type === 'tool_result' && callIds.has(part.callId) ? [part] : [],
   );
 
+  const groupCalls = group.items.flatMap(({part}, itemIndex) =>
+    part.type === 'tool_call' ? [{call: part, result: resultFor(part, itemIndex)}] : [],
+  );
+  const firstToolCallIndex = group.items.find(({part}) => part.type === 'tool_call')?.index;
+  const isGrouped = groupCalls.length >= 2;
+
   return (
     <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
       {group.items.map(({part, index}, itemIndex) => {
+        if (part.type === 'tool_call' && isGrouped) {
+          // Several calls share one summary row; the panel lists them all.
+          return index === firstToolCallIndex ? (
+            <Fragment key={`tool-calls-${index}`}>
+              <ActivityRow
+                detail={{
+                  key: toolGroupActivityKey(scope, index),
+                  kind: 'tools',
+                  items: groupCalls.map(({call, result}) => ({call, result, source})),
+                }}
+                refs={groupCalls.flatMap(({call, result}) => [call, result])}
+              >
+                <ChatToolCalls
+                  calls={groupCalls.map(({call, result}) => toolCallItem(call, result, rowWidthPx))}
+                  xstyle={styles.toolCallsFlush}
+                />
+              </ActivityRow>
+              {toolCallResults.some(hasToolResultImages) && (
+                <HStack gap={2} wrap="wrap" align="start">
+                  {toolCallResults.map(result => (
+                    <ToolResultImages key={result.callId} result={result} source={source} />
+                  ))}
+                </HStack>
+              )}
+            </Fragment>
+          ) : null;
+        }
         if (part.type === 'tool_call') {
           const result = resultFor(part, itemIndex);
           const item = toolCallItem(part, result, rowWidthPx);

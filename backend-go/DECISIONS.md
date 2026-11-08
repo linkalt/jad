@@ -2307,3 +2307,14 @@ T-106, frontend only. A reasoning or tool block no longer expands inline; it ope
 - **Inline images stay under the tool row** and are not repeated in the panel (the old inline expand did not show them either).
 - **`message.tools` (legacy `ChatToolCalls defaultIsExpanded` in `AssistantMessage`) and the run inspector's `ChatToolCalls` still expand inline.** They are not the transcript's reasoning/tool blocks from parts; changing them was out of scope.
 - **Several tool calls of one group are now separate rows** instead of Astryx's collapsible group summary, because the library's group header only toggles inline.
+
+## Multi-call tool group opens one panel (Go, 2026-05-20)
+
+T-107, frontend only. A tool group with two or more calls is one `ChatToolCalls` summary row again, and it opens an `ActivityDetail` of kind `tools` that lists every call. Its key is `toolGroupActivityKey(scope, firstPartIndex)`.
+
+### Left open
+
+- **`npm run build` was not run.** The repo rules forbid it for this agent; typecheck and `npm test` ran instead. Closing it needs someone to run the build.
+- **No live browser check** of the grouped row, the panel list, Escape, focus return or live updates while a group streams.
+- **The group key includes the message scope.** A group opened during streaming loses its link to the panel when the live message is committed under another scope (same limit as the reasoning block in T-106).
+- **A group of several calls whose results arrive after only one call has been seen** renders as a single-call row first, then switches to the group row. An open single-call panel is then keyed `tool-<callId>` and stops following the group.
