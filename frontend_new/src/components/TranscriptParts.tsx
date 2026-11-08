@@ -3,19 +3,29 @@ import {borderVars, colorVars, radiusVars, sizeVars, spacingVars, typeScaleVars}
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
 import {activityRefsChanged} from '../right-panel';
-import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart, type WebUiSubagentTranscript} from '../api';
+import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart} from '../api';
 import {type MessageRecord, type ReasoningStep, type TraceState} from '../app-types';
 import appConfig from '../config.json';
 import {cutRowText, oneLine, toolTitleBudgetPx} from '../row-text';
-import {completedSubagentSteps} from '../subagent-transcript';
 import {hasToolResultImages, toolResultText} from '../tool-result-view';
 import {hostedToolStatus} from '../web-search-view';
-import {hiddenWebUiStepIds, isWebUiPartHidden, visibleWebUiItems, webUiStepAtPartIndex} from '../web-ui-steps';
+import {
+  type WebUiActivityGroupPart,
+  type WebUiToolCall,
+  type WebUiToolResult,
+  groupWebUiParts,
+  segmentWebUiGroups,
+  webUiGroupIndex,
+  webUiGroupKey,
+} from '../web-ui-part-groups';
+import {hiddenWebUiStepIds, isWebUiPartHidden, visibleWebUiItems} from '../web-ui-steps';
 import {type ActivityDetail, ActivityPanelContext} from './activity-panel';
 import {CitationList} from './CitationList';
 import {MarkdownText} from './MarkdownText';
 import {InlineImages, StoredImages} from './StoredImages';
 import {type ScrollPositionSnapshot, captureScrollPosition, findScrollParent, holdAnchorPosition, revealScrollOptions} from './scroll-position';
+
+export type {WebUiContentPart} from '../web-ui-part-groups';
 
 const styles = stylex.create({
   // Reasoning rows and tool rows share one tight stack, so the group itself
@@ -172,6 +182,36 @@ function ActivityRow({
   );
 }
 
+/** The row of a reasoning block, without what opens it; null when there is nothing to show. */
+export function reasoningCallItem({
+  content,
+  steps,
+  rowWidthPx,
+  isStreaming,
+}: {
+  content: string;
+  steps: ReasoningStep[];
+  rowWidthPx: number;
+  isStreaming: boolean;
+}): ChatToolCallItem | null {
+  if (content.trim().length === 0 && steps.length === 0) {
+    return null;
+  }
+  const title = reasoningTitleText(
+    content ||
+      steps.find(step => step.status === 'running')?.detail ||
+      steps[0]?.detail ||
+      '',
+    toolTitleBudgetPx(rowWidthPx, REASONING_ROW_NAME),
+  );
+  return {
+    key: `reasoning-${title}-${steps.length}`,
+    name: REASONING_ROW_NAME,
+    status: isStreaming ? 'running' : 'complete',
+    target: title || undefined,
+  };
+}
+
 export function ReasoningBlock({
   steps,
   content = '',
@@ -190,25 +230,10 @@ export function ReasoningBlock({
   isFlush?: boolean;
   isStreaming?: boolean;
 }) {
-  const hasContent = content.trim().length > 0;
-  const hasSteps = steps.length > 0;
-  const title = reasoningTitleText(
-    content ||
-      steps.find(step => step.status === 'running')?.detail ||
-      steps[0]?.detail ||
-      '',
-    toolTitleBudgetPx(rowWidthPx, REASONING_ROW_NAME),
-  );
-  if (!hasContent && !hasSteps) {
+  const item = reasoningCallItem({content, steps, rowWidthPx, isStreaming});
+  if (item === null) {
     return null;
   }
-
-  const item: ChatToolCallItem = {
-    key: `reasoning-${title}-${steps.length}`,
-    name: REASONING_ROW_NAME,
-    status: isStreaming ? 'running' : 'complete',
-    target: title || undefined,
-  };
 
   return (
     <ActivityRow
@@ -279,10 +304,6 @@ export function ReasoningDetail({
     </VStack>
   );
 }
-
-type WebUiToolCall = Extract<WebUiPart, {type: 'tool_call'}>;
-
-type WebUiToolResult = Extract<WebUiPart, {type: 'tool_result'}>;
 
 function prettyToolArguments(argumentsText: string): string {
   try {
@@ -432,7 +453,7 @@ function truncatedSize(bytes: number): string {
  * A part the server cut for transport. The text continues on the server, and
  * the message carries the cursor that re-reads it whole.
  */
-function TruncatedNotice({
+export function TruncatedNotice({
   bytes,
   source,
 }: {
@@ -484,7 +505,7 @@ function toolCallStatus(result?: WebUiToolResult): 'running' | 'complete' | 'err
   return result.status === 'error' ? 'error' : 'complete';
 }
 
-function toolCallItem(
+export function toolCallItem(
   call: WebUiToolCall,
   result: WebUiToolResult | undefined,
   rowWidthPx: number,
@@ -510,10 +531,17 @@ export function ToolCallDetail({
   call,
   result,
   source,
+  children,
 }: {
   call: WebUiToolCall;
   result?: WebUiToolResult;
   source?: TruncatedSource;
+  /**
+   * Extra sections below the result. The host that shows the call in the right panel
+   * passes the subagent snapshot here; the inline detail of a read-only transcript
+   * passes nothing, so a snapshot never nests inside a snapshot.
+   */
+  children?: ReactNode;
 }) {
   return (
     <VStack gap={2} width="100%">
@@ -548,48 +576,7 @@ export function ToolCallDetail({
       {result?.truncated !== undefined && (
         <TruncatedNotice bytes={result.truncated.bytes} source={source} />
       )}
-      {result?.subagent !== undefined && <SubagentTranscript subagent={result.subagent} />}
-    </VStack>
-  );
-}
-
-/** The completed steps of a subagent run, below its tool result; a static snapshot. */
-function SubagentTranscript({subagent}: {subagent: WebUiSubagentTranscript}) {
-  const steps = completedSubagentSteps(subagent);
-  if (steps.length === 0) {
-    return null;
-  }
-  return (
-    <VStack gap={2} width="100%">
-      <Text type="supporting" color="secondary">
-        {subagent.agent ? `Subagent transcript · ${subagent.agent}` : 'Subagent transcript'}
-      </Text>
-      {steps.map(step => (
-        <VStack key={step.id} gap={1} width="100%">
-          {step.parts.map((part, index) => {
-            if (part.type === 'text') {
-              return (
-                <MarkdownText key={index} density="compact" contentWidth="100%" headingLevelStart={4}>
-                  {part.text}
-                </MarkdownText>
-              );
-            }
-            if (part.type === 'reasoning') {
-              return (
-                <Text key={index} type="supporting" color="secondary">{part.text}</Text>
-              );
-            }
-            if (part.type === 'tool_call') {
-              return (
-                <Text key={index} type="supporting" color="secondary">
-                  {`Tool: ${part.name}`}
-                </Text>
-              );
-            }
-            return null;
-          })}
-        </VStack>
-      ))}
+      {children}
     </VStack>
   );
 }
@@ -622,7 +609,7 @@ export function HostedToolDetail({
   );
 }
 
-function OrphanToolResultBlock({
+export function OrphanToolResultBlock({
   result,
   source,
 }: {
@@ -688,137 +675,6 @@ export function toolActivityForParts(
     }
   }
   return [...calls.values()];
-}
-
-type WebUiReasoningPart = Extract<WebUiPart, {type: 'reasoning'}>;
-
-export type WebUiContentPart = Extract<WebUiPart, {type: 'text'}>;
-
-type WebUiToolPart = WebUiToolCall | WebUiToolResult;
-
-type IndexedWebUiPart<T extends WebUiPart> = {part: T; index: number};
-
-type WebUiPartGroup =
-  | {
-      type: 'reasoning';
-      item: IndexedWebUiPart<WebUiReasoningPart>;
-    }
-  | {
-      type: 'tools';
-      items: IndexedWebUiPart<WebUiToolPart>[];
-    }
-  | {
-      type: 'hosted';
-      item: IndexedWebUiPart<WebUiHostedToolPart>;
-    }
-  | {
-      type: 'content';
-      item: IndexedWebUiPart<WebUiContentPart>;
-    };
-
-function isWebUiToolPart(part: WebUiPart): part is WebUiToolPart {
-  return part.type === 'tool_call' || part.type === 'tool_result';
-}
-
-function groupWebUiParts(
-  parts: WebUiPart[],
-  steps?: readonly WebUiMessageStep[],
-): WebUiPartGroup[] {
-  const groups: WebUiPartGroup[] = [];
-  // Group only adjacent tool parts; reasoning and text always flush the tool run.
-  let toolItems: IndexedWebUiPart<WebUiToolPart>[] = [];
-
-  const flushTools = () => {
-    if (toolItems.length > 0) {
-      groups.push({type: 'tools', items: toolItems});
-      toolItems = [];
-    }
-  };
-
-  parts.forEach((part, index) => {
-    if ((part.type === 'reasoning' || part.type === 'text') && part.text.trim().length === 0) {
-      return;
-    }
-    if (isWebUiToolPart(part)) {
-      const previousTool = toolItems[0];
-      if (
-        previousTool !== undefined &&
-        webUiStepAtPartIndex(steps, previousTool.index)?.id !==
-          webUiStepAtPartIndex(steps, index)?.id
-      ) {
-        flushTools();
-      }
-      toolItems.push({part, index});
-      return;
-    }
-
-    flushTools();
-    if (part.type === 'reasoning') {
-      groups.push({type: 'reasoning', item: {part, index}});
-      return;
-    }
-    if (part.type === 'hosted_tool') {
-      groups.push({type: 'hosted', item: {part, index}});
-      return;
-    }
-    groups.push({type: 'content', item: {part, index}});
-  });
-  flushTools();
-
-  return groups;
-}
-
-type WebUiActivityGroupPart = Extract<
-  WebUiPartGroup,
-  {type: 'reasoning' | 'tools' | 'hosted'}
->;
-
-type WebUiContentGroupPart = Extract<WebUiPartGroup, {type: 'content'}>;
-
-type IndexedWebUiActivityGroup = {group: WebUiActivityGroupPart; index: number};
-
-type WebUiSegment =
-  | {type: 'activity'; items: IndexedWebUiActivityGroup[]}
-  | {type: 'content'; item: {group: WebUiContentGroupPart; index: number}};
-
-function webUiGroupKey(group: WebUiPartGroup, index: number): string {
-  if (group.type === 'tools') {
-    return `tools-${group.items[0]?.index ?? index}`;
-  }
-  return `${group.type}-${group.item.index}`;
-}
-
-function webUiGroupIndex(group: WebUiPartGroup): number {
-  return group.type === 'tools' ? group.items[0]?.index ?? -1 : group.item.index;
-}
-
-/**
- * Reasoning rows and tool rows are the same Astryx call row, so consecutive
- * ones are laid out in a single tight stack: they keep the tool-to-tool row
- * rhythm instead of the wider block spacing used around Markdown text.
- */
-function segmentWebUiGroups(groups: WebUiPartGroup[]): WebUiSegment[] {
-  const segments: WebUiSegment[] = [];
-  let activity: IndexedWebUiActivityGroup[] = [];
-
-  const flushActivity = () => {
-    if (activity.length > 0) {
-      segments.push({type: 'activity', items: activity});
-      activity = [];
-    }
-  };
-
-  groups.forEach((group, index) => {
-    if (group.type === 'content') {
-      flushActivity();
-      segments.push({type: 'content', item: {group, index}});
-      return;
-    }
-    activity.push({group, index});
-  });
-  flushActivity();
-
-  return segments;
 }
 
 /**

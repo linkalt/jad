@@ -70,18 +70,37 @@ func TestSubagentToolResultCarriesTheChildsCompletedStepsLiveAndInTheServedSessi
 	if len(steps) != 2 {
 		t.Fatalf("snapshot steps = %d, want the child's 2 rounds: %v", len(steps), snapshot)
 	}
+	pairs := 0
 	for _, raw := range steps {
 		step := raw.(map[string]any)
 		if step["status"] != "completed" {
 			t.Fatalf("step status = %v, want completed", step["status"])
 		}
+		calls, results := map[any]bool{}, map[any]bool{}
 		for _, rawPart := range step["parts"].([]any) {
-			switch kind := rawPart.(map[string]any)["type"]; kind {
-			case "text", "reasoning", "tool_call":
+			part := rawPart.(map[string]any)
+			switch kind := part["type"]; kind {
+			case "text", "reasoning":
+			case "tool_call":
+				calls[part["callId"]] = true
+			case "tool_result":
+				results[part["callId"]] = true
 			default:
-				t.Fatalf("snapshot part type %v is not text, reasoning or tool_call", kind)
+				t.Fatalf("snapshot part type %v is not text, reasoning, tool_call or tool_result", kind)
+			}
+			if _, nested := part["subagent"]; nested {
+				t.Fatalf("a step part carries a nested snapshot: %v", part)
 			}
 		}
+		for callID := range calls {
+			if !results[callID] {
+				t.Fatalf("call %v of a completed step has no paired result: %v", callID, step)
+			}
+			pairs++
+		}
+	}
+	if pairs == 0 {
+		t.Fatalf("no call/result pair in the snapshot: %v", snapshot)
 	}
 	if !strings.Contains(string(served), "the answer is 42") {
 		t.Fatalf("the child's answer is missing from the served snapshot")

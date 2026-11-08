@@ -2,6 +2,8 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -151,7 +153,7 @@ func toolMessage(name, arguments, output string) Message {
 	}}
 }
 
-func TestSubagentBuilderKeepsCompletedStepsAsTextReasoningAndToolCalls(t *testing.T) {
+func TestSubagentBuilderKeepsCompletedStepsWithTheirPairedResults(t *testing.T) {
 	builder := NewSubagentBuilder("explore", SubagentLimits{})
 	lines := []string{
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"the task"}]}`,
@@ -172,14 +174,147 @@ func TestSubagentBuilderKeepsCompletedStepsAsTextReasoningAndToolCalls(t *testin
 	if first.ID != "1.1" || second.ID != "1.3" || first.Status != SubagentStepCompleted || second.Status != SubagentStepCompleted {
 		t.Fatalf("steps = %+v", snapshot.Steps)
 	}
-	if len(first.Parts) != 2 || first.Parts[0].Type != "reasoning" || first.Parts[0].Text != "thinking" || first.Parts[1].Type != "tool_call" || first.Parts[1].Name != "read" || *first.Parts[1].Arguments != `{"path":"a"}` {
-		t.Fatalf("first step parts = %+v (no tool_result, no hosted_tool)", first.Parts)
+	if len(first.Parts) != 3 || first.Parts[0].Type != "reasoning" || first.Parts[0].Text != "thinking" || first.Parts[1].Type != "tool_call" || first.Parts[1].Name != "read" || *first.Parts[1].Arguments != `{"path":"a"}` {
+		t.Fatalf("first step parts = %+v (reasoning, call, result; no hosted_tool)", first.Parts)
+	}
+	if result := first.Parts[2]; result.Type != "tool_result" || result.CallID != "k1" || result.Output != "big tool result" || result.Status != "unknown" {
+		t.Fatalf("the call's result must follow its step in the conversation's shape: %+v", result)
 	}
 	if len(second.Parts) != 1 || second.Parts[0].Text != "final" {
 		t.Fatalf("second step parts = %+v", second.Parts)
 	}
 	if NewSubagentBuilder("x", SubagentLimits{}).Snapshot() != nil {
 		t.Fatal("a builder that saw no step produced a snapshot")
+	}
+}
+
+func responseLine(step int, output string) []byte {
+	return []byte(fmt.Sprintf(`{"type":"response.completed","session_turn":1,"session_step":%d,"response":{"id":"r%d","output":[%s]}}`, step, step, output))
+}
+
+func callItem(id string) string {
+	return `{"type":"function_call","call_id":"` + id + `","name":"read","arguments":"{}"}`
+}
+
+func outputLine(id, output string) []byte {
+	raw, _ := json.Marshal(output)
+	return []byte(`{"type":"function_call_output","call_id":"` + id + `","output":` + string(raw) + `}`)
+}
+
+func addAll(builder *SubagentBuilder, lines ...[]byte) {
+	for index, line := range lines {
+		builder.Add(int64(index*1000), line)
+	}
+}
+
+func partTypes(parts []Part) string {
+	types := make([]string, len(parts))
+	for index, part := range parts {
+		types[index] = part.Type + ":" + part.CallID
+	}
+	return strings.Join(types, ",")
+}
+
+func TestSubagentBuilderPairsEachCallWithItsOwnResult(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{})
+	addAll(builder,
+		responseLine(1, callItem("a")+","+callItem("b")),
+		// Results may arrive in another order than the calls.
+		outputLine("b", "second"),
+		outputLine("a", "first"),
+		// A result of a call nobody made, and a second result of a paired call, are ignored.
+		outputLine("zzz", "stray"),
+		outputLine("a", "again"),
+		responseLine(2, `{"type":"message","content":[{"type":"output_text","text":"done"}]}`),
+	)
+	snapshot := builder.Snapshot()
+	if snapshot == nil || len(snapshot.Steps) != 2 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if got := partTypes(snapshot.Steps[0].Parts); got != "tool_call:a,tool_call:b,tool_result:b,tool_result:a" {
+		t.Fatalf("step 1 parts = %s", got)
+	}
+	if snapshot.Steps[0].Parts[2].Output != "second" || snapshot.Steps[0].Parts[3].Output != "first" {
+		t.Fatalf("results are not the ones of their calls: %+v", snapshot.Steps[0].Parts)
+	}
+}
+
+// A step is completed when its response is written and its calls have their results. The
+// last step of a child that is still running a tool is not reported, and nothing claims
+// it is complete.
+func TestSubagentBuilderLeavesOutAStepThatStillWaitsForAResult(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{})
+	addAll(builder,
+		responseLine(1, callItem("a")),
+		outputLine("a", "ok"),
+		responseLine(2, callItem("b")+","+callItem("c")),
+		outputLine("b", "half"),
+	)
+	snapshot := builder.Snapshot()
+	if snapshot == nil || len(snapshot.Steps) != 1 || snapshot.Steps[0].ID != "1.1" {
+		t.Fatalf("a running tool's step must not be reported: %+v", snapshot)
+	}
+	// Once the child moves on past it without a result (a lost record), the step is
+	// reported with the results it has: the child's own next response shows it finished.
+	addAll(builder, responseLine(3, `{"type":"message","content":[{"type":"output_text","text":"end"}]}`))
+	snapshot = builder.Snapshot()
+	if len(snapshot.Steps) != 3 || partTypes(snapshot.Steps[1].Parts) != "tool_call:b,tool_call:c,tool_result:b" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+// A tool output can quote the markers (the child read a file that mentions them); the
+// record's own type decides what a line is.
+func TestSubagentBuilderReadsRecordsByTypeNotByWordsInThem(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{})
+	addAll(builder,
+		responseLine(1, callItem("a")),
+		outputLine("a", `{"type":"response.completed"} function_call_output "message"`),
+		responseLine(2, `{"type":"message","content":[{"type":"output_text","text":"say function_call_output"}]}`),
+	)
+	snapshot := builder.Snapshot()
+	if snapshot == nil || len(snapshot.Steps) != 2 || len(snapshot.Steps[0].Parts) != 2 || !strings.Contains(snapshot.Steps[0].Parts[1].Output, "function_call_output") {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestSubagentBuilderCutsResultsAndDropsTheirImages(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{MaxResultBytes: 4, MaxTotalBytes: 1000})
+	addAll(builder,
+		responseLine(1, callItem("a")),
+		outputLine("a", "abcdefgh"),
+	)
+	result := builder.Snapshot().Steps[0].Parts[1]
+	if result.Output != "abcd" || result.Truncated == nil || result.Truncated.Bytes != 8 || result.Images != nil || result.InlineImages != 0 || result.Subagent != nil {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSubagentBuilderKeepsNoResultOfACallOverThePartLimit(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{MaxPartsPerStep: 1})
+	addAll(builder,
+		responseLine(1, callItem("a")+","+callItem("b")),
+		outputLine("b", "dropped with its call"),
+		outputLine("a", "kept"),
+	)
+	if got := partTypes(builder.Snapshot().Steps[0].Parts); got != "tool_call:a,tool_result:a" {
+		t.Fatalf("parts = %s", got)
+	}
+}
+
+func TestSubagentBuilderStopsWhenResultsUseTheByteBudget(t *testing.T) {
+	builder := NewSubagentBuilder("", SubagentLimits{MaxResultBytes: 100, MaxTotalBytes: 14})
+	addAll(builder,
+		responseLine(1, callItem("a")+","+callItem("b")),
+		outputLine("a", "0123456789"),
+		outputLine("b", "never fits"),
+	)
+	snapshot := builder.Snapshot()
+	if snapshot == nil || len(snapshot.Steps) != 1 || builder.Add(0, responseLine(2, callItem("c"))) {
+		t.Fatalf("the budget must end the snapshot: %+v", snapshot)
+	}
+	if got := partTypes(snapshot.Steps[0].Parts); got != "tool_call:a,tool_call:b,tool_result:a" {
+		t.Fatalf("parts = %s", got)
 	}
 }
 
@@ -252,6 +387,7 @@ func TestCapMessagesCutsSubagentTextAndKeepsTheSnapshotOtherwise(t *testing.T) {
 	snapshot := &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{
 		{Type: "text", Text: long},
 		{Type: "tool_call", CallID: "k", Name: "n", Arguments: &arguments},
+		{Type: "tool_result", CallID: "k", Output: long, Status: "success"},
 	}}}}
 	messages := []Message{{ID: "m", Sender: "assistant", Parts: []Part{{Type: "tool_result", CallID: "c", Output: "ok", Subagent: snapshot}}}}
 	cursor := int64(4)
@@ -262,6 +398,9 @@ func TestCapMessagesCutsSubagentTextAndKeepsTheSnapshotOtherwise(t *testing.T) {
 	}
 	if got := *cut.Steps[0].Parts[1].Arguments; len(got) > 3 || cut.Steps[0].Parts[1].Truncated == nil {
 		t.Fatalf("capped arguments = %q", got)
+	}
+	if result := cut.Steps[0].Parts[2]; len(result.Output) > 3 || result.Truncated == nil || result.Truncated.Bytes != len(long) || result.Status != "success" || snapshot.Steps[0].Parts[2].Output != long {
+		t.Fatalf("capped result = %+v", result)
 	}
 	if capped[0].Cursor == nil || *capped[0].Cursor != cursor {
 		t.Fatalf("a cut snapshot must give the message its cursor: %+v", capped[0].Cursor)

@@ -2,6 +2,7 @@ import {useEffect} from 'react';
 import type {ResizableRegion} from '@astryxdesign/core/Resizable';
 import {type ActivityDetail} from './activity-panel';
 import {FloatingPanel} from './FloatingPanel';
+import {SubagentTranscript} from './SubagentTranscript';
 import {HostedToolDetail, ReasoningDetail, ToolCallDetail} from './TranscriptParts';
 
 /**
@@ -52,7 +53,11 @@ export function ActivityPanel({
       onClose={onClose}
     >
       {detail.kind === 'reasoning' && <ReasoningDetail content={detail.content} steps={detail.steps} />}
-      {detail.kind === 'tool' && <ToolCallDetail call={detail.call} result={detail.result} source={detail.source} />}
+      {detail.kind === 'tool' && (
+        <ToolCallDetail call={detail.call} result={detail.result} source={detail.source}>
+          {detail.result?.subagent !== undefined && <SubagentTranscript subagent={detail.result.subagent} />}
+        </ToolCallDetail>
+      )}
       {detail.kind === 'hosted' && <HostedToolDetail part={detail.part} source={detail.source} />}
     </FloatingPanel>
   );

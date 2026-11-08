@@ -21,8 +21,11 @@ type SubagentSnapshot struct {
 	Steps []SubagentStep `json:"steps"`
 }
 
-// SubagentStep is one completed response of the child, as the parts of a message step
-// without tool results: text, reasoning and tool_call parts only.
+// SubagentStep is one completed step of the child, as the parts of a message step: text,
+// reasoning, tool_call and the tool_result of each kept call, in the shapes the
+// conversation uses, so a call and its result pair by call id. A step is completed when its
+// response.completed record is written and every call it kept has its result, or when the
+// child has moved on past it. Hosted-tool and nested subagent parts are never kept.
 type SubagentStep struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
@@ -34,17 +37,20 @@ type SubagentStep struct {
 type SubagentLimits struct {
 	// MaxSteps is the most steps a snapshot keeps; the first ones win.
 	MaxSteps int
-	// MaxPartsPerStep is the most parts one step keeps.
+	// MaxPartsPerStep is the most text, reasoning and tool_call parts one step keeps; the
+	// result of a kept call comes on top, so a step holds at most twice as many parts.
 	MaxPartsPerStep int
 	// MaxPartBytes cuts the text, reasoning or arguments of one part.
 	MaxPartBytes int
+	// MaxResultBytes cuts the output of one tool result.
+	MaxResultBytes int
 	// MaxTotalBytes bounds the text of the whole snapshot.
 	MaxTotalBytes int
 }
 
 // DefaultSubagentLimits is the bound a served snapshot has unless a caller sets another.
 func DefaultSubagentLimits() SubagentLimits {
-	return SubagentLimits{MaxSteps: 32, MaxPartsPerStep: 12, MaxPartBytes: 2048, MaxTotalBytes: 48 * 1024}
+	return SubagentLimits{MaxSteps: 32, MaxPartsPerStep: 12, MaxPartBytes: 2048, MaxResultBytes: 4096, MaxTotalBytes: 48 * 1024}
 }
 
 // SubagentCall identifies the child of one subagent tool result.
@@ -165,17 +171,32 @@ func AttachSubagents(messages []Message, lookup func(SubagentCall) *SubagentSnap
 	return result
 }
 
-var completedMarker = []byte("response.completed")
+var (
+	completedMarker = []byte("response.completed")
+	outputMarker    = []byte("function_call_output")
+	messageMarker   = []byte(`"message"`)
+)
 
 // SubagentBuilder builds a snapshot from the lines of a child's transcript, in file order.
-// The child writes its transcript with the writer a session uses, so each step is a
-// response.completed line normalized by NormalizeTranscript: grouping is the child's own
-// (one line is one step), and a line that is not a completed response adds nothing.
+// The child writes its transcript with the writer a session uses: a response.completed
+// line, then one function_call_output line per call it made. Each record is normalized by
+// NormalizeTranscript, so the parts are the conversation's own, and the grouping is the
+// child's: one response.completed line is one step, and the results that follow it join it.
 type SubagentBuilder struct {
 	limits   SubagentLimits
 	snapshot SubagentSnapshot
 	total    int
 	done     bool
+	// pending is the step whose response is written but whose calls still wait for a
+	// result; it joins the snapshot when the last result arrives, or when the child moves
+	// on without one. A child that is still running a tool leaves it unreported.
+	pending *pendingStep
+}
+
+type pendingStep struct {
+	step SubagentStep
+	// open holds the call ids of the step that have no result yet.
+	open map[string]bool
 }
 
 // NewSubagentBuilder starts a snapshot for agent. A limit of zero or less takes its default.
@@ -190,10 +211,25 @@ func NewSubagentBuilder(agent string, limits SubagentLimits) *SubagentBuilder {
 	if limits.MaxPartBytes <= 0 {
 		limits.MaxPartBytes = defaults.MaxPartBytes
 	}
+	if limits.MaxResultBytes <= 0 {
+		limits.MaxResultBytes = defaults.MaxResultBytes
+	}
 	if limits.MaxTotalBytes <= 0 {
 		limits.MaxTotalBytes = defaults.MaxTotalBytes
 	}
 	return &SubagentBuilder{limits: limits, snapshot: SubagentSnapshot{Agent: agent}}
+}
+
+// subagentHead is the part of a transcript record the builder reads before it normalizes it.
+type subagentHead struct {
+	Type        string `json:"type"`
+	Role        string `json:"role"`
+	CallID      string `json:"call_id"`
+	SessionTurn *int64 `json:"session_turn"`
+	SessionStep *int64 `json:"session_step"`
+	Response    struct {
+		Status string `json:"status"`
+	} `json:"response"`
 }
 
 // Add takes one complete line of the child's transcript and reports whether more lines
@@ -202,44 +238,110 @@ func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
 	if b.done {
 		return false
 	}
-	if !bytes.Contains(line, completedMarker) {
+	// The markers only decide whether a line is worth parsing; the record's own type decides
+	// what it is, since a tool output may well contain the words of a marker.
+	if !bytes.Contains(line, completedMarker) && !bytes.Contains(line, outputMarker) && !bytes.Contains(line, messageMarker) {
 		return true
 	}
-	var head struct {
-		Type        string `json:"type"`
-		SessionTurn *int64 `json:"session_turn"`
-		SessionStep *int64 `json:"session_step"`
-		Response    struct {
-			Status string `json:"status"`
-		} `json:"response"`
-	}
-	if json.Unmarshal(line, &head) != nil || head.Type != "response.completed" {
+	var head subagentHead
+	if json.Unmarshal(line, &head) != nil {
 		return true
+	}
+	switch {
+	case head.Type == "response.completed":
+		// The child has moved on, so a step still waiting for a result will not get one.
+		b.closePending()
+		b.addResponse(offset, line, head)
+	case head.Type == "function_call_output":
+		b.addResult(offset, line, head)
+	case head.Type == "message" && head.Role == "user":
+		b.closePending()
+	}
+	return !b.done
+}
+
+func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHead) {
+	if b.done {
+		return
 	}
 	// A response the provider reports as anything but completed is not a completed step.
 	if head.Response.Status != "" && head.Response.Status != "completed" {
-		return true
+		return
 	}
 	messages, err := NormalizeTranscript([]TranscriptRecord{{Offset: offset, Prefix: "o", Raw: line}})
 	if err != nil || len(messages) == 0 {
-		return true
+		return
 	}
 	parts := b.keep(messages[0].Parts)
 	if len(parts) == 0 {
-		return !b.done
+		return
 	}
 	id := strings.TrimPrefix(messages[0].ID, "session-assistant-")
 	if head.SessionTurn != nil && head.SessionStep != nil {
 		id = strconv.FormatInt(*head.SessionTurn, 10) + "." + strconv.FormatInt(*head.SessionStep, 10)
 	}
-	b.snapshot.Steps = append(b.snapshot.Steps, SubagentStep{ID: id, Status: SubagentStepCompleted, Parts: parts})
+	pending := &pendingStep{step: SubagentStep{ID: id, Status: SubagentStepCompleted, Parts: parts}, open: map[string]bool{}}
+	for _, part := range parts {
+		if part.Type == "tool_call" {
+			pending.open[part.CallID] = true
+		}
+	}
+	b.pending = pending
+	// A step with no call has nothing to wait for; so does one the byte budget cut short.
+	if len(pending.open) == 0 || b.done {
+		b.closePending()
+	}
+}
+
+// addResult pairs a function_call_output record with its call in the pending step. A
+// result of a call that was not kept, or that has been paired, is ignored.
+func (b *SubagentBuilder) addResult(offset int64, line []byte, head subagentHead) {
+	pending := b.pending
+	if pending == nil || !pending.open[head.CallID] {
+		return
+	}
+	remaining := b.limits.MaxTotalBytes - b.total
+	if remaining <= 0 {
+		b.done = true
+		b.closePending()
+		return
+	}
+	messages, err := NormalizeTranscript([]TranscriptRecord{{Offset: offset, Prefix: "o", Raw: line}})
+	if err != nil || len(messages) != 1 || len(messages[0].Parts) != 1 || messages[0].Parts[0].Type != "tool_result" {
+		return
+	}
+	read := messages[0].Parts[0]
+	limit := min(b.limits.MaxResultBytes, remaining)
+	output := cutUTF8(read.Output, limit)
+	// Images stay with the child's transcript: the browser fetches them by the parent's
+	// session, so they would not resolve there.
+	result := Part{Type: "tool_result", CallID: read.CallID, Output: output, Status: read.Status}
+	if len(output) < len(read.Output) {
+		result.Truncated = &PartTruncation{Bytes: len(read.Output)}
+	}
+	b.total += len(output)
+	pending.step.Parts = append(pending.step.Parts, result)
+	delete(pending.open, head.CallID)
+	if len(pending.open) == 0 {
+		b.closePending()
+	}
+}
+
+// closePending adds the pending step to the snapshot, with the results it has.
+func (b *SubagentBuilder) closePending() {
+	pending := b.pending
+	b.pending = nil
+	if pending == nil {
+		return
+	}
+	b.snapshot.Steps = append(b.snapshot.Steps, pending.step)
 	if len(b.snapshot.Steps) >= b.limits.MaxSteps {
 		b.done = true
 	}
-	return !b.done
 }
 
-// Snapshot is what the lines added so far completed, nil when no step was.
+// Snapshot is what the lines added so far completed, nil when no step was. A step whose
+// calls still wait for a result at the end of the lines is not completed and is left out.
 func (b *SubagentBuilder) Snapshot() *SubagentSnapshot {
 	if len(b.snapshot.Steps) == 0 {
 		return nil
@@ -248,8 +350,8 @@ func (b *SubagentBuilder) Snapshot() *SubagentSnapshot {
 	return &snapshot
 }
 
-// keep copies the renderable parts of one step within the limits: text, reasoning and
-// tool_call parts only, with nothing a tool result or a nested snapshot would add.
+// keep copies the renderable parts of one response within the limits: text, reasoning and
+// tool_call parts only; the results are added as their records arrive.
 func (b *SubagentBuilder) keep(parts []Part) []Part {
 	kept := make([]Part, 0, min(len(parts), b.limits.MaxPartsPerStep))
 	for _, part := range parts {
@@ -309,6 +411,8 @@ func capSubagent(snapshot *SubagentSnapshot, max int) (*SubagentSnapshot, bool) 
 					continue
 				}
 				value, set = *part.Arguments, func(text string) { part.Arguments = &text }
+			case "tool_result":
+				value, set = part.Output, func(text string) { part.Output = text }
 			default:
 				continue
 			}
