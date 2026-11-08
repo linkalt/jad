@@ -40,8 +40,3 @@ export function activityRefsChanged(previous: readonly unknown[] | undefined, ne
     next.some((value, index) => !Object.is(value, previous[index]))
   );
 }
-
-/** Stable panel key of a multi-call tool group: its scope and its first part's index. */
-export function toolGroupActivityKey(scope: string, firstPartIndex: number): string {
-  return `${scope}:tools:${firstPartIndex}`;
-}

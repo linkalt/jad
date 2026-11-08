@@ -1,8 +1,8 @@
 import {Badge, Button, Card, type ChatToolCallItem, ChatToolCalls, CodeBlock, HStack, Icon, StatusDot, type StatusDotVariant, Text, VStack} from '@astryxdesign/core';
 import {borderVars, colorVars, radiusVars, sizeVars, spacingVars, typeScaleVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
-import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState} from 'react';
-import {activityRefsChanged, toolGroupActivityKey} from '../right-panel';
+import {Fragment, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
+import {activityRefsChanged} from '../right-panel';
 import {type WebUiHostedToolPart, type WebUiMessageStep, type WebUiPart} from '../api';
 import {type MessageRecord, type ReasoningStep, type TraceState} from '../app-types';
 import appConfig from '../config.json';
@@ -778,6 +778,77 @@ function segmentWebUiGroups(groups: WebUiPartGroup[]): WebUiSegment[] {
   return segments;
 }
 
+/**
+ * The summary row of a tool group with several calls: the latest call, the call
+ * count and a chevron. Pressing it only expands or collapses the list of the
+ * group's calls; each call in the list is a row of its own that opens the panel.
+ * While the panel shows one of the group's calls the list stays expanded, so
+ * the row that opened the panel stays on screen. The expanded state is local, so
+ * calls streaming in neither collapse nor re-expand it.
+ */
+function ToolGroupRow({
+  calls,
+  rowWidthPx,
+  renderCall,
+}: {
+  calls: {call: WebUiToolCall; result: WebUiToolResult | undefined}[];
+  rowWidthPx: number;
+  renderCall: (call: WebUiToolCall, result: WebUiToolResult | undefined) => ReactNode;
+}) {
+  const control = useContext(ActivityPanelContext);
+  const [isToggled, setIsToggled] = useState(false);
+  const holdsOpenPanel =
+    control?.openKey !== undefined && calls.some(({call}) => control.openKey === `tool-${call.callId}`);
+  const isExpanded = isToggled || holdsOpenPanel;
+  const latest = calls[calls.length - 1];
+  const toggle = () => setIsToggled(!isExpanded);
+  const listId = useId();
+  return (
+    <VStack gap={1} width="100%">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-controls={listId}
+        onClick={toggle}
+        onKeyDown={event => {
+          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            toggle();
+          }
+        }}
+        {...stylex.props(styles.activityTrigger)}
+      >
+        <HStack gap={2} align="center" width="100%">
+          <div style={{flex: 1, minWidth: 0}}>
+            <ChatToolCalls
+              calls={[toolCallItem(latest.call, latest.result, rowWidthPx)]}
+              xstyle={styles.toolCallsFlush}
+            />
+          </div>
+          <HStack gap={1} align="center">
+            <Icon icon="wrench" size="xsm" color="inherit" />
+            <Text type="supporting">{calls.length}</Text>
+            <Icon
+              icon="chevronDown"
+              size="xsm"
+              color="inherit"
+              style={{transform: isExpanded ? 'rotate(180deg)' : undefined}}
+            />
+          </HStack>
+        </HStack>
+      </div>
+      <div id={listId} hidden={!isExpanded}>
+        {isExpanded && (
+          <VStack gap={1} width="100%">
+            {calls.map(({call, result}) => renderCall(call, result))}
+          </VStack>
+        )}
+      </div>
+    </VStack>
+  );
+}
+
 function WebUiActivityGroup({
   group,
   scope,
@@ -870,63 +941,59 @@ function WebUiActivityGroup({
   );
   const firstToolCallIndex = group.items.find(({part}) => part.type === 'tool_call')?.index;
   const isGrouped = groupCalls.length >= 2;
+  const images = toolCallResults.some(hasToolResultImages) && (
+    <HStack gap={2} wrap="wrap" align="start">
+      {toolCallResults.map(result => (
+        <ToolResultImages key={result.callId} result={result} source={source} />
+      ))}
+    </HStack>
+  );
+  const callRow = (
+    call: WebUiToolCall,
+    result: WebUiToolResult | undefined,
+  ) => {
+    const item = toolCallItem(call, result, rowWidthPx);
+    return (
+      <ActivityRow
+        key={`tool-call-${call.callId}`}
+        detail={{
+          key: item.key ?? `tool-${call.callId}`,
+          kind: 'tool',
+          name: call.name,
+          target: item.target,
+          call,
+          result,
+          source,
+        }}
+        refs={[call, result]}
+      >
+        <ChatToolCalls calls={[item]} xstyle={styles.toolCallsFlush} />
+      </ActivityRow>
+    );
+  };
 
   return (
     <VStack gap={1} width="100%" xstyle={styles.activityGroup}>
       {group.items.map(({part, index}, itemIndex) => {
         if (part.type === 'tool_call' && isGrouped) {
-          // Several calls share one summary row; the panel lists them all.
+          // Several calls share one expander row; each listed call is its own
+          // panel row, so the panel never shows a group.
           return index === firstToolCallIndex ? (
             <Fragment key={`tool-calls-${index}`}>
-              <ActivityRow
-                detail={{
-                  key: toolGroupActivityKey(scope, index),
-                  kind: 'tools',
-                  items: groupCalls.map(({call, result}) => ({call, result, source})),
-                }}
-                refs={groupCalls.flatMap(({call, result}) => [call, result])}
-              >
-                <ChatToolCalls
-                  calls={groupCalls.map(({call, result}) => toolCallItem(call, result, rowWidthPx))}
-                  xstyle={styles.toolCallsFlush}
-                />
-              </ActivityRow>
-              {toolCallResults.some(hasToolResultImages) && (
-                <HStack gap={2} wrap="wrap" align="start">
-                  {toolCallResults.map(result => (
-                    <ToolResultImages key={result.callId} result={result} source={source} />
-                  ))}
-                </HStack>
-              )}
+              <ToolGroupRow
+                calls={groupCalls}
+                rowWidthPx={rowWidthPx}
+                renderCall={callRow}
+              />
+              {images}
             </Fragment>
           ) : null;
         }
         if (part.type === 'tool_call') {
-          const result = resultFor(part, itemIndex);
-          const item = toolCallItem(part, result, rowWidthPx);
           return (
             <Fragment key={`tool-call-${index}`}>
-              <ActivityRow
-                detail={{
-                  key: item.key ?? `tool-${part.callId}`,
-                  kind: 'tool',
-                  name: part.name,
-                  target: item.target,
-                  call: part,
-                  result,
-                  source,
-                }}
-                refs={[part, result]}
-              >
-                <ChatToolCalls calls={[item]} xstyle={styles.toolCallsFlush} />
-              </ActivityRow>
-              {index === lastToolCallIndex && toolCallResults.some(hasToolResultImages) && (
-                <HStack gap={2} wrap="wrap" align="start">
-                  {toolCallResults.map(result => (
-                    <ToolResultImages key={result.callId} result={result} source={source} />
-                  ))}
-                </HStack>
-              )}
+              {callRow(part, resultFor(part, itemIndex))}
+              {index === lastToolCallIndex && images}
             </Fragment>
           );
         }

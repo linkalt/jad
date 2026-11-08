@@ -2318,3 +2318,14 @@ T-107, frontend only. A tool group with two or more calls is one `ChatToolCalls`
 - **No live browser check** of the grouped row, the panel list, Escape, focus return or live updates while a group streams.
 - **The group key includes the message scope.** A group opened during streaming loses its link to the panel when the live message is committed under another scope (same limit as the reasoning block in T-106).
 - **A group of several calls whose results arrive after only one call has been seen** renders as a single-call row first, then switches to the group row. An open single-call panel is then keyed `tool-<callId>` and stops following the group.
+
+## Tool group expands inline, each call opens its own panel (Go, 2026-05-20)
+
+T-108, frontend only; it replaces the grouped panel of T-107.
+
+- The panel shows one call, reasoning block or hosted tool, never a group.
+- A group of two or more calls is a `ToolGroupRow` expander. The row's expanded state is local to the row, so it survives calls streaming in. While the panel shows one of the group's calls, the group stays expanded; the row cannot be collapsed then.
+- `npm run build` was not run, because the repo rules forbid it.
+- The group header is built by hand: the latest call through `ChatToolCalls`, plus a wrench, the count and a chevron. It looks close to the old Astryx header but is not pixel-identical.
+- Nothing was checked in a real browser.
+- Orphan results and a group that grows from one call to two still switch row type, so the state of the first row is lost.

@@ -2,7 +2,6 @@ import {useEffect} from 'react';
 import type {ResizableRegion} from '@astryxdesign/core/Resizable';
 import {type ActivityDetail} from './activity-panel';
 import {FloatingPanel} from './FloatingPanel';
-import {VStack, Text} from '@astryxdesign/core';
 import {HostedToolDetail, ReasoningDetail, ToolCallDetail} from './TranscriptParts';
 
 /**
@@ -34,17 +33,13 @@ export function ActivityPanel({
   const title =
     detail.kind === 'reasoning'
       ? 'Reasoning'
-      : detail.kind === 'tools'
-        ? `${detail.items.length} tool calls`
-        : detail.name;
+      : detail.name;
   const subtitle =
     detail.kind === 'reasoning'
       ? detail.isStreaming
         ? 'In progress'
         : undefined
-      : detail.kind === 'tools'
-        ? undefined
-        : detail.target;
+      : detail.target;
   return (
     <FloatingPanel
       side="end"
@@ -58,16 +53,6 @@ export function ActivityPanel({
     >
       {detail.kind === 'reasoning' && <ReasoningDetail content={detail.content} steps={detail.steps} />}
       {detail.kind === 'tool' && <ToolCallDetail call={detail.call} result={detail.result} source={detail.source} />}
-      {detail.kind === 'tools' && (
-        <VStack gap={4} width="100%">
-          {detail.items.map(({call, result, source}) => (
-            <VStack key={call.callId} gap={2} width="100%">
-              <Text type="label" weight="semibold">{call.name}</Text>
-              <ToolCallDetail call={call} result={result} source={source} />
-            </VStack>
-          ))}
-        </VStack>
-      )}
       {detail.kind === 'hosted' && <HostedToolDetail part={detail.part} source={detail.source} />}
     </FloatingPanel>
   );
