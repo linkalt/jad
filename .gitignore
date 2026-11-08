@@ -28,3 +28,6 @@ backend-go/jad
 /backend-go/claude-auth
 /backend-go/jad2
 *.kate-swp
+MASTER.md
+EXECUTOR.md
+CODE_CONTEXT.md
