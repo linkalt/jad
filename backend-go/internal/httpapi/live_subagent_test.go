@@ -21,11 +21,11 @@ func (r *snapshotRunner) SubagentSnapshot(call webui.SubagentCall) *webui.Subage
 	return &webui.SubagentSnapshot{Agent: call.Agent, Steps: []webui.SubagentStep{{ID: "1.1", Status: "completed", Parts: []webui.Part{{Type: "text", Text: "child"}}}}}
 }
 
-// TestLiveSubagentResultCarriesTheSnapshotAndNoOtherToolDoes: the live publish asks the
+// TestLiveSubagentResultCarriesTheSummaryAndNoOtherToolDoes: the live publish asks the
 // run's session for the child's steps only for the subagent tool, found by the name of
 // the call the result belongs to; profile_message prints the same transcript line and
 // gets none, and a session that cannot snapshot publishes the result as it is.
-func TestLiveSubagentResultCarriesTheSnapshotAndNoOtherToolDoes(t *testing.T) {
+func TestLiveSubagentResultCarriesTheSummaryAndNoOtherToolDoes(t *testing.T) {
 	registry := newRunRegistry(time.Minute, 1<<30, 0)
 	run, err := registry.begin("key", "turn")
 	if err != nil {
@@ -50,14 +50,14 @@ func TestLiveSubagentResultCarriesTheSnapshotAndNoOtherToolDoes(t *testing.T) {
 	publishToolResult(run, streaming, emitter, item("unknown-call"), runner, nil)
 
 	final := published[len(published)-1]
-	bySnapshot := map[string]*webui.SubagentSnapshot{}
+	bySnapshot := map[string]*webui.SubagentSummary{}
 	for _, part := range final.Parts {
 		if part.Type == "tool_result" {
 			bySnapshot[part.CallID] = part.Subagent
 		}
 	}
-	if got := bySnapshot["sub"]; got == nil || got.Agent != "explore" || got.Steps[0].Status != "completed" {
-		t.Fatalf("subagent result snapshot = %+v", got)
+	if got := bySnapshot["sub"]; got == nil || *got != (webui.SubagentSummary{Agent: "explore", Steps: 1}) {
+		t.Fatalf("subagent result summary = %+v", got)
 	}
 	if bySnapshot["msg"] != nil || bySnapshot["sub2"] != nil || bySnapshot["unknown-call"] != nil {
 		t.Fatalf("snapshots on results that must have none: %+v", bySnapshot)

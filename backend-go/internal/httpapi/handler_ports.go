@@ -194,6 +194,15 @@ type MessageImages interface {
 	ReadMessageImage(ctx context.Context, reference, profile, messageID, callID string, index int, cursor *int64) (SessionImage, error)
 }
 
+// SessionSubagents is an optional extension that serves the completed steps of the child
+// behind one subagent tool call, found by the call id alone. The transcript payload carries
+// only a summary of the child (webui.SubagentSummary); a browser asks here when the user
+// opens it. The answer is the body of the route: {"subagent": webui.SubagentSnapshot}.
+// A call id with no child gives a *StatusError with code 404.
+type SessionSubagents interface {
+	ReadSubagentSnapshot(ctx context.Context, reference, profile, callID string) (json.RawMessage, error)
+}
+
 type CompactionResponse struct {
 	Compacted      bool            `json:"compacted"`
 	CompactedItems int             `json:"compacted_items"`

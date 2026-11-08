@@ -51,10 +51,10 @@ type Part struct {
 	Files     []string        `json:"files,omitempty"`
 	Partial   bool            `json:"partial,omitempty"`
 	Truncated *PartTruncation `json:"truncated,omitempty"`
-	// Subagent is the completed steps of the child a subagent tool_result came from. It is
-	// set only on a tool_result of the subagent tool, never changed once set, and shared
-	// between copies of the part (see SubagentSnapshot).
-	Subagent *SubagentSnapshot `json:"subagent,omitempty"`
+	// Subagent says how many completed steps the child a subagent tool_result came from
+	// had (see SubagentSummary); the steps themselves are fetched on demand. It is set
+	// only on a tool_result of the subagent tool and never changed once set.
+	Subagent *SubagentSummary `json:"subagent,omitempty"`
 }
 
 // Step describes the part range produced by one assistant response step.
@@ -160,12 +160,6 @@ func CapMessages(messages []Message, maxInlineBytes int, cursors map[string]int6
 					capped = capped || part.Truncated != nil
 				}
 				continue
-			}
-			if part.Type == "tool_result" && part.Subagent != nil {
-				if cut, ok := capSubagent(part.Subagent, maxInlineBytes); ok {
-					part.Subagent = cut
-					capped = true
-				}
 			}
 			switch part.Type {
 			case "text", "reasoning":
@@ -279,7 +273,7 @@ func partsEqual(a, b Part) bool {
 		stringsEqual(a.Images, b.Images) && a.InlineImages == b.InlineImages && stringsEqual(a.Files, b.Files) &&
 		a.Partial == b.Partial &&
 		(a.Truncated == b.Truncated || a.Truncated != nil && b.Truncated != nil && *a.Truncated == *b.Truncated) &&
-		subagentEqual(a.Subagent, b.Subagent)
+		(a.Subagent == b.Subagent || a.Subagent != nil && b.Subagent != nil && *a.Subagent == *b.Subagent)
 }
 
 func citationsEqual(a, b []Citation) bool {

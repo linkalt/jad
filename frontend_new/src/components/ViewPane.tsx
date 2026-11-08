@@ -744,6 +744,8 @@ export function ViewPane({
           region={panelRegion}
           isEdgeFixed={isPanelAtWindowEdge}
           onClose={closeActivity}
+          sessionRef={sessionRef}
+          profile={profile}
         />
       )}
       {panel === 'prompts' && (

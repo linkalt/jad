@@ -15,11 +15,16 @@ export function ActivityPanel({
   region,
   isEdgeFixed,
   onClose,
+  sessionRef,
+  profile,
 }: {
   detail: ActivityDetail;
   region: ResizableRegion;
   isEdgeFixed?: boolean;
   onClose: () => void;
+  /** The session on screen and its profile: a subagent transcript is read from there on demand. */
+  sessionRef?: string;
+  profile?: string;
 }) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -55,7 +60,15 @@ export function ActivityPanel({
       {detail.kind === 'reasoning' && <ReasoningDetail content={detail.content} steps={detail.steps} />}
       {detail.kind === 'tool' && (
         <ToolCallDetail call={detail.call} result={detail.result} source={detail.source}>
-          {detail.result?.subagent !== undefined && <SubagentTranscript key={detail.key} subagent={detail.result.subagent} />}
+          {detail.result?.subagent !== undefined && (
+            <SubagentTranscript
+              key={detail.key}
+              summary={detail.result.subagent}
+              sessionRef={sessionRef}
+              profile={profile}
+              callId={detail.call.callId}
+            />
+          )}
         </ToolCallDetail>
       )}
       {detail.kind === 'hosted' && <HostedToolDetail part={detail.part} source={detail.source} />}

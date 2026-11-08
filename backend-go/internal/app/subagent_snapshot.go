@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/webui"
@@ -99,8 +102,43 @@ func (r *Resolver) subagentSnapshot(ctx context.Context, config sessionfs.Sessio
 	return readSubagentSnapshot(ctx, config.NativeSubagent.StorageDir, call, defaultSubagentSnapshotLimits)
 }
 
-// attachSubagentSnapshots adds the snapshots to the subagent tool results of messages
-// that a snapshot or message route serves. Messages it does not change are returned as
+// ReadSubagentSnapshot answers the subagent route: the completed steps of the child behind
+// callID, as {"subagent": snapshot}, read now (a running child gives the steps it has
+// finished, none before its first). The child is found by the call id alone, in the session
+// profile's subagent storage; no folder is a 404, as is a session without storage.
+func (r *Resolver) ReadSubagentSnapshot(ctx context.Context, reference, profile, callID string) (json.RawMessage, error) {
+	if ctx == nil {
+		return nil, errors.New("subagent snapshot context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	location, err := sessionfs.Resolve(r.roots, reference)
+	if err != nil {
+		return nil, mapSessionError(err)
+	}
+	config, err := sessionfs.LoadSessionConfig(location, profile, "")
+	if err != nil {
+		return nil, mapSessionError(err)
+	}
+	notFound := &httpapi.StatusError{Code: 404, Message: "subagent transcript not found"}
+	if callID == "" || config.NativeSubagent == nil || config.NativeSubagent.StorageDir == "" {
+		return nil, notFound
+	}
+	snapshot, found := readSubagentSteps(ctx, config.NativeSubagent.StorageDir, webui.SubagentCall{CallID: callID}, defaultSubagentSnapshotLimits)
+	if !found {
+		return nil, notFound
+	}
+	if snapshot == nil {
+		snapshot = &webui.SubagentSnapshot{Steps: []webui.SubagentStep{}}
+	}
+	return json.Marshal(struct {
+		Subagent *webui.SubagentSnapshot `json:"subagent"`
+	}{Subagent: snapshot})
+}
+
+// attachSubagentSnapshots adds the summaries of the snapshots (agent and step count) to the
+// subagent tool results of messages that a snapshot or message route serves. Messages it does not change are returned as
 // they are; the others are copies, so a cached block is never edited. It is not part of
 // normalizing a transcript: the fork route and the inline image route normalize without
 // it and read no child transcript.
@@ -122,40 +160,54 @@ func (r boundRunner) SubagentSnapshot(call webui.SubagentCall) *webui.SubagentSn
 // readSubagentSnapshot reads the completed steps of the child behind call, from the cache
 // when the child's transcript is unchanged.
 func readSubagentSnapshot(ctx context.Context, root string, call webui.SubagentCall, limits subagentSnapshotLimits) *webui.SubagentSnapshot {
+	snapshot, _ := readSubagentSteps(ctx, root, call, limits)
+	return snapshot
+}
+
+// readSubagentSteps is readSubagentSnapshot that also says whether the child's transcript
+// was found: a found child with no completed step yet (or no transcript file yet) gives
+// (nil, true).
+func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall, limits subagentSnapshotLimits) (*webui.SubagentSnapshot, bool) {
 	key := root + "\x00" + call.CallID + "\x00" + call.Agent + "\x00" + call.Transcript
 	if cached, ok := subagentSnapshots.get(key); ok {
 		if cached.absent {
 			if info, err := os.Stat(root); err == nil && info.ModTime().Equal(cached.rootModTime) {
-				return nil
+				return nil, false
 			}
 		} else if info, err := os.Stat(cached.path); err == nil && info.Size() == cached.size && info.ModTime().Equal(cached.modTime) {
-			return cached.snapshot
+			return cached.snapshot, true
 		}
 	}
 	path := resolveSubagentTranscript(root, call)
 	if path == "" {
+		// A folder that exists without its messages.jsonl is a child that has not written
+		// yet. Creating the file does not change the storage directory's modification time,
+		// so remembering the call as absent would hide the child for good.
+		if subagentFolderFor(root, call.CallID) != "" {
+			return nil, true
+		}
 		if info, err := os.Stat(root); err == nil {
 			subagentSnapshots.put(key, subagentSnapshotEntry{absent: true, rootModTime: info.ModTime()}, limits.cacheEntries)
 		}
-		return nil
+		return nil, false
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return nil
+		return nil, false
 	}
 	builder := webui.NewSubagentBuilder(call.Agent, limits.steps)
 	err = native.ScanTranscriptLines(ctx, file, min(info.Size(), limits.maxScan), limits.maxLine, builder.Add)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	snapshot := builder.Snapshot()
 	subagentSnapshots.put(key, subagentSnapshotEntry{path: path, size: info.Size(), modTime: info.ModTime(), snapshot: snapshot}, limits.cacheEntries)
-	return snapshot
+	return snapshot, true
 }
 
 // resolveSubagentTranscript finds the messages.jsonl of a call's child, always inside

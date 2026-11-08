@@ -1,6 +1,7 @@
 /**
  * @file subagent-transcript.ts
- * @input A tool result's optional `subagent` snapshot
+ * @input A subagent transcript (the steps fetched on demand by the subagent route; the
+ *   tool result itself carries only a summary)
  * @output The completed steps worth showing below the result, and the read-only message
  *   they make
  * @position Used by components/SubagentTranscript.tsx

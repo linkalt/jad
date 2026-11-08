@@ -74,6 +74,7 @@
   "transcript_window_page_messages": 16,
   "message_step_window": 0,
   "message_step_window_page": 10,
+  "subagent_transcript_cache_entries": 16,
   "scroll_debug": false,
   "composer_desync_watch": true,
   "scroll_settle_frames": 16,

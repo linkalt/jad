@@ -248,10 +248,11 @@ func TestHistoryBlockCarriesSubagentSnapshotsOnlyForSubagentCalls(t *testing.T) 
 		t.Fatal(err)
 	}
 	snapshots, results := subagentSnapshotOf(t, response.Body)
-	if results != 2 || len(snapshots) != 1 || snapshots[0]["agent"] != "explore" || !strings.Contains(string(response.Body), "child said") {
+	if results != 2 || len(snapshots) != 1 || snapshots[0]["agent"] != "explore" || snapshots[0]["steps"] != float64(1) {
 		t.Fatalf("results = %d, snapshots = %v\n%s", results, snapshots, response.Body)
 	}
-	if strings.Contains(string(response.Body), "other profile said") {
+	// The payload carries the count, not the child's steps.
+	if strings.Contains(string(response.Body), "child said") || strings.Contains(string(response.Body), "other profile said") {
 		t.Fatalf("profile_message result carries a child transcript:\n%s", response.Body)
 	}
 	// Without subagent storage there is nothing to read and nothing fails.
@@ -262,5 +263,51 @@ func TestHistoryBlockCarriesSubagentSnapshotsOnlyForSubagentCalls(t *testing.T) 
 	}
 	if snapshots, _ := subagentSnapshotOf(t, response.Body); len(snapshots) != 0 {
 		t.Fatalf("snapshots without subagent storage: %v", snapshots)
+	}
+}
+
+// TestReadSubagentStepsSaysWhetherTheChildWasFound: the subagent route needs to tell a child
+// that has no completed step yet (found, 200 with no steps) from a call id with no child (404).
+func TestReadSubagentStepsSaysWhetherTheChildWasFound(t *testing.T) {
+	root := t.TempDir()
+	childFolder(t, root, "young-0a1b2c3d", childUserLine)
+	call := func(id string) webui.SubagentCall { return webui.SubagentCall{CallID: id} }
+	if snapshot, found := readSubagentSteps(context.Background(), root, call("young"), defaultSubagentSnapshotLimits); !found || snapshot != nil {
+		t.Fatalf("child with no step: %+v, found %v", snapshot, found)
+	}
+	if snapshot, found := readSubagentSteps(context.Background(), root, call("nobody"), defaultSubagentSnapshotLimits); found || snapshot != nil {
+		t.Fatalf("unknown call: %+v, found %v", snapshot, found)
+	}
+	// Still running: two steps written, the third line torn. The steps so far are served,
+	// and a read after the child wrote more sees them (the cache follows the file).
+	path := childFolder(t, root, "busy-0a1b2c3d", childUserLine+completedLine(1, 1, "a")+completedLine(1, 2, "b")+`{"type":"response.compl`)
+	snapshot, found := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits)
+	if !found || snapshot == nil || len(snapshot.Steps) != 2 || snapshot.Agent != "" {
+		t.Fatalf("running child: %+v, found %v", snapshot, found)
+	}
+	if err := os.WriteFile(path, []byte(childUserLine+completedLine(1, 1, "a")+completedLine(1, 2, "b")+completedLine(1, 3, "c")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, _ := readSubagentSteps(context.Background(), root, call("busy"), defaultSubagentSnapshotLimits); snapshot == nil || len(snapshot.Steps) != 3 {
+		t.Fatalf("after the child wrote more: %+v", snapshot)
+	}
+}
+
+// TestChildFolderWithoutItsTranscriptYetIsNotRememberedAsAbsent: a running child creates its
+// folder before its messages.jsonl, and creating the file does not touch the storage
+// directory's modification time, so a miss in between must not be cached.
+func TestChildFolderWithoutItsTranscriptYetIsNotRememberedAsAbsent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "early-0a1b2c3d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	call := webui.SubagentCall{CallID: "early"}
+	if snapshot, found := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits); !found || snapshot != nil {
+		t.Fatalf("folder without transcript: %+v, found %v", snapshot, found)
+	}
+	childFolder(t, root, "early-0a1b2c3d", childUserLine+completedLine(1, 1, "now"))
+	snapshot, found := readSubagentSteps(context.Background(), root, call, defaultSubagentSnapshotLimits)
+	if !found || snapshot == nil || snapshotText(snapshot) != "now" {
+		t.Fatalf("after the transcript appeared: %+v, found %v", snapshot, found)
 	}
 }

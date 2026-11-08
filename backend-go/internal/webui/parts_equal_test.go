@@ -47,14 +47,11 @@ func partVariants() []Part {
 		{Truncated: &PartTruncation{Bytes: 5}},
 		{Truncated: &PartTruncation{Bytes: 5}},
 		{Type: "tool_call", CallID: "c", Name: "n", Arguments: str("{"), Partial: true},
-		{Subagent: &SubagentSnapshot{}},
-		{Subagent: &SubagentSnapshot{Steps: []SubagentStep{}}},
-		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}},
-		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}},
-		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{{Type: "text", Text: "y"}}}}}},
-		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "completed", Parts: []Part{}}}}},
-		{Subagent: &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1", Status: "running"}}}},
-		{Subagent: &SubagentSnapshot{Agent: "b", Steps: []SubagentStep{{ID: "1", Status: "running"}}}},
+		{Subagent: &SubagentSummary{}},
+		{Subagent: &SubagentSummary{Agent: "a", Steps: 2}},
+		{Subagent: &SubagentSummary{Agent: "a", Steps: 2}},
+		{Subagent: &SubagentSummary{Agent: "a", Steps: 3}},
+		{Subagent: &SubagentSummary{Agent: "b", Steps: 2}},
 	}
 }
 

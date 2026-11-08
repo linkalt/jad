@@ -90,8 +90,11 @@ export interface WebUiToolResultPart {
   images?: string[];
   /** How many images of this result are still inline in the transcript; fetch them with `fetchMessageImage`. */
   inlineImages?: number;
-  /** Optional one-shot snapshot of the subagent run this result came from. */
-  subagent?: WebUiSubagentTranscript;
+  /**
+   * Optional summary of the subagent run this result came from. It holds no step: the
+   * steps are read once, on demand, with `fetchSubagentTranscript`.
+   */
+  subagent?: WebUiSubagentSummary;
   truncated?: WebUiPartTruncation;
 }
 
@@ -102,6 +105,13 @@ export interface WebUiSubagentStep {
   parts: WebUiPart[];
 }
 
+/** What a tool result says of its subagent run: the agent and how many steps it had completed. */
+export interface WebUiSubagentSummary {
+  agent?: string;
+  steps: number;
+}
+
+/** The completed steps of one subagent run, as `fetchSubagentTranscript` returns them. */
 export interface WebUiSubagentTranscript {
   agent?: string;
   steps: WebUiSubagentStep[];
@@ -560,6 +570,35 @@ export async function fetchSessionMessage(
     throw new Error('the server returned an invalid message');
   }
   return value.message as unknown as WebUiMessage;
+}
+
+/**
+ * The completed steps of the child behind one subagent tool call, read when the user opens
+ * the transcript (a tool result carries only a summary). A child that is still running
+ * gives the steps it has completed so far. The answer is checked here: a body that is not
+ * a well-formed transcript is an error, so the caller shows a retry instead of a broken view.
+ */
+export async function fetchSubagentTranscript(
+  sessionId: string,
+  callId: string,
+  profile?: string,
+  signal?: AbortSignal,
+): Promise<WebUiSubagentTranscript> {
+  const response = await authenticatedFetch(
+    apiUrl(
+      `/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(callId)}${profileQuery(profile)}`,
+    ),
+    signal === undefined ? {} : {signal},
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const value: unknown = await response.json();
+  const transcript = isRecord(value) ? validSubagentTranscript(value.subagent) : undefined;
+  if (transcript === undefined) {
+    throw new Error('the server returned an invalid subagent transcript');
+  }
+  return transcript;
 }
 
 export type RootLibraryKind = 'prompt' | 'template' | 'skill';
@@ -1550,9 +1589,28 @@ function isWebUiSubagentTranscript(value: unknown): value is WebUiSubagentTransc
   );
 }
 
+function isWebUiSubagentSummary(value: unknown): value is WebUiSubagentSummary {
+  return (
+    isRecord(value) &&
+    (value.agent === undefined || typeof value.agent === 'string') &&
+    typeof value.steps === 'number' &&
+    Number.isInteger(value.steps) &&
+    value.steps >= 1
+  );
+}
+
 /**
- * The subagent snapshot of a tool result when it is well formed, otherwise `undefined`.
- * Snapshots and history are not validated as a whole, so the renderer checks it too.
+ * The subagent summary of a tool result when it is well formed, otherwise `undefined`.
+ * Snapshots and history are not validated as a whole, so the renderer checks it too; it
+ * is three field reads, so a closed transcript still costs nothing worth measuring.
+ */
+export function validSubagentSummary(value: unknown): WebUiSubagentSummary | undefined {
+  return isWebUiSubagentSummary(value) ? value : undefined;
+}
+
+/**
+ * The steps of a subagent run when they are well formed, otherwise `undefined`. They come
+ * from `fetchSubagentTranscript` and are checked again where they are mapped.
  */
 export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript | undefined {
   return isWebUiSubagentTranscript(value) ? value : undefined;
@@ -1595,8 +1653,8 @@ function isWebUiPart(value: unknown): value is WebUiPart {
     );
   }
   if (value.type === 'tool_result') {
-    // The snapshot is optional extra data: a malformed one is dropped and the result stays.
-    if (value.subagent !== undefined && !isWebUiSubagentTranscript(value.subagent)) {
+    // The summary is optional extra data: a malformed one is dropped and the result stays.
+    if (value.subagent !== undefined && !isWebUiSubagentSummary(value.subagent)) {
       delete value.subagent;
     }
     return (

@@ -21,6 +21,24 @@ type SubagentSnapshot struct {
 	Steps []SubagentStep `json:"steps"`
 }
 
+// SubagentSummary is what a tool result carries of its child: the agent and how many
+// completed steps the child had when the result was served. It holds no step, so the
+// payload of a transcript does not grow with its children; the steps are read on demand
+// from the subagent route (a SubagentSnapshot). A holder never edits it after it is set.
+type SubagentSummary struct {
+	Agent string `json:"agent,omitempty"`
+	Steps int    `json:"steps"`
+}
+
+// Summary is the descriptor of a snapshot, nil for a missing or empty one, so a result
+// without a child to show stays as it is.
+func (s *SubagentSnapshot) Summary() *SubagentSummary {
+	if s == nil || len(s.Steps) == 0 {
+		return nil
+	}
+	return &SubagentSummary{Agent: s.Agent, Steps: len(s.Steps)}
+}
+
 // SubagentStep is one completed step of the child, as the parts of a message step: text,
 // reasoning, tool_call and the tool_result of each kept call, in the shapes the
 // conversation uses, so a call and its result pair by call id. A step is completed when its
@@ -116,8 +134,8 @@ func subagentInformation(output string) (agent, transcript string) {
 	return agent, transcript
 }
 
-// AttachSubagents sets Subagent on the tool results of subagent calls, as lookup answers
-// them (nil leaves the part as it is). It never edits messages or parts it was given: a
+// AttachSubagents sets Subagent, the summary of the snapshot lookup answers, on the tool
+// results of subagent calls (nil leaves the part as it is). It never edits messages or parts it was given: a
 // message that gains a snapshot is copied. Call it only where a snapshot is served; it
 // reads nothing but what lookup reads.
 func AttachSubagents(messages []Message, lookup func(SubagentCall) *SubagentSnapshot) []Message {
@@ -149,14 +167,14 @@ func AttachSubagents(messages []Message, lookup func(SubagentCall) *SubagentSnap
 			if !ok {
 				continue
 			}
-			snapshot := lookup(call)
-			if snapshot == nil {
+			summary := lookup(call).Summary()
+			if summary == nil {
 				continue
 			}
 			if parts == nil {
 				parts = append([]Part(nil), message.Parts...)
 			}
-			parts[partIndex].Subagent = snapshot
+			parts[partIndex].Subagent = summary
 		}
 		if parts == nil {
 			continue
@@ -390,85 +408,4 @@ func (b *SubagentBuilder) keep(parts []Part) []Part {
 		}
 	}
 	return kept
-}
-
-// capSubagent cuts the text of a snapshot's parts to max bytes, as CapMessages cuts the
-// parts of a message. It returns the same snapshot when nothing is over max, and a copy
-// otherwise: the snapshot is shared and never edited.
-func capSubagent(snapshot *SubagentSnapshot, max int) (*SubagentSnapshot, bool) {
-	var steps []SubagentStep
-	for stepIndex, step := range snapshot.Steps {
-		var parts []Part
-		for partIndex := range step.Parts {
-			part := step.Parts[partIndex]
-			var value string
-			var set func(string)
-			switch part.Type {
-			case "text", "reasoning":
-				value, set = part.Text, func(text string) { part.Text = text }
-			case "tool_call":
-				if part.Arguments == nil {
-					continue
-				}
-				value, set = *part.Arguments, func(text string) { part.Arguments = &text }
-			case "tool_result":
-				value, set = part.Output, func(text string) { part.Output = text }
-			default:
-				continue
-			}
-			if len(value) <= max {
-				continue
-			}
-			full := len(value)
-			if part.Truncated != nil && part.Truncated.Bytes > full {
-				full = part.Truncated.Bytes
-			}
-			set(cutUTF8(value, max))
-			part.Truncated = &PartTruncation{Bytes: full}
-			if parts == nil {
-				parts = append([]Part(nil), step.Parts...)
-			}
-			parts[partIndex] = part
-		}
-		if parts == nil {
-			continue
-		}
-		if steps == nil {
-			steps = append([]SubagentStep(nil), snapshot.Steps...)
-		}
-		steps[stepIndex].Parts = parts
-	}
-	if steps == nil {
-		return snapshot, false
-	}
-	return &SubagentSnapshot{Agent: snapshot.Agent, Steps: steps}, true
-}
-
-// subagentEqual matches reflect.DeepEqual on a snapshot pointer, like partsEqual does for a part.
-func subagentEqual(a, b *SubagentSnapshot) bool {
-	if a == b {
-		return true
-	}
-	if a == nil || b == nil || a.Agent != b.Agent || (a.Steps == nil) != (b.Steps == nil) || len(a.Steps) != len(b.Steps) {
-		return false
-	}
-	for index := range a.Steps {
-		x, y := a.Steps[index], b.Steps[index]
-		if x.ID != y.ID || x.Status != y.Status || !partListEqual(x.Parts, y.Parts) {
-			return false
-		}
-	}
-	return true
-}
-
-func partListEqual(a, b []Part) bool {
-	if (a == nil) != (b == nil) || len(a) != len(b) {
-		return false
-	}
-	for index := range a {
-		if !partsEqual(a[index], b[index]) {
-			return false
-		}
-	}
-	return true
 }

@@ -358,8 +358,13 @@ func TestAttachSubagentsOnlyTouchesSubagentToolResults(t *testing.T) {
 		{ID: "orphan", Parts: []Part{{Type: "tool_result", CallID: "c1", Output: output}}},
 	}
 	attached := AttachSubagents(messages, lookup)
-	if attached[0].Parts[1].Subagent != snapshot || attached[1].Parts[1].Subagent != snapshot {
-		t.Fatalf("subagent results got no snapshot: %+v %+v", attached[0].Parts[1], attached[1].Parts[1])
+	// A result carries the summary (agent and step count), never the steps.
+	want := SubagentSummary{Agent: "explore", Steps: 1}
+	if got := attached[0].Parts[1].Subagent; got == nil || *got != want {
+		t.Fatalf("subagent result summary = %+v, want %+v", got, want)
+	}
+	if got := attached[1].Parts[1].Subagent; got == nil || *got != want {
+		t.Fatalf("subagent result summary = %+v, want %+v", got, want)
 	}
 	for _, index := range []int{2, 3, 4} {
 		for _, part := range attached[index].Parts {
@@ -381,52 +386,48 @@ func TestAttachSubagentsOnlyTouchesSubagentToolResults(t *testing.T) {
 	}
 }
 
-func TestCapMessagesCutsSubagentTextAndKeepsTheSnapshotOtherwise(t *testing.T) {
-	long := "é🙂xyz"
-	arguments := "{\"a\":\"" + long + "\"}"
-	snapshot := &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{
-		{Type: "text", Text: long},
-		{Type: "tool_call", CallID: "k", Name: "n", Arguments: &arguments},
-		{Type: "tool_result", CallID: "k", Output: long, Status: "success"},
-	}}}}
-	messages := []Message{{ID: "m", Sender: "assistant", Parts: []Part{{Type: "tool_result", CallID: "c", Output: "ok", Subagent: snapshot}}}}
-	cursor := int64(4)
-	capped := CapMessages(messages, 3, map[string]int64{"m": cursor})
-	cut := capped[0].Parts[0].Subagent
-	if cut == snapshot || cut.Agent != "a" || cut.Steps[0].Parts[0].Text != "é" || cut.Steps[0].Parts[0].Truncated == nil || cut.Steps[0].Parts[0].Truncated.Bytes != len(long) {
-		t.Fatalf("capped snapshot = %+v", cut)
+func TestSubagentSummaryIsTheAgentAndTheStepCountOnly(t *testing.T) {
+	var none *SubagentSnapshot
+	if none.Summary() != nil || (&SubagentSnapshot{Agent: "a"}).Summary() != nil {
+		t.Fatal("a missing or empty snapshot has a summary")
 	}
-	if got := *cut.Steps[0].Parts[1].Arguments; len(got) > 3 || cut.Steps[0].Parts[1].Truncated == nil {
-		t.Fatalf("capped arguments = %q", got)
+	snapshot := &SubagentSnapshot{Agent: "a", Steps: []SubagentStep{
+		{ID: "1.1", Status: "completed", Parts: []Part{{Type: "text", Text: "secret step text"}}},
+		{ID: "1.2", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}},
+	}}
+	encoded, err := json.Marshal(Part{Type: "tool_result", CallID: "c", Output: "ok", Subagent: snapshot.Summary()})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result := cut.Steps[0].Parts[2]; len(result.Output) > 3 || result.Truncated == nil || result.Truncated.Bytes != len(long) || result.Status != "success" || snapshot.Steps[0].Parts[2].Output != long {
-		t.Fatalf("capped result = %+v", result)
+	if !strings.Contains(string(encoded), `"subagent":{"agent":"a","steps":2}`) || strings.Contains(string(encoded), "secret step text") {
+		t.Fatalf("encoded part = %s", encoded)
 	}
-	if capped[0].Cursor == nil || *capped[0].Cursor != cursor {
-		t.Fatalf("a cut snapshot must give the message its cursor: %+v", capped[0].Cursor)
+	encoded, _ = json.Marshal(Part{Type: "tool_result", Subagent: (&SubagentSnapshot{Steps: snapshot.Steps[:1]}).Summary()})
+	if !strings.Contains(string(encoded), `"subagent":{"steps":1}`) {
+		t.Fatalf("unnamed agent: %s", encoded)
 	}
-	// The shared snapshot itself is untouched.
-	if snapshot.Steps[0].Parts[0].Text != long || snapshot.Steps[0].Parts[0].Truncated != nil {
-		t.Fatalf("CapMessages edited the shared snapshot: %+v", snapshot)
-	}
-	// Under the cap, or with no cap, the very same snapshot is served.
-	for _, limit := range []int{0, 1 << 20} {
-		if got := CapMessages(messages, limit, nil)[0].Parts[0].Subagent; got != snapshot {
-			t.Fatalf("limit %d replaced the snapshot", limit)
+}
+
+func TestCapMessagesLeavesTheSubagentSummaryAlone(t *testing.T) {
+	summary := &SubagentSummary{Agent: "a", Steps: 3}
+	messages := []Message{{ID: "m", Sender: "assistant", Parts: []Part{{Type: "tool_result", CallID: "c", Output: "ok", Subagent: summary}}}}
+	for _, limit := range []int{0, 1, 1 << 20} {
+		if got := CapMessages(messages, limit, nil)[0].Parts[0].Subagent; got != summary {
+			t.Fatalf("limit %d replaced the summary: %+v", limit, got)
 		}
 	}
 }
 
-func TestIncrementsReportsAChangedSubagentSnapshot(t *testing.T) {
+func TestIncrementsReportsAChangedSubagentSummary(t *testing.T) {
 	part := Part{Type: "tool_result", CallID: "c", Output: "ok"}
 	with := part
-	with.Subagent = &SubagentSnapshot{Steps: []SubagentStep{{ID: "1.1", Status: "completed", Parts: []Part{{Type: "text", Text: "x"}}}}}
+	with.Subagent = &SubagentSummary{Steps: 1}
 	events := Increments(Message{ID: "m", Parts: []Part{part}}, Message{ID: "m", Parts: []Part{with}})
 	if len(events) != 1 || events[0].Name != "ui.part" {
-		t.Fatalf("events = %+v, want one ui.part for the part that gained a snapshot", events)
+		t.Fatalf("events = %+v, want one ui.part for the part that gained a summary", events)
 	}
 	if events := Increments(Message{ID: "m", Parts: []Part{with}}, Message{ID: "m", Parts: []Part{with}}); len(events) != 0 {
-		t.Fatalf("an unchanged snapshot produced %+v", events)
+		t.Fatalf("an unchanged summary produced %+v", events)
 	}
 }
 

@@ -123,6 +123,7 @@ type Handler struct {
 	catalogSessions           CatalogSessions
 	images                    SessionImages
 	messageImages             MessageImages
+	subagents                 SessionSubagents
 	maintenance               SessionMaintenance
 	library                   RootLibrary
 	tokenHash                 [sha256.Size]byte
@@ -259,6 +260,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	catalogSessions, _ := resolver.(CatalogSessions)
 	images, _ := resolver.(SessionImages)
 	messageImages, _ := resolver.(MessageImages)
+	subagents, _ := resolver.(SessionSubagents)
 	maintenance, _ := resolver.(SessionMaintenance)
 	gate := newSessionGate(resolver)
 	trace := config.MemoryTrace
@@ -270,6 +272,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		resolver:                  resolver,
 		images:                    images,
 		messageImages:             messageImages,
+		subagents:                 subagents,
 		catalog:                   catalog,
 		toolLister:                toolLister,
 		mcpPrompts:                mcpPrompts,
@@ -406,6 +409,8 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 		h.handleSessionMessage(w, r, reference, segments[4], profile)
 	case r.Method == http.MethodGet && len(segments) == 8 && segments[3] == "messages" && segments[5] == "images":
 		h.handleMessageImage(w, r, reference, profile, segments[4], segments[6], segments[7])
+	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "subagents":
+		h.handleSubagent(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 5 && segments[3] == "images":
 		h.handleSessionImage(w, r, reference, profile, segments[4])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[3] == "mcp-prompts":
