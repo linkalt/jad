@@ -169,7 +169,8 @@ type Tool struct {
 	// it runs: the target as the model named it (a model-facing name or an ID), and the
 	// arguments for it. ok is false for a call that runs nothing (a list or a describe, or
 	// arguments that are not a run). It is a pure parse: it checks nothing against the
-	// catalog. The catalog judges a delegating call as its target (ResolveCall), and the
+	// catalog. The catalog judges a delegating call as its target when the target can be lazy
+	// (ResolveCall; a run naming a native tool runs nothing and is judged as the runner), and the
 	// event hooks of a delegating call are the target's, not the runner's.
 	Delegate           func(arguments map[string]any) (target string, targetArguments map[string]any, ok bool)
 	NormalizeArguments func(map[string]any) map[string]any
@@ -272,24 +273,6 @@ func (c *Catalog) Definitions() []Definition {
 	return definitions
 }
 
-// ListedDefinitions returns the provider definitions of the tools that are listed now, in the
-// registry's stable order: the same tools ResponseTools sends the model.
-func (c *Catalog) ListedDefinitions() []Definition {
-	if c == nil {
-		return []Definition{}
-	}
-	definitions := make([]Definition, 0, len(c.tools))
-	for _, tool := range c.tools {
-		if tool.Listed != nil && !tool.Listed() {
-			continue
-		}
-		definition := tool.Definition
-		definition.InputSchema = append(json.RawMessage(nil), definition.InputSchema...)
-		definitions = append(definitions, definition)
-	}
-	return definitions
-}
-
 // RouteDefinition is one row of the tools route: a definition, and whether the tool is lazy. A
 // lazy tool is not in the tools array the model sees; the route lists it so a client can show it.
 type RouteDefinition struct {
@@ -298,8 +281,8 @@ type RouteDefinition struct {
 }
 
 // RouteDefinitions returns the rows of the tools route, in the registry's stable order: the tools
-// that are listed now, as ListedDefinitions, and the lazy ones, marked lazy. It never changes what
-// ListedDefinitions or ResponseTools return.
+// that are listed now (the ones ResponseTools sends the model), and the lazy ones, marked lazy. It
+// never changes what ResponseTools returns.
 func (c *Catalog) RouteDefinitions() []RouteDefinition {
 	if c == nil {
 		return []RouteDefinition{}
@@ -377,10 +360,12 @@ func (c *Catalog) Has(name string) bool {
 
 // ResolveCall returns the call a runner tool's call stands for: the same call_id, the target
 // tool's name and its arguments, for a call of a tool with a Delegate that delegates to a tool of
-// this catalog (by name or by ID). Any other call comes back unchanged, and so does a call whose
-// target is not in the catalog or is itself a runner, so a call is resolved at most once.
-// The judgments below ask about the resolved call, so a run of exec takes the checkpoint like a
-// call of exec, and a run of an MCP tool is judged as that tool.
+// this catalog (by name or by ID) that can be lazy (CanBeLazy: an MCP or an extension tool). Any
+// other call comes back unchanged: a call whose target is not in the catalog, is itself a runner,
+// or is a native tool. The runner (load_tool) runs only a lazy tool, so a run that names a native
+// tool runs nothing and is judged as the runner itself. A call is resolved at most once.
+// The judgments below ask about the resolved call, so a run of an MCP tool takes the checkpoint,
+// the scheduling and the image source of that tool.
 func (c *Catalog) ResolveCall(call json.RawMessage) json.RawMessage {
 	if c == nil || !c.delegating {
 		return call
@@ -417,7 +402,7 @@ func (c *Catalog) ResolveCall(call json.RawMessage) json.RawMessage {
 		return call
 	}
 	resolved, found := c.byTarget(target)
-	if !found || resolved.Delegate != nil {
+	if !found || resolved.Delegate != nil || !CanBeLazy(resolved.Definition) {
 		return call
 	}
 	encoded, err := json.Marshal(targetArguments)

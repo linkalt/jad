@@ -5,7 +5,7 @@ import (
 )
 
 // NativeLoadToolSettings marks tools.native.load_tool as enabled. The tool has no keys of its
-// own: it lists and loads the profile's tools.lazy tools.
+// own: it lists, describes and runs the profile's tools.lazy tools.
 type NativeLoadToolSettings struct{}
 
 // normalizeNativeLoadToolSettings reads tools.native.load_tool. The value must be an empty

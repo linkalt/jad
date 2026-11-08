@@ -11,14 +11,17 @@ import (
 
 // subagentFingerprint identifies the agent definition a run starts with: its settings, the
 // tool definitions of its catalog (which carry the gated MCP tools) and its model path and prompt.
+// Each definition carries whether the tool is lazy (RouteDefinitions; the flag is left out for an
+// eager tool, so the hash of a catalog without lazy tools is the one Definitions gave): a tool that
+// becomes lazy leaves the child's tools array for load_tool, and that is a change of the agent.
 // It is a hash, so the raw configuration never reaches the manifest. It does not cover what the
 // agent inherits from the calling session (its model settings, retry or compaction); a change
 // there produces no config note, and the design says so.
 func subagentFingerprint(config sessionfs.NativeSubagentAgent, catalog *tools.Catalog) (string, error) {
 	encoded, err := json.Marshal(struct {
 		Agent       sessionfs.NativeSubagentAgent `json:"agent"`
-		Definitions []tools.Definition            `json:"definitions"`
-	}{Agent: config, Definitions: catalog.Definitions()})
+		Definitions []tools.RouteDefinition       `json:"definitions"`
+	}{Agent: config, Definitions: catalog.RouteDefinitions()})
 	if err != nil {
 		return "", err
 	}

@@ -1,6 +1,8 @@
 package native
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -131,5 +133,48 @@ func TestInheritedSettingChangeGivesNoNote(t *testing.T) {
 	}
 	if configChangedNote(before, after) != "" {
 		t.Fatal("an inherited-setting change gave a config note")
+	}
+}
+
+// A tool that becomes lazy leaves the child's tools array, so the agent definition changed: the
+// fingerprint must change with it although the tool's definition did not. A catalog without lazy
+// tools keeps the hash it had before the flag was part of it, so older manifests still compare.
+func TestFingerprintChangesWhenAToolBecomesLazy(t *testing.T) {
+	agent := agentWithTools("explore", "mcp:srv:search")
+	tool := mcpStub(t, "srv", "search")
+	eager, err := tools.NewCatalog([]tools.Tool{tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := tools.NewLazySet([]string{"mcp:srv:search"}, 256, nil)
+	set.Bind([]tools.Tool{tool})
+	gated, ok := set.GateFor(tool)
+	if !ok {
+		t.Fatal("the set did not gate the MCP tool")
+	}
+	lazy, err := tools.NewCatalog([]tools.Tool{gated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := subagentFingerprint(agent, eager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := subagentFingerprint(agent, lazy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after || configChangedNote(before, after) == "" {
+		t.Fatal("a tool that became lazy left the fingerprint unchanged")
+	}
+	legacy, err := json.Marshal(struct {
+		Agent       sessionfs.NativeSubagentAgent `json:"agent"`
+		Definitions []tools.Definition            `json:"definitions"`
+	}{Agent: agent, Definitions: eager.Definitions()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(legacy); before != hex.EncodeToString(sum[:]) {
+		t.Fatal("the fingerprint of a catalog without lazy tools changed")
 	}
 }

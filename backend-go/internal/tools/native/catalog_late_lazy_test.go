@@ -66,8 +66,8 @@ func TestLateNativeToolIsNeverLazy(t *testing.T) {
 			set := tools.NewLazySet([]string{name}, 256, nil)
 			catalog := lateLazyCatalog(t, name, set, sessionfs.HooksSettings{})
 			listed := false
-			for _, definition := range catalog.ListedDefinitions() {
-				listed = listed || definition.Name == name
+			for _, row := range catalog.RouteDefinitions() {
+				listed = listed || (row.Name == name && !row.Lazy)
 			}
 			if !listed {
 				t.Fatalf("%s is not listed", name)

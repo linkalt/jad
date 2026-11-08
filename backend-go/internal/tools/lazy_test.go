@@ -199,8 +199,8 @@ func TestResponseToolsNeverListsALazyTool(t *testing.T) {
 	if len(before) != len(after) || !bytes.Equal(before[0], after[0]) {
 		t.Fatalf("the tools array changed with the set: %s then %s", before, after)
 	}
-	if listed := catalog.ListedDefinitions(); len(listed) != 1 || listed[0].Name != "bash" {
-		t.Fatalf("ListedDefinitions = %v, want only bash", listed)
+	if listed := eagerRows(catalog); len(listed) != 1 || listed[0].Name != "bash" {
+		t.Fatalf("eager route rows = %v, want only bash", listed)
 	}
 }
 
@@ -328,8 +328,8 @@ func TestRouteDefinitionsMarkLazyToolsAndLeaveTheProviderArrayAlone(t *testing.T
 	if len(rows) != 3 || rows[0].Lazy || !rows[1].Lazy || rows[1].ID != "mcp:docs:search" || rows[2].Lazy {
 		t.Fatalf("route rows = %+v, want bash, the lazy search, fetch in registry order", rows)
 	}
-	if listed := withLazy.ListedDefinitions(); len(listed) != 2 {
-		t.Fatalf("ListedDefinitions = %v, want the two eager tools", listed)
+	if listed := eagerRows(withLazy); len(listed) != 2 {
+		t.Fatalf("eager route rows = %v, want the two eager tools", listed)
 	}
 	encoded, err := json.Marshal(search.Definition)
 	if err != nil || strings.Contains(string(encoded), "lazy") {
@@ -340,4 +340,15 @@ func TestRouteDefinitionsMarkLazyToolsAndLeaveTheProviderArrayAlone(t *testing.T
 	if strings.Contains(string(eagerRow), `"lazy"`) || !strings.Contains(string(lazyRow), `"lazy":true`) {
 		t.Fatalf("rows encode as %s and %s", eagerRow, lazyRow)
 	}
+}
+
+// eagerRows is the route rows of the tools the model's tools array holds: every row not marked lazy.
+func eagerRows(catalog *Catalog) []RouteDefinition {
+	var rows []RouteDefinition
+	for _, row := range catalog.RouteDefinitions() {
+		if !row.Lazy {
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }

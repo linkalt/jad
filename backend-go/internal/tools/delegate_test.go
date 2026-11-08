@@ -27,25 +27,32 @@ func delegatingTool(t *testing.T) Tool {
 	return runner
 }
 
+// delegateCatalog holds the runner, the tools a run may target (extension and MCP tools: the
+// ones that can be lazy) and two native tools, which a run never targets.
 func delegateCatalog(t *testing.T) *Catalog {
 	t.Helper()
-	write := lazyTool(t, "native.write", "native", "write")
-	read := lazyTool(t, "native.read", "native", "read")
+	write := lazyTool(t, "extension.write", "extension", "write")
+	read := lazyTool(t, "extension.read", "extension", "read")
 	read.ReadOnly = true
-	leaf := lazyTool(t, "native.lsp", "native", "lsp")
+	leaf := lazyTool(t, "extension.lsp", "extension", "lsp")
 	leaf.ReadOnly = true
 	leaf.LeafBudget = true
-	guarded := lazyTool(t, "native.guarded", "native", "guarded")
+	guarded := lazyTool(t, "extension.guarded", "extension", "guarded")
 	guarded.ReadOnly = true
 	guarded.PlanGuarded = true
-	decide := lazyTool(t, "native.decide", "native", "decide")
+	decide := lazyTool(t, "extension.decide", "extension", "decide")
 	decide.ReadOnly = true
 	decide.RequiresUserDecision = true
-	maybe := lazyTool(t, "native.maybe", "native", "maybe")
+	maybe := lazyTool(t, "extension.maybe", "extension", "maybe")
 	maybe.ReadOnly = true
 	maybe.MayChangeFiles = func(arguments map[string]any) bool { return arguments["write"] == true }
 	remote := lazyTool(t, "mcp:docs:fetch", "mcp", "mcp_docs_fetch_0123456789")
-	catalog, err := NewCatalog([]Tool{delegatingTool(t), write, read, leaf, guarded, decide, maybe, remote})
+	nativeWrite := lazyTool(t, "native.exec", "native", "exec")
+	nativeWrite.LeafBudget = true
+	nativeDecide := lazyTool(t, "native.request_draft", "native", "request_draft")
+	nativeDecide.ReadOnly = true
+	nativeDecide.RequiresUserDecision = true
+	catalog, err := NewCatalog([]Tool{delegatingTool(t), write, read, leaf, guarded, decide, maybe, remote, nativeWrite, nativeDecide})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +105,29 @@ func TestResolveCallLeavesEveryOtherCallAlone(t *testing.T) {
 	call := runnerCall("runner", `{"run":"write"}`)
 	if got := nilCatalog.ResolveCall(call); string(got) != string(call) {
 		t.Errorf("a nil catalog changed the call: %s", got)
+	}
+}
+
+// A runner runs only a tool that can be lazy, so a run that names a native tool, by name or by ID,
+// runs nothing: it is left as the runner's own call and judged as the runner (read-only, no
+// checkpoint, no leaf token, no user decision), not as the native tool it names.
+func TestResolveCallLeavesARunOfANativeToolAlone(t *testing.T) {
+	catalog := delegateCatalog(t)
+	for _, target := range []string{"exec", "native.exec", "request_draft", "native.request_draft"} {
+		call := runnerCall("runner", `{"run":"`+target+`"}`)
+		if got := catalog.ResolveCall(call); string(got) != string(call) {
+			t.Errorf("run %s: resolved to %s, want the call unchanged", target, got)
+		}
+		if catalog.ChangesState(call) || catalog.IsLeafCall(call) || catalog.IsUserDecisionCall(call) {
+			t.Errorf("run %s: judged as the native tool, want the runner's judgments", target)
+		}
+		if got := catalog.SourceOf(call); got != "native" {
+			t.Errorf("run %s: SourceOf = %q, want the runner's own native", target, got)
+		}
+	}
+	// The native tools themselves keep their own judgments when called directly.
+	if !catalog.ChangesState(runnerCall("exec", `{}`)) || !catalog.IsUserDecisionCall(runnerCall("request_draft", `{}`)) {
+		t.Fatal("a direct call of a native tool must be judged as that tool")
 	}
 }
 

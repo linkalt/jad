@@ -671,7 +671,8 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 		return nil, nil, nil, err
 	}
 	// A child gates its MCP tools with the owning profile's set and gets the owner's load_tool when
-	// the owner enables it. Both come from the owner's config, so a child reads the same state folder.
+	// the owner enables it. Both come from the owner's config, so a child lists, describes and runs
+	// the owner's lazy tools.
 	var childLoadTool *tools.Tool
 	if lazy != nil && config.NativeLoadTool != nil {
 		tool, err := native.ChildLoadTool(config, lazy)

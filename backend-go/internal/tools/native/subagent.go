@@ -713,8 +713,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string][]
 			}
 			if _, done := added[tool.Definition.ID]; !done {
 				added[tool.Definition.ID] = struct{}{}
-				// The owning profile's lazy set gates the child's copy: a lazy tool stays off the child's
-				// request until the child loads it. GateFor leaves the set's one-shot gate to the parent.
+				// The owning profile's lazy set gates the child's copy: a lazy tool is never in the child's
+				// tools array, and runs only through the child's load_tool (run). GateFor leaves the set's
+				// one-shot gate to the parent.
 				gated, _ := s.lazy.GateFor(tool)
 				if !fromToolset {
 					gated = hook(gated)

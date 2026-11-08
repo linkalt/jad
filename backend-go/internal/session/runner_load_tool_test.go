@@ -64,7 +64,8 @@ func loadToolCall(id, arguments string) json.RawMessage {
 
 // A load_tool run is judged as the tool it runs: a run of an MCP tool by its source under
 // checkpoint.include_mcp_tools, and a list, a describe, a pattern or a plan-guarded target does not.
-// A native tool such as exec is never lazy, so it is called directly and judged by its own name.
+// A native tool such as exec is never lazy, so it is called directly and judged by its own name; a
+// run that names it runs nothing (the runner refuses it) and takes no checkpoint.
 func TestRoundChangesWorkspaceJudgesALoadToolRunByItsTarget(t *testing.T) {
 	catalog := loadToolCatalog(t, nil, nil)
 	for _, includeMCP := range []bool{true, false} {
@@ -83,6 +84,8 @@ func TestRoundChangesWorkspaceJudgesALoadToolRunByItsTarget(t *testing.T) {
 			"run a pattern":      {loadToolCall("c6", `{"run":"*"}`), false},
 			"run a server glob":  {loadToolCall("c7", `{"run":"mcp:docs:*"}`), false},
 			"run a plain target": {loadToolCall("c8", `{"run":"peek"}`), false},
+			"run a native tool":  {loadToolCall("c9", `{"run":"exec"}`), false},
+			"run a native ID":    {loadToolCall("c10", `{"run":"native.exec"}`), false},
 		} {
 			if got := roundChangesWorkspace(catalog, []json.RawMessage{tc.call}, run); got != tc.want {
 				t.Errorf("include_mcp_tools=%v, %s: roundChangesWorkspace = %v, want %v", includeMCP, name, got, tc.want)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -141,6 +142,34 @@ func TestLazyExtensionToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testin
 	}
 	requireStableTools(t, parentRequests(f), "web_search")
 	requireNoLazyFile(t, f)
+}
+
+// A state folder that still holds the lazy_tools.json of an older version is not an error: the file
+// is never read (the tool it names as loaded is still lazy, and refused when called directly), and
+// never written.
+func TestAnOldLazyStateFileIsIgnoredAndLeftAlone(t *testing.T) {
+	name := mcpToolNameFor("fixture", "lookup")
+	steps := []subagentStep{
+		{name, `{"word":"answer"}`},
+		runStep("mcp:fixture:lookup", `{"word":"answer"}`),
+	}
+	f, calls := lazyFixture(t, []string{"mcp:fixture:lookup"}, steps)
+	old := []byte(`{"fingerprint":"0000","loaded":["mcp:fixture:lookup"]}`)
+	if err := os.MkdirAll(filepath.Dir(f.lazyFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.lazyFile(), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireCompleted(t, f)
+	history := lastRequestText(t, parentRequests(f))
+	if !strings.Contains(history, "lazy_tool_not_loaded") || calls.Load() != 1 {
+		t.Errorf("the old file's loaded tool was not kept lazy (MCP calls %d, want 1 through the run):\n%s", calls.Load(), history)
+	}
+	requireStableTools(t, parentRequests(f), name)
+	if got, err := os.ReadFile(f.lazyFile()); err != nil || !bytes.Equal(got, old) {
+		t.Errorf("the old lazy_tools.json changed (%v): %s", err, got)
+	}
 }
 
 func TestLazyMCPToolIsRefusedWhenCalledAndRunsThroughLoadToolRun(t *testing.T) {

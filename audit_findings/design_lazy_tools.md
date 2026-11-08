@@ -7,7 +7,7 @@
 > tool directly is refused (`lazy_tool_not_loaded`, pointing at `load_tool run`). The sections below that speak of
 > loading and of listing a loaded tool describe the previous behaviour; see `backend-go/DECISIONS.md`.
 >
-> **Superseded in part by T-103 (2026-11-09).** Only MCP tools and extension tools can be lazy; a native tool is
+> **Superseded in part by T-103 (2026-11-08).** Only MCP tools and extension tools can be lazy; a native tool is
 > always listed, and a `tools.lazy` entry that names one fails the profile load. `lazy_tools.json`, the loaded
 > set and the fingerprint are gone: a lazy set keeps no file, so the sections below on the state file, on
 > loading, and on native lazy tools (including the late-built tools and a nested `subagent`) describe code that

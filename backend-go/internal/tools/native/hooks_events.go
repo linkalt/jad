@@ -325,8 +325,6 @@ func resultStatus(result string) string {
 	return header.Status
 }
 
-// appendOutputText adds a text part to a tool output that is a list of parts. Any other
-// shape is returned as it was, so a report can never corrupt an output.
 // outputResultText is the result a post_tool hook is told of: the text of a text output, and the
 // JSON of any other output value.
 func outputResultText(output json.RawMessage) string {
@@ -337,6 +335,9 @@ func outputResultText(output json.RawMessage) string {
 	return string(output)
 }
 
+// appendOutputText adds a hook report to a tool output: as a content section to an output that is
+// a text (load_tool's), and as a text part to one that is a list of parts. Any other shape is
+// returned as it was, so a report can never corrupt an output.
 func appendOutputText(output json.RawMessage, text string) json.RawMessage {
 	// A tool whose output value is a text (load_tool) gets the report the way a text tool does.
 	var result string

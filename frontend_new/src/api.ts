@@ -295,7 +295,7 @@ export type ConditionalResult<T> =
 
 export interface ToolDefinition {
   id: string;
-  source: 'native' | 'mcp';
+  source: 'native' | 'extension' | 'mcp';
   server?: string;
   name: string;
   description: string;

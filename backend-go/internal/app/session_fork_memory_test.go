@@ -10,7 +10,10 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/imagestore"
 )
@@ -54,21 +57,31 @@ func growTranscript(t *testing.T, f *heldResetFixture, session string, turns, li
 // a streaming fork drops at once may fall between samples, which is fine: it is not held.
 func retainedBy(call func()) uint64 {
 	defer debug.SetGCPercent(debug.SetGCPercent(1))
-	live := func() uint64 {
-		low := uint64(math.MaxUint64)
-		for range 3 {
-			runtime.GC()
-			var stats runtime.MemStats
-			runtime.ReadMemStats(&stats)
-			low = min(low, stats.HeapAlloc)
-		}
-		return low
+	return sampleRetained(call, liveHeap)
+}
+
+// liveHeap is one sample of retainedBy: the lowest HeapAlloc of three forced collections in a row.
+func liveHeap() uint64 {
+	low := uint64(math.MaxUint64)
+	for range 3 {
+		runtime.GC()
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		low = min(low, stats.HeapAlloc)
 	}
-	base := live()
-	peak := base
+	return low
+}
+
+// sampleRetained runs call while a goroutine takes samples one after another, and returns the
+// highest sample above the one taken before call. The sampler is stopped, and waited for, however
+// call ends: a t.Fatal inside it (runtime.Goexit) or a panic included. Otherwise a failed fork would
+// leave it forcing collections for the rest of the package's tests.
+func sampleRetained(call func(), sample func() uint64) uint64 {
+	base := sample()
 	done := make(chan struct{})
-	sampled := make(chan uint64)
+	sampled := make(chan uint64, 1)
 	go func() {
+		peak := base
 		for {
 			select {
 			case <-done:
@@ -76,12 +89,49 @@ func retainedBy(call func()) uint64 {
 				return
 			default:
 			}
-			peak = max(peak, live())
+			peak = max(peak, sample())
 		}
 	}()
+	var once sync.Once
+	var highest uint64
+	stop := func() {
+		once.Do(func() {
+			close(done)
+			highest = <-sampled
+		})
+	}
+	defer stop()
 	call()
-	close(done)
-	return <-sampled - base
+	stop()
+	return highest - base
+}
+
+// A measured call that ends with t.Fatal (runtime.Goexit) still stops the sampler: once
+// sampleRetained has returned, no sample is taken any more.
+func TestSampleRetainedStopsTheSamplerWhenTheCallExits(t *testing.T) {
+	var samples atomic.Int64
+	sample := func() uint64 {
+		samples.Add(1)
+		time.Sleep(time.Millisecond)
+		return 0
+	}
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		sampleRetained(func() {
+			time.Sleep(5 * time.Millisecond)
+			runtime.Goexit()
+		}, sample)
+	}()
+	<-exited
+	after := samples.Load()
+	time.Sleep(50 * time.Millisecond)
+	if more := samples.Load() - after; more != 0 {
+		t.Fatalf("the sampler took %d samples after the measured call had exited", more)
+	}
+	if got := sampleRetained(func() {}, func() uint64 { return 7 }); got != 0 {
+		t.Fatalf("a flat sample gave %d, want 0", got)
+	}
 }
 
 // A fork streams the transcript it copies and searches a message one turn at a time, so its
