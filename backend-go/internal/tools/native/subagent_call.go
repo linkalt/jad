@@ -282,7 +282,7 @@ func (s *subagentTool) worktreeStart(agent sessionfs.NativeSubagentAgent, from r
 	if agent.IsolationBase == sessionfs.SandboxIsolationBaseWorking {
 		options.Base = worktree.BaseWorking
 	}
-	return &subagentWorktreeStart{options: options, from: from.branch}
+	return &subagentWorktreeStart{options: options, from: from.branch, materialize: agent.IsolationMaterialize, share: agent.IsolationShare}
 }
 
 // depthExceeded reports whether a call at depth may not start a sub-agent, local or remote.

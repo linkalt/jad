@@ -517,7 +517,7 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 	if problem != "" {
 		return nil
 	}
-	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
+	if info, err := os.Stat(resolved.openPath); err != nil || !info.IsDir() {
 		return nil
 	}
 	spawnFor := func(execution tools.ExecutionContext) func(workDir string) (standbySpawn, error) {

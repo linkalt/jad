@@ -13,15 +13,35 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
+// resolvedTarget is a path a tool reads in-process. realPath is the file as the run sees it,
+// checked against the policy, shown and given to child processes; openPath is where jad
+// reaches it: the same path, or, in an overlay run, the path through the holder's root (view),
+// since the run's files exist only there (sandbox_holder_view.go).
 type resolvedTarget struct {
 	workspaceRoot string
 	realPath      string
+	openPath      string
+	view          string
 	displayPath   string
 	errorPath     string
 }
 
+// open opens the target for reading; in an overlay run with openat2 inside the holder's root,
+// so no link swapped in meanwhile resolves on the host.
+func (t resolvedTarget) open() (*os.File, error) {
+	if t.view != "" {
+		return openInRoot(t.view, t.realPath)
+	}
+	return os.Open(t.realPath)
+}
+
 func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs.NativePathPolicy, callID string) (resolvedTarget, string) {
-	root, err := filepath.EvalSymlinks(workspaceRoot)
+	view := runView(workspaceRoot)
+	evalSymlinks := filepath.EvalSymlinks
+	if view != "" {
+		evalSymlinks = func(path string) (string, error) { return evalSymlinksIn(view, path) }
+	}
+	root, err := evalSymlinks(workspaceRoot)
 	if err != nil {
 		return resolvedTarget{}, tools.ExecutionError(callID, tools.StatusError, "workspace_unavailable", "Workspace is not available")
 	}
@@ -44,7 +64,7 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 	}
 	candidateErrorPath := safeErrorPath(root, candidate)
 
-	realPath, err := filepath.EvalSymlinks(candidate)
+	realPath, err := evalSymlinks(candidate)
 	if err != nil {
 		code, status, summary := "path_resolution_failed", tools.StatusError, "The requested path could not be resolved"
 		switch {
@@ -69,6 +89,8 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 	return resolvedTarget{
 		workspaceRoot: root,
 		realPath:      realPath,
+		openPath:      view + realPath,
+		view:          view,
 		displayPath:   displayPath(root, realPath),
 		errorPath:     safeErrorPath(root, realPath),
 	}, ""
@@ -123,11 +145,19 @@ func safeErrorPath(root, target string) string {
 	return filepath.ToSlash(filepath.Join("..", name))
 }
 
-func readVerifiedRegularFile(path string, before os.FileInfo, maxBytes int64) ([]byte, os.FileInfo, error) {
-	file, err := os.Open(path)
+// readVerifiedTarget reads the regular file target, which must still be the file before
+// describes, up to maxBytes; it is opened as the run sees it (resolvedTarget.open).
+func readVerifiedTarget(target resolvedTarget, before os.FileInfo, maxBytes int64) ([]byte, os.FileInfo, error) {
+	file, err := target.open()
 	if err != nil {
 		return nil, nil, err
 	}
+	return readVerifiedFile(file, before, maxBytes)
+}
+
+// readVerifiedFile reads the opened file, which must still be before, up to maxBytes, and
+// closes it.
+func readVerifiedFile(file *os.File, before os.FileInfo, maxBytes int64) ([]byte, os.FileInfo, error) {
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
@@ -151,4 +181,14 @@ func readVerifiedRegularFile(path string, before os.FileInfo, maxBytes int64) ([
 		return nil, after, fmt.Errorf("file grew past configured limit")
 	}
 	return data, after, nil
+}
+
+// readTarget reads the whole of target, opened as the run sees it.
+func readTarget(target resolvedTarget) ([]byte, error) {
+	file, err := target.open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }

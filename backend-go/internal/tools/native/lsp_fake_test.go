@@ -27,6 +27,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	sandboxTempParent = func() string { return parent }
+	// Runs check out unless a test asks for the overlay materialiser (sandbox_holder_test.go).
+	autoOverlay = false
 	code := m.Run()
 	os.RemoveAll(parent)
 	os.Exit(code)

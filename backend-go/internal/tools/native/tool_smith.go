@@ -314,7 +314,7 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	if problem != "" {
 		return nil
 	}
-	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
+	if info, err := os.Stat(resolved.openPath); err != nil || !info.IsDir() {
 		return nil
 	}
 	sandbox := callSandbox("tool_smith", settings.Child.Sandbox, execution)

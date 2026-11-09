@@ -89,6 +89,8 @@ func withCallSandbox(agent sessionfs.NativeSubagentAgent, choice sessionfs.Sandb
 		if agent.ChangesFiles() {
 			agent.Isolation = sessionfs.SubagentIsolationWorktree
 			agent.IsolationBase = choice.Isolation.Base
+			agent.IsolationMaterialize = choice.Isolation.Materialize
+			agent.IsolationShare = choice.Isolation.SharePaths
 		}
 	}
 	if choice.Sandbox != nil {

@@ -47,6 +47,8 @@ func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubage
 	if settings != nil {
 		worktreeSettings = settings.Worktree
 	}
+	// A collection that failed before is tried again first (RecoverDelegatedWorktrees).
+	RecoverDelegatedWorktrees(context.WithoutCancel(ctx), stateDir, settings, nil)
 	options := worktreeOptions(worktreeSettings)
 	if isolation.Base == sessionfs.SandboxIsolationBaseWorking {
 		options.Base = worktree.BaseWorking
@@ -56,14 +58,15 @@ func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubage
 		return nil, fmt.Errorf("name the run's worktree: %w", err)
 	}
 	parentRoot := execution.WorkspaceRoot
-	tree, err := worktree.Create(ctx, options, parentRoot, "profile-"+hex.EncodeToString(random), "")
+	tree, holder, err := openIsolatedTree(ctx, options, isolation.Materialize, isolation.SharePaths, executionSandbox(*execution), parentRoot, "profile-"+hex.EncodeToString(random), "")
 	if err != nil {
 		return nil, err
 	}
 	record, err := writeDelegatedWorktreeRecord(stateDir, tree, message)
 	if err != nil {
 		// Without a record a restart could not finish the worktree, so the run does not start.
-		if _, finishErr := tree.Finish(context.WithoutCancel(ctx), message, nil); finishErr != nil {
+		holder.stop()
+		if finishErr := tree.Remove(context.WithoutCancel(ctx)); finishErr != nil {
 			return nil, fmt.Errorf("%w (and the new worktree at %s could not be removed: %v)", err, tree.Path, finishErr)
 		}
 		return nil, err
@@ -74,6 +77,9 @@ func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubage
 	execution.WorkspaceRoot = tree.Workspace
 	execution.PathScope = movedScope(execution.PathScope, parentRoot, tree.Workspace)
 	registerIsolatedRun(tree)
+	if holder != nil {
+		attachHolder(tree, holder)
+	}
 	return &DelegatedWorktree{tree: tree, record: record}, nil
 }
 
@@ -157,10 +163,18 @@ func appendNew(list []string, value string) []string {
 // changed something. Call it once nothing of the run works in the folder any more.
 func (d *DelegatedWorktree) Close(ctx context.Context, execution tools.ExecutionContext, message string) DelegatedWorktreeResult {
 	defer forgetIsolatedRun(d.tree)
-	outcome, err := d.tree.Finish(context.WithoutCancel(ctx), message, collectLauncher(execution, d.tree))
+	outcome, err := finishIsolatedTree(context.WithoutCancel(ctx), d.tree, message, func() worktree.Launcher { return collectLauncher(execution, d.tree) }, holderExecutable(executionSandbox(execution)), d.tree.Timeout())
 	if d.record != "" {
-		// Tried once: a folder kept on failure is reported to the caller with its path.
-		_ = os.Remove(d.record)
+		if outcome.Kept {
+			// The collection failed: the folders are kept and so is the record, which a later
+			// start or run tries again from (RecoverDelegatedWorktrees); the caller is told the
+			// path now.
+			if kept, readErr := readDelegatedWorktreeRecord(d.record); readErr == nil {
+				_ = keepDelegatedWorktreeRecord(d.record, kept, 1, fmt.Sprint(err))
+			}
+		} else {
+			_ = os.Remove(d.record)
+		}
 	}
 	record := worktreeRecord(outcome)
 	if err != nil {

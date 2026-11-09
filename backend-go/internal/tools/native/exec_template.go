@@ -57,7 +57,7 @@ func execTemplateText(settings sessionfs.NativeExecSettings, lang sessionfs.Nati
 			ext = ".txt"
 		}
 		file := runner + "/" + execTemplateFilePrefix + ext
-		if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(file))); statErr == nil {
+		if _, statErr := os.Lstat(viewPath(filepath.Join(root, filepath.FromSlash(file)))); statErr == nil {
 			handle, problem := openExecFunction(root, realRoot, file, settings.FunctionMaxBytes)
 			if problem != "" {
 				return nil, fmt.Errorf("%s: %s", file, problem)

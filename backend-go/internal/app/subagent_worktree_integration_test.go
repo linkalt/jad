@@ -61,7 +61,7 @@ func TestIsolatedWriterChangesABranchNotTheSession(t *testing.T) {
 	if records := f.checkpointRecords(t); len(records) != 0 {
 		t.Fatalf("an isolated writer took a checkpoint of the session's files: %v", records)
 	}
-	if list := gitIn(t, f.workspace, "worktree", "list"); strings.Count(list, "\n") != 0 {
+	if list := gitIn(t, f.workspace, "worktree", "list"); strings.Count(list, "\n")-baseCheckouts(list) != 0 {
 		t.Fatalf("a worktree is left: %s", list)
 	}
 }
@@ -102,4 +102,11 @@ func TestRemoteIsolatedSubagentReportsItsWorktree(t *testing.T) {
 	if made := gitIn(t, f.workspace, "show", branch+":made.txt"); made != "by the child" {
 		t.Fatalf("made.txt on %s = %q", branch, made)
 	}
+}
+
+// baseCheckouts counts the lines of a git worktree list that name the overlay materialiser's
+// base cache (worktree package): the checkout of HEAD stays there after the runs end, for the
+// next run, where the overlay works on this host.
+func baseCheckouts(list string) int {
+	return strings.Count(list, string(filepath.Separator)+filepath.Join("jad-worktrees", ".base")+string(filepath.Separator))
 }

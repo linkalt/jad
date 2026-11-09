@@ -42,6 +42,14 @@ type delegatedWorktreeRecord struct {
 	Top       string         `json:"top"`
 	// Message is the commit message of the run's work.
 	Message string `json:"message"`
+	// Pending is set once collecting the run's work failed: the run is over, its folders are
+	// kept, and the record stays so that a later server start, or the next delegated run, tries
+	// again. Attempts counts the tries (the first is the end of the run), Error is the last
+	// failure. After worktree.collect_attempts tries the record stays for manual recovery and is
+	// not tried again; nothing is deleted.
+	Pending  bool   `json:"pending,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 func (r delegatedWorktreeRecord) state() worktree.State {
@@ -79,11 +87,19 @@ func writeDelegatedWorktreeRecord(stateDir string, tree *worktree.Tree, message 
 		return "", fmt.Errorf("make the folder of the worktree records: %w", err)
 	}
 	path := filepath.Join(dir, filepath.Base(state.Admin)+".json")
+	if err := writeRecordFile(dir, path, encoded); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// writeRecordFile writes data to path (in dir) through a temporary file and a rename.
+func writeRecordFile(dir, path string, data []byte) error {
 	temporary, err := os.CreateTemp(dir, ".record-*")
 	if err != nil {
-		return "", fmt.Errorf("record the run's worktree: %w", err)
+		return fmt.Errorf("record the run's worktree: %w", err)
 	}
-	_, err = temporary.Write(encoded)
+	_, err = temporary.Write(data)
 	if closeErr := temporary.Close(); err == nil {
 		err = closeErr
 	}
@@ -92,26 +108,52 @@ func writeDelegatedWorktreeRecord(stateDir string, tree *worktree.Tree, message 
 	}
 	if err != nil {
 		_ = os.Remove(temporary.Name())
-		return "", fmt.Errorf("record the run's worktree: %w", err)
+		return fmt.Errorf("record the run's worktree: %w", err)
 	}
-	return path, nil
+	return nil
+}
+
+// readDelegatedWorktreeRecord reads the record at path.
+func readDelegatedWorktreeRecord(path string) (delegatedWorktreeRecord, error) {
+	var record delegatedWorktreeRecord
+	data, err := os.ReadFile(path)
+	if err == nil {
+		err = json.Unmarshal(data, &record)
+	}
+	return record, err
+}
+
+// keepDelegatedWorktreeRecord rewrites the record at path as one whose collection failed with
+// reason, after attempts tries: it stays, and a later start or run tries again.
+func keepDelegatedWorktreeRecord(path string, record delegatedWorktreeRecord, attempts int, reason string) error {
+	record.Pending, record.Attempts, record.Error = true, attempts, boundedReason(reason)
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return writeRecordFile(filepath.Dir(path), path, encoded)
 }
 
 // DelegatedWorktreeRecovery is the end of one lost delegated run's worktree.
 type DelegatedWorktreeRecovery struct {
 	Branch  string
 	Changed bool
-	// Path is the worktree folder when it was kept; Error says why.
+	// Path is the worktree folder when it was kept; Error says why. Busy is set when a running
+	// process still holds the run's layers, so the run was not tried.
 	Path  string
 	Error string
+	Busy  bool
 }
 
 // RecoverDelegatedWorktrees finishes the worktrees of the delegated runs recorded in
-// stateDir whose server stopped while they went: what each run left is committed to its
-// branch and its folder removed, on the host (the run's sandbox is not known any more), with
-// settings' git options. A run of this server, or of another server that still runs, is left
-// alone. Each record is removed once tried; a record that cannot be read is removed too, and
-// logged.
+// stateDir whose server stopped while they went, and tries again those whose collection failed:
+// what each run left is committed to its branch and its folder removed, on the host (the run's
+// sandbox is not known any more; an overlay run in a holder of its own), with settings' git
+// options. A run of this server, or of another server that still runs, is left alone, and so is
+// a record another process is working on. A record is removed once its run is finished; one whose
+// collection fails stays, with one more attempt, until settings' collect_attempts tries have
+// failed, and then stays for manual recovery (logged, never deleted); a record that cannot be
+// read is removed, and logged.
 func RecoverDelegatedWorktrees(ctx context.Context, stateDir string, settings *sessionfs.NativeSubagentSettings, logger *slog.Logger) []DelegatedWorktreeRecovery {
 	if stateDir == "" {
 		return nil
@@ -150,12 +192,40 @@ func RecoverDelegatedWorktrees(ctx context.Context, stateDir string, settings *s
 			_ = os.Remove(path)
 			continue
 		}
-		if record.Server == self || foreignServerAlive(self, record.Server) {
+		if !record.Pending && (record.Server == self || foreignServerAlive(self, record.Server)) {
 			// A run that still goes, here or in another server on the same folders.
 			continue
 		}
-		recovered = append(recovered, recoverDelegatedWorktree(ctx, options, record, logger))
-		_ = os.Remove(path)
+		if record.Pending && record.Attempts >= options.CollectAttempts {
+			logger.Warn("a delegated profile run's worktree could not be collected and is kept for manual recovery", "branch", record.Branch, "path", record.Path, "record", path, "attempts", record.Attempts, "error", record.Error)
+			continue
+		}
+		lock, err := lockRecord(path + ".lock")
+		if err != nil || lock == nil {
+			// Another process is collecting it (or the lock cannot be made): not tried here.
+			continue
+		}
+		recovery := recoverDelegatedWorktree(ctx, options, record, logger)
+		recovered = append(recovered, recovery)
+		switch {
+		case recovery.Path == "":
+			// Finished, or the folder is gone: nothing is left to try.
+			_ = os.Remove(path)
+		case recovery.Busy:
+			// A process still holds the run's layers: tried again later, not counted.
+		default:
+			attempts := record.Attempts + 1
+			if err := keepDelegatedWorktreeRecord(path, record, attempts, recovery.Error); err != nil {
+				logger.Warn("keep the record of a delegated run's worktree whose collection failed", "record", path, "error", err)
+			}
+			if attempts >= options.CollectAttempts {
+				logger.Warn("a delegated profile run's worktree could not be collected after repeated tries; it is kept for manual recovery and not tried again", "branch", record.Branch, "path", record.Path, "record", path, "attempts", attempts, "error", recovery.Error)
+			}
+		}
+		_ = lock.Close()
+		if recovery.Path == "" {
+			_ = os.Remove(path + ".lock")
+		}
 	}
 	return recovered
 }
@@ -167,6 +237,7 @@ func recoverDelegatedWorktree(ctx context.Context, options worktree.Options, rec
 	if err != nil {
 		if !errors.Is(err, worktree.ErrGone) {
 			recovery.Path, recovery.Error = record.Path, err.Error()
+			recovery.Busy = errors.Is(err, worktree.ErrHeld)
 		}
 		logger.Warn("a delegated profile run's worktree was lost with the server and could not be finished", "branch", record.Branch, "path", record.Path, "error", err)
 		return recovery
@@ -177,7 +248,7 @@ func recoverDelegatedWorktree(ctx context.Context, options worktree.Options, rec
 	} else {
 		message += " (finished after the server stopped)"
 	}
-	outcome, err := tree.Finish(ctx, message, nil)
+	outcome, err := recoverIsolatedTree(ctx, tree, message, options.Timeout)
 	recovery.Changed = outcome.Changed
 	if err != nil {
 		recovery.Error = err.Error()

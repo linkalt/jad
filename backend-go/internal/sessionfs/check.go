@@ -22,7 +22,10 @@ type CheckReport struct {
 	// Sandboxes are the distinct enabled sandboxes of the sessions, each with the first session
 	// that uses it. Reading files cannot show that a sandbox starts on this machine, so the
 	// caller tries each one.
-	Sandboxes   []CheckedSandbox
+	Sandboxes []CheckedSandbox
+	// Shares are the isolation settings that name share_paths, which only the overlay
+	// materialiser can give: the caller tries it on this host for each.
+	Shares      []CheckedShares
 	seen        map[string]bool
 	seenSandbox map[string]bool
 }
@@ -32,6 +35,54 @@ type CheckedSandbox struct {
 	SessionID  string
 	WorkingDir string
 	Settings   *SandboxSettings
+}
+
+// CheckedShares is a session, profile, agent or sandbox_choice template whose isolation has
+// share_paths, with the sandbox its runs start in (nil: the default bwrap holds the overlay).
+type CheckedShares struct {
+	Where   string
+	Paths   []string
+	Sandbox *SandboxSettings
+}
+
+// addShares records the share_paths of config: those of the isolation of the profile's own
+// delegated runs, of each sub-agent with isolation worktree, and of each sandbox_choice
+// template. materialize checkout with share_paths never loads, so every entry here asks for
+// overlay (explicitly or through auto).
+func (r *CheckReport) addShares(id string, config SessionConfig) {
+	add := func(what string, paths []string, sandbox *SandboxSettings) {
+		if len(paths) > 0 {
+			r.Shares = append(r.Shares, CheckedShares{Where: id + " " + what, Paths: paths, Sandbox: sandbox})
+		}
+	}
+	add("sandbox.isolation", config.Isolation.SharePaths, config.Sandbox)
+	if settings := config.NativeSubagent; settings != nil {
+		for _, agent := range settings.Agents {
+			if !agent.Isolated() {
+				continue
+			}
+			sandbox := agent.Sandbox
+			if sandbox == nil {
+				sandbox = config.Sandbox
+			}
+			add("agent "+agent.Name+" sandbox.isolation", agent.IsolationShare, sandbox)
+		}
+		for _, choice := range settings.SandboxChoices {
+			add("subagent sandbox_choice "+choice.Name+" isolation", choice.Isolation.SharePaths, choiceSandbox(choice, config.Sandbox))
+		}
+	}
+	if settings := config.NativeProfileMessage; settings != nil {
+		for _, choice := range settings.SandboxChoices {
+			add("profile_message sandbox_choice "+choice.Name+" isolation", choice.Isolation.SharePaths, choiceSandbox(choice, config.Sandbox))
+		}
+	}
+}
+
+func choiceSandbox(choice SandboxChoice, session *SandboxSettings) *SandboxSettings {
+	if choice.Sandbox != nil {
+		return choice.Sandbox
+	}
+	return session
 }
 
 func (r *CheckReport) addSandbox(id string, config SessionConfig) {
@@ -151,6 +202,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 		}
 		r.checkProfileMessage(file.ID, config)
 		r.addSandbox(file.ID, config)
+		r.addShares(file.ID, config)
 		for _, profile := range config.Profiles {
 			if profile == config.Profile {
 				continue
@@ -162,6 +214,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			}
 			r.checkProfileMessage(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addSandbox(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
+			r.addShares(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 		}
 	}
 }

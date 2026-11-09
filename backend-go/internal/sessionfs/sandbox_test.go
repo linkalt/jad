@@ -217,7 +217,16 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"isolation":{"mode":"overlay"}}`, false},
 		{`{"isolation":{"base":"working"}}`, true},
 		{`{"isolation":{"base":"tip"}}`, false},
-		{`{"isolation":{"materialize":"overlay"}}`, false},
+		{`{"isolation":{"materialize":"overlay"}}`, true},
+		{`{"isolation":{"materialize":"auto","share_paths":["node_modules","web/node_modules"]}}`, true},
+		{`{"isolation":{"materialize":"checkout","share_paths":[]}}`, true},
+		{`{"isolation":{"materialize":"checkout","share_paths":["node_modules"]}}`, false},
+		{`{"isolation":{"materialize":"overlay","share_paths":["node_modules"]}}`, true},
+		{`{"isolation":{"materialize":"copy"}}`, false},
+		{`{"isolation":{"share_paths":"node_modules"}}`, false},
+		{`{"isolation":{"share_paths":["/abs"]}}`, false},
+		{`{"isolation":{"share_paths":["../up"]}}`, false},
+		{`{"isolation":{"share_paths":[""]}}`, false},
 		{`{"tools":["lsp"],"read":{"paths":["/"]}}`, true},
 	} {
 		if got := schemaAccepts(t, schema, `{"sandbox":`+test.raw+`}`); got != test.accept {
@@ -382,7 +391,7 @@ func TestSessionIsolationIsKeptWithAndWithoutTheSandbox(t *testing.T) {
 			Settings: map[string]any{"sandbox": test.sandbox},
 		})
 		config := loadFixtureSession(t, fixture)
-		if config.Isolation != (SandboxIsolation{Mode: SandboxIsolationWorktree, Base: SandboxIsolationBaseWorking}) {
+		if !reflect.DeepEqual(config.Isolation, SandboxIsolation{Mode: SandboxIsolationWorktree, Base: SandboxIsolationBaseWorking}) {
 			t.Fatalf("enabled %v: isolation = %+v", test.enabled, config.Isolation)
 		}
 		if (config.Sandbox != nil) != test.enabled {
@@ -390,7 +399,7 @@ func TestSessionIsolationIsKeptWithAndWithoutTheSandbox(t *testing.T) {
 		}
 	}
 	fixture := layouttest.Write(t, layouttest.Spec{Native: map[string]any{"exec": map[string]any{}}})
-	if config := loadFixtureSession(t, fixture); config.Isolation != (SandboxIsolation{}) {
+	if config := loadFixtureSession(t, fixture); !reflect.DeepEqual(config.Isolation, SandboxIsolation{}) {
 		t.Fatalf("no sandbox: %+v", config.Isolation)
 	}
 }

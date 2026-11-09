@@ -1,6 +1,8 @@
 package native
 
 import (
+	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +25,9 @@ type isolatedRun struct {
 	admin  string
 	// env are the variables every sandboxed process of the run gets (Tree.RunEnvironment).
 	env []string
+	// holder is the running holder of an overlay run, whose namespaces every process of the
+	// run joins; nil for a checkout, and while an overlay run has none (sandbox_holder.go).
+	holder *sandboxHolder
 }
 
 // isolatedRuns are the runs in a worktree of their own that are going, by worktree folder.
@@ -39,11 +44,81 @@ func registerIsolatedRun(tree *worktree.Tree) {
 	isolatedRuns.Unlock()
 }
 
-// forgetIsolatedRun drops what registerIsolatedRun recorded for tree.
+// forgetIsolatedRun drops what registerIsolatedRun recorded for tree, and stops its holder.
 func forgetIsolatedRun(tree *worktree.Tree) {
 	isolatedRuns.Lock()
-	delete(isolatedRuns.byPath, filepath.Clean(tree.Path))
+	path := filepath.Clean(tree.Path)
+	holder := isolatedRuns.byPath[path].holder
+	delete(isolatedRuns.byPath, path)
 	isolatedRuns.Unlock()
+	holder.stop()
+}
+
+// attachHolder makes holder the one every process of tree's run joins (registering the run
+// when it is not yet).
+func attachHolder(tree *worktree.Tree, holder *sandboxHolder) {
+	path := filepath.Clean(tree.Path)
+	isolatedRuns.Lock()
+	run, ok := isolatedRuns.byPath[path]
+	if !ok {
+		run = isolatedRun{path: path, common: tree.Common(), admin: tree.Admin, env: tree.RunEnvironment()}
+	}
+	previous := run.holder
+	run.holder = holder
+	isolatedRuns.byPath[path] = run
+	isolatedRuns.Unlock()
+	if previous != holder {
+		previous.stop()
+	}
+	recordHolder(tree, holder)
+}
+
+// recordHolder writes the holder's identity (pid and start time) into the overlay run's state
+// file, or clears it for nil, so a later server finds a holder that outlived this one
+// (reapStaleHolder). A run that cannot record it still runs; the failure is logged.
+func recordHolder(tree *worktree.Tree, holder *sandboxHolder) {
+	var ref worktree.HolderRef
+	if holder != nil {
+		ref = worktree.HolderRef{PID: holder.identity.pid, Start: holder.identity.start}
+	}
+	if err := tree.SetHolder(ref); err != nil {
+		slog.Default().Warn("the overlay run's holder could not be recorded in its state file", "run", tree.Path, "error", err)
+	}
+}
+
+// detachHolder stops the holder of tree's run, if it has one; the run stays registered.
+func detachHolder(tree *worktree.Tree) {
+	path := filepath.Clean(tree.Path)
+	isolatedRuns.Lock()
+	run, ok := isolatedRuns.byPath[path]
+	holder := run.holder
+	if ok {
+		run.holder = nil
+		isolatedRuns.byPath[path] = run
+	}
+	isolatedRuns.Unlock()
+	holder.stop()
+	if holder != nil {
+		recordHolder(tree, nil)
+	}
+}
+
+// holderOf is the pid of the holder of the overlay run whose worktree holds dir; 0 for any
+// other folder.
+func holderOf(dir string) int {
+	if holder := holderFor(dir); holder != nil {
+		return holder.pid
+	}
+	return 0
+}
+
+// holderFor is the holder of the overlay run whose worktree holds dir; nil for any other
+// folder.
+func holderFor(dir string) *sandboxHolder {
+	if run, ok := isolatedRunOf(dir); ok {
+		return run.holder
+	}
+	return nil
 }
 
 // isolatedRunOf is the isolated run whose worktree holds dir.
@@ -107,9 +182,13 @@ func sandboxRunEnvironment(place sandboxPlace) []string {
 // is interpreted on the host. The sandbox is the run's, with the run's admin folder writable
 // (git add and commit write the index, HEAD and objects there even when the run's own write
 // paths leave it out). Nil without a sandbox: the commands then run on the host, which the
-// run could reach as well.
+// run could reach as well; an overlay run's still start in its holder (holderLauncher).
 func collectLauncher(execution tools.ExecutionContext, tree *worktree.Tree) worktree.Launcher {
 	if execution.Environment == nil || execution.Environment.Sandbox == nil {
+		if _, overlay := tree.Layers(); overlay {
+			// Without a sandbox an overlay run is still collected inside its mount.
+			return holderLauncher(tree)
+		}
 		return nil
 	}
 	sandbox := *execution.Environment.Sandbox
@@ -129,5 +208,25 @@ func collectLauncher(execution tools.ExecutionContext, tree *worktree.Tree) work
 			return worktree.Launch{}, err
 		}
 		return worktree.Launch{File: launch.resolved, Argv0: launch.configured, Args: launch.args, Env: buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{}, "")}, nil
+	}
+}
+
+// holderLauncher starts git in the holder of tree's overlay run without a sandbox, with the
+// host's environment as a collection on the host has.
+func holderLauncher(tree *worktree.Tree) worktree.Launcher {
+	return func(git string, args []string, dir string) (worktree.Launch, error) {
+		resolved, err := exec.LookPath(git)
+		if err != nil {
+			return worktree.Launch{}, err
+		}
+		holder := holderFor(tree.Workspace)
+		if holder == nil {
+			return worktree.Launch{}, errors.New("the overlay run has no holder to collect in")
+		}
+		launch, err := joinHolder(holder, dir, sandboxLaunch{configured: git, resolved: resolved, args: args})
+		if err != nil {
+			return worktree.Launch{}, err
+		}
+		return worktree.Launch{File: launch.resolved, Argv0: launch.configured, Args: launch.args, Env: os.Environ()}, nil
 	}
 }

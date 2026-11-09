@@ -494,3 +494,167 @@ P4 came next in §12, but its overlay materialiser needs bwrap ≥ 0.10 and this
 7. **Not done:** tool_smith gets no fallback (in plan mode its calls with code are still refused
    by its own `MayChangeFiles`); hooks in plan mode are not confined by the fallback; `jad check`
    does not report whether the fallback starts.
+
+## P4 implementation, overlay materialiser (2026-11-10)
+
+Built and tested on a host with bubblewrap 0.13.1, kernel 7.4, util-linux 2.42.4 (`nsenter`
+with `--wdns`) and git 2.56.0, where the overlay trial passes; the tests that need it skip on a
+host without `bwrap --overlay`, `nsenter --wdns` or user namespaces, and the suites were also run
+with bwrap off `PATH` (then every isolated run checks out).
+
+1. **Settings (D6).** `sandbox.isolation` takes `materialize` (`auto`, default; `checkout`;
+   `overlay`) and `share_paths` (slash-separated folders relative to the session's working
+   directory, no `.`/`..` names or placeholders; default empty). Agents copy both from their own
+   sandbox and from a per-call sandbox choice (`IsolationMaterialize`, `IsolationShare`, left out
+   of JSON when empty, so fingerprints of existing agents are unchanged); delegated runs read
+   them from the target's `SandboxIsolation`.
+2. **Materialiser (worktree, `overlay.go`, `base.go`).** `Options.Materialize` is `checkout` or
+   `overlay`; the owner resolves `auto` because only it can try the overlay. An overlay run gets a
+   worktree registered with `git worktree add --no-checkout --detach` (same admin folder, private
+   objects and `State` as a checkout, so the records and `Open` are unchanged), the base
+   checkout's index (C5), its own `.git` file in its upper layer, and `<dir>/.overlay/<run>/`
+   with `upper`, `work`, `lock` (flock held from `Create` to the end of `Finish`, C2) and
+   `jad-run.json` (start commit, lower, phase, holder identity), which `Open` reads to rebuild
+   the layers.
+   `Finish` refuses an overlay tree without a launcher (git on the host would see every file
+   deleted) and keeps it. `Tree.OnCollected` lets the owner stop the mount before the folders go.
+3. **Base cache (revised in "P4 review follow-ups" below).** `<git dir>/jad-worktrees/.base/<commit>/`
+   holds `tree/` (the commit's files, the overlay's lower), `index` and `refs`; it is built with
+   `read-tree` + `checkout-index`, so no git worktree is registered for it. See follow-up F2/F7.
+4. **Holder and join (D14, `tools/native/sandbox_holder.go`).** The holder is
+   `bwrap --die-with-parent --unshare-user --unshare-pid --dev-bind / / --proc /proc --overlay-src
+   <base> --overlay <upper> <work> <worktree> [--ro-bind <share> …] --chdir / -- cat`: it confines
+   nothing by itself (everything stays where the host has it) and only owns the mount. A process
+   of the run joins it with `nsenter -t <pid> -U -m -p --preserve-credentials --wdns=<cwd>` and
+   starts from `/` on the host. `sandboxed()` adds the join for every child whose workspace is an
+   overlay run, sandboxed or not; a sandboxed call then starts its own bwrap in there with the
+   same arguments as for a checkout, so both materialisers enforce the same rules (D1) — the
+   design's holder-as-confinement (§9.5) was not used. The holder is ready only once `cat`
+   echoes a line jad writes (bwrap reports its pid before it has mounted anything). Stopping it
+   closes `cat`'s input; the pid namespace takes every process the run left with it. The
+   design's hidden `jad sandbox-hold` subcommand was replaced by `cat`, which needs no wiring and
+   cannot start a test binary.
+5. **Collection and recovery.** At the end of a run its holder is stopped and the work is
+   collected in a second holder of the same layers without the share binds (so shared folders
+   never reach the branch), through the run's collect launcher, which now joins that holder (with
+   the run's sandbox when it has one, without one otherwise). Recovery at the next start
+   (sub-agent runs and delegated runs) opens the record, starts such a holder with the default
+   bwrap and finishes the same way. Import, rebase onto HEAD, checks and branch are unchanged.
+6. **`auto` and failures (§10.1, R3).** The overlay trial (`ProbeOverlay`: a one-file overlay in
+   a holder, a joined read with `--wdns`, an in-process `openat2` read) runs once per bwrap
+   executable per process; `auto` takes overlay only where it passed. `overlay` where it fails
+   fails the run with the reason. A holder that fails to start removes the new worktree, fails
+   the run and marks the overlay as not working for later `auto` runs. The holder's start and
+   stop are bounded by `tools.native.subagent.worktree.timeout_ms`.
+7. **In-process view.** `resolveExistingTarget` resolves an overlay run's paths inside
+   `/proc/<holder>/root` (links resolved there, `realPath` stays the logical path for policy,
+   display and children) and its readers open them with `openat2(RESOLVE_IN_ROOT)`
+   (`resolvedTarget.open`); `code_context`, `read_image`, `lsp` (and its result view), `transcript`,
+   exec/tool_smith cwd checks, the `hooks.shell_changes` scan, the exec/tool_smith function
+   library, a post-edit hook's `nearest:` marker, spill files and the `hide_paths` stat of
+   `bwrapArguments` all go through it.
+8. **`jad check`** writes `note:` lines (not problems) when the overlay trial fails with the
+   default or a configured bwrap, and when the P5 plan-mode fallback does not start; nothing is
+   written where both work.
+9. **Not done:** the delta layer of `base: working` (accepted departure F5 below); the design's
+   `Validate`/`Recover`/`Probe`/`Wrap` API names (the native package owns the probe and the
+   holder); materialiser benchmarks; macOS (no overlay there, checkout).
+
+### P4 review follow-ups (2026-11-10)
+
+The first P4 report was reviewed; every finding is closed by a fix with a regression test or by an
+accepted departure written down here. Nothing is committed.
+
+**F1, `share_paths` are never dropped.** `share_paths` need the overlay materialiser and are
+refused, not skipped, wherever they cannot be given:
+
+- `materialize: checkout` with a non-empty `share_paths` is a configuration error at load
+  (`sessionfs.sandboxIsolation`, strict like an unknown key; the schema says the same with
+  `if materialize const checkout then share_paths maxItems 0`). Checked on the merged object, so
+  a template with `share_paths` and an override `checkout` is refused too.
+- `auto` that would fall back to a checkout (overlay trial failed, or turned off) while
+  `share_paths` is non-empty refuses the run with an error naming the bwrap and the probe's
+  reason (`resolveMaterialize`). `overlay` where it does not work already failed the run.
+- A `share_paths` entry that is missing, is not a folder, or resolves outside the working
+  directory fails the run (`shareBinds`; formerly logged and left out). It is checked before the
+  worktree is made, so a refused run leaves nothing behind.
+- `jad check` reports a **problem** (not a note) for every session, profile, agent and
+  `sandbox_choice` template whose isolation has `share_paths` on a host where the overlay trial
+  fails with the bwrap that run would use (`app.shareProblems`).
+- No symlink is ever made from a checkout into the session (there is no sharing into a checkout).
+
+**F2, base cache across servers.** Every change of an entry is made under an exclusive `flock` on
+`<commit>.lock` (waiting, bounded by the caller's context; the lock file is removed with its entry
+and a waiter that opened the removed file reopens, so two processes never hold "the" lock of one
+entry). An entry is built in `<commit>.build-<random>/`, given its `complete` marker last and
+renamed to `<commit>/`; a reader never uses an entry without the marker (it is removed and built
+again) and garbage collection removes unmarked entries, build folders and half-removed
+`<commit>.gc-*` folders under the entry's lock. `refs` lists the holders as absolute overlay
+folders; a holder counts while its `<dir>/.overlay/<run>` folder exists, which `addOverlay` makes
+(and locks) before it takes the entry, so another server's collection never takes a base from
+under a run that is starting. Collection runs at every overlay `Create` and release and removes
+unheld entries other than HEAD's. `worktree` tests run with `-race`.
+
+**F3, failed collection persists and retries.** `Finish` of an overlay run writes
+`phase: collect-pending` into `jad-run.json` before it collects and leaves it there on failure;
+`Tree.Remove` refuses a pending run, so the upper layer (the run's work) is never deleted after a
+failure, and `Open` reads the phase back. Callers keep the run's record when the collection fails
+instead of dropping it: a sub-agent manifest keeps `worktree.path` and counts `attempts`
+(`keep_finished` never drops a run whose folder is kept); a delegated run's record is rewritten as
+`pending` with `attempts`. Retries happen at server start (`SubagentManager.recover`,
+`RecoverDelegatedWorktrees`) and before the next isolated run starts of the same manager or state
+folder, each at most once at a time (a flock on the record's `.lock` file, and a flag on the run),
+and a run another process still holds (`worktree.ErrHeld`) is skipped without counting. After
+`tools.native.subagent.worktree.collect_attempts` tries (new setting, default 3, 1..100; the first
+try is the end of the run) the folders and the record stay for manual recovery, logged at each
+start, and nothing is deleted.
+
+**F4, holder identity.** A holder is a pid, its start time (`/proc/<pid>/stat` field 22) and a
+pidfd where `pidfd_open` exists (`processIdentity`). The identity is checked before every
+`nsenter` join (`joinHolder` fails with "the holder is gone"), before every kill (a pidfd signal;
+a mismatching pid is left alone), before every `/proc/<pid>/root` read (`root()` becomes
+`/proc/0/root`, which no read can succeed in), and in recovery: the state file records the
+holder's pid and start time, and `recoverIsolatedTree` ends only a process that matches before it
+collects (a holder that outlived its server is killed; a reused pid is not touched). The window
+between a check and the use of the pid (microseconds, and only where there is no pidfd and the
+holder is not jad's own unreaped child) remains open for `nsenter -t`, which takes a pid.
+
+**F5, accepted departure: `base: working` uses a full shared checkout, not a delta layer.** A run
+of `base: working` mounts a base checkout of the snapshot commit `W` itself (shared by runs of the
+same `W`), not the design's HEAD checkout plus a delta layer of the working-state changes (§5.2).
+It is correct, only costlier for large repositories with a dirty session. Follow-up: build
+`.base/<HEAD>` plus a refcounted `.delta/<W>` lower with a one-shot bwrap, with a test that the
+delta's deletes are whiteouts.
+
+**F6, confinement parity between overlay and checkout runs.** The differences under one profile,
+enumerated:
+
+1. A sandboxed call starts the same bwrap with the same arguments inside the holder as it does on
+   a checkout; the sandbox's read, write, hide and plan-mode rules are computed from the same
+   code. Tested: `TestOverlayAndCheckoutRunsAreConfinedAlike` (and `…InPlanMode`) runs the same write
+   and read probes in both materialisers and asserts the allowed and blocked sets are identical
+   and equal to the expected ones.
+2. The overlay's own folders (the upper and work layers, the lock, the base checkout) have no
+   counterpart in a checkout. A sandboxed call can neither read nor write them: they sit in
+   `<git dir>/jad-worktrees`, which every sandbox hides (S4), and the same test asserts it.
+3. An unsandboxed call is unconfined in both (it can write any path its user can, the other runs'
+   folders and, for an overlay run, the layers and the base checkout too). Parity, not a new
+   hole: `TestUnsandboxedOverlayAndCheckoutRunsAreUnconfinedAlike`. A user who needs the shared
+   base protected from an unsandboxed run needs a sandbox, as for every other folder.
+4. Namespaces: processes of an overlay run live in the holder's user and pid namespaces (setuid
+   programs do not elevate, `/proc` lists the run's processes only, a process the run leaves is
+   killed when the run ends). This confines more; accepted.
+5. `share_paths`: overlay only; read-only binds; refused for checkout (F1).
+6. On the host the overlay worktree folder holds only `.git`; in-process readers see the files
+   through the holder root (tested earlier); a program looked up by path before a call starts is
+   resolved on the host. Less access than a checkout run, never more.
+
+Overlay confines more or equally in every row; no write outside the run is allowed by one
+materialiser and blocked by the other. Accepted as departures: rows 3 (unconfined is unconfined),
+4 and 6.
+
+**F7, the cache is not a worktree.** It is built with `git read-tree` and `git checkout-index -u`
+(index with stat data, files with the repository's filters and attributes, sparse checkout off),
+registers nothing, lives in `<git dir>/jad-worktrees/.base` whatever `worktree.dir` says (never in
+the working directory), does not show in `git worktree list` or `git status` (test:
+`TestBaseCacheIsNotAWorktreeAndStaysInTheGitDirectory`), and is collected as F2 says.

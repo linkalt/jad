@@ -20,9 +20,11 @@ const (
 	defaultNativeSubagentWorktreeAuthorEmail  = "jad@localhost"
 	defaultNativeSubagentWorktreeTimeoutMS    = int64(60_000)
 	maxNativeSubagentWorktreeTimeoutMS        = int64(600_000)
+	defaultNativeSubagentWorktreeCollectTries = 3
+	maxNativeSubagentWorktreeCollectTries     = 100
 )
 
-var nativeSubagentWorktreeKeys = []string{"dir", "branch_prefix", "git", "author_name", "author_email", "commit_hooks", "timeout_ms"}
+var nativeSubagentWorktreeKeys = []string{"dir", "branch_prefix", "git", "author_name", "author_email", "commit_hooks", "timeout_ms", "collect_attempts"}
 
 // NativeSubagentWorktreeSettings configure the git worktrees of the agents with isolation
 // worktree.
@@ -40,8 +42,12 @@ type NativeSubagentWorktreeSettings struct {
 	AuthorEmail string
 	// CommitHooks runs the repository's commit hooks for that commit.
 	CommitHooks bool
-	// TimeoutMS bounds each git command.
+	// TimeoutMS bounds each git command, and the start and the stop of an overlay run's holder.
 	TimeoutMS int64
+	// CollectAttempts is how many times jad tries to collect a run's work (commit it and
+	// import it into the repository) before it keeps the folders for manual recovery: the
+	// first try when the run ends, then one at each server start and each later isolated run.
+	CollectAttempts int
 }
 
 // DefaultNativeSubagentWorktreeSettings are the settings of a section without worktree.
@@ -52,6 +58,8 @@ func DefaultNativeSubagentWorktreeSettings() NativeSubagentWorktreeSettings {
 		AuthorName:   defaultNativeSubagentWorktreeAuthorName,
 		AuthorEmail:  defaultNativeSubagentWorktreeAuthorEmail,
 		TimeoutMS:    defaultNativeSubagentWorktreeTimeoutMS,
+
+		CollectAttempts: defaultNativeSubagentWorktreeCollectTries,
 	}
 }
 
@@ -158,6 +166,11 @@ func normalizeNativeSubagentWorktree(raw json.RawMessage, cwd, settingPath strin
 	if settings.TimeoutMS, err = configuredInteger(fields, "timeout_ms", defaultNativeSubagentWorktreeTimeoutMS, 1000, maxNativeSubagentWorktreeTimeoutMS, settingPath, section); err != nil {
 		return NativeSubagentWorktreeSettings{}, err
 	}
+	tries, err := configuredInteger(fields, "collect_attempts", defaultNativeSubagentWorktreeCollectTries, 1, maxNativeSubagentWorktreeCollectTries, settingPath, section)
+	if err != nil {
+		return NativeSubagentWorktreeSettings{}, err
+	}
+	settings.CollectAttempts = int(tries)
 	return settings, nil
 }
 

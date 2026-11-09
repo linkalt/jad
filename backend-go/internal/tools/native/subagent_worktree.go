@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -36,6 +37,10 @@ type subagentWorktree struct {
 	// folder could not be cleaned up (Error says why).
 	Path  string `json:"path,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Attempts is how many times collecting the run's work has failed (the folders are kept
+	// and tried again at the next server start and before the next isolated run, until
+	// worktree.collect_attempts is reached; then they stay for manual recovery).
+	Attempts int `json:"attempts,omitempty"`
 	// Note says why the worktree started where it did, when that is not what was asked.
 	Note string `json:"note,omitempty"`
 	// Target is the session's HEAD the branch was checked against when the run ended, and
@@ -76,6 +81,9 @@ func (w subagentWorktree) state() worktree.State {
 // subagentWorktreeStart asks the manager to run the child in a worktree of its own.
 type subagentWorktreeStart struct {
 	options worktree.Options
+	// materialize and share are the agent's sandbox.isolation.materialize and share_paths.
+	materialize string
+	share       []string
 	// from is the revision the worktree starts at; empty is HEAD. A resume passes the
 	// branch of the run it continues.
 	from string
@@ -103,7 +111,18 @@ func worktreeOptions(settings sessionfs.NativeSubagentWorktreeSettings) worktree
 		AuthorEmail:  pick(settings.AuthorEmail, defaults.AuthorEmail),
 		CommitHooks:  settings.CommitHooks,
 		Timeout:      time.Duration(timeout) * time.Millisecond,
+
+		CollectAttempts: collectAttempts(settings.CollectAttempts),
 	}
+}
+
+// collectAttempts is the configured number of collection attempts, or the default when a
+// settings value built in code leaves it unset.
+func collectAttempts(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return sessionfs.DefaultNativeSubagentWorktreeSettings().CollectAttempts
 }
 
 // openWorktree creates the run's worktree and points the child's tools at it: the
@@ -111,6 +130,8 @@ func worktreeOptions(settings sessionfs.NativeSubagentWorktreeSettings) worktree
 // folder becomes the origin its path rules are moved from, and the agent's path scope is
 // moved the same way.
 func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, spec *subagentStart) (*worktree.Tree, error) {
+	// A collection that failed before is tried again first (recoverWorktree).
+	m.retryPendingWorktrees(ctx, spec.worktree.options)
 	execution := &spec.request.Execution
 	parentRoot := execution.WorkspaceRoot
 	record := subagentWorktree{}
@@ -119,7 +140,7 @@ func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, sp
 		record.Note = fmt.Sprintf("the branch %s of the resumed run is gone, so this run starts from HEAD", from)
 		from = ""
 	}
-	tree, err := worktree.Create(ctx, spec.worktree.options, parentRoot, run.id, from)
+	tree, holder, err := openIsolatedTree(ctx, spec.worktree.options, spec.worktree.materialize, spec.worktree.share, executionSandbox(*execution), parentRoot, run.id, from)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +156,9 @@ func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, sp
 		record.Start = tree.Start
 	}
 	registerIsolatedRun(tree)
+	if holder != nil {
+		attachHolder(tree, holder)
+	}
 	run.setWorktree(record)
 	return tree, nil
 }
@@ -149,28 +173,44 @@ func (m *SubagentManager) closeWorktree(run *subagentRun, tree *worktree.Tree, e
 	defer forgetIsolatedRun(tree)
 	view := run.view()
 	message := fmt.Sprintf("jad sub-agent %s (run %s)\n\n%s", view.agent, view.id, view.task)
-	finishWorktree(context.WithoutCancel(run.ctx), run, tree, message, collectLauncher(execution, tree))
+	finishWorktree(context.WithoutCancel(run.ctx), run, tree, func(ctx context.Context) (worktree.Outcome, error) {
+		return finishIsolatedTree(ctx, tree, message, func() worktree.Launcher { return collectLauncher(execution, tree) }, holderExecutable(executionSandbox(execution)), tree.Timeout())
+	})
 }
 
-// recoverWorktree finishes the worktree of a run the last server lost while it went, the
-// way closeWorktree would have: what the run left there is committed to its branch and the
-// folder is removed. A folder that is gone, or a finish that fails, is recorded on the run
-// (the folder's path stays in the record when the folder is still there). No sandbox of the
-// run is known at startup: the commands run on the host with the folders named outright
-// (worktree.Tree.Finish without a launcher).
+// recoverWorktree finishes the worktree of a run that still has one: one the last server lost
+// while it went, or one whose collection failed (the folders were kept, Attempts counts the
+// failures). It does what closeWorktree would have: what the run left there is committed to its
+// branch and the folder is removed. A folder that is gone, or a finish that fails, is recorded on
+// the run (the folder's path stays in the record, with one more attempt, while the folder is
+// still there). A run that has failed options.CollectAttempts times is left as it is, for manual
+// recovery, and logged; nothing is deleted. No sandbox of the run is known at startup: the
+// commands run on the host with the folders named outright (worktree.Tree.Finish without a
+// launcher), or, for an overlay run, in a holder of their own (recoverIsolatedTree).
 func recoverWorktree(ctx context.Context, run *subagentRun, options worktree.Options) {
 	view := run.view()
 	record := view.worktree
-	if record == nil || record.Commit != "" || record.Error != "" || record.Path == "" {
+	if record == nil || record.Path == "" {
+		return
+	}
+	if record.Attempts >= options.CollectAttempts && options.CollectAttempts > 0 {
+		slog.Default().Warn("a sub-agent run's worktree could not be collected and is kept for manual recovery", "run", view.id, "branch", record.Branch, "path", record.Path, "attempts", record.Attempts, "error", record.Error)
 		return
 	}
 	tree, err := worktree.Open(ctx, options, record.state())
 	if err != nil {
+		if errors.Is(err, worktree.ErrHeld) {
+			// A running process still holds the layers (another server): not this one's to finish.
+			return
+		}
 		run.mu.Lock()
 		failed := *run.worktree
 		failed.Error = boundedReason("the server stopped while the run was going, and its worktree could not be finished: " + err.Error())
 		if errors.Is(err, worktree.ErrGone) {
 			failed.Path = ""
+		} else {
+			failed.Attempts++
+			slog.Default().Warn("a sub-agent run's worktree could not be opened to collect it; it is kept", "run", view.id, "path", record.Path, "attempts", failed.Attempts, "error", err)
 		}
 		run.worktree = &failed
 		run.mu.Unlock()
@@ -178,12 +218,53 @@ func recoverWorktree(ctx context.Context, run *subagentRun, options worktree.Opt
 		return
 	}
 	message := fmt.Sprintf("jad sub-agent %s (run %s, finished after the server stopped)\n\n%s", view.agent, view.id, view.task)
-	finishWorktree(ctx, run, tree, message, nil)
+	finishWorktree(ctx, run, tree, func(ctx context.Context) (worktree.Outcome, error) {
+		return recoverIsolatedTree(ctx, tree, message, options.Timeout)
+	})
+	if after := run.view().worktree; after != nil && after.Path != "" && after.Attempts >= options.CollectAttempts {
+		slog.Default().Warn("a sub-agent run's worktree could not be collected; it is kept for manual recovery and not tried again", "run", view.id, "branch", after.Branch, "path", after.Path, "attempts", after.Attempts, "error", after.Error)
+	}
 }
 
-// finishWorktree commits and removes tree and records the outcome on run.
-func finishWorktree(ctx context.Context, run *subagentRun, tree *worktree.Tree, message string, launcher worktree.Launcher) {
-	outcome, err := tree.Finish(ctx, message, launcher)
+// retryPendingWorktrees tries again, before a new isolated run starts, the collection of the
+// worktrees of finished runs whose collection failed (recoverWorktree); a run being retried is
+// not retried twice at once.
+func (m *SubagentManager) retryPendingWorktrees(ctx context.Context, options worktree.Options) {
+	m.mu.Lock()
+	runs := make([]*subagentRun, 0, len(m.runs))
+	for _, run := range m.runs {
+		runs = append(runs, run)
+	}
+	m.mu.Unlock()
+	for _, run := range runs {
+		if !run.beginCollectionRetry(options.CollectAttempts) {
+			continue
+		}
+		recoverWorktree(context.WithoutCancel(ctx), run, options)
+		run.mu.Lock()
+		run.retrying = false
+		run.mu.Unlock()
+	}
+}
+
+// beginCollectionRetry reports whether the run is over, still has a worktree whose collection
+// failed fewer than limit times and is not being retried, and marks it as being retried.
+func (r *subagentRun) beginCollectionRetry(limit int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retrying || r.worktree == nil || r.worktree.Path == "" || r.worktree.Attempts == 0 || (limit > 0 && r.worktree.Attempts >= limit) {
+		return false
+	}
+	if r.state == subagentRunQueued || r.state == subagentRunRunning {
+		return false
+	}
+	r.retrying = true
+	return true
+}
+
+// finishWorktree commits and removes tree with finish and records the outcome on run.
+func finishWorktree(ctx context.Context, run *subagentRun, tree *worktree.Tree, finish func(context.Context) (worktree.Outcome, error)) {
+	outcome, err := finish(ctx)
 	run.mu.Lock()
 	record := worktreeRecord(outcome)
 	if run.worktree != nil {
@@ -191,6 +272,10 @@ func finishWorktree(ctx context.Context, run *subagentRun, tree *worktree.Tree, 
 	}
 	if err != nil {
 		record.Error = boundedReason(err.Error())
+		record.Attempts = 1
+		if run.worktree != nil {
+			record.Attempts = run.worktree.Attempts + 1
+		}
 	}
 	if outcome.Kept {
 		// Still there: a later start can finish it from the same folders.

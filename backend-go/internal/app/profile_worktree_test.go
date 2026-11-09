@@ -111,7 +111,7 @@ func TestProfileMessageTargetWithIsolationWorksInAWorktree(t *testing.T) {
 	if got := worktreeValue(outcome, "worktree_conflicts"); !strings.HasPrefix(got, "none") {
 		t.Fatalf("worktree_conflicts = %q", got)
 	}
-	if list := gitIn(t, f.cwd, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 1 {
+	if list := gitIn(t, f.cwd, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ")-baseCheckouts(list) != 1 {
 		t.Fatalf("the run's worktree was not removed:\n%s", list)
 	}
 	if !strings.Contains(outcome.Worktree.Text, branch) {
@@ -274,7 +274,9 @@ func (d *recordingDriver) stopped() []string {
 // The isolated run writes no file of the session, so it takes no checkpoint; its tools work
 // in the worktree.
 func TestOpenDelegatedWorktreeDropsTheCheckpoint(t *testing.T) {
-	f := isolatedTargetFixture(t, `{"mode":"worktree","base":"working"}`)
+	// A checkout, so the test reads the run's file on the host (an overlay run's exist only in
+	// its holder; native's overlay tests read them there).
+	f := isolatedTargetFixture(t, `{"mode":"worktree","base":"working","materialize":"checkout"}`)
 	runner := boundRunnerOf(t, f, "review/reviewer")
 	runner.delegation = &profileDelegation{isolation: runner.config.Isolation, commitMessage: "m"}
 	writeFile(t, filepath.Join(f.cwd, "dirty.txt"), []byte("uncommitted\n"))
@@ -364,7 +366,9 @@ func TestResolveFinishesALostDelegatedWorktree(t *testing.T) {
 	}
 	stateDir := resolved.Runner.(boundRunner).config.StateDir
 	execution := tools.ExecutionContext{WorkspaceRoot: f.cwd}
-	if _, err := native.OpenDelegatedWorktree(context.Background(), nil, sessionfs.SandboxIsolation{Mode: sessionfs.SandboxIsolationWorktree}, &execution, stateDir, "jad profile run review/reviewer (message from dev/coder)"); err != nil {
+	// A checkout: the test writes the lost run's file on the host and this server still holds
+	// what it opened (native's overlay tests recover an overlay run).
+	if _, err := native.OpenDelegatedWorktree(context.Background(), nil, sessionfs.SandboxIsolation{Mode: sessionfs.SandboxIsolationWorktree, Materialize: sessionfs.SandboxIsolationMaterializeCheckout}, &execution, stateDir, "jad profile run review/reviewer (message from dev/coder)"); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(execution.WorkspaceRoot, "made.txt"), []byte("lost\n"))
@@ -390,7 +394,7 @@ func TestResolveFinishesALostDelegatedWorktree(t *testing.T) {
 	if got := gitIn(t, f.cwd, "show", branch+":made.txt"); got != "lost" {
 		t.Fatalf("made.txt on %s = %q", branch, got)
 	}
-	if list := gitIn(t, f.cwd, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 1 {
+	if list := gitIn(t, f.cwd, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ")-baseCheckouts(list) != 1 {
 		t.Fatalf("the lost worktree was not removed:\n%s", list)
 	}
 	if _, err := os.Stat(records[0]); !os.IsNotExist(err) {

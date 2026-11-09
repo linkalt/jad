@@ -123,7 +123,7 @@ func runShellChildDetailed(
 	if pathError != "" {
 		return shellRunResult{text: pathError}
 	}
-	info, err := os.Stat(resolved.realPath)
+	info, err := os.Stat(resolved.openPath)
 	if err != nil {
 		return shellRunResult{text: tools.ExecutionError(execution.CallID, tools.StatusError, "cwd_unavailable", "The working directory is not readable", tools.Information{Key: "path", Value: resolved.displayPath})}
 	}

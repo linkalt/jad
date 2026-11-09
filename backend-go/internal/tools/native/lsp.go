@@ -103,7 +103,7 @@ func executeLSP(ctx context.Context, arguments map[string]any, settings sessionf
 			tools.Information{Key: "path", Value: resolved.displayPath}, tools.Information{Key: "configured_extensions", Value: strings.Join(extensions, " ")},
 			tools.Information{Key: "suggestion", Value: "add a server to tools.native.lsp.servers, or search with exec (rg)"}), nil
 	}
-	info, err := os.Stat(resolved.realPath)
+	info, err := os.Stat(resolved.openPath)
 	if err != nil || info.IsDir() {
 		return tools.ExecutionError(callID, tools.StatusError, "not_a_file", "The path is not a readable file", tools.Information{Key: "path", Value: resolved.displayPath}), nil
 	}
@@ -111,7 +111,7 @@ func executeLSP(ctx context.Context, arguments map[string]any, settings sessionf
 		return tools.ExecutionError(callID, tools.StatusBlocked, "size_limit", "The file exceeds tools.native.lsp.max_file_bytes",
 			tools.Information{Key: "path", Value: resolved.displayPath}, tools.Information{Key: "bytes", Value: info.Size()}, tools.Information{Key: "max_bytes", Value: settings.MaxFileBytes}), nil
 	}
-	data, err := os.ReadFile(resolved.realPath)
+	data, err := readTarget(resolved)
 	if err != nil || !utf8.Valid(data) {
 		return tools.ExecutionError(callID, tools.StatusError, "unreadable_file", "The file could not be read as UTF-8 text", tools.Information{Key: "path", Value: resolved.displayPath}), nil
 	}
@@ -313,22 +313,17 @@ func (v *lspView) lines(path string) []string {
 		return lines
 	}
 	var lines []string
-	if v.readable(path) {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Size() <= v.maxFileBytes {
-			if data, err := os.ReadFile(path); err == nil && utf8.Valid(data) {
+	// Only a path the tool's read rules allow shows its text; outside them only the path and
+	// position are shown. The file is read as the run sees it (through an overlay run's holder).
+	if target, failure := resolveExistingTarget(path, v.root, v.policy, ""); failure == "" {
+		if info, err := os.Stat(target.openPath); err == nil && !info.IsDir() && info.Size() <= v.maxFileBytes {
+			if data, err := readTarget(target); err == nil && utf8.Valid(data) {
 				lines = strings.Split(string(data), "\n")
 			}
 		}
 	}
 	v.files[path] = lines
 	return lines
-}
-
-// readable reports whether the tool's read rules allow path; outside them only the path and
-// position are shown, never the text.
-func (v *lspView) readable(path string) bool {
-	_, failure := resolveExistingTarget(path, v.root, v.policy, "")
-	return failure == ""
 }
 
 func (v *lspView) place(path string, position lspPos) (string, string) {

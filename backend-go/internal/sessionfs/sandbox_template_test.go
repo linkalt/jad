@@ -81,20 +81,27 @@ func TestSandboxReadWriteKeysAddPathsAndWriteImpliesRead(t *testing.T) {
 
 func TestSandboxNewKeyRefusals(t *testing.T) {
 	for name, test := range map[string]struct{ raw, want string }{
-		"both spellings":       {`{"writable_paths":["/x"],"write":{"paths":["/y"]}}`, "older spelling of sandbox.write.paths"},
-		"both plan spellings":  {`{"plan_writable_paths":["/x"],"write":{"plan_paths":["/y"]}}`, "older spelling of sandbox.write.plan_paths"},
-		"read not object":      {`{"read":["/"]}`, "sandbox.read must be an object"},
-		"unknown read key":     {`{"read":{"path":["/"]}}`, "did you mean paths"},
-		"unknown write key":    {`{"write":{"plan":["/"]}}`, "sandbox.write"},
-		"system in write":      {`{"write":{"paths":["{system}"]}}`, "{system} is a read path of its own"},
-		"system inside a path": {`{"read":{"paths":["{system}/x"]}}`, "{system} is a read path of its own"},
-		"system in hide":       {`{"hide_paths":["{system}"]}`, "{system} is a read path of its own"},
-		"relative read":        {`{"read":{"paths":["src"]}}`, "read.paths[0] must be an absolute path"},
-		"isolation mode":       {`{"isolation":{"mode":"overlay"}}`, `isolation.mode must be "none" or "worktree"`},
-		"isolation later key":  {`{"isolation":{"materialize":"overlay"}}`, "sandbox.isolation"},
-		"isolation base":       {`{"isolation":{"base":"tip"}}`, `isolation.base must be "head" or "working"`},
-		"blank template":       {`{"template":" "}`, "template must be the name"},
-		"string":               {`"workspace-writer"`, "needs the catalog layout"},
+		"both spellings":        {`{"writable_paths":["/x"],"write":{"paths":["/y"]}}`, "older spelling of sandbox.write.paths"},
+		"both plan spellings":   {`{"plan_writable_paths":["/x"],"write":{"plan_paths":["/y"]}}`, "older spelling of sandbox.write.plan_paths"},
+		"read not object":       {`{"read":["/"]}`, "sandbox.read must be an object"},
+		"unknown read key":      {`{"read":{"path":["/"]}}`, "did you mean paths"},
+		"unknown write key":     {`{"write":{"plan":["/"]}}`, "sandbox.write"},
+		"system in write":       {`{"write":{"paths":["{system}"]}}`, "{system} is a read path of its own"},
+		"system inside a path":  {`{"read":{"paths":["{system}/x"]}}`, "{system} is a read path of its own"},
+		"system in hide":        {`{"hide_paths":["{system}"]}`, "{system} is a read path of its own"},
+		"relative read":         {`{"read":{"paths":["src"]}}`, "read.paths[0] must be an absolute path"},
+		"isolation mode":        {`{"isolation":{"mode":"overlay"}}`, `isolation.mode must be "none" or "worktree"`},
+		"isolation materialize": {`{"isolation":{"materialize":"copy"}}`, `isolation.materialize must be "auto", "checkout" or "overlay"`},
+		"isolation unknown key": {`{"isolation":{"shared":["x"]}}`, "sandbox.isolation"},
+		"share with checkout":   {`{"isolation":{"materialize":"checkout","share_paths":["node_modules"]}}`, `share_paths needs the overlay materialiser`},
+		"share not array":       {`{"isolation":{"share_paths":"node_modules"}}`, "isolation.share_paths must be an array"},
+		"share absolute":        {`{"isolation":{"share_paths":["/opt/x"]}}`, `share_paths entry "/opt/x"`},
+		"share outside":         {`{"isolation":{"share_paths":["../x"]}}`, `share_paths entry "../x"`},
+		"share placeholder":     {`{"isolation":{"share_paths":["{workspace}/x"]}}`, `share_paths entry "{workspace}/x"`},
+		"share dot":             {`{"isolation":{"share_paths":["."]}}`, `share_paths entry "."`},
+		"isolation base":        {`{"isolation":{"base":"tip"}}`, `isolation.base must be "head" or "working"`},
+		"blank template":        {`{"template":" "}`, "template must be the name"},
+		"string":                {`"workspace-writer"`, "needs the catalog layout"},
 	} {
 		_, err := normalizeSandbox(json.RawMessage(test.raw), "s")
 		if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -198,6 +205,9 @@ func TestSandboxTemplateRefusals(t *testing.T) {
 		"bad name":                   {nil, "-writer", "must start with a letter or digit"},
 		"template key not a string":  {nil, map[string]any{"template": 3}, "template must be the name"},
 		"wrong schema_version":       {map[string]map[string]any{"writer": envSandbox(map[string]any{"schema_version": 2})}, "writer", "unsupported schema_version 2"},
+		// The two halves come from different layers; the merged object is what is checked.
+		"share_paths over a checkout template": {map[string]map[string]any{"writer": envSandbox(map[string]any{"isolation": map[string]any{"materialize": "checkout"}})}, map[string]any{"template": "writer", "isolation": map[string]any{"share_paths": []string{"node_modules"}}}, "share_paths needs the overlay materialiser"},
+		"checkout over a share_paths template": {map[string]map[string]any{"writer": envSandbox(map[string]any{"isolation": map[string]any{"share_paths": []string{"node_modules"}}})}, map[string]any{"template": "writer", "isolation": map[string]any{"materialize": "checkout"}}, "share_paths needs the overlay materialiser"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := layouttest.Write(t, layouttest.Spec{SandboxTemplates: test.templates, Settings: map[string]any{"sandbox": test.value}})

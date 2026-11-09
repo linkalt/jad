@@ -291,6 +291,12 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 		if own.Isolation.Base == SandboxIsolationBaseWorking {
 			agent.IsolationBase = SandboxIsolationBaseWorking
 		}
+		if own.Isolation.Materialize != "" {
+			agent.IsolationMaterialize = own.Isolation.Materialize
+		}
+		if len(own.Isolation.SharePaths) > 0 {
+			agent.IsolationShare = own.Isolation.SharePaths
+		}
 		if !enabled {
 			continue
 		}

@@ -5,7 +5,6 @@ package native
 import (
 	"os"
 	"strconv"
-	"strings"
 )
 
 // processStartTime reads the start time of a process, in clock ticks since boot, from
@@ -18,20 +17,10 @@ func processStartTime(pid int) uint64 {
 	return parseProcStatStart(string(data))
 }
 
-// parseProcStatStart takes field 22 of a stat line. The command name (field 2) sits in
-// parentheses and may hold spaces and parentheses, so the fields are counted from the
-// last closing parenthesis; after it the first field is number 3.
+// parseProcStatStart is the start time of a stat line (field 22, see parseProcessStat), 0 when
+// it cannot be read.
 func parseProcStatStart(stat string) uint64 {
-	end := strings.LastIndexByte(stat, ')')
-	if end < 0 {
-		return 0
-	}
-	fields := strings.Fields(stat[end+1:])
-	const startIndex = 22 - 3
-	if len(fields) <= startIndex {
-		return 0
-	}
-	start, err := strconv.ParseUint(fields[startIndex], 10, 64)
+	start, _, err := parseProcessStat(stat)
 	if err != nil {
 		return 0
 	}

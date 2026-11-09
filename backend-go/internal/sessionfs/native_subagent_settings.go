@@ -241,6 +241,11 @@ type NativeSubagentAgent struct {
 	// IsolationBase is sandbox.isolation.base of the agent's own sandbox: what its worktree
 	// starts from (SandboxIsolationBaseWorking; empty is HEAD). Left out of JSON when empty.
 	IsolationBase string `json:",omitempty"`
+	// IsolationMaterialize and IsolationShare are sandbox.isolation.materialize and
+	// share_paths of the agent's own sandbox (how its worktree gets its files, and the
+	// session folders bound read-only into an overlay run). Left out of JSON when empty.
+	IsolationMaterialize string   `json:",omitempty"`
+	IsolationShare       []string `json:",omitempty"`
 	// Sandbox is the agent's own sandbox (the agent key sandbox: a template name, a template
 	// with overrides or an object), narrowed by the session's (NarrowSandbox); nil runs the
 	// agent in its caller's. Left out of JSON when nil, so the fingerprint of an agent without

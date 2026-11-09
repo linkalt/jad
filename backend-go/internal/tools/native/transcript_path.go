@@ -99,10 +99,10 @@ func (t *transcriptTool) resolve(ctx context.Context, selector, source string, e
 		if failure != "" {
 			return TranscriptFiles{}, "", failure
 		}
-		if !looksLikeTranscript(target.realPath, t.settings.LineMaxBytes) {
+		if !looksLikeTranscript(target.openPath, t.settings.LineMaxBytes) {
 			return TranscriptFiles{}, "", t.fail(execution, tools.StatusInvalidInput, "not_a_transcript", "The file is not a messages.jsonl transcript", tools.Information{Key: "path", Value: target.displayPath})
 		}
-		return TranscriptFiles{Messages: target.realPath}, "path:" + target.displayPath, ""
+		return TranscriptFiles{Messages: target.openPath}, "path:" + target.displayPath, ""
 	case "subagent":
 		parts, ok := splitTranscriptName(rest)
 		if !ok || (len(parts) != 1 && len(parts) != 3 && len(parts) != 4) || !transcriptRunID.MatchString(parts[len(parts)-1]) {

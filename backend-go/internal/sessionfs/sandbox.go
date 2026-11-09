@@ -20,6 +20,9 @@ const (
 
 	defaultSandboxBackend    = SandboxBackendBwrap
 	defaultSandboxExecutable = "bwrap"
+	// DefaultSandboxExecutable is the bwrap a sandbox without executable starts, and the one
+	// an overlay run's holder starts when the run has no bwrap sandbox of its own.
+	DefaultSandboxExecutable = defaultSandboxExecutable
 	maxSandboxPaths          = 64
 
 	// defaultSandboxProxyPort is the loopback port inside the sandbox where network_allow's
@@ -72,7 +75,7 @@ var sandboxKeys = []string{"template", "enabled", "tools", "backend", "executabl
 var (
 	sandboxReadKeys      = []string{"paths", "add_paths"}
 	sandboxWriteKeys     = []string{"paths", "add_paths", "plan_paths", "add_plan_paths"}
-	sandboxIsolationKeys = []string{"mode", "base"}
+	sandboxIsolationKeys = []string{"mode", "base", "materialize", "share_paths"}
 )
 
 // sandboxAddKeys maps a list key of a sandbox object (or of its read and write objects) to
@@ -115,6 +118,14 @@ const (
 	// a snapshot of the session's tracked and untracked, not ignored files.
 	SandboxIsolationBaseHead    = "head"
 	SandboxIsolationBaseWorking = "working"
+	// Materialisers of sandbox.isolation.materialize: how a run's worktree gets its files.
+	// checkout writes a full git checkout; overlay mounts the run's changes over a shared,
+	// read-only checkout of the start commit inside a per-run bwrap holder (Linux, bwrap 0.10
+	// or later, nsenter); auto, the default, takes overlay where a trial start shows it works
+	// and checkout elsewhere (docs/isolation-decisions.md D1, D14).
+	SandboxIsolationMaterializeAuto     = "auto"
+	SandboxIsolationMaterializeCheckout = "checkout"
+	SandboxIsolationMaterializeOverlay  = "overlay"
 )
 
 // SandboxSettings is the sandbox setting: the child processes of the listed tools start
@@ -159,13 +170,20 @@ type SandboxSettings struct {
 }
 
 // SandboxIsolation is sandbox.isolation, read even when the sandbox is not enabled, since a
-// worktree without confinement is the agent key isolation. materialize and share_paths come
-// with the overlay materialiser (docs/isolation-sandbox-design.md P4).
+// worktree without confinement is the agent key isolation.
 type SandboxIsolation struct {
 	Mode string `json:",omitempty"`
 	// Base is what a run's worktree starts from: SandboxIsolationBaseHead (also when empty)
 	// or SandboxIsolationBaseWorking (docs/isolation-decisions.md D12).
 	Base string `json:",omitempty"`
+	// Materialize is how the worktree gets its files: SandboxIsolationMaterializeAuto (also
+	// when empty), SandboxIsolationMaterializeCheckout or SandboxIsolationMaterializeOverlay.
+	Materialize string `json:",omitempty"`
+	// SharePaths are folders, relative to the session's working directory, bound read-only
+	// from the session into an overlay run (ignored folders such as node_modules are in no
+	// commit); empty by default (D6). Never together with materialize checkout (refused at
+	// load); with auto a host without overlay refuses the run (native.openIsolatedTree).
+	SharePaths []string `json:",omitempty"`
 }
 
 // WholeFileSystemReadable reports whether ReadPaths cover the whole file system (the default),
@@ -469,7 +487,45 @@ func sandboxIsolation(fields map[string]json.RawMessage, path, section string) (
 			return SandboxIsolation{}, configError("%s: %s.isolation.base must be %q or %q", path, section, SandboxIsolationBaseHead, SandboxIsolationBaseWorking)
 		}
 	}
+	if raw, exists := object["materialize"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &isolation.Materialize); err != nil || (isolation.Materialize != SandboxIsolationMaterializeAuto && isolation.Materialize != SandboxIsolationMaterializeCheckout && isolation.Materialize != SandboxIsolationMaterializeOverlay) {
+			return SandboxIsolation{}, configError("%s: %s.isolation.materialize must be %q, %q or %q", path, section, SandboxIsolationMaterializeAuto, SandboxIsolationMaterializeCheckout, SandboxIsolationMaterializeOverlay)
+		}
+	}
+	if raw, exists := object["share_paths"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		var shares []string
+		if err := json.Unmarshal(raw, &shares); err != nil {
+			return SandboxIsolation{}, configError("%s: %s.isolation.share_paths must be an array of folders relative to the session's working directory", path, section)
+		}
+		for _, share := range shares {
+			if !validSharePath(share) {
+				return SandboxIsolation{}, configError("%s: %s.isolation.share_paths entry %q must be a folder relative to the session's working directory, without .. or placeholders", path, section, share)
+			}
+			isolation.SharePaths = appendNewStrings(isolation.SharePaths, filepath.ToSlash(filepath.Clean(share)))
+		}
+	}
+	if isolation.Materialize == SandboxIsolationMaterializeCheckout && len(isolation.SharePaths) > 0 {
+		// share_paths are binds of the overlay materialiser; a checkout has no way to give them
+		// (and a link into the session would let a run write through), so the pair is refused
+		// rather than the folders dropped.
+		return SandboxIsolation{}, configError("%s: %s.isolation.share_paths needs the overlay materialiser: it cannot be set with materialize %q (use %q or %q)", path, section, SandboxIsolationMaterializeCheckout, SandboxIsolationMaterializeAuto, SandboxIsolationMaterializeOverlay)
+	}
 	return isolation, nil
+}
+
+// validSharePath reports whether share names a folder inside the session's working directory:
+// slash-separated names, none of them empty, . or .., and no placeholder (the schema's
+// pattern says the same).
+func validSharePath(share string) bool {
+	if share == "" || strings.ContainsAny(share, "{}\\") {
+		return false
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(share, "/"), "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // appendNewStrings appends each value not already in list.

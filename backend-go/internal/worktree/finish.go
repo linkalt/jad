@@ -37,6 +37,23 @@ func (t *Tree) Finish(ctx context.Context, message string, launcher Launcher) (O
 		// sandbox that keeps the shared git directory read-only refuses.
 		launcher = nil
 	}
+	if t.overlay != nil {
+		// Deferred first, so it runs after the mount has stopped.
+		defer t.unlock()
+	}
+	defer t.collected()
+	// From here the run's work is being collected: persisted, so that a failure or a crash
+	// leaves the layers marked as waiting for another try, which nothing deletes.
+	if err := t.markCollectPending(); err != nil {
+		outcome.Kept = true
+		return outcome, fmt.Errorf("record that the collection started: %w", err)
+	}
+	if t.overlay != nil && launcher == nil {
+		// On the host the folder holds only the .git file: git there would see every file
+		// of the run deleted.
+		outcome.Kept = true
+		return outcome, errors.New("an overlay worktree can only be collected inside its mount, and no launcher was given")
+	}
 	tip, err := t.collect(ctx, message, launcher)
 	if err != nil {
 		outcome.Kept = true
@@ -46,6 +63,7 @@ func (t *Tree) Finish(ctx context.Context, message string, launcher Launcher) (O
 	outcome.Changed = tip != t.Start
 	if !outcome.Changed {
 		outcome.Commit = t.Base
+		t.collected()
 		if err := t.remove(ctx, t.attached); err != nil {
 			outcome.Kept = true
 			return outcome, err
@@ -58,6 +76,7 @@ func (t *Tree) Finish(ctx context.Context, message string, launcher Launcher) (O
 			return outcome, err
 		}
 	}
+	t.collected()
 	branchTip, statFrom := tip, t.Base
 	if t.Start != t.Base {
 		if rebased, ok := t.ontoBase(ctx, tip, message); ok {
@@ -323,6 +342,7 @@ func (t *Tree) remove(ctx context.Context, dropBranch bool) error {
 	if _, err := run(ctx, t.options, t.common, "worktree", "prune"); err != nil {
 		return fmt.Errorf("git worktree prune: %w", err)
 	}
+	t.releaseBase(ctx)
 	if dropBranch {
 		if _, err := run(ctx, t.options, t.common, "branch", "--quiet", "-D", t.Branch); err != nil {
 			return fmt.Errorf("git branch -D: %w", err)
@@ -342,5 +362,5 @@ func (t *Tree) removeFolders() error {
 			return fmt.Errorf("remove the worktree's admin folder: %w", err)
 		}
 	}
-	return nil
+	return t.removeOverlay()
 }

@@ -31,6 +31,10 @@ type sandboxLaunch struct {
 	configured string
 	resolved   string
 	args       []string
+	// dir is the folder the process starts in on the host: the call's cwd, or the root for a
+	// process that joins an overlay run's holder, whose cwd may exist only in there (the
+	// holder sets it inside).
+	dir string
 }
 
 // callSandbox is the sandbox the children tool starts for one call start in: the run's own
@@ -55,6 +59,20 @@ func callSandbox(tool string, configured *sessionfs.SandboxSettings, execution t
 // it. The child keeps its configured name as argv[0] under bwrap; a command backend sees the
 // resolved path.
 func sandboxed(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configured, resolved string, args []string) (sandboxLaunch, error) {
+	launch, err := sandboxedLaunch(sandbox, place, configured, resolved, args)
+	if err != nil {
+		return sandboxLaunch{}, err
+	}
+	launch.dir = place.cwd
+	if holder := holderFor(place.workspace); holder != nil {
+		// An overlay run: every process of the run, sandboxed or not, starts in its holder.
+		return joinHolder(holder, place.cwd, launch)
+	}
+	return launch, nil
+}
+
+// sandboxedLaunch is sandboxed without an overlay run's holder.
+func sandboxedLaunch(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configured, resolved string, args []string) (sandboxLaunch, error) {
 	if sandbox == nil {
 		return sandboxLaunch{configured: configured, resolved: resolved, args: args}, nil
 	}
@@ -156,7 +174,7 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(writes, expand)))...)
 	for _, path := range sandbox.HidePaths {
 		path = expand(path)
-		info, err := os.Stat(path)
+		info, err := statInRun(path)
 		switch {
 		case path == "" || err != nil:
 		case !whole && !sandboxVisible(path, readable, writable):
@@ -234,11 +252,20 @@ func gitCommonDir(dir string) string {
 // sandboxKey is the part of a standby's identity the sandbox makes: two launches in different
 // sandboxes (or workspaces) are different processes.
 func sandboxKey(sandbox *sessionfs.SandboxSettings, place sandboxPlace) string {
+	holder := holderOf(place.workspace)
 	if sandbox == nil {
+		if holder != 0 {
+			// Without a sandbox an overlay run's process still lives in its holder.
+			return "holder\x00" + strconv.Itoa(holder)
+		}
 		return ""
 	}
 	settings, _ := json.Marshal(sandbox)
-	return string(settings) + "\x00" + place.workspace + "\x00" + place.tmp + "\x00" + place.sessionDir
+	key := string(settings) + "\x00" + place.workspace + "\x00" + place.tmp + "\x00" + place.sessionDir
+	if holder != 0 {
+		key += "\x00holder\x00" + strconv.Itoa(holder)
+	}
+	return key
 }
 
 // sandboxDescription is the sentence added to a tool's description when its calls run in a

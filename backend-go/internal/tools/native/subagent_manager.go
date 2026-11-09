@@ -167,6 +167,9 @@ func (m *SubagentManager) recover(keep int, worktreeOptions worktree.Options) {
 			run.endedAt = now
 			m.store.save(run)
 			recoverWorktree(context.Background(), run, worktreeOptions)
+		} else if run.worktree != nil && run.worktree.Path != "" {
+			// A finished run whose collection failed: its folders were kept, and are tried again.
+			recoverWorktree(context.Background(), run, worktreeOptions)
 		}
 		m.runs[run.id] = run
 		m.finished = append(m.finished, run.id)
@@ -208,14 +211,16 @@ type droppedRun struct {
 func (m *SubagentManager) trimOwnerLocked(owner string, keep int) []droppedRun {
 	count := 0
 	for _, id := range m.finished {
-		if run := m.runs[id]; run != nil && run.owner == owner {
+		if run := m.runs[id]; run != nil && run.owner == owner && !run.keepsWorktree() {
 			count++
 		}
 	}
 	var dropped []droppedRun
 	for index := 0; index < len(m.finished); {
 		run := m.runs[m.finished[index]]
-		if run != nil && (run.owner != owner || count <= keep) {
+		// A run whose worktree is kept (its collection failed) is the only record of those
+		// folders: it stays until the work is collected, whatever the limit.
+		if run != nil && (run.owner != owner || count <= keep || run.keepsWorktree()) {
 			index++
 			continue
 		}
@@ -225,6 +230,13 @@ func (m *SubagentManager) trimOwnerLocked(owner string, keep int) []droppedRun {
 		dropped = append(dropped, m.dropFinishedLocked(index))
 	}
 	return dropped
+}
+
+// keepsWorktree reports whether the run still has a worktree folder that was kept.
+func (r *subagentRun) keepsWorktree() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.worktree != nil && r.worktree.Path != "" && r.state != subagentRunQueued && r.state != subagentRunRunning
 }
 
 // dropFinishedLocked forgets the ended run at index of m.finished; see trimOwnerLocked.
@@ -344,10 +356,12 @@ type subagentRun struct {
 	// done closes once, after the final state is set.
 	done chan struct{}
 
-	mu     sync.Mutex
-	state  string
-	result SubagentResult
-	reason string
+	mu    sync.Mutex
+	state string
+	// retrying is set while a failed collection of the run's worktree is tried again.
+	retrying bool
+	result   SubagentResult
+	reason   string
 	// stopReason is why the host stopped the run; the final stopped state keeps it as reason.
 	stopReason string
 	endedAt    time.Time

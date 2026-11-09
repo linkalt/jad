@@ -25,8 +25,8 @@ entries).
 - **Last full run (`a308767`):** `go test ./internal/... ./cmd/...` passed 5,487 tests and failed 0,
   with 29 skipped, across 45 packages. `go vet`, `gofmt -l` and `git diff --check` were clean.
   The suite also passes with bwrap hidden from `PATH`.
-- **Not done:** P4 (next section), P6 (optional), D7 (still waits on your answer; see "Needs the
-  user" in the decisions file).
+- **Not done:** P6 (optional), D7 (still waits on your answer; see "Needs the user" in the
+  decisions file). P4 is implemented since (next section), with the gaps its decisions list.
 
 ## Using it with the sandbox off
 
@@ -49,6 +49,11 @@ entries).
   The distribution's bwrap has a profile. If the fallback cannot start, the backend logs it once.
 
 ## P4: overlay materialiser
+
+**Status (2026-11-10):** implemented on a host with bubblewrap 0.13.1 and util-linux 2.42.4; see
+"P4 implementation" in `docs/isolation-decisions.md` (what was built, where it departs from the
+design, what is not done) and the T-120 batch 15 entries in `backend-go/DECISIONS.md`. The
+section below is the original brief.
 
 **Why it was not done here:** it needs bwrap 0.10 or later (`--overlay-src`/`--overlay`), and the
 cloud container had 0.9.0 (P0 table in the decisions file). Check on your host with
@@ -95,6 +100,8 @@ D1, D6 and D14, plus design §13 (risks).
 
 ## Open items carried over
 
+- **`jad check`** now reports (as `note:` lines) whether the P5 fallback starts and whether
+  overlay runs work (P4).
 - **`tool_smith`** has no P5 fallback, so its code calls are still refused in plan mode.
 - **Hooks in plan mode** are not confined by the fallback, only by an enabled sandbox that lists
   `hooks` (U1).

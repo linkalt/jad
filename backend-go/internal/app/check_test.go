@@ -2,16 +2,107 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"jad/backend-go/internal/sessionfs"
 )
+
+func init() {
+	// What the host offers is tried by hostNotes' own test; the file checks stay the same on
+	// every host.
+	checkOverlay = func(context.Context, string, time.Duration) error { return nil }
+	checkPlanFallback = func(context.Context) error { return nil }
+}
+
+func TestCheckHostNotesSayWhatDoesNotWorkHere(t *testing.T) {
+	works := func(context.Context) error { return nil }
+	overlayWorks := func(context.Context, string, time.Duration) error { return nil }
+	if notes := hostNotes(nil, overlayWorks, works); len(notes) != 0 {
+		t.Fatalf("notes on a host where everything works: %q", notes)
+	}
+	var tried []string
+	overlayFails := func(_ context.Context, executable string, _ time.Duration) error {
+		tried = append(tried, executable)
+		return errors.New("no --overlay")
+	}
+	fails := func(context.Context) error { return errors.New("no user namespaces") }
+	sandboxes := []sessionfs.CheckedSandbox{
+		{Settings: &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, Executable: "/opt/bwrap"}},
+		{Settings: &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, Executable: sessionfs.DefaultSandboxExecutable}},
+		{Settings: &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendCommand}},
+	}
+	notes := hostNotes(sandboxes, overlayFails, fails)
+	if len(notes) != 3 || !strings.Contains(notes[0], "materialize auto") || !strings.Contains(notes[0], "no --overlay") || !strings.Contains(notes[2], "plan mode") || !strings.Contains(notes[2], "no user namespaces") {
+		t.Fatalf("notes = %q", notes)
+	}
+	if strings.Join(tried, " ") != sessionfs.DefaultSandboxExecutable+" /opt/bwrap" {
+		t.Fatalf("overlay tried with %q, want the default bwrap and each configured one once", tried)
+	}
+}
+
+func TestCheckFilesWritesTheHostNotesBeforeTheSummary(t *testing.T) {
+	overlay, fallback := checkOverlay, checkPlanFallback
+	t.Cleanup(func() { checkOverlay, checkPlanFallback = overlay, fallback })
+	checkPlanFallback = func(context.Context) error { return errors.New("no user namespaces") }
+	_, out := newLayoutFixture(t).checkFiles(t)
+	if !strings.HasPrefix(out, "note: plan mode: ") || !strings.HasSuffix(out, "checked 6 files, 0 problems\n") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+// F1: share_paths are never run without the folders, so a setting that names them is a problem
+// of jad check where the overlay trial fails, and none where it works.
+func TestCheckFilesRefusesShareEntriesWhereTheOverlayDoesNotWork(t *testing.T) {
+	overlay := checkOverlay
+	t.Cleanup(func() { checkOverlay = overlay })
+	f := newLayoutFixture(t)
+	f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev","review"]},"settings":{"sandbox":{"enabled":false,"isolation":{"mode":"worktree","share_paths":["node_modules"]}}}}`)
+	if valid, out := f.checkFiles(t); !valid {
+		t.Fatalf("the overlay works, yet: %s", out)
+	}
+	checkOverlay = func(_ context.Context, executable string, _ time.Duration) error {
+		return errors.New("no --overlay in " + executable)
+	}
+	valid, out := f.checkFiles(t)
+	if valid || !strings.Contains(out, "session demo sandbox.isolation: isolation.share_paths [\"node_modules\"] need the overlay materialiser") || !strings.Contains(out, "no --overlay in "+sessionfs.DefaultSandboxExecutable) {
+		t.Fatalf("valid = %v, output %q", valid, out)
+	}
+	// A session whose isolation names no share_paths is not a problem on the same host.
+	f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev","review"]},"settings":{"sandbox":{"enabled":false,"isolation":{"mode":"worktree"}}}}`)
+	if valid, out := f.checkFiles(t); !valid || strings.Contains(out, "need the overlay materialiser") {
+		t.Fatalf("without share_paths: %v %q", valid, out)
+	}
+}
+
+// The overlay is tried once for each bwrap the settings name, and each setting is named.
+func TestShareProblemsTryEachExecutableOnce(t *testing.T) {
+	var tried []string
+	overlay := func(_ context.Context, executable string, _ time.Duration) error {
+		tried = append(tried, executable)
+		return errors.New("fails")
+	}
+	custom := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, Executable: "/opt/bwrap"}
+	problems := shareProblems([]sessionfs.CheckedShares{
+		{Where: "a", Paths: []string{"x"}},
+		{Where: "b", Paths: []string{"x"}, Sandbox: custom},
+		{Where: "c", Paths: []string{"y"}, Sandbox: &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendCommand}},
+	}, overlay)
+	if len(problems) != 3 || problems[1].ID != "b" || !strings.Contains(problems[1].Message, "/opt/bwrap") {
+		t.Fatalf("problems = %+v", problems)
+	}
+	if strings.Join(tried, " ") != sessionfs.DefaultSandboxExecutable+" /opt/bwrap" {
+		t.Fatalf("tried %q", tried)
+	}
+}
 
 func (f *layoutFixture) checkFiles(t *testing.T) (bool, string) {
 	t.Helper()

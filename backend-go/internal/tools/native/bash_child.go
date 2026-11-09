@@ -26,7 +26,9 @@ var (
 )
 
 type bashSpillOutcome struct {
-	path         string
+	path string
+	// at is where jad reaches path: path itself, or through an overlay run's holder.
+	at           string
 	writtenBytes int64
 	capped       bool
 	err          string
@@ -129,7 +131,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 		return finishBashSpawnFailure(result, request.collector, request.spill, err, started)
 	}
 	command := newBashCommand(launch.configured, launch.resolved, launch.args...)
-	command.Dir = request.cwd
+	command.Dir = launch.dir
 	command.Env = request.environment
 	command.Stdout = stdoutWriter
 	command.Stderr = stderrWriter

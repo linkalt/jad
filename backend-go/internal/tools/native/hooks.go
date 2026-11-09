@@ -227,7 +227,7 @@ func hookWorkingDirectory(hook sessionfs.PostEditHook, workspaceRoot, file strin
 	}
 	marker := strings.TrimPrefix(hook.Cwd, sessionfs.HookCwdNearestPrefix)
 	for sessionfs.PathWithin(workspaceRoot, directory) {
-		if _, err := os.Stat(filepath.Join(directory, marker)); err == nil {
+		if _, err := statInRun(filepath.Join(directory, marker)); err == nil {
 			return directory, true
 		}
 		parent := filepath.Dir(directory)

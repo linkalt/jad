@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func ProbeSandbox(ctx context.Context, sandbox *sessionfs.SandboxSettings, worki
 	defer cancel()
 	command := exec.CommandContext(ctx, launch.resolved, launch.args...)
 	command.Args[0] = launch.configured
-	command.Dir = workingDir
+	command.Dir = launch.dir
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	// A timeout kills the whole group, so a wrapper's own children cannot keep stderr open.
@@ -53,4 +54,17 @@ func ProbeSandbox(ctx context.Context, sandbox *sessionfs.SandboxSettings, worki
 		reason = err.Error()
 	}
 	return fmt.Errorf("a trial start in the sandbox failed, so every sandboxed call would fail: %s", reason)
+}
+
+// ProbePlanFallback starts the sandbox that plan-mode and read_only exec calls fall back to
+// when no sandbox covers exec (sessionfs.PlanFallbackSandbox), as planSandboxWorks does before
+// the first such call, and reports why it does not work here.
+func ProbePlanFallback(ctx context.Context) error {
+	fallback := sessionfs.PlanFallbackSandbox(nil)
+	if fallback == nil {
+		return errors.New("neither bwrap nor seatbelt runs on this system")
+	}
+	probed := *fallback.ForPlanMode()
+	probed.ReadOnlyPaths = nil
+	return ProbeSandbox(ctx, &probed, os.TempDir())
 }

@@ -11,18 +11,19 @@ import (
 // open sequence of the library; the exec helper reader, the tool_smith staging copy and the list
 // reader all go through it (P6BM-17).
 func openLibraryFile(dir, realRoot, file string) (*os.File, os.FileInfo, string) {
-	real, err := filepath.EvalSymlinks(filepath.Join(dir, file))
+	real, err := evalSymlinksInRun(filepath.Join(dir, file))
 	if err != nil {
 		return nil, nil, "cannot be resolved: " + err.Error()
 	}
 	if !toolSmithInside(dir, real) || !toolSmithInside(realRoot, real) {
 		return nil, nil, "symlink leaves the functions directory"
 	}
-	info, err := os.Stat(real)
+	// In an overlay run the file is reached through the run's holder (viewPath).
+	info, err := os.Stat(viewPath(real))
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, nil, "is not a regular file"
 	}
-	return openToolSmithFile(real, info)
+	return openToolSmithFile(viewPath(real), info)
 }
 
 // openToolSmithFile opens the resolved library file without following a symlink and checks that

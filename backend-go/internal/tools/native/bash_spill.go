@@ -45,7 +45,10 @@ type bashSpillPlan struct {
 }
 
 type bashSpillWriter struct {
-	path     string
+	path string
+	// at is where jad writes path: path itself, or, in an overlay run, through its holder
+	// (viewPath), so the run sees the file where its result names it.
+	at       string
 	capBytes int64
 	file     *os.File
 	written  int64
@@ -106,10 +109,10 @@ func planBashSpill(
 			).Replace(pruneTemplate))
 		}
 		template := pruneTemplate
-		pruneBashSpillFilesThrottled(filepath.Dir(path), template+"\x00"+workspaceRoot+"\x00"+sessionDir, func() *regexp.Regexp {
+		pruneBashSpillFilesThrottled(viewPath(filepath.Dir(path)), template+"\x00"+workspaceRoot+"\x00"+sessionDir, func() *regexp.Regexp {
 			return bashSpillPruneRegexp(template, workspaceRoot, sessionDir)
 		}, policy.RetentionDays, time.Duration(policy.PruneIntervalSeconds)*time.Second)
-		plan.writers[stream] = &bashSpillWriter{path: path, capBytes: policy.CapBytes}
+		plan.writers[stream] = &bashSpillWriter{path: path, at: viewPath(path), capBytes: policy.CapBytes}
 	}
 	return plan
 }
@@ -129,11 +132,11 @@ func (writer *bashSpillWriter) write(chunk []byte) {
 		writer.capped = true
 	}
 	if writer.file == nil {
-		if err := os.MkdirAll(filepath.Dir(writer.path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(writer.at), 0o755); err != nil {
 			writer.failure = err.Error()
 			return
 		}
-		file, err := os.OpenFile(writer.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		file, err := os.OpenFile(writer.at, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			writer.failure = err.Error()
 			return
@@ -163,6 +166,7 @@ func (writer *bashSpillWriter) close() bashSpillOutcome {
 	}
 	return bashSpillOutcome{
 		path:         writer.path,
+		at:           writer.at,
 		writtenBytes: writer.written,
 		capped:       writer.capped,
 		err:          writer.failure,
@@ -197,7 +201,7 @@ func applyBashSpillPolicy(
 			streamTruncated = result.output.stderr.truncated
 		}
 		if policy.Keep != "always" && !streamTruncated {
-			_ = os.Remove(outcome.path)
+			_ = os.Remove(outcome.at)
 			continue
 		}
 		kept := &bashKeptSpill{

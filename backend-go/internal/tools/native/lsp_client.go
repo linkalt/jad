@@ -145,7 +145,7 @@ func startLSPClient(ctx context.Context, server sessionfs.NativeLSPServer, root 
 	}
 	command := exec.Command(launch.resolved, launch.args...)
 	command.Args[0] = launch.configured
-	command.Dir = root
+	command.Dir = launch.dir
 	command.Env = environmentWithoutServerToken()
 	for name, value := range server.Env {
 		command.Env = append(command.Env, name+"="+value)

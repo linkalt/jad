@@ -13,18 +13,18 @@ func TestNativeSubagentWorktreeDefaultsAndValues(t *testing.T) {
 	if got.Worktree != DefaultNativeSubagentWorktreeSettings() || got.Agents[0].Isolation != "" || got.Agents[0].Isolated() || !got.Agents[0].ChangesWorkspace() {
 		t.Fatalf("defaults: %+v, agent %+v", got.Worktree, got.Agents[0])
 	}
-	want := NativeSubagentWorktreeSettings{Dir: "", BranchPrefix: "jad/", Git: "git", AuthorName: "jad", AuthorEmail: "jad@localhost", TimeoutMS: 60_000}
+	want := NativeSubagentWorktreeSettings{Dir: "", BranchPrefix: "jad/", Git: "git", AuthorName: "jad", AuthorEmail: "jad@localhost", TimeoutMS: 60_000, CollectAttempts: 3}
 	if got.Worktree != want {
 		t.Fatalf("default values = %+v", got.Worktree)
 	}
 
 	custom, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{
-		"worktree": {"dir": "trees", "branch_prefix": "agents/", "git": "/usr/bin/git", "author_name": "Bot", "author_email": "bot@example.com", "commit_hooks": true, "timeout_ms": 5000},
+		"worktree": {"dir": "trees", "branch_prefix": "agents/", "git": "/usr/bin/git", "author_name": "Bot", "author_email": "bot@example.com", "commit_hooks": true, "timeout_ms": 5000, "collect_attempts": 5},
 		"agents": {"iso": {"tools": ["read_image","exec"], "isolation": "worktree"}, "none": {"tools": ["exec"], "isolation": "none"}}}`), "/s/setting.json", "/w", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = NativeSubagentWorktreeSettings{Dir: "/w/trees", BranchPrefix: "agents/", Git: "/usr/bin/git", AuthorName: "Bot", AuthorEmail: "bot@example.com", CommitHooks: true, TimeoutMS: 5000}
+	want = NativeSubagentWorktreeSettings{Dir: "/w/trees", BranchPrefix: "agents/", Git: "/usr/bin/git", AuthorName: "Bot", AuthorEmail: "bot@example.com", CommitHooks: true, TimeoutMS: 5000, CollectAttempts: 5}
 	if custom.Worktree != want {
 		t.Fatalf("values = %+v", custom.Worktree)
 	}
@@ -48,6 +48,8 @@ func TestNativeSubagentWorktreeRefusals(t *testing.T) {
 		"blank git":            {`{"worktree":{"git":" "},"agents":{}}`, "git must be a non-empty string"},
 		"timeout too small":    {`{"worktree":{"timeout_ms":10},"agents":{}}`, "timeout_ms"},
 		"timeout too large":    {`{"worktree":{"timeout_ms":600001},"agents":{}}`, "timeout_ms"},
+		"attempts zero":        {`{"worktree":{"collect_attempts":0},"agents":{}}`, "collect_attempts"},
+		"attempts too large":   {`{"worktree":{"collect_attempts":101},"agents":{}}`, "collect_attempts"},
 		"hooks not a boolean":  {`{"worktree":{"commit_hooks":"yes"},"agents":{}}`, "commit_hooks"},
 	} {
 		_, err := normalizeNativeSubagentSettings(subagentSettingsFor(test.section), "/s/setting.json", "/w", "")

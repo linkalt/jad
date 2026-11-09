@@ -36,7 +36,7 @@ func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner session
 		return nil, nil
 	}
 	extra = map[string]string{execFunctionsDirEnv: root}
-	dir, err := filepath.EvalSymlinks(filepath.Join(root, name))
+	dir, err := evalSymlinksInRun(filepath.Join(root, name))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// Not created yet: a program may make it, and fn looks here at call time.
@@ -45,7 +45,7 @@ func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner session
 	case err != nil || !toolSmithInside(root, dir) || !toolSmithInside(realRoot, dir):
 		return nil, extra
 	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	if info, err := os.Stat(viewPath(dir)); err != nil || !info.IsDir() {
 		return nil, extra
 	}
 	extra[execRunnerDirEnv] = dir
@@ -128,7 +128,7 @@ func readExecFunctionEntry(dir, realRoot, file, runner string, settings sessionf
 // scanExecHelpers lists the files of every runner's directory under dir, in runner order, and
 // the entries of dir that no runner owns. scanned is cut at list_max_files.
 func scanExecHelpers(dir string, settings sessionfs.NativeExecSettings) (files []execHelperFile, scanned []execHelperFile, strays []string, err error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(viewPath(dir))
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -141,7 +141,7 @@ func scanExecHelpers(dir string, settings sessionfs.NativeExecSettings) (files [
 			continue
 		}
 		delete(present, runner)
-		inner, err := os.ReadDir(filepath.Join(dir, runner))
+		inner, err := os.ReadDir(viewPath(filepath.Join(dir, runner)))
 		if err != nil {
 			strays = append(strays, runner+"/: "+err.Error())
 			continue

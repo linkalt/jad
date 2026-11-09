@@ -40,18 +40,20 @@ func resolveToolSmithFunctionsDir(configured, workspaceRoot string) (dir, realRo
 	if workspaceRoot == "" {
 		return "", "", fmt.Errorf("the workspace root is unknown")
 	}
-	realRoot, err = filepath.EvalSymlinks(workspaceRoot)
+	// Resolved as the run sees its workspace; an overlay run's files are read through its
+	// holder (viewPath) by every reader of the library.
+	realRoot, err = evalSymlinksInRun(workspaceRoot)
 	if err != nil {
 		return "", "", fmt.Errorf("workspace root: %w", err)
 	}
-	dir, err = filepath.EvalSymlinks(filepath.Join(realRoot, configured))
+	dir, err = evalSymlinksInRun(filepath.Join(realRoot, configured))
 	if err != nil {
 		return "", "", err
 	}
 	if !toolSmithInside(realRoot, dir) {
 		return "", "", fmt.Errorf("functions_dir %q resolves outside the workspace", configured)
 	}
-	info, err := os.Stat(dir)
+	info, err := os.Stat(viewPath(dir))
 	if err != nil {
 		return "", "", err
 	}
@@ -93,7 +95,7 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 			tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},
 			tools.Information{Key: "system_error", Value: err.Error()})
 	default:
-		entries, err := os.ReadDir(dir)
+		entries, err := os.ReadDir(viewPath(dir))
 		if err != nil {
 			return tools.ExecutionError(callID, tools.StatusError, "list_failed", "The function library could not be read",
 				tools.Information{Key: "functions_dir", Value: settings.FunctionsDir},

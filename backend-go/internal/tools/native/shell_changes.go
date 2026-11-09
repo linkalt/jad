@@ -33,7 +33,8 @@ func WithShellChangeScan(tool tools.Tool, hooks sessionfs.HooksSettings) tools.T
 		if execution.OnFileChange == nil || execution.WorkspaceRoot == "" {
 			return inner(ctx, arguments, execution)
 		}
-		before, complete := scanWorkspaceFiles(execution.WorkspaceRoot, hooks)
+		// An overlay run's files are read through its holder (viewPath).
+		before, complete := scanWorkspaceFiles(viewPath(execution.WorkspaceRoot), hooks)
 		result, err := inner(ctx, arguments, execution)
 		if err != nil {
 			return result, err
@@ -41,7 +42,7 @@ func WithShellChangeScan(tool tools.Tool, hooks sessionfs.HooksSettings) tools.T
 		if !complete {
 			return appendShellScanNote(result, fmt.Sprintf("Changed files were not looked for: the workspace holds more than %d files (hooks.shell_scan_max_files).", hooks.ShellScanMaxFiles))
 		}
-		after, complete := scanWorkspaceFiles(execution.WorkspaceRoot, hooks)
+		after, complete := scanWorkspaceFiles(viewPath(execution.WorkspaceRoot), hooks)
 		if !complete {
 			return appendShellScanNote(result, fmt.Sprintf("Changed files were not looked for: the workspace holds more than %d files (hooks.shell_scan_max_files).", hooks.ShellScanMaxFiles))
 		}

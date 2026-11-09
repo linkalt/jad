@@ -9,6 +9,11 @@
 // what the run left (inside the run's environment when a Launcher is given), imports the run's
 // objects into the repository as a pack, creates the branch, checks it against the session's
 // HEAD with merge-tree, and removes the worktree; a run that changed nothing leaves no branch.
+//
+// With Options.Materialize overlay the worktree is not checked out: the run's files are an
+// overlay of its own upper layer over a shared, read-only base checkout of the start commit
+// (overlay.go, base.go), mounted by the caller in the run's holder; Finish then needs a
+// Launcher that starts git inside that mount.
 package worktree
 
 import (
@@ -58,11 +63,17 @@ type Options struct {
 	// CommitHooks runs the repository's commit hooks for the commit of the run's changes;
 	// off passes --no-verify.
 	CommitHooks bool
-	// Timeout bounds each git command.
+	// Timeout bounds each git command (and, set by the caller, an overlay run's holder).
 	Timeout time.Duration
 	// Base is BaseHead (also when empty) or BaseWorking. A run started from a revision (a
 	// resume) always starts from that revision.
 	Base string
+	// Materialize is MaterializeCheckout (also when empty) or MaterializeOverlay.
+	Materialize string
+	// CollectAttempts is how many times a caller tries to collect a run's work before it keeps
+	// the folders for manual recovery. The package only carries it: Finish never gives up, and
+	// nothing it keeps is deleted.
+	CollectAttempts int
 }
 
 // Tree is one run's worktree.
@@ -86,6 +97,10 @@ type Tree struct {
 	Admin    string
 	Objects  string
 	attached bool
+	// overlay is set for a run of MaterializeOverlay.
+	overlay *overlay
+	// onCollected is called by Finish once nothing more runs in the run's mount.
+	onCollected func()
 }
 
 // State is what a run records about its tree, so that Open can finish it after a restart.
@@ -104,6 +119,9 @@ type State struct {
 func (t *Tree) State() State {
 	return State{Path: t.Path, Workspace: t.Workspace, Branch: t.Branch, Base: t.Base, Start: t.Start, Admin: t.Admin, Common: t.common, Top: t.top}
 }
+
+// Timeout bounds each git command of the tree (Options.Timeout).
+func (t *Tree) Timeout() time.Duration { return t.options.Timeout }
 
 // Common is the repository's common git directory.
 func (t *Tree) Common() string { return t.common }
@@ -237,6 +255,16 @@ func Create(ctx context.Context, options Options, workspace, name, from string) 
 	}
 	tree := &Tree{options: options, top: top, common: common, Path: filepath.Join(dir, name), Branch: options.BranchPrefix + name, Base: base, Start: start}
 	tree.Workspace = filepath.Join(tree.Path, relative)
+	switch options.Materialize {
+	case "", MaterializeCheckout:
+	case MaterializeOverlay:
+		if err := tree.addOverlay(ctx, relative); err != nil {
+			return nil, err
+		}
+		return tree, nil
+	default:
+		return nil, fmt.Errorf("unknown materialiser %q", options.Materialize)
+	}
 	if err := tree.add(ctx); err != nil {
 		return nil, err
 	}
@@ -304,6 +332,9 @@ func Open(ctx context.Context, options Options, state State) (*Tree, error) {
 	}
 	if tree.Admin != "" && tree.common != "" {
 		tree.Objects = filepath.Join(tree.Admin, ObjectsDirName)
+		if err := tree.openOverlay(); err != nil {
+			return nil, err
+		}
 		return tree, nil
 	}
 	common, err := run(ctx, options, state.Path, "rev-parse", "--git-common-dir")

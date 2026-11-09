@@ -452,7 +452,7 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 		return fail(err)
 	}
 	command := newBashCommand(launch.configured, launch.resolved, launch.args...)
-	command.Dir = spawn.cwd
+	command.Dir = launch.dir
 	command.Env = spawn.environment
 	command.Stdin = stdinReader
 	command.Stdout = stdoutWriter

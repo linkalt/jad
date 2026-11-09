@@ -488,7 +488,7 @@ func (r codeContextReader) readFile(path string) (data []byte, display string, f
 		}
 		return nil, "", failure, "the file can no longer be read here"
 	}
-	info, err := os.Lstat(target.realPath)
+	info, err := os.Lstat(target.openPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, "", tools.ExecutionError(callID, tools.StatusNotFound, "not_found", "Could not find "+target.errorPath), "the file no longer exists"
@@ -502,7 +502,7 @@ func (r codeContextReader) readFile(path string) (data []byte, display string, f
 	if info.Size() > r.settings.MaxFileBytes {
 		return nil, "", tooLarge, "the file is now larger than max_file_bytes"
 	}
-	data, _, err = readVerifiedRegularFile(target.realPath, info, r.settings.MaxFileBytes)
+	data, _, err = readVerifiedTarget(target, info, r.settings.MaxFileBytes)
 	if err != nil {
 		if strings.Contains(err.Error(), "past configured limit") {
 			return nil, "", tooLarge, "the file is now larger than max_file_bytes"

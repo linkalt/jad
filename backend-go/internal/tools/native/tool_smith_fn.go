@@ -31,7 +31,7 @@ func stageToolSmithFunctions(workDir string, settings sessionfs.NativeToolSmithS
 		manifest.LibraryError = err.Error()
 		return writeToolSmithManifest(workDir, manifest)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(viewPath(dir))
 	if err != nil {
 		manifest.LibraryError = err.Error()
 		return writeToolSmithManifest(workDir, manifest)

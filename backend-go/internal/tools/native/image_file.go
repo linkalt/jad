@@ -36,7 +36,7 @@ func readImageFile(path string, policy sessionfs.NativePathPolicy, store *images
 	if failure != "" {
 		return nil, failure
 	}
-	info, err := os.Lstat(target.realPath)
+	info, err := os.Lstat(target.openPath)
 	if err != nil {
 		return nil, imageReadFailure(execution.CallID, err, target.errorPath)
 	}
@@ -47,7 +47,7 @@ func readImageFile(path string, policy sessionfs.NativePathPolicy, store *images
 		return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s%s is larger than %d bytes", prefix, target.errorPath, maxBytes))
 	}
 	// The same open and identity check as read: the file read is the one Lstat described.
-	data, _, err := readVerifiedRegularFile(target.realPath, info, maxBytes)
+	data, _, err := readVerifiedTarget(target, info, maxBytes)
 	if err != nil {
 		if strings.Contains(err.Error(), "past configured limit") {
 			return nil, tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "image_too_large", fmt.Sprintf("%s%s is larger than %d bytes", prefix, target.errorPath, maxBytes))
