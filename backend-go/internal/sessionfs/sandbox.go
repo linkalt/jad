@@ -193,16 +193,17 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 }
 
 // normalizeSessionSandbox is normalizeSandbox with the isolation of the sandbox, which is
-// read whether or not it is enabled.
-func normalizeSessionSandbox(raw json.RawMessage, path string) (*SandboxSettings, SandboxIsolation, error) {
+// read whether or not it is enabled, and the sandbox object as written (nil when absent),
+// whose backend, executable and plan-mode paths shape PlanFallbackSandbox even when it is off.
+func normalizeSessionSandbox(raw json.RawMessage, path string) (*SandboxSettings, SandboxIsolation, *SandboxSettings, error) {
 	settings, enabled, err := parseSandbox(raw, path, "sandbox")
 	if err != nil || settings == nil {
-		return nil, SandboxIsolation{}, err
+		return nil, SandboxIsolation{}, nil, err
 	}
 	if !enabled {
-		return nil, settings.Isolation, nil
+		return nil, settings.Isolation, settings, nil
 	}
-	return settings, settings.Isolation, nil
+	return settings, settings.Isolation, settings, nil
 }
 
 // ParseSandboxSetting reads one inline sandbox object as the loader does (no template names):
@@ -531,9 +532,65 @@ func (s *SandboxSettings) ForPlanMode() *SandboxSettings {
 	return &plan
 }
 
+// EnforcesPlanMode reports whether the sandbox's plan-mode form keeps a call from writing the
+// project: bwrap and seatbelt keep only the plan-mode writable paths writable. A command
+// backend is the person's own program, which jad cannot narrow; no sandbox enforces nothing.
+func (s *SandboxSettings) EnforcesPlanMode() bool {
+	return s != nil && (s.Backend == SandboxBackendBwrap || s.Backend == SandboxBackendSeatbelt)
+}
+
+// planFallbackBackend is the backend PlanFallbackSandbox uses on this system: bwrap on Linux,
+// seatbelt on macOS, none elsewhere.
+func planFallbackBackend() string {
+	switch runtime.GOOS {
+	case "linux":
+		return SandboxBackendBwrap
+	case "darwin":
+		return SandboxBackendSeatbelt
+	}
+	return ""
+}
+
+// PlanFallbackSandbox is the sandbox a read_only exec call, and every exec call of a plan-mode
+// run, starts in when no sandbox covers exec (docs/isolation-decisions.md D2): it only keeps
+// the project from being written. Every path stays readable, nothing is hidden and the network
+// stays open, as for a call outside any sandbox; only the plan-mode writable paths (by default
+// {tmp}) are writable. configured is the session's sandbox object, enabled or not: its
+// executable, plan-mode writable paths and check timeout are used when it names this system's
+// backend. Nil where this system has neither bwrap nor seatbelt. Whether the program starts on
+// this host is for the tool to probe.
+func PlanFallbackSandbox(configured *SandboxSettings) *SandboxSettings {
+	backend := planFallbackBackend()
+	if backend == "" {
+		return nil
+	}
+	fallback := &SandboxSettings{
+		Tools: []string{"exec"}, Backend: backend, Executable: defaultSandboxExecutable, Network: true,
+		ProxyPort: defaultSandboxProxyPort, ReadPaths: append([]string(nil), defaultSandboxReadPaths...),
+		PlanWritablePaths: append([]string(nil), defaultSandboxPlanWritablePaths...), HidePaths: []string{},
+		CheckTimeoutMs: defaultSandboxCheckTimeoutMs,
+	}
+	if backend == SandboxBackendSeatbelt {
+		fallback.Executable = defaultSeatbeltExecutable
+	}
+	if configured != nil && configured.Backend == backend {
+		fallback.Executable = configured.Executable
+		fallback.PlanWritablePaths = append([]string(nil), configured.PlanWritablePaths...)
+		fallback.CheckTimeoutMs = configured.CheckTimeoutMs
+	}
+	// Outside plan mode it is never used; its writable paths are the plan-mode ones all the same.
+	fallback.WritablePaths = append([]string(nil), fallback.PlanWritablePaths...)
+	return fallback
+}
+
 // applySandbox hands an enabled sandbox to each enabled tool it covers, and to the hooks
 // when it covers them.
-func applySandbox(sandbox *SandboxSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, hooks *HooksSettings, lsp *NativeLSPSettings) {
+func applySandbox(sandbox, configured *SandboxSettings, execSettings *NativeExecSettings, toolSmith *NativeToolSmithSettings, hooks *HooksSettings, lsp *NativeLSPSettings) {
+	if execSettings != nil && execSettings.Child.Sandbox == nil && !sandbox.Covers("exec") {
+		// No sandbox covers exec: its read_only and plan-mode calls get one that only keeps
+		// the project read-only, where it works on the host.
+		execSettings.Child.PlanSandbox = PlanFallbackSandbox(configured)
+	}
 	if sandbox == nil {
 		return
 	}

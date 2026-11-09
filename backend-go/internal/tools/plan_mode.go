@@ -11,7 +11,8 @@ const PlanModeErrorCode = "plan_mode"
 // PlanMode returns the catalog a plan-mode run sees: the tools marked ReadOnly, and the
 // ones an allow entry covers. A ReadOnly tool that decides per call whether it changes
 // files (MayChangeFiles, such as a sub-agent that may write) stays listed, but a call
-// that would change files is refused with status forbidden and error_code plan_mode.
+// that would change files is refused with status forbidden and error_code plan_mode. A
+// tool with PlanModeRefusal is guarded by it instead, and its calls are scheduled as it says.
 // An allow entry keeps a tool whole, with no such refusal. Every kept tool's calls carry
 // ExecutionContext.PlanMode, so a sandboxed child starts with the project read-only. The
 // receiver is unchanged.
@@ -24,7 +25,7 @@ func (c *Catalog) PlanMode(allow []string) (*Catalog, error) {
 		switch {
 		case AnyEntryMatches(allow, tool.Definition):
 			kept = append(kept, planModeCalls(tool))
-		case tool.ReadOnly && tool.MayChangeFiles != nil:
+		case tool.ReadOnly && (tool.MayChangeFiles != nil || tool.PlanModeRefusal != nil):
 			kept = append(kept, planModeCalls(planModeGuard(tool)))
 		case tool.ReadOnly:
 			kept = append(kept, planModeCalls(tool))
@@ -71,26 +72,43 @@ func planModeCalls(tool Tool) Tool {
 // would are refused before the tool runs.
 func planModeGuard(tool Tool) Tool {
 	mayChange := tool.MayChangeFiles
+	reason := func(arguments map[string]any, _ *ExecutionContext) string {
+		if mayChange(arguments) {
+			return planModeChangeRefusal
+		}
+		return ""
+	}
+	if tool.PlanModeRefusal != nil {
+		reason = tool.PlanModeRefusal
+		// A call the tool runs confined changes no file, so it is scheduled like a read;
+		// one it refuses is refused before it starts.
+		tool.MayChangeFiles = func(arguments map[string]any) bool { return reason(arguments, nil) != "" }
+	}
 	tool.PlanGuarded = true
-	refusal := func(execution ExecutionContext) string {
-		return ExecutionError(execution.CallID, StatusForbidden, PlanModeErrorCode,
-			"Plan mode: this call could change files, so it is not run in this turn. Use a read-only call, or put the change in the plan.")
+	refusal := func(arguments map[string]any, execution ExecutionContext) string {
+		if summary := reason(arguments, &execution); summary != "" {
+			return ExecutionError(execution.CallID, StatusForbidden, PlanModeErrorCode, summary)
+		}
+		return ""
 	}
 	if execute := tool.Execute; execute != nil {
 		tool.Execute = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (string, error) {
-			if mayChange(arguments) {
-				return refusal(execution), nil
+			if refused := refusal(arguments, execution); refused != "" {
+				return refused, nil
 			}
 			return execute(ctx, arguments, execution)
 		}
 	}
 	if execute := tool.ExecuteOutput; execute != nil {
 		tool.ExecuteOutput = func(ctx context.Context, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
-			if mayChange(arguments) {
-				return MarshalJSON(refusal(execution))
+			if refused := refusal(arguments, execution); refused != "" {
+				return MarshalJSON(refused)
 			}
 			return execute(ctx, arguments, execution)
 		}
 	}
 	return tool
 }
+
+// planModeChangeRefusal is why a plan-mode run refuses a call that could change files.
+const planModeChangeRefusal = "Plan mode: this call could change files, so it is not run in this turn. Use a read-only call, or put the change in the plan."

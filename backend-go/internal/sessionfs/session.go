@@ -412,7 +412,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	sandbox, isolation, err := normalizeSessionSandbox(setting["sandbox"], settingPath)
+	sandbox, isolation, sandboxObject, err := normalizeSessionSandbox(setting["sandbox"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -536,7 +536,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err := checkLazyNeedsLoadTool(settingPath, profile, profileTools, nativeLoadTool); err != nil {
 		return SessionConfig{}, err
 	}
-	applySandbox(sandbox, nativeExec, nativeToolSmith, &hooks, nativeLSP)
+	applySandbox(sandbox, sandboxObject, nativeExec, nativeToolSmith, &hooks, nativeLSP)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err

@@ -100,6 +100,13 @@ type NativeBashSettings struct {
 	// Sandbox, when set, is the sandbox every child of this tool starts in (the sandbox
 	// setting, for a tool it covers).
 	Sandbox *SandboxSettings
+	// PlanSandbox is, for exec only, the sandbox a read_only call and every call of a
+	// plan-mode run start in when no sandbox covers exec (Sandbox nil): one that keeps only
+	// the plan-mode writable paths writable and confines nothing else (PlanFallbackSandbox).
+	// It counts only where it starts on this host, which the tool probes once. Nil where no
+	// such backend exists (neither Linux nor macOS), when a sandbox covers exec, and for
+	// tool_smith.
+	PlanSandbox *SandboxSettings
 }
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process: native.exec and

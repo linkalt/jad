@@ -10,7 +10,7 @@ which phase, and what still needs the user.
 |---|---|---|---|---|
 | D1 | accept | Overlay + per-run bwrap holder on Linux where probed; `git worktree add` checkout elsewhere. fuse-overlayfs rejected. | Both paths enforce the same rules and differ only in cost; fuse-overlayfs would be host-visible and needs a daemon. P0 must confirm `--overlay` and overlay sources on the host with destinations on tmpfs, else `auto` falls back to checkout. | checkout P3, overlay P4 |
 | D2 | accept with correction | Normal calls stay `enabled: false`; a `read_only` or plan-mode exec call runs in the plan-mode environment wherever a backend probes OK, even when the sandbox is off. | Turning the sandbox on for writer calls would change every install's environment; narrowing only `read_only`/plan-mode calls narrows only. | P5 |
-| D3 | defer with a condition **[USER]** | Remove `read_only_calls` together with the D2 correction; `read_only` then counts only where a sandbox enforces it. | Removal alone would make every `read_only` call a writer on a default install and plan mode would refuse all exec. Lands after P1 closes S3. | P5 |
+| D3 | accept (user, 2026-11-09) | Remove `read_only_calls` together with the D2 correction; `read_only` then counts only where a sandbox enforces it. On a host where no bwrap or seatbelt works, plan mode refuses every exec call with code, with an error that says why. | Removal alone would make every `read_only` call a writer on a default install and plan mode would refuse all exec. Lands after P1 closes S3. | P5 (implemented) |
 | D4 | accept | `sandbox.read.paths` is deny-by-default as a key with default `["/"]`; a write path is always readable. `hide_paths` and the fixed `.git/hooks`/`.git/config` protections still beat `write`. | This is the user's `read → paths`; the `["/"]` default keeps today's behaviour and write-wins is applied where the environment is built. | P2 |
 | D5 | accept with correction | The credential list is the **default value** of `hide_paths` (so it is overridable) and is longer: `{home}/.ssh`, `.gnupg`, `.aws`, `.kube`, `.config/gcloud`, `.azure`, `.config/gh`, `.git-credentials`, `.netrc`, `.npmrc`, `.pypirc`, `.cargo/credentials`, `.docker/config.json`, `.jad/auth` (jad's own credential store, `{home}/.jad/auth`: the `openaiauth`/`claudeauth` default files `openai-codex.json` and `claude-oauth.json`). | Hiding narrows the environment and changes no tool; as a default a profile that needs ssh/gh can replace it. | P2 |
 | D6 | accept | `isolation.share_paths` defaults to empty; guessing dependency folders is speculative. Document that an `npm install`-style write fails in a run. | Prefer backend defaults over speculative abstraction. | P4 |
@@ -81,9 +81,9 @@ which phase, and what still needs the user.
 
 ## Needs the user
 
-1. **D3:** "On a host with no working sandbox (no bwrap/seatbelt), is it acceptable that plan mode
-   cannot run exec at all once `read_only_calls` is removed?" Everywhere else plan mode stays usable
-   through the D2 correction.
+1. **D3 — answered 2026-11-09: yes.** On a host with no working sandbox plan mode refuses exec
+   code, with a clear error; everywhere else plan mode runs every exec call in the plan-mode
+   environment (see "P5 implementation").
 2. **D7:** "Profiles' sandboxes will confine the interactive session, but it keeps editing your
    checkout in place. Do you also want interactive sessions to work in a private worktree with an
    explicit integrate step?"
@@ -100,7 +100,7 @@ and `Sandbox`; `Ceiling` waits on D20).
 
 P0, P1, P3 and P4 can start now in the order of §12, and so can all of P2 (D20 is answered, so the
 narrowing of `profile_message` targets by the caller and D24's `Ceiling` are in it). D3's removal of
-`read_only_calls` (P5) waits for the D3 answer.
+`read_only_calls` (P5) was implemented once D3 was answered.
 
 ## Phase risk
 
@@ -453,3 +453,44 @@ P4 came next in §12, but its overlay materialiser needs bwrap ≥ 0.10 and this
 9. **Not done:** the target's exec description still tells its own sandbox, not the chosen one
    (as for a target confined by its caller, P2 item 6). The choice does not confine MCP servers
    (D10, P6). Remote targets and remote sub-agents cannot take a choice.
+
+## P5 implementation, enforced read_only and plan mode (2026-11-09)
+
+1. **D2 correction.** Where no sandbox covers exec (sandbox off, absent, or its `tools` leave exec
+   out), exec's settings carry a fallback (`NativeBashSettings.PlanSandbox`,
+   `sessionfs.PlanFallbackSandbox`): bwrap on Linux, seatbelt on macOS, every path readable,
+   nothing hidden, the network open, and only the plan-mode writable paths writable, plus the
+   session's configuration read-only. It keeps the project from being written and changes
+   nothing else a call sees. A disabled sandbox object of the same backend lends it its
+   `executable`, `write.plan_paths` and `check_timeout_ms`. A `read_only` call, and every exec
+   call of a plan-mode run, starts in it (`childCallSandbox`) where it works on the host: exec
+   makes one trial start per fallback the first time a call needs it (`planSandboxWorks`, kept
+   for the life of the process, a failure logged once). Calls without `read_only` outside plan
+   mode are not affected (D2: normal calls stay unsandboxed).
+2. **D3.** `tools.native.exec.read_only_calls` is removed and refused by name with a hint
+   (`removedReadOnlyCallsHint`). `read_only` counts (the call is scheduled beside other reads)
+   only where the call is held: a bwrap or seatbelt sandbox covers exec, or none covers it and the
+   fallback starts. A command backend is never counted (jad cannot narrow it).
+3. **Plan mode runs any exec call** where it is held (P5 step 2): the guard no longer asks for
+   `read_only`. A tool may now decide its plan-mode calls itself (`Tool.PlanModeRefusal`, used by
+   `Catalog.PlanMode` in place of `MayChangeFiles`); exec's refuses a call with code only where no
+   sandbox holds it, naming the reason (no bwrap or seatbelt on the host, or a command sandbox).
+   Calls it allows are scheduled as reads and take no checkpoint. A helper listing always runs.
+   An `allow_tools` entry still keeps exec whole, without the refusal.
+4. **Per-call environment.** Before a plan-mode call runs, the refusal is decided again with the
+   call's own environment (a sub-agent's sandbox, a `profile_message` caller's), so a run whose
+   sandbox covers exec with a command backend is refused even where the session's settings would
+   hold the call. Scheduling, which has no call context, still judges by the session's settings:
+   outside plan mode a `read_only` call of such a run may be scheduled beside reads though its
+   command sandbox does not make it read-only (the person's own sandbox; accepted).
+5. **Texts.** exec's `read_only` description and the default plan-mode instructions say the call
+   runs in a sandbox that keeps the project read-only and that plan mode refuses exec code where
+   there is none. A definition file with the previous `read_only` text still loads
+   (`execInputSchemaIgnorable`). The exec definition changes, so the agent fingerprint does too:
+   a resume of a sub-agent run started before gets the existing "definition changed" note.
+6. **Standby.** A call outside plan mode also warms the plan-mode form where the fallback holds
+   read_only calls, so a session without a sandbox now keeps one more waiting interpreter per
+   runner (bounded by `standby_max`, as before).
+7. **Not done:** tool_smith gets no fallback (in plan mode its calls with code are still refused
+   by its own `MayChangeFiles`); hooks in plan mode are not confined by the fallback; `jad check`
+   does not report whether the fallback starts.

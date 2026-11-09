@@ -176,6 +176,12 @@ type Tool struct {
 	// call take the checkpoint and run in order, like a write. Nil means the
 	// ReadOnly flag alone decides.
 	MayChangeFiles func(arguments map[string]any) bool
+	// PlanModeRefusal, when set, decides the calls of a plan-mode run in place of
+	// MayChangeFiles, for a tool whose calls plan mode confines instead of refusing (exec,
+	// whose children start in a sandbox that keeps the project read-only): it returns why a
+	// call is refused, or "" for a call that may run. execution is the call's own when it is
+	// about to run, and nil when the call is only scheduled or judged for the checkpoint.
+	PlanModeRefusal func(arguments map[string]any, execution *ExecutionContext) string
 	// PlanGuarded is set by Catalog.PlanMode on a tool whose calls that could change files
 	// are refused before they run (planModeGuard): no call of it changes files, so none
 	// takes the checkpoint.

@@ -89,17 +89,25 @@ func TestSandboxRefusals(t *testing.T) {
 func TestApplySandboxReachesOnlyTheCoveredTools(t *testing.T) {
 	sandbox := &SandboxSettings{Tools: []string{"exec"}}
 	execSettings, smith, hooks, lsp := &NativeExecSettings{}, &NativeToolSmithSettings{}, &HooksSettings{}, &NativeLSPSettings{}
-	applySandbox(sandbox, execSettings, smith, hooks, lsp)
+	applySandbox(sandbox, sandbox, execSettings, smith, hooks, lsp)
 	if execSettings.Child.Sandbox != sandbox || smith.Child.Sandbox != nil || hooks.Sandbox != nil || lsp.Sandbox != nil {
 		t.Fatalf("exec %v smith %v hooks %v lsp %v", execSettings.Child.Sandbox, smith.Child.Sandbox, hooks.Sandbox, lsp.Sandbox)
 	}
 	withHooks := &SandboxSettings{Tools: []string{"hooks", "lsp"}}
-	applySandbox(withHooks, execSettings, smith, hooks, lsp)
+	applySandbox(withHooks, withHooks, execSettings, smith, hooks, lsp)
 	if hooks.Sandbox != withHooks || lsp.Sandbox != withHooks || execSettings.Child.Sandbox != sandbox {
 		t.Fatalf("hooks %v lsp %v exec %v", hooks.Sandbox, lsp.Sandbox, execSettings.Child.Sandbox)
 	}
-	applySandbox(sandbox, nil, nil, nil, nil)
-	applySandbox(nil, execSettings, smith, hooks, lsp)
+	applySandbox(sandbox, sandbox, nil, nil, nil, nil)
+	applySandbox(nil, nil, execSettings, smith, hooks, lsp)
+	if execSettings.Child.PlanSandbox != nil {
+		t.Fatal("exec, covered by a sandbox, got a fallback")
+	}
+	uncovered := &NativeExecSettings{}
+	applySandbox(withHooks, withHooks, uncovered, nil, nil, nil)
+	if (uncovered.Child.PlanSandbox != nil) != (runtime.GOOS == "linux" || runtime.GOOS == "darwin") || uncovered.Child.Sandbox != nil {
+		t.Fatalf("exec left out of the sandbox: sandbox %v fallback %v", uncovered.Child.Sandbox, uncovered.Child.PlanSandbox)
+	}
 }
 
 // sandbox.tools is a filter, not a check: a sandbox is shared by profiles and sub-agents with

@@ -148,7 +148,7 @@ func runShellChildDetailed(
 		watch.set(collector)
 	}
 	environment := shellChildEnvironment(run, settings, apiKeyEnv)
-	sandbox := callSandbox(run.sandboxTool(), settings.Sandbox, execution)
+	sandbox := childCallSandbox(run.sandboxTool(), settings, execution)
 	tmp, err := callTempDir(sandbox, execution)
 	if err != nil {
 		return shellRunResult{text: sandboxTempError(execution.CallID, err)}

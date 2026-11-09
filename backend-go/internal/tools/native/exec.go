@@ -43,7 +43,7 @@ var execInputSchema = json.RawMessage(`{
     "input":{"description":"Any JSON value, written to the program's standard input as one line of JSON. Without input, stdin is empty."},
     "cwd":{"type":"string","minLength":1,"description":"Directory to run in, relative to the workspace root or absolute. Defaults to the workspace root."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the result. If the program is still running an id is returned; collect it with the async tool."},
-    "read_only":{"type":"boolean","description":"Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files, and a session may be set to ignore it: the call then runs in order and plan mode refuses it."}
+    "read_only":{"type":"boolean","description":"Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time. The call runs in a sandbox where only the plan-mode writable paths (by default the temp folder) can be written; on a host where no such sandbox works, read_only does not count and the call runs in order. In plan mode every call runs in that sandbox, and where there is none plan mode refuses calls with code."}
   },
   "additionalProperties":false
 }`)
@@ -62,6 +62,14 @@ const execReadOnlyPromiseText = "Set true for a call that changes no file: searc
 // execInputSchemaPromiseOnly is the schema with that description, which a tool definition
 // file written then still holds (see requireExecDefinition).
 var execInputSchemaPromiseOnly = schemaWithPropertyDescription(execInputSchema, execReadOnlyProperty, execReadOnlyPromiseText)
+
+// execReadOnlyIgnorableText is read_only's description while tools.native.exec.read_only_calls
+// chose whether it counted without a sandbox (removed with D3).
+const execReadOnlyIgnorableText = "Set true for a call that changes no file: searching, listing, printing files, git log, diff or status. Read-only calls of one response may run at the same time, and plan mode runs only these. Under a bwrap or seatbelt sandbox only the plan-mode writable paths (by default the temp folder) are writable for the call; without one, read_only is your promise not to change files, and a session may be set to ignore it: the call then runs in order and plan mode refuses it."
+
+// execInputSchemaIgnorable is the schema with that description, which a tool definition file
+// written then still holds (see requireExecDefinition).
+var execInputSchemaIgnorable = schemaWithPropertyDescription(execInputSchema, execReadOnlyProperty, execReadOnlyIgnorableText)
 
 const execDescription = "Call with no parameters (or only filters, e.g. read*) to list the saved helpers per language. Run inline code in an interpreter (python, node, bash, ...). Use it to compute, filter or combine data in one call; a plain command is lang bash with the command as code. Code calls the saved helpers of its own language through fn (fn.<name>(...) in python, node, ts, deno, ruby and lua; fn->name(...) in perl; $fn->name(...) in php; fn$name(...) in r; found when the call is made, so a helper the program just wrote works) or by a bare command name (bash); the listing shows exactly what to type and which member runs. php code is a file, so it starts with <?php. Helpers may also import each other. Another language's helper is run as a subprocess from the directory in $JAD_FUNCTIONS_DIR. Pass data as input: the program reads it from stdin as JSON. Print the answer to stdout; for a short structured answer write to the file named by $JAD_RESULT to see it ahead of the raw output. It waits up to block_ms; if the program is still running you get an id and it keeps going: use the async tool to wait for, list, inspect or stop it."
 
@@ -88,12 +96,15 @@ func NewExecTool(settings sessionfs.NativeExecSettings, apiKeyEnv string, host *
 		Validator:          validator,
 		RejectedProperties: execRejectedProperties,
 		ExampleOperation:   json.RawMessage(`{"code":"echo hello"}`),
-		// ReadOnly lets the calls that change no file (a read_only call, or a helper listing)
-		// share a response and run in plan mode; every other call says so through MayChangeFiles.
+		// ReadOnly lets the calls that change no file (a read_only call held by a sandbox that
+		// keeps the project read-only, or a helper listing) share a response; every other call
+		// says so through MayChangeFiles. In plan mode every call starts in that sandbox, so
+		// PlanModeRefusal refuses only where there is none.
 		ReadOnly: true,
 		MayChangeFiles: func(arguments map[string]any) bool {
-			return execCallMayChangeFiles(arguments, settings.ReadOnlyHonored())
+			return execCallMayChangeFiles(arguments, execReadOnlyEnforced(settings))
 		},
+		PlanModeRefusal: execPlanModeRefusal(settings),
 		// The configured default language is bound here, where the settings are known.
 		NormalizeArguments: func(arguments map[string]any) map[string]any {
 			return normalizeExecArguments(arguments, settings.DefaultLang)
@@ -112,7 +123,7 @@ func execReadOnly(arguments map[string]any) bool {
 
 // execReadOnlyExecution is the execution a call runs with: a read_only call's children start
 // in the sandbox of a plan-mode call, where only sandbox.plan_writable_paths are writable
-// (callSandbox). Without a sandbox nothing changes.
+// (childCallSandbox). Where no sandbox works on the host nothing changes.
 func execReadOnlyExecution(arguments map[string]any, execution tools.ExecutionContext) tools.ExecutionContext {
 	if execReadOnly(arguments) {
 		execution.PlanMode = true
@@ -121,10 +132,10 @@ func execReadOnlyExecution(arguments map[string]any, execution tools.ExecutionCo
 }
 
 // execCallMayChangeFiles is exec's per-call answer to "can this call change files": a call
-// that runs code can, unless it sets read_only and honored says read_only counts
-// (tools.native.exec.read_only_calls). A call without code only lists helpers.
-func execCallMayChangeFiles(arguments map[string]any, honored bool) bool {
-	return execGiven(arguments, "code") && !(honored && execReadOnly(arguments))
+// that runs code can, unless it sets read_only and enforced says a sandbox keeps such a call
+// from writing the project (execReadOnlyEnforced). A call without code only lists helpers.
+func execCallMayChangeFiles(arguments map[string]any, enforced bool) bool {
+	return execGiven(arguments, "code") && !(enforced && execReadOnly(arguments))
 }
 
 // schemaWithoutProperty returns schema, a JSON object schema, without the named property.
@@ -311,7 +322,7 @@ func executeNativeExecAsync(
 		if standby != nil {
 			workDir = standby.workDir
 		} else {
-			tmp, err := callTempDir(callSandbox("exec", settings.Child.Sandbox, execution), execution)
+			tmp, err := callTempDir(childCallSandbox("exec", settings.Child, execution), execution)
 			if err != nil {
 				return shellRunResult{text: sandboxTempError(callID, err)}
 			}
@@ -510,7 +521,7 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 		return nil
 	}
 	spawnFor := func(execution tools.ExecutionContext) func(workDir string) (standbySpawn, error) {
-		sandbox := callSandbox("exec", settings.Child.Sandbox, execution)
+		sandbox := childCallSandbox("exec", settings.Child, execution)
 		tmp, tmpErr := callTempDir(sandbox, execution)
 		return func(workDir string) (standbySpawn, error) {
 			if tmpErr != nil {
@@ -538,11 +549,12 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
 	process := execStandby.take(key, idle)
 	execStandby.refill(key, execWorkDirIn(keyed.tmp), spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
-	// Under a bwrap or seatbelt sandbox a read_only call starts in the plan-mode sandbox, so
-	// it cannot take a standby a call that may write started. A call outside plan mode also
-	// warms that form, after its own, so the run's read_only calls find one waiting too. A
-	// plan-mode call does not warm the other way: its run makes no other kind of call.
-	if !execution.PlanMode && settings.ReadOnlyEnforced() {
+	// A read_only call starts in the plan-mode sandbox (the fallback one where no sandbox
+	// covers exec), so it cannot take a standby a call that may write started. A call outside
+	// plan mode also warms that form, after its own, so the run's read_only calls find one
+	// waiting too. A plan-mode call does not warm the other way: its run makes no other kind
+	// of call.
+	if !execution.PlanMode && execReadOnlyEnforced(settings) {
 		readOnly := execution
 		readOnly.PlanMode = true
 		readOnlySpawn := spawnFor(readOnly)

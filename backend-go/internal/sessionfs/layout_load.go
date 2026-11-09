@@ -190,6 +190,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 				if derived.Sandbox != nil && config.Sandbox != nil {
 					derived.Sandbox.ReadOnlyPaths = config.Sandbox.ReadOnlyPaths
 				}
+				setPlanSandboxReadOnlyPaths(derived, c.readOnly)
 				if config.AgentToolsets == nil {
 					config.AgentToolsets = make(map[string]SessionConfig)
 				}
@@ -217,10 +218,21 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 		// starts in the profile: its own runs always work in its cwd (D7).
 		config.Sandbox.ReadOnlyPaths = readOnly
 	}
+	// The sandbox exec's read_only and plan-mode calls fall back to keeps them read-only too.
+	setPlanSandboxReadOnlyPaths(*config, readOnly)
+	c.readOnly = readOnly
 	if err := c.finishSandboxChoices(config, readOnly); err != nil {
 		return err
 	}
 	return c.resolveAgentSandboxes(config, readOnly)
+}
+
+// setPlanSandboxReadOnlyPaths gives the sandbox exec's read_only and plan-mode calls fall back
+// to (NativeBashSettings.PlanSandbox) the session's read-only paths.
+func setPlanSandboxReadOnlyPaths(config SessionConfig, readOnly []string) {
+	if config.NativeExec != nil && config.NativeExec.Child.PlanSandbox != nil {
+		config.NativeExec.Child.PlanSandbox.ReadOnlyPaths = append([]string(nil), readOnly...)
+	}
 }
 
 // sessionConfigPaths are the files and folders the session's configuration comes from: the
@@ -384,6 +396,8 @@ type layoutCompose struct {
 	warnings []string
 	// templates reads the session's sandbox templates; set by compose.
 	templates sandboxTemplates
+	// readOnly are the session's configuration paths (sessionConfigPaths); set by finishSandbox.
+	readOnly []string
 }
 
 func (c *layoutCompose) warn(format string, args ...any) {

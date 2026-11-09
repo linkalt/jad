@@ -29,3 +29,10 @@ const removedAllowWriteHint = "an agent's tools list alone decides whether a chi
 // read-only mode now; a child's protection is its tool set and isolation, and ignoring the key
 // would turn an agent that was protected into one that writes the workspace.
 const removedAgentReadOnlyHint = "protection now comes only from isolation; remove the key, and set isolation to \"worktree\" if this child must not write the workspace"
+
+// removedReadOnlyCallsHint: tools.native.exec.read_only_calls chose whether an exec call's
+// read_only counted without a sandbox to enforce it. read_only now counts only where the call
+// runs in a sandbox that keeps the project read-only, which exec finds by itself wherever bwrap
+// or seatbelt works, even with the sandbox setting off; ignoring the key would hide that a
+// host without either no longer honors read_only (docs/isolation-decisions.md D3).
+const removedReadOnlyCallsHint = "read_only now counts only where a bwrap or seatbelt sandbox keeps the call from writing the project, which exec uses by itself wherever one works on the host; delete the key"

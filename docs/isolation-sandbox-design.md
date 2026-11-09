@@ -772,7 +772,7 @@ deleted. Base checkouts are deleted only at refcount 0 and when not the current 
 | P2b | Per-call `sandbox` in `subagent` and `profile_message` (`sandbox_choice`, §15) | P2 | `sessionfs/native_subagent_settings.go`, `native_profile_message_settings.go`, `layout_load.go`, `tools/native/{subagent,subagent_call,subagent_model,profile_message,catalog}.go`, `app/{profile_message,profile_message_queue,resolver,locked_config}.go`, `httpapi/{profile_run,handler_ports,handler}.go`, `sessionfs/{session,settings_stamp}.go`, `sample/tools/native/{subagent,profile_message}.json`, `setting.schema.json` |
 | P3 | Isolated runs sandboxed with private git (checkout materialiser): detached HEAD, private objects, `Collect` in the environment, pack `Import`, `Validate`, `base: "working"`, delegated profile runs | P2 | `worktree/*`, `subagent_worktree.go`, `subagent_call.go`, `app/bound_runner.go`, `agent.schema.json` text |
 | P4 | Overlay materialiser, holder, base cache, `/proc/<holder>/root` view, `share_paths` | P3, P0 | `worktree/{overlay,base}.go`, `tools/native/sandbox_holder.go`, `path.go`, `shell_changes.go` |
-| P5 | Remove `read_only_calls`; decide the sandbox default | P1, decisions D2/D3 | `sessionfs/native_exec_settings.go`, `removed_keys.go`, `tools/native/exec.go` text, schema |
+| P5 | Remove `read_only_calls`; decide the sandbox default (implemented 2026-11-09, docs/isolation-decisions.md "P5 implementation") | P1, decisions D2/D3 | `sessionfs/native_exec_settings.go`, `removed_keys.go`, `tools/native/exec.go` text, schema |
 | P6 | Optional: APFS/reflink clone materialiser; per-run stdio MCP (D10) | P3 | `worktree`, `app/mcp_sampling.go` |
 
 Each phase ends with its tests, `verify-go.sh` and a DECISIONS entry.
