@@ -35,46 +35,66 @@ the session has 10 turns.
   error for an empty dropped set was found: the summary is skipped silently. The error seen may be
   the P4 reply or the overflow that follows. **[unverified]**
 
-Root cause: the summary only covers turns older than the kept window. Whenever the window covers
-the whole history, which is common with a large `keep` and a high `trigger_tokens`, there is
-nothing to summarize.
+Root cause: the summary only covers turns older than the kept window, and it runs only when
+something falls out of that window. While the window still has room, a compaction strips tool work
+and summarizes nothing.
 
-## 2. The user's idea
+## 2. The idea
 
-When the summary is on, `keep` no longer decides what is summarized. **Everything since the last
-compaction is summarized**, and summaries pile up as a list instead of being re-summarized into
-one:
+**The kept window works as it does today until it is full.** When it is full, **the whole window
+is summarized** and emptied. Summaries pile up as a list instead of being re-summarized into one,
+and a limit merges the oldest.
+
+- **Window not full** (fewer than `keep` turns since the last summary): an ordinary compaction,
+  exactly as today. Turns are kept and reduced by `keepbatch.turn.type`, and there is no summary
+  and no model call.
+- **Window full** (`keep` turns or more since the last summary, counted when a compaction runs):
+  every turn in the window is summarized into one new summary, and the window starts again empty.
+  Nothing is dropped without a summary.
+- **Earlier summaries** are kept byte for byte. They are not counted as turns, and they are not
+  stripped or summarized again until the limit merges them (§4.4).
+
+Example with `keep: 20`, where the token trigger happens to fire about every 10 turns:
 
 ```
-compaction 1:  [turn 1 … turn 30]                         → [S1(1–30)]
-compaction 2:  [S1] + [turn 31 … turn 60]                 → [S1, S2(31–60)]
-compaction 3:  [S1, S2] + [turn 61 … turn 90]             → [S1, S2, S3(61–90)]
+turn 10, trigger:  [t1 … t10]              window 10 < 20  → ordinary: [t1 … t10] reduced
+turn 20, trigger:  [t1 … t20]              window full     → [S1(1–20)]
+turn 30, trigger:  [S1] [t21 … t30]        window 10 < 20  → ordinary: [S1] [t21 … t30] reduced
+turn 40, trigger:  [S1] [t21 … t40]        window full     → [S1, S2(21–40)]
 …
-limit reached: [S1 … Sk] + new turns                      → oldest summaries merged, see §4.4
+limit reached:     [S1 … Sk] [full window]                 → oldest pair merged, then append
 ```
+
+- **Uneven counts:** the window is checked only when a compaction runs, so it can hold more than
+  `keep` turns, for example 25 when the trigger fires late. All 25 are summarized, and turns are
+  never split across two summaries.
+- **The keep-20/10-turns case** becomes an ordinary compaction. It no longer tries to summarize,
+  so there is no empty summary call. What remains is the case where an ordinary compaction cannot
+  help, which the escape rule in §4.2 covers.
 
 **What this gives:**
 
-- **There is always something to summarize.** The trigger fires only on token size
-  (`input_tokens >= trigger_tokens`), so the new turns are large by definition.
-- **The keep-window bug cannot happen.** The keep window is gone for summary users.
-- **No chain loss on each compaction.** An old summary is never re-summarized until the limit
-  forces a merge. Today, and in the redesign's Option A, the earlier summary is re-summarized each
-  time, and facts fade with every pass.
-- **The work in progress is summarized as well**, which closes redesign P2 (mid-turn tool work
-  stripped without a summary) without a separate active-turn mode.
-- **The output stays small and bounded**: at most `max_summaries × max_output_tokens`, plus the
-  verbatim tail (§4.2).
+- **The summary is used only when needed.** Recent turns stay verbatim, as reduced by `turn.type`,
+  for as long as `keep` allows, and the model call happens only once per `keep` turns.
+- **A summary always has real input:** at least `keep` turns.
+- **No loss along the chain.** An old summary is never summarized again until the limit forces a
+  merge. Today, and in the redesign's Option A, the earlier summary is summarized again each time,
+  and facts fade with every pass.
+- **Bounded size:** at most `max_summaries × max_output_tokens`, plus the window, plus the
+  current request.
 
 ## 3. Goals and non-goals
 
 **Goals:**
 
-- With the summary on, a compaction always summarizes the turns since the last compaction, whatever
-  `keep` is.
-- Earlier summaries are kept verbatim, as separate items, and never silently deleted.
+- With the summary on, a compaction keeps the window as today until `keep` turns have
+  accumulated. It then summarizes the whole window into one summary.
+- Earlier summaries are kept verbatim as separate items. They are never deleted without notice
+  and never use up a `keep` slot.
 - The number of summaries is limited by config. When the limit is reached, the oldest ones are
   merged.
+- An ordinary compaction that cannot bring relief does not loop. It falls back to summarizing the
+  window early (§4.2).
 - The current request stays usable mid-run: the agent must still see what it was asked and the
   calls it has in flight.
 
@@ -95,42 +115,73 @@ New key `compaction.summary.scope`:
 
 | Value | Meaning |
 |---|---|
-| `all` | This design: summarize everything since the last compaction, and keep a list of summaries. |
-| `dropped` | Today's behavior: summarize only the turns older than the `keep` window, as one rolling summary. |
+| `window` | This design. Keep the window as today until it holds `keep` turns, then summarize all of it. Summaries form a list. |
+| `dropped` | Today's behavior. Summarize only the turns older than the `keep` window, as one rolling summary. |
 
-- **Default:** `all` (decision C1). The summary is off by default, so only sessions that turned it
-  on are affected, and for them `dropped` has the bug.
-- Under `all`, `keepbatch.turn.keep` and `keepbatch.turn.type` are not used, because nothing old
-  is kept verbatim. `keepbatch.tools` takes on a new meaning (§4.2).
-  - The keys stay valid, so a setting can switch modes.
-  - The schema descriptions say they apply only with the summary off or under `scope: dropped`.
+- **Default:** `window` (decision C1). The summary is off by default, so only sessions that turned
+  it on are affected, and for them `dropped` has the bug.
+- `keepbatch.turn.keep`, `keepbatch.turn.type` and `keepbatch.tools` keep their meaning in both
+  modes. `keep` additionally becomes the size of a summary batch.
 
-### 4.2 What a compaction keeps verbatim (`scope: all`)
+### 4.2 One compaction under `scope: window`
 
-The compacted history is:
+`planCompaction` splits the history into the **summaries** (§4.3) and the **window**, which is
+every other turn, the active turn included, with the preserved response excluded as today. It then
+picks one of three paths.
+
+**A. Ordinary** (the window has fewer than `keep` turns): today's compaction applied to the window
+only.
 
 ```
-[S1] [S2] … [Sk]                  summaries, oldest first (the list)
-[current request]                 only when a run is in flight (PreserveResponseID set)
-[active tail]                     the preserved response's calls, as today
+[S1 … Sk]  [window turns, reduced by turn.type]  [active tail]
 ```
 
-- **Summaries:** the earlier ones are kept byte for byte, and the new one is appended.
-- **Current request (mid-run only):** to continue, the agent needs the request it is working on.
+The summaries go first and are untouched. Nothing is summarized.
+
+**B. Summary** (the window has `keep` turns or more):
+
+```
+[S1 … Sk, S(k+1)]  [current request]  [active tail]
+```
+
+- **New summary:** it covers every completed turn of the window and the summarizable part of the
+  active turn.
+- **Current request (mid-run only):**
   - The user message that started the active turn, and its steering messages, are kept verbatim
     and in order. They are also rendered into the summary input, so the summary can place the
     steering among the steps.
-  - The newest `max(1, keepbatch.tools)` completed tool pairs of the active turn are kept verbatim,
-    so the model sees its last real result (the floor of 1 comes from redesign §5.1).
-  - Everything else in the active turn (older pairs, interim assistant messages, reasoning) is
-    summarized. The new summary is told it covers "the current request so far".
-- **Active tail:** the in-flight calls are excluded and kept as today
-  (`excludePreservedItems`, `transcript/maintenance.go:216-287`), so they are never summarized.
-- **No run in flight** (a final answer, or a manual compaction): everything is summarized,
-  including the last turn. Whether to keep the last user message verbatim anyway is decision C2.
+  - The newest `max(1, keepbatch.tools)` completed tool pairs of the active turn are kept
+    verbatim, so the model sees its last real result (the floor of 1 comes from redesign §5.1).
+  - The rest of the active turn (older pairs, interim assistant messages, reasoning) is
+    summarized, and the summary is told it covers "the current request so far".
+- **Active tail:** the in-flight calls are excluded and kept as today (`excludePreservedItems`,
+  `transcript/maintenance.go:216-287`), so they are never summarized.
+- **No run in flight** (a final answer, or a manual compaction): the whole window is summarized.
+  Whether the last final answer is kept verbatim as well is decision C2.
+- **The window restarts empty,** apart from the current request, which becomes the first turn of
+  the new window.
 
-**Placement:** the summaries come before the current request. That is also the chronological
-order, which fixes the placement weakness of redesign Option A.
+**C. Escape: summarize early** (the window is not full, but an ordinary compaction cannot help).
+Path B is taken when either of these holds:
+
+1. The ordinary result is not smaller than the history: today's no-op at
+   `transcript/maintenance.go:151`, the loop described in §1.
+2. The automatic trigger fires again before a new turn has entered the window since the previous
+   ordinary compaction. The context is still over the limit after reducing, so a second ordinary
+   compaction would change nothing. The runner records the window size of its last ordinary
+   compaction in the run state; this is not stored in the cache. Decision C8.
+
+The escape is what fixes the reported case: keep 20, 10 large turns, and the trigger firing again
+and again.
+
+**The active turn under path A (decision C9).** An ordinary mid-turn compaction under
+`assistant_final` strips the active turn's tool pairs without a summary (redesign P2). Under
+`window`, the recommended rule is: if path A would strip completed pairs from the **active** turn,
+take path B instead. Completed turns keep today's reduction: for them, the final answer stands for
+the work, which is what `assistant_final` means.
+
+**Placement:** the summaries come first, and every summary is older than every turn after it. The
+order is chronological, which fixes the placement weakness of redesign Option A.
 
 ### 4.3 Knowing which items are summaries
 
@@ -201,15 +252,18 @@ When a compaction would leave more than `max_summaries`, it merges before it app
 
 ### 4.5 What the summarizer reads
 
-- **Input:** only the new items (turns since the last compaction, and the summarizable part of the
-  active turn). Earlier summaries are **not** re-summarized.
+- **Input:** the window as it is stored at that moment, plus the summarizable part of the active
+  turn. Earlier summaries are **not** summarized again.
+  - Turns that earlier ordinary compactions reduced arrive in their reduced form: under
+    `assistant_final`, that is the user message and the final answer. That is intended, because
+    the final answer stands for the work.
 - **Context (decision C4):** the existing summaries are passed as read-only context, so the new
   summary can say "continues the work on X" and does not repeat facts. They are labeled "do not
   summarize this again; write only what is new". This uses up to
   `max_summaries × max_output_tokens` of input, which is small, and the budget comes off
   `max_input_bytes`.
-- **Size:** everything since the last compaction is about `trigger_tokens` (200 000 tokens, roughly
-  800 KB), well above `max_input_bytes` 200 000. Today `RenderItemsForSummary` would leave out the
+- **Size:** the window is at most about `trigger_tokens` (200 000 tokens, roughly 800 KB), well
+  above `max_input_bytes` 200 000 when it holds unreduced tool work. Today `RenderItemsForSummary` would leave out the
   *oldest* blocks (`session/compaction_summary.go:213-231`), which are the user's instructions.
   - **This design depends on redesign §8:** render with priority (user and assistant messages
     always, then calls, then tool outputs cut head and tail and replaced oldest first by an
@@ -222,21 +276,22 @@ When a compaction would leave more than `max_summaries`, it merges before it app
 ### 4.6 Guards
 
 - **Small input:** `compaction.summary.min_input_bytes` (redesign §6.1, default 2 000, 0 = off) is
-  kept. It is measured on the new items only. Below it the compaction is a no-op
-  (`ErrCompactionSkipped`, logged at info level). Under `all` this only matters for manual
-  compaction, since the automatic trigger only fires on a large history.
-- **No growth:** the size check (`transcript/maintenance.go:151`) stays. Under `all` it practically
-  never fires, because the output is the summaries plus a short tail.
+  kept. It is measured on the window only. Below it, path B falls back to path A (an ordinary
+  compaction), with the reason logged at info level. Under `window`, a full window is rarely this
+  small, so the guard mostly covers the escape path and very small `keep` values.
+- **No growth:** the size check (`transcript/maintenance.go:151`) stays. Under `window`, a no-op
+  from path A starts the escape (§4.2 C). Path B practically never fails it, because its output is
+  the summaries plus a short tail.
 - **The transcript changed:** the digest check stays, and now covers the summarized items of the
   active turn too.
 
 ### 4.7 The three callers
 
-| Caller | Today | Under `scope: all` |
+| Caller | Today | Under `scope: window` |
 |---|---|---|
-| Automatic, after a response (`session/runner.go:974`) | keep window, `PreserveResponseID` when calls are pending | §4.2 with the current request kept |
-| Overflow recovery (`session/runner.go:878`) | `KeepLatestTurn = true`: keep the whole latest turn | §4.2 too: the current request plus the newest pair(s) kept, the rest of the active turn summarized. This also fixes redesign P3 (keeping the whole turn removes nothing when the turn is the big part). Decision C6. |
-| Manual (`app/maintenance.go:102`) | no run in flight, keep window | everything summarized (C2 for the last user message) |
+| Automatic, after a response (`session/runner.go:974`) | keep window, `PreserveResponseID` when calls are pending | §4.2: path A, B or C |
+| Overflow recovery (`session/runner.go:878`) | `KeepLatestTurn = true`: keep the whole latest turn | Always path B: the window is summarized whether full or not, and the current request plus the newest pair(s) are kept. This also fixes redesign P3, where keeping the whole turn removes nothing when that turn is the big part. Decision C6. |
+| Manual (`app/maintenance.go:102`) | no run in flight, keep window | path A or B by the window count, as automatic; decision C10 on whether a manual request should force B |
 
 ### 4.8 Other readers of the compaction cache
 
@@ -246,7 +301,7 @@ To trace in R0, because they read the items or the turn split:
 - `transcript/state_context.go`: `After` is an item count. With several summary items at the
   start, state-context blocks must still land after them. **[inferred]**
 - `app/session_fork.go` / `httpapi/session_fork.go`: a fork copies or replays the compacted
-  history and uses `keep`. Under `all`, a fork must carry the `summaries` field across.
+  history and uses `keep`. Under `window`, a fork must carry the `summaries` field across.
 - `app/subagent.go`: it names the cache path. Sub-agents have no summary, so there should be no
   change. **[inferred]**
 - The frontend: check whether the session view displays the compacted items, and how a list of
@@ -261,7 +316,7 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 
 | Key | Type, default, bounds | Phase |
 |---|---|---|
-| `scope` | `all` \| `dropped`, default `all` (C1) | R1 |
+| `scope` | `window` \| `dropped`, default `window` (C1) | R1 |
 | `max_summaries` | int, 4, 1..64 (C3) | R1 |
 | `merge_prompt` | string, default text in §4.4 | R1 |
 | `min_input_bytes` | int, 2000, 0 = off, ≤ `max_input_bytes` | R1 |
@@ -277,10 +332,10 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 
 | Phase | Content | Main files |
 |---|---|---|
-| R0 | Baseline. Pin today's behavior in tests, including the bug as an expected-failure case: keep 20, 10 turns, no summary, tool work stripped. Golden `messages.jsonl` from the baseline build. Trace the readers in §4.8. | `transcript/*_test.go` |
-| R1 | Settings (`scope`, `max_summaries`, `merge_prompt`, `min_input_bytes`). Cache `summaries` and `summarized_turns`. Plan: summary items are excluded from the turn split, and the old-cache rule. `scope: all` plan for "no run in flight". Merge step. | `sessionfs/compaction_summary_settings.go`, `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/compaction_summary.go` |
-| R2 | Mid-run: keep the current request and the newest pair(s), summarize the rest of the active turn. Render priority and `max_tool_output_bytes` (redesign §8). | `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/compaction_summary.go` |
-| R3 | Overflow recovery on the same rule (C6). Manual compaction. Fork carries `summaries`. | `session/runner.go`, `app/maintenance.go`, `app/session_fork.go` |
+| R0 | Baseline. Pin today's behavior in tests, including the bug as an expected-failure case: keep 20, 10 turns, no summary, tool work stripped, and a repeated no-op. Golden `messages.jsonl` from the baseline build. Trace the readers in §4.8. | `transcript/*_test.go` |
+| R1 | Settings (`scope`, `max_summaries`, `merge_prompt`, `min_input_bytes`). Cache `summaries` and `summarized_turns`. Plan: summaries are split from the window and excluded from the turn count, plus the old-cache rule. Paths A and B with no run in flight. Merge step. | `sessionfs/compaction_summary_settings.go`, `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/compaction_summary.go` |
+| R2 | Mid-run path B: keep the current request and the newest pair(s), summarize the rest of the active turn. Escape C (no-op, and the trigger firing again) and the active-turn rule (C9). Render priority and `max_tool_output_bytes` (redesign §8). | `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/runner.go`, `session/compaction_summary.go` |
+| R3 | Overflow recovery always takes path B (C6). Manual compaction (C10). Fork carries `summaries`. | `session/runner.go`, `app/maintenance.go`, `app/session_fork.go` |
 | R4 | Schema, sample settings, docs, `DECISIONS.md` entry. Golden diff, full suite, manual quality comparison (redesign §10.2, adding 3-5 chained compactions with merges). | `sample/schemes/`, docs |
 | later | Optional chunking (C5). Summary model (redesign §7). | |
 
@@ -288,36 +343,47 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 
 **`transcript`** (through `CompactHistory` with a recording `Summarize`):
 
-1. **The bug:** keep 20, 10 turns, `scope: all`. `Summarize` gets all 10 turns, and the result is
-   `[S1]` plus nothing else when no run is in flight.
-2. **Second compaction:** `[S1]` plus 30 new turns. `Summarize` gets only the 30 turns (and S1 as
-   context). The result is `[S1, S2]`, and S1 is byte for byte the same.
-3. **Limit:** `max_summaries: 2`, a third compaction. The merge callback gets S1 and S2, and the
+1. **Window not full:** keep 20, 10 turns. `Summarize` is not called, and the result is today's
+   ordinary compaction of the 10 turns.
+2. **Window full:** keep 20, 20 turns (and 25 turns). `Summarize` gets all of them, and the result
+   is `[S1]` when no run is in flight.
+3. **After a summary:** `[S1]` plus 10 turns gives path A, with S1 first and byte for byte the
+   same, and not counted as a turn. `[S1]` plus 20 turns gives `[S1, S2]`, and `Summarize` gets
+   only the 20 turns, with S1 as context.
+4. **Escape:**
+   - Keep 20 and 10 turns whose ordinary result is not smaller: path B is taken, where today the
+     compaction is a no-op.
+   - At the runner level, the trigger firing twice with no new turn in between gives path B on the
+     second compaction.
+5. **Active-turn rule (C9):** mid-run with path A, where the active turn has completed pairs that
+   would be stripped: path B is taken instead.
+6. **Limit:** `max_summaries: 2`, a third compaction. The merge callback gets S1 and S2, and the
    result is `[S12, S3]`. Ranges and `merged` are right.
-4. **A merge failure:**
+7. **A merge failure:**
    - Under `compact`, the list is `[S1, S2, S3]` (one over the limit), and the next compaction
      merges.
    - Under `skip`, the history is unchanged.
-5. **Mid-run:** `PreserveResponseID` set. The current user message and steering messages are kept
+8. **Mid-run path B:** `PreserveResponseID` set. The current user message and steering messages are kept
    in order, the newest completed pair is kept (also with tools 0), the active tail stays
    verbatim, and the rest goes into `Summarize`. `continued_items` is right.
-6. **Old cache:** item 0 with the header and no `summaries` field is read as one summary and
+9. **Old cache:** item 0 with the header and no `summaries` field is read as one summary and
    kept. A user message that starts with the header *after* index 0 is not a summary.
-7. **`scope: dropped`:** byte for byte the same results as R0's baseline.
-8. **Digest:** an item appended during `Summarize` or the merge is refused.
-9. **`min_input_bytes`:** a manual compaction of "proceed"/"ok" is a no-op with no model call.
+10. **`scope: dropped`:** byte for byte the same results as R0's baseline.
+11. **Digest:** an item appended during `Summarize` or the merge is refused.
+12. **`min_input_bytes`:** a tiny window on the escape path falls back to path A, with no model
+    call.
 
 **`session`:**
 
 - An automatic mid-run compaction via `multiRoundStreamer`. The summary request carries the
   earlier summaries as labeled context, and the merge request uses `merge_prompt`. Both are counted
   on the run meter.
-- Overflow recovery under `all` removes the active turn's older pairs.
+- Overflow recovery under `window` takes path B and removes the active turn's older pairs.
 
 **`sessionfs`:** default, bounds and wrong type of each new key; `min_input_bytes >
 max_input_bytes` is refused.
 
-**`app`:** manual compaction under `all`; a fork of a session with two summaries keeps both.
+**`app`:** manual compaction under `window`; a fork of a session with two summaries keeps both.
 
 **Final gate:**
 
@@ -327,14 +393,18 @@ max_input_bytes` is refused.
 
 ## 8. Risks
 
-- **Losing verbatim recent context.** Under `all`, the agent continues from summaries, not from
-  the last turns as they were. Quality now depends on the summary. Mitigations:
+- **A cliff after each summary.** Right after path B, the agent has only summaries and the
+  current request. A turn later it again has a growing verbatim window. Quality just after a
+  summary depends on the summary. Mitigations:
   - the current request and the last result are kept verbatim;
+  - C2 can keep the last final answer;
   - summaries are not re-summarized until the limit is reached;
   - a user who prefers verbatim turns keeps `scope: dropped`;
   - the R4 quality comparison measures the effect.
-- **Latency inside the run:** up to two model calls per compaction (summary and merge), each
-  bounded by `timeout_ms`.
+- **Latency inside the run:** only on path B, with up to two model calls (summary and merge), each
+  bounded by `timeout_ms`. Path A has no model call.
+- **Tool work lost on path A:** completed turns lose their tool pairs under `assistant_final`
+  before they are ever summarized, as today. C9 protects only the active turn.
 - **Cost:** the input of each summary call is bounded by `max_input_bytes` plus the summaries
   used as context. The merge input is small. Both are counted on the run meter in automatic
   compaction. Manual compaction has no meter today (redesign §7). **[inferred]**
@@ -346,10 +416,10 @@ max_input_bytes` is refused.
 
 ## 9. Decisions needed
 
-- **C1.** Should `scope` default to `all`, or should summary users opt in? Recommended: `all`,
-  because `dropped` has the bug and the summary is off by default anyway.
-- **C2.** With no run in flight (final answer or manual compaction), should the last user message
-  and the final answer also be kept verbatim? Recommended: keep the last final answer verbatim
+- **C1.** Should `scope` default to `window`, or should summary users opt in? Recommended:
+  `window`, because `dropped` has the bug and the summary is off by default anyway.
+- **C2.** When path B runs with no run in flight (after a final answer, or a manual compaction),
+  should the last final answer also be kept verbatim? Recommended: keep the last final answer verbatim
   (one item, cheap, and the next user message often refers to it), and summarize the rest.
 - **C3.** What should `max_summaries` default to, and what should its maximum be? Recommended: 4,
   maximum 64.
@@ -360,5 +430,13 @@ max_input_bytes` is refused.
 - **C6.** Should overflow recovery use the same rule (summarize the active turn's older pairs) in
   place of `KeepLatestTurn`? Recommended: yes, because that is the case where keeping the whole
   turn fails.
+- **C8.** Should escape rule 2 (the trigger fires again with no new turn in the window) be built?
+  Rule 1 (the no-op) catches only the case where reducing removes nothing. Recommended: build both.
+  Without rule 2, a reduced window that is still over the trigger makes every round compact again.
+- **C9.** Should a mid-turn path A that would strip the active turn's completed pairs take path B
+  instead? Recommended: yes. This is where unsummarized loss hurts most, in a long tool-heavy run.
+- **C10.** Should a manual compaction always force path B (summarize now), or follow the window
+  count? Recommended: follow the count, and add a `summarize: true` request option later if
+  wanted.
 - **C7.** The redesign is still only a proposal. Should its Phase 1 (guard and P7) be built
   separately first, or folded into R1? Recommended: fold it into R1, since §4.3 replaces its P7 fix.
