@@ -16,7 +16,7 @@ import (
 func planBashCall(t *testing.T, catalog *tools.Catalog, callID, command, root string) string {
 	t.Helper()
 	call, _ := json.Marshal(map[string]any{"type": "function_call", "call_id": callID, "name": "exec", "arguments": `{"lang":"bash","code":` + strconvQuote(command) + `}`})
-	output, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: root, SessionDir: root})
+	output, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{WorkspaceRoot: root, SessionDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +69,10 @@ func TestPlanModeRunsSandboxedCallsWithTheProjectReadOnly(t *testing.T) {
 func TestCallSandboxUsesThePlanPathsOnlyInPlanMode(t *testing.T) {
 	sandbox := bwrapSandbox()
 	sandbox.PlanWritablePaths = []string{"{tmp}"}
-	if got := callSandbox(sandbox, tools.ExecutionContext{}); got != sandbox {
+	if got := callSandbox("exec", sandbox, tools.ExecutionContext{}); got != sandbox {
 		t.Fatalf("outside plan mode the sandbox changed: %+v", got)
 	}
-	plan := callSandbox(sandbox, tools.ExecutionContext{PlanMode: true})
+	plan := callSandbox("exec", sandbox, tools.ExecutionContext{PlanMode: true})
 	if !reflect.DeepEqual(plan.WritablePaths, []string{"{tmp}"}) || !reflect.DeepEqual(sandbox.WritablePaths, []string{"{workspace}", "{git_common_dir}", "{tmp}"}) {
 		t.Fatalf("plan writable = %v, configured = %v", plan.WritablePaths, sandbox.WritablePaths)
 	}
@@ -81,11 +81,11 @@ func TestCallSandboxUsesThePlanPathsOnlyInPlanMode(t *testing.T) {
 	if sandboxKey(plan, place) == sandboxKey(sandbox, place) {
 		t.Fatal("the plan sandbox shares a standby key with the work sandbox")
 	}
-	if callSandbox(nil, tools.ExecutionContext{PlanMode: true}) != nil {
+	if callSandbox("exec", nil, tools.ExecutionContext{PlanMode: true}) != nil {
 		t.Fatal("no sandbox became one")
 	}
 	command := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendCommand, Command: []string{"firejail"}}
-	if callSandbox(command, tools.ExecutionContext{PlanMode: true}) != command {
+	if callSandbox("exec", command, tools.ExecutionContext{PlanMode: true}) != command {
 		t.Fatal("a command backend was changed")
 	}
 	if got := sandboxDescription(sandbox); !strings.Contains(got, "In plan mode, writable: $TMPDIR (this session's own temp folder).") {

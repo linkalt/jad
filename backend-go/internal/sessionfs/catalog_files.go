@@ -23,6 +23,8 @@ const (
 	CatalogModels   CatalogKind = "model"
 	CatalogToolsets CatalogKind = "toolset"
 	CatalogMCP      CatalogKind = "mcp"
+	// CatalogSandboxes are the sandbox templates, flat files <name>.json with flat IDs.
+	CatalogSandboxes CatalogKind = "sandbox"
 )
 
 // ServerFileValidator checks the contents of an MCP server file. The loader for those files
@@ -111,6 +113,11 @@ func (l Layout) catalogDir(kind CatalogKind) (string, error) {
 		return l.Tools, nil
 	case CatalogMCP:
 		return l.MCP, nil
+	case CatalogSandboxes:
+		if l.Sandbox == "" {
+			return "", &CatalogError{Kind: CatalogNotFound, Message: "the sandbox template folder is taken from each session's cwd (catalogs.sandbox {cwd}/...); edit its files in the project"}
+		}
+		return l.Sandbox, nil
 	}
 	return "", &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("unknown catalog %q", kind)}
 }
@@ -119,6 +126,12 @@ func (l Layout) catalogPath(kind CatalogKind, id string) (string, error) {
 	directory, err := l.catalogDir(kind)
 	if err != nil {
 		return "", err
+	}
+	if kind == CatalogSandboxes {
+		if strings.Contains(id, "/") || catalog.ValidateIdentifier(id) != nil {
+			return "", &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("sandbox template %q must be a flat <name>: letters, digits, '-', '_' and '.', starting with a letter or digit", id)}
+		}
+		return filepath.Join(directory, id+SandboxTemplateFileSuffix), nil
 	}
 	category, name, ok := strings.Cut(id, "/")
 	if !ok || catalog.ValidateIdentifier(category) != nil || catalog.ValidateIdentifier(name) != nil {
@@ -132,6 +145,17 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 	directory, err := layout.catalogDir(kind)
 	if err != nil {
 		return nil, err
+	}
+	if kind == CatalogSandboxes {
+		var infos []CatalogFileInfo
+		for _, name := range ListSandboxTemplates(directory) {
+			data, err := readRegularFile(filepath.Join(directory, name+SandboxTemplateFileSuffix), maxInternalJSONFileBytes)
+			if err != nil {
+				continue
+			}
+			infos = append(infos, CatalogFileInfo{ID: name, ETag: CatalogETag(data)})
+		}
+		return infos, nil
 	}
 	entries, err := catalog.Scan(string(kind), directory)
 	if err != nil {
@@ -303,6 +327,16 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("toolset %q is needed by profile %s", id, strings.Join(users, ", "))}
 		}
 	}
+	if kind == CatalogSandboxes {
+		users, err := sandboxUsers(layout, roots, id)
+		if err != nil {
+			return err
+		}
+		if len(users) > 0 {
+			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("sandbox template %q is named by %s", id, strings.Join(users, ", "))}
+		}
+		return os.Remove(path)
+	}
 	if kind == CatalogMCP {
 		users, err := serverUsers(layout, id)
 		if err != nil {
@@ -335,6 +369,9 @@ func validateCatalogFile(layout Layout, roots []Root, kind CatalogKind, path str
 			return configError("%s: no MCP server file validator is configured", path)
 		}
 		return validateServer(path, data)
+	case CatalogSandboxes:
+		_, err := parseSandboxTemplate(path, data)
+		return err
 	}
 	return nil
 }

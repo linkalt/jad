@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"jad/backend-go/internal/sessionfs"
 )
 
 // Definition is the provider-facing metadata for one tool.
@@ -83,6 +85,19 @@ type ExecutionContext struct {
 	// ViaRunner says that a runner tool dispatches this call, not the model: a lazy tool
 	// accepts only such a call. The runner sets it on the call it dispatches.
 	ViaRunner bool
+	// Environment, when set, is the environment of the run the call belongs to: every child
+	// process of a tool its sandbox covers starts in it, and the in-process readers see only
+	// what it shows. The bound runner sets it from the session's sandbox; a sub-agent with a
+	// sandbox of its own, or a profile_message target narrowed by its caller, gets its own.
+	// ForNested copies it, so a nested call stays inside its parent's. Nil: each tool's own
+	// configured sandbox, as before.
+	Environment *Environment
+}
+
+// Environment is what a run's calls start in (docs/isolation-sandbox-design.md §9.4).
+type Environment struct {
+	// Sandbox is the run's resolved sandbox; nil runs every child without one.
+	Sandbox *sessionfs.SandboxSettings
 }
 
 // Dispatcher is what a runner tool needs of the catalog that runs it: dispatch one call and

@@ -17,7 +17,11 @@ var layoutCatalogDefaults = map[string]string{
 	"mcp":      ".jad/mcp",
 	"remotes":  ".jad/remotes",
 	"state":    ".jad/state",
+	"sandbox":  ".jad/sandbox",
 }
+
+// sandboxCatalogCWD starts a catalogs.sandbox value that each session takes from its own cwd.
+const sandboxCatalogCWD = "{cwd}"
 
 // layoutFromSetting reads `catalogs`, `defaults` and `libraries.tool_definition_paths`
 // of the root setting. Folders are resolved against the setting file's directory.
@@ -33,7 +37,7 @@ func layoutFromSetting(setting map[string]json.RawMessage, settingPath string) (
 		}
 		for key, rawValue := range configured {
 			if _, known := layoutCatalogDefaults[key]; !known {
-				return nil, configError("%s: catalogs.%s is not a catalog (profiles, models, tools, mcp, remotes, state)", settingPath, key)
+				return nil, configError("%s: catalogs.%s is not a catalog (profiles, models, tools, mcp, remotes, state, sandbox)", settingPath, key)
 			}
 			var folder string
 			if err := json.Unmarshal(rawValue, &folder); err != nil || strings.TrimSpace(folder) == "" {
@@ -51,6 +55,11 @@ func layoutFromSetting(setting map[string]json.RawMessage, settingPath string) (
 		Remotes:  resolveFrom(base, folders["remotes"]),
 		State:    resolveFrom(base, folders["state"]),
 		Defaults: map[string]json.RawMessage{},
+
+		RootSetting: filepath.Clean(settingPath),
+	}
+	if err := layout.setSandboxCatalog(folders["sandbox"], base, settingPath); err != nil {
+		return nil, err
 	}
 	if raw, exists := setting["defaults"]; exists {
 		if err := json.Unmarshal(raw, &layout.Defaults); err != nil || layout.Defaults == nil {

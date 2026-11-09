@@ -384,6 +384,7 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 		SessionDir:    config.StateDir,
 		SessionKey:    sessionKey(resolved.Reference, resolved.Profile),
 		RemoteHops:    request.Hops,
+		Environment:   runEnvironment(config),
 	}
 	go func() {
 		finished <- callSubagentTool(func() json.RawMessage {

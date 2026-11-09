@@ -188,6 +188,9 @@ type profileMessagePlan struct {
 	blocking  bool
 	hops      int
 	beforeRun func(context.Context)
+	// confine narrows the target's run by the caller's sandbox (D20); nil for a caller
+	// without one.
+	confine func(httpapi.RunSession) (httpapi.RunSession, error)
 	// targetMessages and callerMessages are the transcripts of the target and of the caller.
 	targetMessages, callerMessages string
 }
@@ -208,6 +211,7 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 		Hops:      p.hops,
 		Wait:      wait,
 		BeforeRun: p.beforeRun,
+		Confine:   p.confine,
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				run.lastText.Store(text)

@@ -54,7 +54,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation", "sandbox"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -233,10 +233,24 @@ type NativeSubagentAgent struct {
 	// of their own, and empty otherwise. It is left out of JSON when empty, so the
 	// fingerprint of an agent without it is what it was before the key existed.
 	Isolation string `json:",omitempty"`
+	// Sandbox is the agent's own sandbox (the agent key sandbox: a template name, a template
+	// with overrides or an object), narrowed by the session's (NarrowSandbox); nil runs the
+	// agent in its caller's. Left out of JSON when nil, so the fingerprint of an agent without
+	// it is what it was before the key existed, while an edited template changes it.
+	Sandbox *SandboxSettings `json:",omitempty"`
+	// sandboxRaw is the sandbox value as written, expanded and narrowed once the session's
+	// sandbox and template folder are known (resolveAgentSandboxes); isolationKey says the
+	// agent key isolation was written, which sandbox.isolation may not repeat.
+	sandboxRaw   json.RawMessage
+	isolationKey bool
 	// NoChangeTools is set by the subagent tool when it builds the agent's catalog and finds no
 	// tool in it that can change files (exec, tool_smith, profile_message, or subagent when it may
 	// nest): the agent is then a reader, whatever its settings allowed. It is not read from a file.
 	NoChangeTools bool `json:",omitempty"`
+	// NoProfileMessage is set with NoChangeTools when the agent's catalog has no
+	// profile_message: such a child reaches no other session, so an enforcing sandbox that
+	// writes only scratch makes it a reader (SandboxReader). Not part of the fingerprint.
+	NoProfileMessage bool `json:"-"`
 }
 
 // Agent returns the configured agent with the given name.
@@ -555,6 +569,12 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	}
 	if agent.Isolation, err = subagentIsolation(fields, agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
+	}
+	if raw, has := fields["isolation"]; has && strings.TrimSpace(string(raw)) != "null" {
+		agent.isolationKey = true
+	}
+	if raw, has := fields["sandbox"]; has && strings.TrimSpace(string(raw)) != "null" {
+		agent.sandboxRaw = raw
 	}
 	return agent, nil
 }

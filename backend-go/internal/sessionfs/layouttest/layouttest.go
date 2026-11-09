@@ -72,6 +72,11 @@ type Spec struct {
 	// NoSession writes the root setting and catalogs only, for a test that adds its own
 	// sessions with AddSession.
 	NoSession bool
+	// SandboxCatalog is the root setting's catalogs.sandbox; empty leaves the default.
+	SandboxCatalog string
+	// SandboxTemplates maps a template name to the file <root>/.jad/sandbox/<name>.json
+	// (the default catalogs.sandbox).
+	SandboxTemplates map[string]map[string]any
 }
 
 // Fixture is where Write put everything.
@@ -133,6 +138,12 @@ func Write(t *testing.T, spec Spec) Fixture {
 		"schema_version": 1,
 		"session_roots":  sessionRoots,
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": stateDir},
+	}
+	if spec.SandboxCatalog != "" {
+		rootSetting["catalogs"].(map[string]any)["sandbox"] = spec.SandboxCatalog
+	}
+	for name, template := range spec.SandboxTemplates {
+		put(filepath.Join(".jad", "sandbox", name+".json"), template)
 	}
 	if spec.Server != nil {
 		rootSetting["server"] = spec.Server

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "description": "Writer: the workspace, its git directory and scratch are writable, the system and the workspace readable, credentials hidden, no network",
+  "enabled": true,
+  "backend": "bwrap",
+  "tools": ["exec", "tool_smith", "lsp"],
+  "read": {"paths": ["{system}", "{workspace}", "{home}/.cache"]},
+  "write": {"paths": ["{workspace}", "{git_common_dir}", "{tmp}"], "plan_paths": ["{tmp}"]},
+  "add_hide_paths": ["{workspace}/.env"],
+  "network": false
+}

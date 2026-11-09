@@ -37,6 +37,9 @@ type ProfileRunRequest struct {
 	BeforeRun func(ctx context.Context)
 	// OnEnd runs once the run has ended and the transcript is released, also when the start fails.
 	OnEnd func(*ProfileRun)
+	// Confine, when set, turns the target's runner into the one the run uses: the target's
+	// session narrowed by the caller's sandbox (profile_message, D20). An error fails the start.
+	Confine func(RunSession) (RunSession, error)
 }
 
 // ProfileRunStarter starts a run of a profile for a tool, the way a user's message
@@ -129,6 +132,13 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	run.hops = request.Hops
 	run.onEnd = request.OnEnd
 	run.mu.Unlock()
+	runner := started.resolved.Runner
+	if request.Confine != nil {
+		// Fails like any start that ends before the run: the deferred cleanup runs OnEnd.
+		if runner, err = request.Confine(runner); err != nil {
+			return nil, err
+		}
+	}
 	if request.BeforeRun != nil {
 		request.BeforeRun(ctx)
 	}
@@ -140,7 +150,7 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 		// Deferred calls run last in, first out: the transcript lock is released before OnEnd runs.
 		defer run.callOnEnd(handle)
 		defer started.processUnlock()
-		h.executeRun(run, started.resolved.Runner, input)
+		h.executeRun(run, runner, input)
 	}()
 	return handle, nil
 }

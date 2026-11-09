@@ -155,7 +155,7 @@ func TestLSPServerIsSharedAndStopsWhenIdle(t *testing.T) {
 	settings.IdleShutdownMs = 300
 	_ = os.WriteFile(filepath.Join(root, "a.fk"), []byte("x\n"), 0o644)
 	callLSP(t, settings, root, map[string]any{"action": "symbols", "path": "a.fk"})
-	key := lspKey(settings.Servers[0], resolvedRoot(t, root))
+	key := lspKey(settings.Servers[0], resolvedRoot(t, root), nil, sandboxPlace{})
 	first := slotClient(key)
 	callLSP(t, settings, root, map[string]any{"action": "symbols", "path": "a.fk"})
 	if first == nil || slotClient(key) != first {

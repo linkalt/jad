@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,13 +14,15 @@ import (
 )
 
 // sandboxPlace is where a sandboxed child runs: the call's workspace root and working
-// directory, which the {workspace} and {cwd} placeholders name, and the call's own temp
-// folder (callTempDir), which {tmp} names and the child gets as TMPDIR. An empty tmp (a
-// process that belongs to no call: an MCP server, jad check) is the system temp folder.
+// directory, which the {workspace} and {cwd} placeholders name, the call's own temp folder
+// (callTempDir), which {tmp} names and the child gets as TMPDIR, and the session's state
+// folder, which {session_dir} names. An empty tmp (a process that belongs to no call: an MCP
+// server, jad check) is the system temp folder; an empty sessionDir drops {session_dir} paths.
 type sandboxPlace struct {
-	workspace string
-	cwd       string
-	tmp       string
+	workspace  string
+	cwd        string
+	tmp        string
+	sessionDir string
 }
 
 // sandboxLaunch is the program that starts a child, possibly inside a sandbox: the name it is
@@ -32,9 +33,17 @@ type sandboxLaunch struct {
 	args       []string
 }
 
-// callSandbox is the sandbox one call's children start in: its plan-mode form for a call of
-// a plan-mode run, else the configured one.
-func callSandbox(sandbox *sessionfs.SandboxSettings, execution tools.ExecutionContext) *sessionfs.SandboxSettings {
+// callSandbox is the sandbox the children tool starts for one call start in: the run's own
+// (ExecutionContext.Environment) when the call has one, if it covers tool, else the tool's
+// configured one; its plan-mode form for a call of a plan-mode run.
+func callSandbox(tool string, configured *sessionfs.SandboxSettings, execution tools.ExecutionContext) *sessionfs.SandboxSettings {
+	sandbox := configured
+	if environment := execution.Environment; environment != nil {
+		sandbox = nil
+		if environment.Sandbox.Covers(tool) {
+			sandbox = environment.Sandbox
+		}
+	}
 	if execution.PlanMode {
 		return sandbox.ForPlanMode()
 	}
@@ -107,27 +116,46 @@ type sandboxNetwork struct {
 	forwarder string
 }
 
-// bwrapArguments builds a bubblewrap call: the whole file system read-only, a fresh /dev and
-// /proc, the writable paths bound read-write (sandboxWritableRoots), the fixed rules
-// (sandboxFixedRules), the hidden paths covered, every namespace new (the network kept only
-// with network true), and the child killed if bwrap dies. A writable or hidden path that does
-// not exist is left out. A later argument wins over an earlier one for the same path.
+// bwrapArguments builds a bubblewrap call (docs/isolation-sandbox-design.md §9.3): the read
+// paths read-only (the whole file system by default, else only the listed ones on an empty
+// root), a fresh /dev and /proc, the writable paths bound read-write (sandboxWritableRoots),
+// the fixed rules (sandboxFixedRules), the hidden paths covered, every namespace new (the
+// network kept only with network true), and the child killed if bwrap dies. A read, writable
+// or hidden path that does not exist is left out. A later argument wins over an earlier one
+// for the same path.
 func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expand func(string) string, network *sandboxNetwork, configured, resolved string, args []string) []string {
 	arguments := []string{"--die-with-parent", "--unshare-all"}
 	if sandbox.Network {
 		arguments = append(arguments, "--share-net")
 	}
-	arguments = append(arguments, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc")
 	writable := sandboxWritableRoots(sandbox.WritablePaths, expand)
+	whole := sandbox.WholeFileSystemReadable()
+	var readable []sandboxReadRoot
+	if whole {
+		arguments = append(arguments, "--ro-bind", "/", "/")
+	} else {
+		readable = sandboxReadRoots(sandbox.ReadPaths, expand, writable)
+		for _, root := range readable {
+			arguments = append(arguments, "--ro-bind", root.real, root.real)
+		}
+		for _, root := range readable {
+			if root.link != "" {
+				arguments = append(arguments, "--symlink", root.real, root.link)
+			}
+		}
+	}
+	arguments = append(arguments, "--dev", "/dev", "--proc", "/proc")
 	for _, path := range writable {
 		arguments = append(arguments, "--bind-try", path, path)
 	}
-	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable))...)
+	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(sandbox.WritablePaths, expand)))...)
 	for _, path := range sandbox.HidePaths {
 		path = expand(path)
 		info, err := os.Stat(path)
 		switch {
 		case path == "" || err != nil:
+		case !whole && !sandboxVisible(path, readable, writable):
+			// Not in the environment at all; a cover would only make an empty folder.
 		case info.IsDir():
 			arguments = append(arguments, "--tmpfs", path)
 		default:
@@ -143,6 +171,10 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	if network != nil {
 		// No network of its own: the forwarder hands loopback proxy_port to jad's proxy,
 		// whose socket is bound in, and starts the child with the proxy variables.
+		if !whole {
+			// jad's own forwarder runs inside, whatever the read paths list.
+			arguments = append(arguments, "--ro-bind", network.forwarder, network.forwarder)
+		}
 		arguments = append(arguments, "--bind", network.socket, network.socket)
 		arguments = append(arguments, sandboxProxyEnvironment(sandbox.ProxyPort)...)
 		arguments = append(arguments, "--", network.forwarder, SandboxNetForwardCommand,
@@ -153,17 +185,18 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	return append(arguments, args...)
 }
 
-// sandboxExpander fills in {workspace}, {cwd}, {git_common_dir}, {tmp} and {home}. A value
-// whose placeholder names nothing (no workspace, no repository, no home) becomes empty, so a
-// path that names it is left out. {tmp} is the call's own temp folder, or the system one for
-// a process that belongs to no call.
+// sandboxExpander fills in {workspace}, {cwd}, {git_common_dir}, {tmp}, {home} and
+// {session_dir}. A value whose placeholder names nothing (no workspace, no repository, no
+// home, no session) becomes empty, so a path that names it is left out. {tmp} is the call's
+// own temp folder, or the system one for a process that belongs to no call. {system} stands
+// for several folders and is expanded by sandboxReadRoots, not here.
 func sandboxExpander(place sandboxPlace) func(string) string {
 	home, _ := os.UserHomeDir()
 	tmp := place.tmp
 	if tmp == "" {
 		tmp = os.TempDir()
 	}
-	values := map[string]string{"{workspace}": place.workspace, "{cwd}": place.cwd, "{tmp}": tmp, "{home}": home}
+	values := map[string]string{"{workspace}": place.workspace, "{cwd}": place.cwd, "{tmp}": tmp, "{home}": home, "{session_dir}": place.sessionDir}
 	gitDirKnown := false
 	return func(value string) string {
 		if strings.Contains(value, "{git_common_dir}") && !gitDirKnown {
@@ -180,50 +213,8 @@ func sandboxExpander(place sandboxPlace) func(string) string {
 	}
 }
 
-// gitCommonDir is the git directory of the repository that holds dir: the .git folder of a
-// checkout, or for a worktree (whose .git is a file naming its own git folder) the folder its
-// commondir names. Empty when dir is in no repository.
-func gitCommonDir(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	for current := filepath.Clean(dir); ; current = filepath.Dir(current) {
-		dotGit := filepath.Join(current, ".git")
-		if info, err := os.Stat(dotGit); err == nil {
-			if info.IsDir() {
-				return dotGit
-			}
-			return worktreeCommonDir(current, dotGit)
-		}
-		if parent := filepath.Dir(current); parent == current {
-			return ""
-		}
-	}
-}
-
-func worktreeCommonDir(top, dotGit string) string {
-	content, err := os.ReadFile(dotGit)
-	if err != nil {
-		return ""
-	}
-	gitDir, found := strings.CutPrefix(strings.TrimSpace(string(content)), "gitdir:")
-	if !found {
-		return ""
-	}
-	gitDir = strings.TrimSpace(gitDir)
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(top, gitDir)
-	}
-	common, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
-	if err != nil {
-		return gitDir
-	}
-	commonDir := strings.TrimSpace(string(common))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(gitDir, commonDir)
-	}
-	return filepath.Clean(commonDir)
-}
+// gitCommonDir is the git directory of the repository that holds dir (sessionfs.GitCommonDir).
+func gitCommonDir(dir string) string { return sessionfs.GitCommonDir(dir) }
 
 // sandboxKey is the part of a standby's identity the sandbox makes: two launches in different
 // sandboxes (or workspaces) are different processes.
@@ -232,7 +223,7 @@ func sandboxKey(sandbox *sessionfs.SandboxSettings, place sandboxPlace) string {
 		return ""
 	}
 	settings, _ := json.Marshal(sandbox)
-	return string(settings) + "\x00" + place.workspace + "\x00" + place.tmp
+	return string(settings) + "\x00" + place.workspace + "\x00" + place.tmp + "\x00" + place.sessionDir
 }
 
 // sandboxDescription is the sentence added to a tool's description when its calls run in a
@@ -248,9 +239,13 @@ func sandboxDescription(sandbox *sessionfs.SandboxSettings) string {
 	if sandbox.Backend == sessionfs.SandboxBackendSeatbelt {
 		kind = "a macOS sandbox-exec"
 	}
-	text := " Sandbox: every call runs in " + kind + " sandbox. Writable: " + sandboxPathList(sandbox.WritablePaths) +
+	text := " Sandbox: every call runs in " + kind + " sandbox."
+	if !sandbox.WholeFileSystemReadable() {
+		text += " Readable: only " + sandboxPathList(sandbox.ReadPaths) + "; nothing else exists in it."
+	}
+	text += " Writable: " + sandboxPathList(sandbox.WritablePaths) +
 		"; everything else is read-only, so a write elsewhere fails with \"Read-only file system\"." +
-		" The repository's git hooks and config stay read-only and other runs' worktrees are hidden."
+		" The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden."
 	if !slices.Equal(sandbox.PlanWritablePaths, sandbox.WritablePaths) {
 		text += " In plan mode, writable: " + sandboxPathList(sandbox.PlanWritablePaths) + "."
 	}
@@ -274,7 +269,7 @@ func sandboxPathList(paths []string) string {
 	if len(paths) == 0 {
 		return "nothing"
 	}
-	names := strings.NewReplacer("{workspace}", "<workspace>", "{cwd}", "<working directory>", "{git_common_dir}", "<repository git directory>", "{tmp}", "$TMPDIR (this session's own temp folder)", "{home}", "~")
+	names := strings.NewReplacer("{workspace}", "<workspace>", "{cwd}", "<working directory>", "{git_common_dir}", "<repository git directory>", "{tmp}", "$TMPDIR (this session's own temp folder)", "{home}", "~", "{session_dir}", "<session state folder>", "{system}", "<system folders: "+strings.Join(sessionfs.SandboxSystemPaths(), " ")+">")
 	named := make([]string, len(paths))
 	for index, path := range paths {
 		named[index] = names.Replace(path)

@@ -55,15 +55,16 @@ func ShutdownLanguageServers() {
 	}
 }
 
-func lspKey(server sessionfs.NativeLSPServer, root string) string {
+func lspKey(server sessionfs.NativeLSPServer, root string, sandbox *sessionfs.SandboxSettings, place sandboxPlace) string {
 	identity, _ := json.Marshal(server)
-	return string(identity) + "\x00" + root
+	return string(identity) + "\x00" + root + "\x00" + sandboxKey(sandbox, place)
 }
 
-// acquire returns the running server for root, starting and initializing it when it is not
-// running. The caller calls release when its call is done.
-func (p *lspPool) acquire(ctx context.Context, server sessionfs.NativeLSPServer, root string, settings sessionfs.NativeLSPSettings) (*lspClient, error) {
-	key := lspKey(server, root)
+// acquire returns the running server for root in sandbox, starting and initializing it when it
+// is not running. A server started in one sandbox never serves a call of another. The caller
+// calls release when its call is done.
+func (p *lspPool) acquire(ctx context.Context, server sessionfs.NativeLSPServer, root string, settings sessionfs.NativeLSPSettings, sandbox *sessionfs.SandboxSettings, place sandboxPlace) (*lspClient, error) {
+	key := lspKey(server, root, sandbox, place)
 	p.mu.Lock()
 	slot := p.slots[key]
 	if slot == nil {
@@ -76,7 +77,7 @@ func (p *lspPool) acquire(ctx context.Context, server sessionfs.NativeLSPServer,
 	if slot.client != nil && slot.client.tryBegin() {
 		return slot.client, nil
 	}
-	client, err := startLSPClient(ctx, server, root, settings)
+	client, err := startLSPClient(ctx, server, root, settings, sandbox, place)
 	if err != nil {
 		return nil, err
 	}
@@ -133,13 +134,17 @@ type lspClient struct {
 	doneErr error
 }
 
-func startLSPClient(ctx context.Context, server sessionfs.NativeLSPServer, root string, settings sessionfs.NativeLSPSettings) (*lspClient, error) {
+func startLSPClient(ctx context.Context, server sessionfs.NativeLSPServer, root string, settings sessionfs.NativeLSPSettings, sandbox *sessionfs.SandboxSettings, place sandboxPlace) (*lspClient, error) {
 	program, err := exec.LookPath(server.Command[0])
 	if err != nil {
 		return nil, fmt.Errorf("the language server %s (%s) cannot be run: %w", server.Name, server.Command[0], err)
 	}
-	command := exec.Command(program, server.Command[1:]...)
-	command.Args[0] = server.Command[0]
+	launch, err := sandboxed(sandbox, place, server.Command[0], program, server.Command[1:])
+	if err != nil {
+		return nil, fmt.Errorf("start the language server %s in the sandbox: %w", server.Name, err)
+	}
+	command := exec.Command(launch.resolved, launch.args...)
+	command.Args[0] = launch.configured
 	command.Dir = root
 	command.Env = environmentWithoutServerToken()
 	for name, value := range server.Env {

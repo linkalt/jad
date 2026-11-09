@@ -125,7 +125,15 @@ func executeLSP(ctx context.Context, arguments map[string]any, settings sessionf
 	}
 
 	root := resolved.workspaceRoot
-	client, err := languageServers.acquire(ctx, *server, root, settings)
+	// The server is a child of the call like exec's: with sandbox.tools listing lsp it starts
+	// in the run's sandbox (its plan-mode form in plan mode), one server per sandbox.
+	sandbox := callSandbox("lsp", settings.Sandbox, execution)
+	tmp, err := callTempDir(sandbox, execution)
+	if err != nil {
+		return sandboxTempError(callID, err), nil
+	}
+	place := sandboxPlace{workspace: execution.WorkspaceRoot, cwd: root, tmp: tmp, sessionDir: execution.SessionDir}
+	client, err := languageServers.acquire(ctx, *server, root, settings, sandbox, place)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "server_unavailable", "The language server could not be started",
 			tools.Information{Key: "server", Value: server.Name}, tools.Information{Key: "system_error", Value: err.Error()}), nil

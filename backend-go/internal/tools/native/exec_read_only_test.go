@@ -34,7 +34,7 @@ func execROCall(arguments string) json.RawMessage {
 
 func runExecCall(t *testing.T, catalog *tools.Catalog, arguments, root string) string {
 	t.Helper()
-	output, err := catalog.ExecuteFunctionCall(context.Background(), execROCall(arguments), tools.ExecutionContext{CallID: "c", WorkspaceRoot: root, SessionDir: root})
+	output, err := catalog.ExecuteFunctionCall(context.Background(), execROCall(arguments), tools.ExecutionContext{CallID: "c", WorkspaceRoot: root, SessionDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestExecReadOnlyCallStartsInThePlanSandbox(t *testing.T) {
 		if execution.PlanMode != tc.want {
 			t.Errorf("%s: PlanMode = %v, want %v", name, execution.PlanMode, tc.want)
 		}
-		got := callSandbox(sandbox, execution)
+		got := callSandbox("exec", sandbox, execution)
 		if usesPlanPaths := strings.Join(got.WritablePaths, ",") == "{tmp}"; usesPlanPaths != tc.want {
 			t.Errorf("%s: writable paths = %v", name, got.WritablePaths)
 		}

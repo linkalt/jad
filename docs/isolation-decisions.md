@@ -178,4 +178,102 @@ What P1 changed, and where it departs from the design text:
 8. **Not covered in P1 (P2):** the in-process `write`/`edit` tools are not sandboxed and no default
    path rule refuses `.git` (the only `.git` default is the file listing's ignore list,
    `sessionfs/file_settings.go:53`), so a model can still write `.git/hooks/*` through them; P2's
-   in-process mirror of the environment (§2.4, §9.3) closes it.
+   in-process mirror of the environment (§2.4, §9.3) closes it. **Corrected in P2:** this was
+   wrong. `write` and `edit` were removed before P1 (`sessionfs/tool_shape.go`, `removedNativeTools`:
+   every write goes through `exec`), so no in-process tool writes the project. The in-process
+   tools left (code_context, read_image, the lsp tool's file view, transcript) only read; P2
+   mirrors the environment for them (item 9 of the P2 record).
+
+## P2 implementation (2026-11-09)
+
+What P2 changed, and where it departs from the design text. Verified on this container's
+bwrap 0.9.0; nothing was run on macOS.
+
+1. **Settings** (`sessionfs/sandbox.go`): `read.paths` / `read.add_paths` (default `["/"]`),
+   `write.paths` / `write.add_paths` / `write.plan_paths` / `write.add_plan_paths` (the older
+   `writable_paths` / `plan_writable_paths` still load; one object with both spellings of one
+   list is refused, D11), `add_hide_paths`, `isolation.mode`, `template`; `lsp` in `SandboxTools`;
+   placeholders `{session_dir}` and `{system}` (a read path of its own only). Each `add_` list is
+   folded into its list, then every write path (both forms) is added to the read paths unless
+   `"/"` is readable (D16 correction). `hide_paths` defaults to the D5 credential list.
+   `isolation` accepts only `mode` (`base`, `materialize`, `share_paths` are P3/P4 and refused);
+   it is read even when `enabled` is false. A sandbox built in code with nil `ReadPaths` reads the
+   whole file system.
+2. **Templates** (`sessionfs/sandbox_template.go`): `catalogs.sandbox` (default `.jad/sandbox`;
+   absolute, relative to the root setting, or `{cwd}/…` per session, D28); a name is read with
+   `readRegularFile` after `noteFile`, so an edited template changes the settings stamp; flat
+   names only (D15), `enabled` required (D19), no `template` inside (D17), `schema_version` 1
+   when given. Each layer (root defaults, session, profile) is expanded before the merge; the
+   merge is per key with the `add_` lists concatenated, a layer that sets a list clears the
+   `add_` lists below it, and `null` drops the layers below (§14.9, D26). As D16 says, a template
+   named on an upper layer merges *over* the lower layers, so a key the template does not set
+   (for example `network` from the defaults) still comes from below.
+3. **Backends** (`tools/native/sandbox.go`, `sandbox_rules.go`, `sandbox_seatbelt.go`): with read
+   paths, bwrap starts from an empty root and ro-binds each existing read path by its resolved
+   name, recreating a top-level symlink (`/lib` → `/usr/lib`) with `--symlink`; a read path under
+   a writable path is left to that bind (its name could have been swapped, as S5). jad's own
+   network forwarder is bound read-only whatever the read paths. Hidden paths outside the
+   environment are skipped. seatbelt gets `(deny file-read*)`, `(allow file-read-metadata)` and an
+   allow per read root and writable root (unverified on macOS).
+4. **Configuration read-only (D27, D28, broader than the design):** under a writable path, the root
+   setting, the session file, the catalogs (profiles, models, toolsets, MCP servers, remotes,
+   sandbox templates) and the whole state folder are read-only in every bwrap/seatbelt sandbox;
+   the session's own state folder comes last, so its transcripts stay read-only even when
+   `{session_dir}` is listed. A writable path inside one of them is writable again when no
+   symlink lies on the way and no other such path holds it (in a read-only folder its name cannot
+   be swapped). The design named only the template folder and the session's records; a writable
+   toolset (hooks run outside the sandbox unless `tools` lists `hooks`), MCP server file (its
+   command) or model file (its endpoint) is the same kind of escape. Agent folders are **not**
+   protected: an agent's sandbox is narrowed by the session's, so an edited `agent.json` cannot
+   widen the environment, and agents may keep files there. A protected path that does not exist
+   is not created.
+5. **LSP** (`lsp.go`, `lsp_client.go`): with `lsp` in `tools`, a language server starts through
+   `sandboxed()` in the call's sandbox (plan-mode form in plan mode) with the call's `{tmp}`; the
+   pool key includes `sandboxKey`, so a server never serves another sandbox.
+6. **Agents** (`layout_load.go` `resolveAgentSandboxes`, `sandbox_narrow.go`): agent key
+   `sandbox` (name, `{template, …}` or object), expanded like a layer and narrowed by the
+   session's at load (D18, correction 6: read ⊆ parent read ∪ write, write ⊆ parent write; and,
+   stricter than the design, plan-mode write ⊆ parent plan-mode write). `sandbox.isolation.mode`
+   sets the agent's isolation; with the agent key `isolation` too it is refused. At run time
+   (`subagent_call.go` `childEnvironment`) the agent's sandbox is narrowed again by the calling
+   run's environment, so a narrow agent cannot start a wider one (`sandbox_widens`). An agent
+   whose sandbox is bwrap/seatbelt, writes only under `{tmp}` and has no `profile_message` is a
+   reader (`SandboxReader`, §14.3).
+   **Departure (§14.4 step 5):** no derived tool set per (toolset, template). The child's calls
+   follow `ExecutionContext.Environment` (item 7) for every process they start, so confinement
+   is the agent's; but the exec/tool_smith *descriptions* a sandbox-only agent sees are the
+   session's, and a toolset agent's stdio MCP servers start in the session's sandbox (U4 is fixed:
+   `loadAgentToolsetMCP` now sets the wrapper), not the agent's own.
+7. **`ExecutionContext.Environment`** (`tools/catalog.go`): `{Sandbox}` only (holder, tmp and the
+   rest come with P3/P4). The bound runner and the remote API set it from the session's sandbox;
+   `ForNested` copies it; `callSandbox(tool, configured, execution)` uses it when set (if it
+   covers the tool), else the tool's configured sandbox.
+8. **D20 / D24 departure:** no `RunChoice{…, Ceiling}` through `Resolve`/`LoadSessionSettings` and
+   no `lockedConfigKey` change. `Prepare` refuses a target whose sandbox would widen the caller's
+   (`sandbox_widens`, before any handle or queue place), and the run request carries a `Confine`
+   hook that httpapi applies to the target's runner after it is resolved: its config's sandbox is
+   replaced by the narrowed one (paths compared expanded, `{tmp}`/`{system}` by name, correction 8;
+   a target without a sandbox inherits the caller's with the caller's paths and keeps its own
+   session file read-only). A cached config is therefore never a narrowed one, and the cache key
+   needs no ceiling. A plan-mode caller narrows by its plan-mode form. Not covered: a remote
+   target (another server), and the target session's stdio MCP servers when `tools` does not list
+   `mcp` (D10).
+9. **In-process mirror** (`path_scope.go` `environmentPolicy`): with an environment, hidden paths,
+   the `{tmp}` root and other runs' worktrees are denied, and with read paths only what they and
+   the writable paths show is within reach (intersected with any existing scope). This replaces
+   P1 item 8, which was wrong (see there). tool_smith bridge calls carry the environment through
+   `ForNested`; no test runs a bridge call under it.
+10. **Catalog API**: kind `sandbox` (`/api/catalog/sandbox/<name>`), flat IDs; a save is
+    checked by the template loader (an enabled template needs its program on this machine); a
+    delete is refused while the root defaults, a session, a profile or an agent inline in a toolset
+    names it (agent folders are not searched; such a session then fails to load naming the
+    template). With `{cwd}` the folder is per session and the API refuses to list it.
+11. **Schemas**: `setting.schema.json` (`$defs.sandbox_fields`, `sandbox` as name, null or object;
+    agent key `sandbox` in both agent schemas), `root-setting.schema.json` (`catalogs.sandbox`),
+    new `sandbox.schema.json` (`schema_version` optional, as in the loader). Sample templates
+    `sample/jad/sandbox/{workspace-writer,reader}.json`.
+12. **`jad check`** starts sandboxes that differ only in their per-session read-only paths once.
+
+Not done in P2 (later phases or follow-ups): `isolation.base/materialize/share_paths` and delegated
+profile-run isolation (P3/P4); per-call `sandbox` / `sandbox_choice` (P2b); `--bind-fd` for S5; an
+agent-specific tool description and MCP servers; seatbelt read rules on a Mac.

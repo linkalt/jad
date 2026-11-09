@@ -193,7 +193,7 @@ func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunRes
 	if standby != nil {
 		workDir, token = standby.workDir, standby.token
 	} else {
-		tmp, err := callTempDir(callSandbox(settings.Child.Sandbox, execution), execution)
+		tmp, err := callTempDir(callSandbox("tool_smith", settings.Child.Sandbox, execution), execution)
 		if err != nil {
 			return shellRunResult{text: sandboxTempError(callID, err)}
 		}
@@ -317,7 +317,7 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
 		return nil
 	}
-	sandbox := callSandbox(settings.Child.Sandbox, execution)
+	sandbox := callSandbox("tool_smith", settings.Child.Sandbox, execution)
 	tmp, err := callTempDir(sandbox, execution)
 	if err != nil {
 		return nil
@@ -325,7 +325,7 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	build := func(workDir, token string) standbySpawn {
 		launch := toolSmithLaunch(settings, workDir, bridged, token)
 		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, apiKeyEnv)
-		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}
+		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}
 	}
 	spawn := func(workDir string) (standbySpawn, error) {
 		token := ""

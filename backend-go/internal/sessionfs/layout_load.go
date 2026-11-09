@@ -80,6 +80,9 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	if err := built.finishSandbox(&config); err != nil {
+		return SessionConfig{}, err
+	}
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
@@ -184,6 +187,9 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 				err = configError("%s: tools.native.profile_message is not allowed in a toolset used by an agent (toolset %s); a sub-agent cannot message a profile", c.sessionPath, strings.Join(agent.Toolset, ", "))
 			} else if err == nil {
 				derived.NativeSubagent = nil
+				if derived.Sandbox != nil && config.Sandbox != nil {
+					derived.Sandbox.ReadOnlyPaths = config.Sandbox.ReadOnlyPaths
+				}
 				if config.AgentToolsets == nil {
 					config.AgentToolsets = make(map[string]SessionConfig)
 				}
@@ -196,6 +202,90 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 			return configError("agent %s uses toolset %s: %s", agent.Name, key, configProblem.Message)
 		}
 		return err
+	}
+	return nil
+}
+
+// finishSandbox completes the session's sandbox once the settings are read: the folders of
+// the session's own configuration become its read-only paths (sessionConfigPaths), and each
+// agent's own sandbox is expanded and narrowed by the session's (resolveAgentSandboxes).
+func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
+	readOnly := c.sessionConfigPaths(config)
+	if config.Sandbox != nil {
+		// The tools share this pointer (applySandbox), so they see the paths too. Its
+		// isolation is read but unused: a profile's own runs always work in its cwd (D7), and
+		// delegated profile runs are not isolated before P3.
+		config.Sandbox.ReadOnlyPaths = readOnly
+	}
+	return c.resolveAgentSandboxes(config, readOnly)
+}
+
+// sessionConfigPaths are the files and folders the session's configuration comes from: the
+// root setting, the session file, the catalogs (profiles, models, toolsets, MCP servers,
+// remotes, sandbox templates) and the state folder with every session's transcripts. A
+// sandbox keeps the ones under its writable paths read-only, so a sandboxed call cannot change
+// what the next run is allowed, where jad sends its requests, or a transcript (D27, D28). The
+// agent folders are not among them: an agent's sandbox is narrowed by the session's, so an
+// edited agent.json cannot widen the environment, and agents may keep their own files there.
+func (c *layoutCompose) sessionConfigPaths(config *SessionConfig) []string {
+	candidates := []string{c.layout.RootSetting, c.location.File, c.layout.Profiles, c.layout.Models, c.layout.Tools, c.layout.MCP, c.layout.Remotes, c.layout.State, c.templates.dir}
+	var paths []string
+	for _, path := range candidates {
+		if path != "" {
+			paths = appendNewStrings(paths, filepath.Clean(path))
+		}
+	}
+	return paths
+}
+
+// resolveAgentSandboxes expands each agent's sandbox value like a layer (a template name, or
+// a template with overrides), reads it and narrows it by the session's: an agent that would
+// reach more than the session is refused, naming the agent, the template and the path (D18).
+// An agent whose sandbox is not enabled runs in its caller's. sandbox.isolation.mode is the
+// agent key isolation; an agent may set only one of them.
+func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []string) error {
+	if config.NativeSubagent == nil {
+		return nil
+	}
+	for index := range config.NativeSubagent.Agents {
+		agent := &config.NativeSubagent.Agents[index]
+		if agent.sandboxRaw == nil {
+			continue
+		}
+		where := fmt.Sprintf("%s: tools.native.subagent agent %s", c.sessionPath, agent.Name)
+		fields, reset, err := expandSandboxValue(agent.sandboxRaw, c.templates, where)
+		if err != nil || reset || fields == nil {
+			return err
+		}
+		own, enabled, err := parseSandbox(mustJSON(fields), where, "sandbox")
+		if err != nil {
+			return err
+		}
+		if mode := own.Isolation.Mode; mode != "" {
+			if agent.isolationKey {
+				return configError("%s: isolation and sandbox.isolation.mode are both set; keep one", where)
+			}
+			if mode == SandboxIsolationWorktree && !agent.ChangesFiles() {
+				return configError("%s: sandbox.isolation.mode worktree needs a tool that changes files (%s) in tools, or no tools list", where, strings.Join(agentChangeTools, ", "))
+			}
+			agent.Isolation = ""
+			if mode == SandboxIsolationWorktree {
+				agent.Isolation = SubagentIsolationWorktree
+			}
+		}
+		if !enabled {
+			continue
+		}
+		own.ReadOnlyPaths = readOnly
+		narrowed, err := NarrowSandbox(config.Sandbox, own, nil, nil)
+		if err != nil {
+			template := ""
+			if own.Template != "" {
+				template = " (template " + own.Template + ")"
+			}
+			return configError("%s: sandbox%s %v", where, template, err)
+		}
+		agent.Sandbox = narrowed
 	}
 	return nil
 }
@@ -286,6 +376,8 @@ type layoutCompose struct {
 	scans *CatalogScans
 	// warnings are the notices of every compose of this load, without repeats.
 	warnings []string
+	// templates reads the session's sandbox templates; set by compose.
+	templates sandboxTemplates
 }
 
 func (c *layoutCompose) warn(format string, args ...any) {
@@ -325,6 +417,9 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 	if raw, set := setting["cwd"]; !set || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		// Falling back to the root folder would run tools inside .jad/.
 		return nil, nil, configError("%s: cwd is required; set defaults.cwd in the root setting, cwd or settings.cwd in the session, or settings.cwd in the profile", c.sessionPath)
+	}
+	if err := c.composeSandbox(setting, sessionLayer, profile.Settings, selected.Path); err != nil {
+		return nil, nil, err
 	}
 	// env_file is a default for the toolset's bash, process, exec and tool_smith, not a setting of its own.
 	defaultEnvFile := setting["env_file"]
@@ -386,6 +481,30 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 		return nil, nil, err
 	}
 	return setting, modelPaths, nil
+}
+
+// composeSandbox replaces the generic merge of the sandbox key: each layer's value is expanded
+// first (a template name, or {"template": ...} with overrides), then the layers are merged
+// with the add_ lists added up (composeSandboxLayers). Expanding after the generic merge would
+// lose a template named on one layer and overridden on another.
+func (c *layoutCompose) composeSandbox(setting, sessionLayer, profileSettings map[string]json.RawMessage, profilePath string) error {
+	layers := []json.RawMessage{c.layout.Defaults["sandbox"], sessionLayer["sandbox"], profileSettings["sandbox"]}
+	wheres := []string{"root setting: defaults", c.sessionPath + ": settings", profilePath + ": settings"}
+	var cwd string
+	if err := json.Unmarshal(setting["cwd"], &cwd); err == nil {
+		cwd = filepath.Clean(expandHome(strings.TrimSpace(cwd)))
+	}
+	c.templates = sandboxTemplates{dir: c.layout.SandboxTemplateDir(cwd), scans: c.scans}
+	composed, absent, err := composeSandboxLayers(layers, wheres, c.templates)
+	if err != nil {
+		return err
+	}
+	if absent {
+		delete(setting, "sandbox")
+		return nil
+	}
+	setting["sandbox"] = composed
+	return nil
 }
 
 func (c *layoutCompose) noteProfileName(id string, profile layoutProfileFile) {

@@ -161,9 +161,9 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		maxLineChars,
 		hooks.StripANSI,
 	)
-	sandbox, tmp := hooks.Sandbox, ""
+	sandbox, tmp, sessionDir := hooks.Sandbox, "", ""
 	if hook.call != nil {
-		sandbox = callSandbox(sandbox, *hook.call)
+		sandbox, sessionDir = callSandbox("hooks", sandbox, *hook.call), hook.call.SessionDir
 		var err error
 		if tmp, err = callTempDir(sandbox, *hook.call); err != nil {
 			return "[" + hook.name + "] could not start: " + err.Error() + " (setting: " + hook.setting + ")", false, bashStreamOutput{}
@@ -184,6 +184,7 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		sandbox:                  sandbox,
 		workspace:                workspaceRoot,
 		tmp:                      tmp,
+		sessionDir:               sessionDir,
 	})
 	label := "[" + hook.name + "] "
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))

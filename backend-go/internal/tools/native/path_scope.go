@@ -1,10 +1,12 @@
 package native
 
 import (
+	"os"
 	"path/filepath"
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/worktree"
 )
 
 // scopedPolicy returns the tool's policy narrowed by the call's PathScope. The scope
@@ -12,7 +14,11 @@ import (
 // result allows a subset of what policy allowed. It is applied once, to a policy that
 // has no Within of its own: only this function sets it.
 func scopedPolicy(policy sessionfs.NativePathPolicy, execution tools.ExecutionContext) sessionfs.NativePathPolicy {
-	policy = workspacePolicy(policy, execution)
+	return environmentPolicy(pathScopePolicy(workspacePolicy(policy, execution), execution), execution)
+}
+
+// pathScopePolicy narrows policy by the call's PathScope.
+func pathScopePolicy(policy sessionfs.NativePathPolicy, execution tools.ExecutionContext) sessionfs.NativePathPolicy {
 	scope := execution.PathScope
 	if scope == nil {
 		return policy
@@ -153,4 +159,104 @@ func narrowScope(workspaceRoot string, parent *tools.PathScope, own *tools.PathS
 		}
 	}
 	return narrowed
+}
+
+// environmentPolicy narrows policy to what the run's sandbox shows (docs/isolation-sandbox-design.md
+// §2.4, §9.3): the in-process readers (code_context, read_image, the lsp tool's file view,
+// transcript) have no child to put in a sandbox, so they are given the environment's own sets
+// and answer as if the path were absent. Each hidden path, the {tmp} folders and the worktrees
+// of other runs are denied; with read paths, only what they and the writable paths show is
+// within reach. Without an environment the policy is returned as it is.
+func environmentPolicy(policy sessionfs.NativePathPolicy, execution tools.ExecutionContext) sessionfs.NativePathPolicy {
+	if execution.Environment == nil || execution.Environment.Sandbox == nil {
+		return policy
+	}
+	sandbox := execution.Environment.Sandbox
+	if execution.PlanMode {
+		sandbox = sandbox.ForPlanMode()
+	}
+	root := execution.WorkspaceRoot
+	place := sandboxPlace{workspace: root, cwd: root, sessionDir: execution.SessionDir}
+	expand := sandboxExpander(place)
+	mirrored := sessionfs.NativePathPolicy{
+		Paths:             append([]sessionfs.NativePathRule(nil), policy.Paths...),
+		UnrestrictedPaths: policy.UnrestrictedPaths,
+		Within:            append([]string(nil), policy.Within...),
+	}
+	deny := func(path string) {
+		if path != "" {
+			mirrored.Paths = append(mirrored.Paths, sessionfs.NativePathRule{Action: "deny", Path: scopeRoot(root, path)})
+		}
+	}
+	for _, path := range sandbox.HidePaths {
+		deny(expand(path))
+	}
+	deny(sandboxTempRoot())
+	for _, path := range otherRunsWorktrees(root) {
+		deny(path)
+	}
+	if sandbox.WholeFileSystemReadable() {
+		return mirrored
+	}
+	writable := sandboxWritableRoots(sandbox.WritablePaths, expand)
+	reach := append([]string(nil), writable...)
+	for _, read := range sandboxReadRoots(sandbox.ReadPaths, expand, writable) {
+		reach = append(reach, read.real)
+		if read.link != "" {
+			reach = append(reach, read.link)
+		}
+	}
+	if len(mirrored.Within) == 0 {
+		mirrored.Within = reach
+		if len(reach) == 0 {
+			mirrored.Paths = append(mirrored.Paths, sessionfs.NativePathRule{Action: "deny", Path: string(filepath.Separator)})
+		}
+		return mirrored
+	}
+	var within []string
+	for _, a := range mirrored.Within {
+		for _, b := range reach {
+			switch {
+			case sessionfs.PathWithin(b, a):
+				within = append(within, a)
+			case sessionfs.PathWithin(a, b):
+				within = append(within, b)
+			}
+		}
+	}
+	mirrored.Within = within
+	if len(within) == 0 {
+		mirrored.Paths = append(mirrored.Paths, sessionfs.NativePathRule{Action: "deny", Path: string(filepath.Separator)})
+	}
+	return mirrored
+}
+
+// otherRunsWorktrees are the worktree checkouts and admin folders of runs other than the one
+// working in workspace, which no sandbox of that run shows (S4).
+func otherRunsWorktrees(workspace string) []string {
+	common := gitCommonDir(workspace)
+	if common == "" {
+		return nil
+	}
+	common, err := filepath.EvalSymlinks(common)
+	if err != nil {
+		return nil
+	}
+	own := workspaceGitDir(workspace, common)
+	ownWorkspace, _ := filepath.EvalSymlinks(workspace)
+	var others []string
+	for _, folder := range []string{filepath.Join(common, "worktrees"), filepath.Join(common, worktree.DefaultDirName)} {
+		entries, err := os.ReadDir(folder)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			path := filepath.Join(folder, entry.Name())
+			if path == own || pathInside(ownWorkspace, path) {
+				continue
+			}
+			others = append(others, path)
+		}
+	}
+	return others
 }

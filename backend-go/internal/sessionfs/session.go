@@ -531,7 +531,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err := checkLazyNeedsLoadTool(settingPath, profile, profileTools, nativeLoadTool); err != nil {
 		return SessionConfig{}, err
 	}
-	applySandbox(sandbox, nativeExec, nativeToolSmith, &hooks)
+	applySandbox(sandbox, nativeExec, nativeToolSmith, &hooks, nativeLSP)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)
 	if err != nil {
 		return SessionConfig{}, err

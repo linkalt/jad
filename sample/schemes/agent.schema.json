@@ -89,6 +89,7 @@
       "default": false,
       "description": "Send the newest state-context block stored for the session to this agent's child, in every request. A child collects none of its own. Nothing is sent when the session's statecontext is off or has no block yet."
     },
+    "sandbox": {"$ref": "setting.schema.json#/properties/sandbox", "description": "The agent's own sandbox: a template name, a template with overrides ({\"template\": ..., ...}) or an object, written like the setting key sandbox. It is narrowed by the session's: an agent whose sandbox would read, write or reach more than the session's is refused at load, naming the agent, the template and the path; hidden paths and covered tools add up. Without it the agent runs in its caller's sandbox. At run time it is narrowed again by the calling run's, so an agent started by a narrower agent cannot widen it. sandbox.isolation.mode is the isolation key (set only one). An agent whose sandbox is enforcing (bwrap or seatbelt), writes nothing outside {tmp} and that has no profile_message is a reader: it is scheduled, handed off and checkpointed like one."},
     "isolation": {
       "type": "string",
       "enum": ["none", "worktree"],

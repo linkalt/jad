@@ -15,6 +15,7 @@ var catalogFileKinds = map[string]sessionfs.CatalogKind{
 	"models":   sessionfs.CatalogModels,
 	"toolsets": sessionfs.CatalogToolsets,
 	"mcp":      sessionfs.CatalogMCP,
+	"sandbox":  sessionfs.CatalogSandboxes,
 }
 
 func (r *Resolver) catalogLayout(ctx context.Context, kind string) (sessionfs.Layout, sessionfs.CatalogKind, error) {

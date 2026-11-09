@@ -30,6 +30,11 @@ import (
 //   - S5: a writable path whose name a sandboxed call could have changed (it lies in a folder
 //     another writable path covers) is not bound on its own: the folder's bind covers what is
 //     really there, and a symlink the call put in its place cannot point the bind elsewhere.
+//   - D27/D28: the session's own configuration (sandbox templates, the session file, the
+//     catalogs, the root setting, the agent folders and the state folder with the transcripts)
+//     stays read-only under a writable path, so a call cannot widen the next one's environment
+//     or rewrite a transcript; a writable path inside one of them is writable again, and the
+//     session's own state folder is made read-only last, over any writable path that holds it.
 
 // sandboxTempDirName starts the name of the folder in the system temp folder that holds every
 // session's {tmp}; the user's id follows it, so users of one machine never share it.
@@ -230,6 +235,8 @@ type sandboxRule struct {
 	missing bool
 	// keep are the entries of a hidden folder shown again, each as writable as before.
 	keep []sandboxKeep
+	// inner are writable folders inside a read-only folder, bound read-write again.
+	inner []string
 }
 
 type sandboxKeep struct {
@@ -240,9 +247,11 @@ type sandboxKeep struct {
 }
 
 // sandboxFixedRules are the fixed rules for one call, given the folders the sandbox binds
-// read-write (sandboxWritableRoots).
-func sandboxFixedRules(place sandboxPlace, writable []string) []sandboxRule {
-	var rules []sandboxRule
+// read-write (sandboxWritableRoots) and the session's configuration paths (the sandbox's
+// ReadOnlyPaths). The configuration rules come first: they bind writable folders inside them
+// again, which the rules after them then narrow as usual.
+func sandboxFixedRules(place sandboxPlace, writable, configuration, candidates []string) []sandboxRule {
+	rules := sandboxConfigurationRules(place, writable, configuration, candidates)
 	if root, err := filepath.EvalSymlinks(sandboxTempRoot()); err == nil {
 		var keep []sandboxKeep
 		if place.tmp != "" {
@@ -296,6 +305,151 @@ func sandboxFixedRules(place sandboxPlace, writable []string) []sandboxRule {
 		rules = append(rules, sandboxRule{kind: sandboxHide, path: runs, dir: true, keep: keep})
 	}
 	return rules
+}
+
+// sandboxConfigurationRules keep the session's configuration read-only where a writable path
+// covers it. The session's own state folder comes last, so its transcripts stay read-only even
+// when a writable path covers it or it is listed itself ({session_dir}).
+//
+// A writable path inside such a folder (candidates: the expanded writable paths) is writable
+// again when no symlink lies between the folder and it and no other such path holds it: in a
+// read-only folder a sandboxed call cannot rename or replace a name, so the S5 rule that left
+// the path out of the writable roots does not apply there.
+func sandboxConfigurationRules(place sandboxPlace, writable, configuration, candidates []string) []sandboxRule {
+	if place.sessionDir != "" {
+		configuration = append(append([]string(nil), configuration...), place.sessionDir)
+	}
+	var rules []sandboxRule
+	var done []string
+	for _, path := range configuration {
+		real, err := filepath.EvalSymlinks(path)
+		if err != nil || containsString(done, real) || !insideAny(real, writable) {
+			// Missing (nothing to keep) or not writable anyway.
+			continue
+		}
+		info, err := os.Stat(real)
+		if err != nil {
+			continue
+		}
+		done = append(done, real)
+		rule := sandboxRule{kind: sandboxReadOnly, path: real, dir: info.IsDir()}
+		var inside []string
+		for _, candidate := range append(append([]string(nil), writable...), candidates...) {
+			if candidate != real && pathInside(candidate, real) && !containsString(inside, candidate) && noSymlinkBelow(real, candidate) {
+				inside = append(inside, candidate)
+			}
+		}
+		for _, candidate := range inside {
+			held := false
+			for _, other := range inside {
+				if other != candidate && pathInside(candidate, other) {
+					held = true
+				}
+			}
+			if !held {
+				rule.inner = append(rule.inner, candidate)
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+// noSymlinkBelow reports whether every name from root down to path is a real folder or file.
+func noSymlinkBelow(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(relative, "..") {
+		return false
+	}
+	current := root
+	for _, name := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, name)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// sandboxWritableCandidates are the expanded writable paths, absolute and clean, as written:
+// sandboxConfigurationRules binds the ones inside a read-only folder again.
+func sandboxWritableCandidates(paths []string, expand func(string) string) []string {
+	var candidates []string
+	for _, path := range paths {
+		if path = expand(path); path == "" {
+			continue
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			candidates = append(candidates, filepath.Clean(absolute))
+		}
+	}
+	return candidates
+}
+
+// sandboxReadRoot is one folder or file a sandbox with read paths binds read-only: real is
+// where it is, and link, when set, the name the read path gave it, made a symlink to real
+// (/lib is a symlink to /usr/lib on most systems).
+type sandboxReadRoot struct {
+	real string
+	link string
+}
+
+// sandboxReadRoots are the read paths that exist, {system} expanded, resolved through
+// symlinks, each once, without those under a writable path: the writable bind already shows
+// what is really there, and resolving a name a sandboxed call could have replaced would show
+// whatever its symlink points at (as S5 for writes).
+func sandboxReadRoots(paths []string, expand func(string) string, writable []string) []sandboxReadRoot {
+	var expanded []string
+	for _, path := range paths {
+		if path == sessionfs.SandboxSystemPlaceholder {
+			expanded = append(expanded, sessionfs.SandboxSystemPaths()...)
+			continue
+		}
+		if path = expand(path); path != "" {
+			expanded = append(expanded, path)
+		}
+	}
+	var roots []sandboxReadRoot
+	var bound, linked []string
+	for _, path := range expanded {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		absolute = filepath.Clean(absolute)
+		real, controlled, ok := resolveThrough(absolute, writable)
+		if !ok || controlled || insideAny(real, writable) {
+			continue
+		}
+		root := sandboxReadRoot{real: real}
+		if absolute != real && !containsString(linked, absolute) {
+			// Only a name directly in a folder that exists inside can be a symlink there.
+			if parent, err := filepath.EvalSymlinks(filepath.Dir(absolute)); err == nil && parent == filepath.Dir(absolute) {
+				root.link = absolute
+				linked = append(linked, absolute)
+			}
+		}
+		if containsString(bound, real) && root.link == "" {
+			continue
+		}
+		bound = append(bound, real)
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+// sandboxVisible reports whether path is in a sandbox with read paths at all.
+func sandboxVisible(path string, readable []sandboxReadRoot, writable []string) bool {
+	if insideAny(path, writable) {
+		return true
+	}
+	for _, root := range readable {
+		if pathInside(path, root.real) || (root.link != "" && pathInside(path, root.link)) {
+			return true
+		}
+	}
+	return false
 }
 
 // sandboxKeepOf is path shown again in a hidden folder, writable when a writable root covers
@@ -357,6 +511,9 @@ func bwrapRuleArguments(rules []sandboxRule) []string {
 			} else {
 				arguments = append(arguments, "--ro-bind", rule.path, rule.path)
 			}
+			for _, inner := range rule.inner {
+				arguments = append(arguments, "--bind", inner, inner)
+			}
 		case sandboxHide:
 			arguments = append(arguments, "--tmpfs", rule.path)
 			for _, keep := range rule.keep {
@@ -389,6 +546,9 @@ func seatbeltRuleProfile(rules []sandboxRule) string {
 				profile.WriteString("(deny file-write* (literal " + path + ") (subpath " + path + "))\n")
 			} else {
 				profile.WriteString("(deny file-write* (literal " + path + "))\n")
+			}
+			for _, inner := range rule.inner {
+				profile.WriteString("(allow file-write* (subpath " + seatbeltString(inner) + "))\n")
 			}
 		case sandboxHide:
 			profile.WriteString("(deny file-read* file-write* (subpath " + path + "))\n(allow file-read-metadata (literal " + path + "))\n")

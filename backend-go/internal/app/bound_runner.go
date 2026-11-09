@@ -13,6 +13,7 @@ import (
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 	mcpclient "jad/backend-go/internal/tools/mcp"
 	"jad/backend-go/internal/tools/native"
 	"jad/backend-go/internal/transcript"
@@ -160,6 +161,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	options.ToolExecution.WorkspaceRoot = r.config.WorkingDir
 	options.ToolExecution.SessionDir = r.config.StateDir
 	options.ToolExecution.SessionKey = sessionKey(r.reference, r.config.Profile)
+	options.ToolExecution.Environment = runEnvironment(r.config)
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:        r.config.Compaction.AutoEnabled,
 		TriggerTokens:  r.config.Compaction.TriggerTokens,
@@ -410,4 +412,13 @@ func (r boundRunner) resourceChangesNote() session.StateContextPrompt {
 		role = "developer"
 	}
 	return session.StateContextPrompt{Role: role, Text: text}
+}
+
+// runEnvironment is the environment a run of config starts its calls in: the session's sandbox
+// (narrowed by a profile_message caller's, when one started the run). Nil without a sandbox.
+func runEnvironment(config sessionfs.SessionConfig) *tools.Environment {
+	if config.Sandbox == nil {
+		return nil
+	}
+	return &tools.Environment{Sandbox: config.Sandbox}
 }

@@ -311,7 +311,7 @@ func executeNativeExecAsync(
 		if standby != nil {
 			workDir = standby.workDir
 		} else {
-			tmp, err := callTempDir(callSandbox(settings.Child.Sandbox, execution), execution)
+			tmp, err := callTempDir(callSandbox("exec", settings.Child.Sandbox, execution), execution)
 			if err != nil {
 				return shellRunResult{text: sandboxTempError(callID, err)}
 			}
@@ -510,7 +510,7 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 		return nil
 	}
 	spawnFor := func(execution tools.ExecutionContext) func(workDir string) (standbySpawn, error) {
-		sandbox := callSandbox(settings.Child.Sandbox, execution)
+		sandbox := callSandbox("exec", settings.Child.Sandbox, execution)
 		tmp, tmpErr := callTempDir(sandbox, execution)
 		return func(workDir string) (standbySpawn, error) {
 			if tmpErr != nil {
@@ -521,12 +521,12 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 				// start of this call would have; only the code file is a named pipe for now.
 				launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
 				environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
-				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}, nil
+				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}, nil
 			}
 			launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
 			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
 			files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
-			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}, nil
+			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}, nil
 		}
 	}
 	spawn := spawnFor(execution)

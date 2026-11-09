@@ -448,6 +448,10 @@ func TestInlineAgentSchemaChecksTheToolsetList(t *testing.T) {
 	if err := compiler.AddResource("inline-agent.json", node); err != nil {
 		t.Fatal(err)
 	}
+	// The agent key sandbox refers to the setting's sandbox definition.
+	if err := compiler.AddResource("setting.schema.json", document); err != nil {
+		t.Fatal(err)
+	}
 	schema, err := compiler.Compile("inline-agent.json")
 	if err != nil {
 		t.Fatal(err)

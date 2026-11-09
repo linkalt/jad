@@ -24,7 +24,7 @@ func sandboxedBash(t *testing.T, root, session, command string, writable ...stri
 		settings.Sandbox.WritablePaths = writable
 	}
 	return executeNativeBash(context.Background(), map[string]any{"command": command}, settings, "", tools.ExecutionContext{
-		CallID: "escape-call", WorkspaceRoot: root, SessionDir: root, SessionKey: session,
+		CallID: "escape-call", WorkspaceRoot: root, SessionDir: t.TempDir(), SessionKey: session,
 	})
 }
 

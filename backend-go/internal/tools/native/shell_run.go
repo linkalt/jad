@@ -68,6 +68,14 @@ type shellProgram struct {
 	subject string
 }
 
+// sandboxTool is the sandbox.tools name of the tool the run belongs to: exec or tool_smith.
+func (run shellChildRun) sandboxTool() string {
+	if run.section == "tools.native.tool_smith" {
+		return "tool_smith"
+	}
+	return "exec"
+}
+
 // settingsSection is the block advice points the user at; a run that names none is exec's.
 func (run shellChildRun) settingsSection() string {
 	if run.section == "" {
@@ -140,7 +148,7 @@ func runShellChildDetailed(
 		watch.set(collector)
 	}
 	environment := shellChildEnvironment(run, settings, apiKeyEnv)
-	sandbox := callSandbox(settings.Sandbox, execution)
+	sandbox := callSandbox(run.sandboxTool(), settings.Sandbox, execution)
 	tmp, err := callTempDir(sandbox, execution)
 	if err != nil {
 		return shellRunResult{text: sandboxTempError(execution.CallID, err)}
@@ -163,6 +171,7 @@ func runShellChildDetailed(
 		sandbox:                  sandbox,
 		workspace:                execution.WorkspaceRoot,
 		tmp:                      tmp,
+		sessionDir:               execution.SessionDir,
 	}
 	var child bashChildResult
 	if run.standby != nil {

@@ -20,7 +20,8 @@
     "models": "models",
     "tools": "tools",
     "mcp": "mcp",
-    "state": "state"
+    "state": "state",
+    "sandbox": "sandbox"
   },
   "libraries": {
     "prompt_dirs": [

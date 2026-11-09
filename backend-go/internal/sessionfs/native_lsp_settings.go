@@ -43,6 +43,8 @@ type NativeLSPSettings struct {
 	MaxResults        int64
 	// MaxFileBytes is the largest file sent to a server.
 	MaxFileBytes int64
+	// Sandbox, when sandbox.tools lists lsp, is the sandbox the language servers start in.
+	Sandbox *SandboxSettings
 }
 
 // NativeLSPServer is one language server: the program, the file extensions it serves and

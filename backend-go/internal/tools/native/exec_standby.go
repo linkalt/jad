@@ -78,10 +78,12 @@ type standbySpawn struct {
 	// token is a secret in the environment that the call must use (tool_smith's bridge token);
 	// it is not part of the key.
 	token string
-	// sandbox, workspace and tmp start the standby in the sandbox the call would start in.
-	sandbox   *sessionfs.SandboxSettings
-	workspace string
-	tmp       string
+	// sandbox, workspace, tmp and sessionDir start the standby in the sandbox the call would
+	// start in.
+	sandbox    *sessionfs.SandboxSettings
+	workspace  string
+	tmp        string
+	sessionDir string
 }
 
 type standbyFile struct {
@@ -106,7 +108,7 @@ func standbyKey(spawn standbySpawn) string {
 	field(spawn.file)
 	field(spawn.cwd)
 	field(spawn.pipe)
-	field(sandboxKey(spawn.sandbox, sandboxPlace{workspace: spawn.workspace, cwd: spawn.cwd, tmp: spawn.tmp}))
+	field(sandboxKey(spawn.sandbox, sandboxPlace{workspace: spawn.workspace, cwd: spawn.cwd, tmp: spawn.tmp, sessionDir: spawn.sessionDir}))
 	if spawn.gate {
 		count(1)
 	} else {
@@ -445,7 +447,7 @@ func startStandby(spawn standbySpawn) (*standbyProcess, error) {
 	if err != nil {
 		return fail(err)
 	}
-	launch, err := sandboxed(spawn.sandbox, sandboxPlace{workspace: spawn.workspace, cwd: spawn.cwd, tmp: spawn.tmp}, spawn.file, resolved, spawn.argv)
+	launch, err := sandboxed(spawn.sandbox, sandboxPlace{workspace: spawn.workspace, cwd: spawn.cwd, tmp: spawn.tmp, sessionDir: spawn.sessionDir}, spawn.file, resolved, spawn.argv)
 	if err != nil {
 		return fail(err)
 	}

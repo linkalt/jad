@@ -54,12 +54,32 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 // the parent's channel, or the headless fallback when the parent has none) and its file changes
 // are reported to the caller's OnFileChange as well as to the manager's own list. The manager
 // fills ProcessOwner, ProcessAsync, AgentDepth and RootRun when it starts the run. The caller's
-// path scope (a worktree) carries over.
+// path scope (a worktree) carries over, and so does its environment, unless the agent has a
+// sandbox of its own: then that one, narrowed by the caller's (childEnvironment).
 func childExecutionContext(execution tools.ExecutionContext, agent sessionfs.NativeSubagentAgent) tools.ExecutionContext {
 	child := execution.ForNested()
 	child.AgentName = agent.Name
 	child.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, nil)
 	return child
+}
+
+// childEnvironment is the environment a run of agent starts in from a call in execution: the
+// caller's, or the agent's own sandbox narrowed by it. The loader narrowed the agent by the
+// session's sandbox already; a caller that is itself a sub-agent with a narrower sandbox, or a
+// session narrowed by a profile_message caller, can be narrower still, and an agent that would
+// reach more than its caller does not start.
+func childEnvironment(execution tools.ExecutionContext, agent sessionfs.NativeSubagentAgent) (*tools.Environment, error) {
+	if agent.Sandbox == nil {
+		return execution.Environment, nil
+	}
+	if execution.Environment == nil {
+		return &tools.Environment{Sandbox: agent.Sandbox}, nil
+	}
+	narrowed, err := sessionfs.NarrowSandbox(execution.Environment.Sandbox, agent.Sandbox, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &tools.Environment{Sandbox: narrowed}, nil
 }
 
 func (s *subagentTool) startRun(ctx context.Context, callID, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
@@ -100,6 +120,12 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		return depthExceededError(callID), nil
 	}
 	childExecution := childExecutionContext(execution, agent.config)
+	environment, err := childEnvironment(execution, agent.config)
+	if err != nil {
+		return tools.ExecutionError(callID, tools.StatusForbidden, "sandbox_widens", "The agent's sandbox reaches more than this run's, so it cannot start here: "+err.Error(),
+			tools.Information{Key: "agent", Value: agent.config.Name}), nil
+	}
+	childExecution.Environment = environment
 	// A writer becomes a handle only when it is allowed to (background_writers) and its
 	// session has a place left; otherwise it runs to its end inside this call, where the
 	// checkpoint belongs.

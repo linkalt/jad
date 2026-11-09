@@ -465,7 +465,7 @@
     },
     "catalogs": {
       "type": "object",
-      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call); there is no category level. Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state.",
+      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call), and the sandbox folder <name>.json sandbox templates; there is no category level in either. Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state, .jad/sandbox.",
       "properties": {
         "profiles": {
           "type": "string",
@@ -490,6 +490,12 @@
         "state": {
           "type": "string",
           "pattern": "\\S"
+        },
+        "sandbox": {
+          "type": "string",
+          "pattern": "\\S",
+          "default": ".jad/sandbox",
+          "description": "Folder of the sandbox templates, flat files <name>.json that a sandbox value names as \"<name>\" (no category level; sandbox.schema.json). An absolute path (or ~/...), a path relative to this file's folder, or {cwd}/<folder>, taken from each session's cwd so a project keeps its own templates (never a sub-agent's worktree). No other placeholder is accepted. The folder is read-only in every bwrap and seatbelt sandbox, so a sandboxed call cannot edit the template of its next run. With {cwd}, the catalog file API cannot list the folder."
         }
       },
       "additionalProperties": false

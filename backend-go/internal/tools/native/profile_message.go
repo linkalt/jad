@@ -163,7 +163,20 @@ type ProfileMessageRequest struct {
 	// block_ms passes), so a message that would wait for a profile that is itself blocked
 	// on the caller is refused as a cycle.
 	Blocking bool
+	// Environment is the calling run's (nil without a sandbox) and CallerPlace what its
+	// placeholders stand for: the target's session is narrowed by it (D20), and a target that
+	// would reach more than the caller is refused with a *ProfileSandboxError.
+	Environment *tools.Environment
+	CallerPlace sessionfs.SandboxPlace
 }
+
+// ProfileSandboxError refuses a message to a profile whose own sandbox reaches more than the
+// caller's: the target would run outside the environment the caller is confined to.
+type ProfileSandboxError struct {
+	Message string
+}
+
+func (e *ProfileSandboxError) Error() string { return e.Message }
 
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
 // last text it wrote when it did not finish. Err is nil for an answer; otherwise one of the
@@ -373,6 +386,8 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		QueueWait:    time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
 		Timeout:      time.Duration(p.settings.TimeoutMs) * time.Millisecond,
 		MaxQueued:    p.settings.MaxQueued,
+		Environment:  callerEnvironment(execution),
+		CallerPlace:  sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless
@@ -386,6 +401,11 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	plan, err := p.messenger.Prepare(callCtx, request)
 	if errors.Is(err, ErrProfileUnknown) {
 		return p.unknownProfile(callID, profile), nil
+	}
+	var sandboxErr *ProfileSandboxError
+	if errors.As(err, &sandboxErr) {
+		return tools.ExecutionError(callID, tools.StatusForbidden, "sandbox_widens",
+			fmt.Sprintf("Profile %s cannot be messaged from this run: its sandbox reaches more than this run's (%s)", profile, sandboxErr.Message)), nil
 	}
 	var modelErr *ProfileModelError
 	if errors.As(err, &modelErr) {
@@ -533,4 +553,15 @@ func profileBusyText(profile string, err error) string {
 		text += fmt.Sprintf("; %d messages are already waiting for it (tools.native.profile_message.max_queued_per_profile)", busy.QueueFull)
 	}
 	return text + "; try again later"
+}
+
+// callerEnvironment is the environment a profile_message target is narrowed by: the calling
+// run's, in its plan-mode form for a call of a plan-mode run, so a caller that may not write
+// cannot have a target write for it.
+func callerEnvironment(execution tools.ExecutionContext) *tools.Environment {
+	environment := execution.Environment
+	if environment == nil || environment.Sandbox == nil || !execution.PlanMode {
+		return environment
+	}
+	return &tools.Environment{Sandbox: environment.Sandbox.ForPlanMode()}
 }

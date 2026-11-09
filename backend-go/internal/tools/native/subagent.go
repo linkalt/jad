@@ -619,13 +619,16 @@ func newSubagentAgent(agent sessionfs.NativeSubagentAgent, sessionDeny []string,
 	// Nesting alone does not make it a writer: a child it starts that changes files is a call of its own run,
 	// which that run's checkpoint and change list cover.
 	selfShown := nesting && tools.ProfileShows(filter, tools.Definition{ID: subagentToolID, Source: "native", Name: "subagent"})
-	changes := false
+	changes, messages := false, false
 	for _, tool := range shown {
 		if sessionfs.IsChangeTool(tool.Definition.Name) {
 			changes = true
 		}
+		if tool.Definition.Name == "profile_message" {
+			messages = true
+		}
 	}
-	agent.NoChangeTools = !changes
+	agent.NoChangeTools, agent.NoProfileMessage = !changes, !messages
 	if filter.HasAllow && len(shown) == 0 && !mcpListed && !selfShown {
 		return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: its tools list and the profile's tools.deny leave none of the session's tools (enabled: %s)", agent.Name, strings.Join(available, ", "))
 	}

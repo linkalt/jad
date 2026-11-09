@@ -15,12 +15,19 @@ import (
 // directory is absolute. Defaults holds the root setting `defaults`; ToolDefinitionPaths
 // the root `libraries.tool_definition_paths`.
 type Layout struct {
-	Profiles            string
-	Models              string
-	Tools               string
-	MCP                 string
-	Remotes             string
-	State               string
+	Profiles string
+	Models   string
+	Tools    string
+	MCP      string
+	Remotes  string
+	State    string
+	// Sandbox is the folder of the sandbox templates (catalogs.sandbox) when it is a fixed
+	// path; SandboxFromCWD is set instead when catalogs.sandbox starts with {cwd}: the rest of
+	// the path, taken from each session's cwd (SandboxTemplateDir).
+	Sandbox        string
+	SandboxFromCWD string
+	// RootSetting is the root setting file the layout was read from.
+	RootSetting         string
 	Defaults            map[string]json.RawMessage
 	ToolDefinitionPaths []string
 }

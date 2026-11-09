@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // requireBwrap skips unless bubblewrap is installed and can make namespaces here.
@@ -35,6 +36,19 @@ func bwrapSandbox() *sessionfs.SandboxSettings {
 	}
 }
 
+// executeSandboxBashTest is executeBashTest with the session's state folder apart from the
+// workspace, as it is in a session: a sandbox keeps the state folder read-only.
+func executeSandboxBashTest(t *testing.T, root, callID, command, cwd string, settings sessionfs.NativeBashSettings) string {
+	t.Helper()
+	arguments := map[string]any{"command": command}
+	if cwd != "" {
+		arguments["cwd"] = cwd
+	}
+	return executeNativeBash(context.Background(), arguments, settings, "", tools.ExecutionContext{
+		CallID: callID, WorkspaceRoot: root, SessionDir: t.TempDir(),
+	})
+}
+
 // sandboxDirs are a workspace, a folder outside it and the temp folder, all apart: the
 // temp folder is writable in the sandbox, so the other two must not lie inside it.
 func sandboxDirs(t *testing.T) (root, outside, tmp string) {
@@ -50,7 +64,7 @@ func TestSandboxedBashWritesOnlyTheWorkspaceAndHasNoNetwork(t *testing.T) {
 	settings.Sandbox = bwrapSandbox()
 	command := `touch in.txt && echo wrote-in; touch ` + outside + `/out.txt 2>&1; ` +
 		`touch "$TMPDIR/t.txt" && echo wrote-tmp; echo "nets=$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\n' ',')"; exit 7`
-	output := executeBashTest(t, root, "sandbox-call", command, "", settings)
+	output := executeSandboxBashTest(t, root, "sandbox-call", command, "", settings)
 	for _, want := range []string{"wrote-in", "Read-only file system", "wrote-tmp", "nets=lo,", "exit_code: 7"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("missing %q in:\n%s", want, output)
@@ -67,7 +81,7 @@ func TestSandboxedBashWritesOnlyTheWorkspaceAndHasNoNetwork(t *testing.T) {
 func TestSandboxOffRunsTheCommandAsBefore(t *testing.T) {
 	root, outside, _ := sandboxDirs(t)
 	settings := bashTestSettings(t, root)
-	output := executeBashTest(t, root, "plain-call", "touch "+outside+"/out.txt && echo wrote-out", "", settings)
+	output := executeSandboxBashTest(t, root, "plain-call", "touch "+outside+"/out.txt && echo wrote-out", "", settings)
 	if !strings.Contains(output, "wrote-out") {
 		t.Fatalf("without a sandbox the write must work:\n%s", output)
 	}
@@ -90,7 +104,7 @@ func TestSandboxHidesPathsAndKeepsTheNetworkWhenAsked(t *testing.T) {
 	settings.Sandbox = bwrapSandbox()
 	settings.Sandbox.HidePaths = []string{"{workspace}/secret", "{workspace}/token", "{workspace}/missing"}
 	settings.Sandbox.Network = true
-	output := executeBashTest(t, root, "hide-call", `echo "dir=[$(ls secret)] file=[$(cat token)]"; test -e /proc/net/dev && echo has-net-proc`, "", settings)
+	output := executeSandboxBashTest(t, root, "hide-call", `echo "dir=[$(ls secret)] file=[$(cat token)]"; test -e /proc/net/dev && echo has-net-proc`, "", settings)
 	if !strings.Contains(output, "dir=[] file=[]") || strings.Contains(output, "hunter2") || strings.Contains(output, "abc123") || !strings.Contains(output, "has-net-proc") {
 		t.Fatalf("hidden paths leaked or the call failed:\n%s", output)
 	}
@@ -140,7 +154,7 @@ func TestSandboxCommandBackendWrapsTheChild(t *testing.T) {
 	root := t.TempDir()
 	settings := bashTestSettings(t, root)
 	settings.Sandbox = &sessionfs.SandboxSettings{Tools: []string{"bash"}, Backend: sessionfs.SandboxBackendCommand, Executable: "env", Command: []string{"env", "WRAPPED_IN={workspace}"}}
-	output := executeBashTest(t, root, "wrap-call", `echo "wrapped=$WRAPPED_IN"`, "", settings)
+	output := executeSandboxBashTest(t, root, "wrap-call", `echo "wrapped=$WRAPPED_IN"`, "", settings)
 	if !strings.Contains(output, "wrapped="+root) {
 		t.Fatalf("output:\n%s", output)
 	}
@@ -229,7 +243,7 @@ func TestSandboxedBashTimeoutStopsTheSandbox(t *testing.T) {
 	settings.Sandbox = bwrapSandbox()
 	marker := "jad-sandbox-timeout-" + filepath.Base(root)
 	started := time.Now()
-	output := executeBashTest(t, root, "timeout-call", "sleep 30 & exec -a "+marker+" sleep 30", "", settings)
+	output := executeSandboxBashTest(t, root, "timeout-call", "sleep 30 & exec -a "+marker+" sleep 30", "", settings)
 	if elapsed := time.Since(started); elapsed > 8*time.Second || !strings.Contains(output, "timed_out") {
 		t.Fatalf("after %s:\n%s", elapsed, output)
 	}

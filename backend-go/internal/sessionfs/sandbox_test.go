@@ -27,7 +27,8 @@ func TestSandboxDefaultsAndValues(t *testing.T) {
 	}
 	want := &SandboxSettings{
 		Tools: []string{"exec", "tool_smith"}, Backend: "command", Executable: "sh",
-		WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
+		ReadPaths: []string{"/"}, WritablePaths: []string{"{workspace}", "{git_common_dir}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}, Command: []string{"sh", "-c", "exec \"$@\"", "sandbox"},
+		HidePaths:      defaultSandboxHidePaths,
 		CheckTimeoutMs: 10000, ProxyPort: 3128,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -87,18 +88,18 @@ func TestSandboxRefusals(t *testing.T) {
 
 func TestApplySandboxReachesOnlyTheCoveredTools(t *testing.T) {
 	sandbox := &SandboxSettings{Tools: []string{"exec"}}
-	execSettings, smith, hooks := &NativeExecSettings{}, &NativeToolSmithSettings{}, &HooksSettings{}
-	applySandbox(sandbox, execSettings, smith, hooks)
-	if execSettings.Child.Sandbox != sandbox || smith.Child.Sandbox != nil || hooks.Sandbox != nil {
-		t.Fatalf("exec %v smith %v hooks %v", execSettings.Child.Sandbox, smith.Child.Sandbox, hooks.Sandbox)
+	execSettings, smith, hooks, lsp := &NativeExecSettings{}, &NativeToolSmithSettings{}, &HooksSettings{}, &NativeLSPSettings{}
+	applySandbox(sandbox, execSettings, smith, hooks, lsp)
+	if execSettings.Child.Sandbox != sandbox || smith.Child.Sandbox != nil || hooks.Sandbox != nil || lsp.Sandbox != nil {
+		t.Fatalf("exec %v smith %v hooks %v lsp %v", execSettings.Child.Sandbox, smith.Child.Sandbox, hooks.Sandbox, lsp.Sandbox)
 	}
-	withHooks := &SandboxSettings{Tools: []string{"hooks"}}
-	applySandbox(withHooks, execSettings, smith, hooks)
-	if hooks.Sandbox != withHooks || execSettings.Child.Sandbox != sandbox {
-		t.Fatalf("hooks %v exec %v", hooks.Sandbox, execSettings.Child.Sandbox)
+	withHooks := &SandboxSettings{Tools: []string{"hooks", "lsp"}}
+	applySandbox(withHooks, execSettings, smith, hooks, lsp)
+	if hooks.Sandbox != withHooks || lsp.Sandbox != withHooks || execSettings.Child.Sandbox != sandbox {
+		t.Fatalf("hooks %v lsp %v exec %v", hooks.Sandbox, lsp.Sandbox, execSettings.Child.Sandbox)
 	}
-	applySandbox(sandbox, nil, nil, nil)
-	applySandbox(nil, execSettings, smith, hooks)
+	applySandbox(sandbox, nil, nil, nil, nil)
+	applySandbox(nil, execSettings, smith, hooks, lsp)
 }
 
 // sandbox.tools is a filter, not a check: a sandbox is shared by profiles and sub-agents with
@@ -200,6 +201,14 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"tools":["hooks"],"check_timeout_ms":5000}`, true},
 		{`{"check_timeout_ms":50}`, false},
 		{`{"check_timeout_ms":1.5}`, false},
+		{`{"read":{"paths":["{system}","{workspace}"],"add_paths":["{home}/.m2"]},"write":{"paths":["{workspace}"],"add_paths":["{tmp}"],"plan_paths":["{tmp}"],"add_plan_paths":["{session_dir}/x"]}}`, true},
+		{`{"add_hide_paths":["{workspace}/.env"],"isolation":{"mode":"worktree"}}`, true},
+		{`{"read":{"path":["/"]}}`, false},
+		{`{"read":{"paths":["src"]}}`, false},
+		{`{"write":{"plan":["/"]}}`, false},
+		{`{"isolation":{"mode":"overlay"}}`, false},
+		{`{"isolation":{"base":"working"}}`, false},
+		{`{"tools":["lsp"],"read":{"paths":["/"]}}`, true},
 	} {
 		if got := schemaAccepts(t, schema, `{"sandbox":`+test.raw+`}`); got != test.accept {
 			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
@@ -313,5 +322,37 @@ func TestSandboxNetworkAllowSeatbeltAndMCP(t *testing.T) {
 	plan := (&SandboxSettings{Backend: SandboxBackendSeatbelt, WritablePaths: []string{"{workspace}"}, PlanWritablePaths: []string{"{tmp}"}}).ForPlanMode()
 	if !reflect.DeepEqual(plan.WritablePaths, []string{"{tmp}"}) {
 		t.Fatalf("seatbelt plan mode = %+v", plan)
+	}
+}
+
+// sandbox.schema.json and the template loader take and refuse the same template files.
+func TestSandboxTemplateSchemaAgreesWithTheLoader(t *testing.T) {
+	schema := compileSchema(t, "sandbox.schema.json")
+	for _, test := range []struct {
+		raw    string
+		accept bool
+	}{
+		{`{"schema_version":1,"description":"reader","enabled":false,"read":{"paths":["{system}","{workspace}"]},"write":{"paths":["{tmp}"],"plan_paths":["{tmp}"]}}`, true},
+		{`{"enabled":false,"writable_paths":["{tmp}"],"add_hide_paths":["{workspace}/.env"]}`, true},
+		{`{"enabled":false,"isolation":{"mode":"worktree"},"tools":["exec","lsp"]}`, true},
+		{`{"schema_version":1}`, false},
+		{`{"enabled":false,"template":"other"}`, false},
+		{`{"enabled":false,"schema_version":2}`, false},
+		{`{"enabled":false,"netwrk":true}`, false},
+		{`{"enabled":false,"backend":"command"}`, false},
+		{`{"enabled":false,"read":{"paths":["rel"]}}`, false},
+	} {
+		if got := schemaAccepts(t, schema, test.raw); got != test.accept {
+			t.Errorf("schema accepts %s = %v, want %v", test.raw, got, test.accept)
+		}
+		if _, err := parseSandboxTemplate("t.json", []byte(test.raw)); (err == nil) != test.accept {
+			t.Errorf("loader accepts %s = %v (err %v), want %v", test.raw, err == nil, err, test.accept)
+		}
+	}
+	setting := compileSchema(t, "setting.schema.json")
+	for raw, accept := range map[string]bool{`"reader"`: true, `{"template":"reader","network":true}`: true, `null`: true, `"team/reader"`: false, `""`: false} {
+		if got := schemaAccepts(t, setting, `{"sandbox":`+raw+`}`); got != accept {
+			t.Errorf("setting schema accepts sandbox %s = %v, want %v", raw, got, accept)
+		}
 	}
 }

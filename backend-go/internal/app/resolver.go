@@ -917,6 +917,9 @@ func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.Ses
 		if err != nil {
 			return nil, err
 		}
+		// The toolset's stdio servers start in the sandbox like the session's own (U4); an
+		// agent's own sandbox does not reach them, since agents share a toolset's servers.
+		manager.SetCommandWrapper(mcpSandboxWrapper(derived))
 		mcpTools, err := manager.LoadTools(ctx, derived.MCPServers, derived.WorkingDir)
 		if err != nil {
 			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, id, err)})

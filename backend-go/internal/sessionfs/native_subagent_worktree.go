@@ -59,8 +59,29 @@ func DefaultNativeSubagentWorktreeSettings() NativeSubagentWorktreeSettings {
 func (a NativeSubagentAgent) Isolated() bool { return a.Isolation == SubagentIsolationWorktree }
 
 // ChangesWorkspace reports whether a run of the agent can change the session's own files:
-// it can change files and does not work in a worktree of its own.
-func (a NativeSubagentAgent) ChangesWorkspace() bool { return a.ChangesFiles() && !a.Isolated() }
+// it can change files, does not work in a worktree of its own, and its sandbox does not keep
+// it to scratch (SandboxReader).
+func (a NativeSubagentAgent) ChangesWorkspace() bool {
+	return a.ChangesFiles() && !a.Isolated() && !a.SandboxReader()
+}
+
+// SandboxReader reports whether the agent's own sandbox makes it a reader whatever its tools:
+// an enforcing backend (bwrap or seatbelt, as for exec's read_only) whose write paths, in both
+// forms, are all inside {tmp}, and no profile_message in its catalog, which would start a run
+// in another session (docs/isolation-sandbox-design.md §14.3). Such a child is scheduled,
+// handed off and checkpointed like a reader: by its environment, not by a promise.
+func (a NativeSubagentAgent) SandboxReader() bool {
+	sandbox := a.Sandbox
+	if sandbox == nil || !a.NoProfileMessage || (sandbox.Backend != SandboxBackendBwrap && sandbox.Backend != SandboxBackendSeatbelt) {
+		return false
+	}
+	for _, path := range append(append([]string(nil), sandbox.WritablePaths...), sandbox.PlanWritablePaths...) {
+		if path != "{tmp}" && !strings.HasPrefix(path, "{tmp}/") {
+			return false
+		}
+	}
+	return true
+}
 
 // subagentIsolation reads an agent's isolation key; absent or null is none. An agent that
 // cannot change files has nothing to isolate, so worktree is refused for it.

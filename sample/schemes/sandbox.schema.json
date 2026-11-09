@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sandbox.schema.json",
+  "title": "Jad sandbox template",
+  "description": "One sandbox template, <catalogs.sandbox>/<name>.json (default .jad/sandbox), named \"<name>\" by root defaults, sessions, profiles (settings.sandbox) and sub-agents (the agent key sandbox), with or without overrides ({\"template\": \"<name>\", ...}). Its keys are those of the setting key sandbox (setting.schema.json); every path is a placeholder or an absolute path, filled in for each run, so one template serves every profile and agent that names it. enabled is required, and a template cannot name another one. Editing a template reloads the sessions that use it; the folder is read-only inside every bwrap and seatbelt sandbox.",
+  "type": "object",
+  "required": ["enabled"],
+  "$ref": "setting.schema.json#/$defs/sandbox_fields",
+  "properties": {
+    "schema_version": {"const": 1, "description": "1 when given."},
+    "description": {"type": "string", "description": "What the environment is for; shown nowhere but here."},
+    "template": false
+  },
+  "unevaluatedProperties": false,
+  "examples": [
+    {
+      "schema_version": 1,
+      "description": "Reader: sees the workspace, writes nothing but scratch",
+      "enabled": true,
+      "read": {"paths": ["{system}", "{workspace}"]},
+      "write": {"paths": ["{tmp}"], "plan_paths": ["{tmp}"]}
+    }
+  ]
+}

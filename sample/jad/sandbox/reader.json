@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "description": "Reader: sees the system and the workspace, writes nothing but scratch; a sub-agent that names it is scheduled as a reader",
+  "enabled": true,
+  "backend": "bwrap",
+  "read": {"paths": ["{system}", "{workspace}"]},
+  "write": {"paths": ["{tmp}"], "plan_paths": ["{tmp}"]}
+}
