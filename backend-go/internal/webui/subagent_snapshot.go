@@ -58,8 +58,15 @@ func (s *SubagentSnapshot) Summary() *SubagentSummary {
 // SubagentSummaryOf is what the tool result of call carries of its child: the summary of
 // snapshot, marked when the result omits the child's last text. Every path that sets a
 // result's summary (the live run and the replay) builds it here, so they cannot differ.
+//
+// A result that handed the child off (it names the run's state) always has a summary, even
+// before the child has completed a step: a still-running child has a transcript to open,
+// which fills in as its steps complete. The count is then 0.
 func SubagentSummaryOf(call SubagentCall, snapshot *SubagentSnapshot) *SubagentSummary {
 	summary := snapshot.Summary()
+	if summary == nil && call.HandedOff {
+		summary = &SubagentSummary{Agent: call.Agent}
+	}
 	if summary != nil {
 		summary.OmitsLastText = call.OmitsLastText
 	}
@@ -116,6 +123,9 @@ type SubagentCall struct {
 	// written and which the snapshot therefore leaves out. It is not part of what identifies
 	// the child, so a reader does not key on it.
 	OmitsLastText bool
+	// HandedOff is set when the result names the run's state, so the call returned while the
+	// child was still queued or running. Its summary exists before the child's first step.
+	HandedOff bool
 }
 
 // IsSubagentTool reports whether a tool call name is the native subagent tool. It is the
@@ -143,7 +153,7 @@ func SubagentCallOf(call, result Part) (SubagentCall, bool) {
 		}
 	}
 	omits := information.state != "" || information.truncated || (information.errorCode != "" && information.errorCode != "subagent_timeout")
-	return SubagentCall{CallID: call.CallID, Agent: agent, Transcript: information.transcript, OmitsLastText: omits}, true
+	return SubagentCall{CallID: call.CallID, Agent: agent, Transcript: information.transcript, OmitsLastText: omits, HandedOff: information.state != ""}, true
 }
 
 // subagentResultInformation is what the reader takes from a subagent result's information.

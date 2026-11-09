@@ -1,13 +1,17 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"jad/backend-go/internal/webui"
 )
 
 // subagentSnapshotOf finds the subagent snapshot on the tool_result parts of a served
@@ -222,8 +226,149 @@ func TestSubagentRouteReadsAChildThatIsStillRunning(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		status, body = f.get(t, "/subagents/"+ids[0])
 	}
-	if status != http.StatusOK || !strings.Contains(body, `"subagent":{"steps":[]}`) {
+	// The handed-off child is going: the body says so, beside the steps it has (none yet).
+	if status != http.StatusOK || !strings.Contains(body, `"subagent":{"steps":[],"running":true}`) {
 		t.Fatalf("running child: status %d, body %s", status, body)
+	}
+}
+
+// TestHandedOffChildWithNoStepHasASummaryLiveAndOnReplay: a call that handed the child off
+// before its first completed response still has a transcript to open: the live tool result
+// and the replayed session both carry {steps: 0, omitsLastText} (a hand-off result does not
+// name the agent, and this call's arguments do not either, so there is none to add).
+func TestHandedOffChildWithNoStepHasASummaryLiveAndOnReplay(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.handoffOnly = true
+	f.provider.childBlocks = true
+	f.provider.childEntered = make(chan struct{}, 1)
+	f.provider.childCancelled = make(chan struct{}, 1)
+	f.provider.childRelease = make(chan struct{})
+	t.Cleanup(func() { close(f.provider.childRelease) })
+
+	live := f.run(t)
+	if !strings.Contains(live, `"subagent":{"steps":0,"omitsLastText":true}`) {
+		t.Fatalf("the live tool result of a handed-off child with no step has no zero-step summary:\n%s", live)
+	}
+	summaries, results := subagentSnapshotOf(t, f.sessionSnapshot(t))
+	if results != 1 || len(summaries) != 1 {
+		t.Fatalf("replayed tool results = %d, with a summary = %d, want 1 and 1", results, len(summaries))
+	}
+	if got := summaries[0]; len(got) != 2 || got["steps"] != float64(0) || got["omitsLastText"] != true {
+		t.Fatalf("replayed summary = %v, want steps 0 and omitsLastText true", got)
+	}
+}
+
+// routeStepIDs decodes a subagent route body: the step ids and whether it says running.
+func routeStepIDs(t *testing.T, body string) (ids []string, running bool) {
+	t.Helper()
+	var decoded struct {
+		Subagent struct {
+			Steps []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"steps"`
+			Running bool `json:"running"`
+		} `json:"subagent"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode %v: %s", err, body)
+	}
+	for _, step := range decoded.Subagent.Steps {
+		if step.Status != "completed" {
+			t.Fatalf("step %s has status %q: %s", step.ID, step.Status, body)
+		}
+		ids = append(ids, step.ID)
+	}
+	return ids, decoded.Subagent.Running
+}
+
+// TestSubagentRouteFillsInWhileTheParentCallIsUnsettled: the parent's call waits for its
+// child (no hand-off) while the child is let go one response at a time. The route, asked at
+// each pause, returns the completed steps so far (none, one, then two) with running true,
+// never the response being written; once the child ends it returns every step and no
+// running key, and that body is what the route answered before the flag existed.
+func TestSubagentRouteFillsInWhileTheParentCallIsUnsettled(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	f.provider.childRounds = 2
+	f.provider.childGate = make(chan struct{}, 8)
+	f.provider.childAtGate = make(chan struct{}, 8)
+	t.Cleanup(func() { close(f.provider.childGate) })
+
+	finished := make(chan string, 1)
+	go func() {
+		payload, _ := json.Marshal(map[string]string{"input": "ask the explorer"})
+		request, _ := http.NewRequest(http.MethodPost, f.apiURL+"/api/sessions/local:demo/run", strings.NewReader(string(payload)))
+		request.Header.Set("Authorization", "Bearer "+integrationAPIToken)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			finished <- "error: " + err.Error()
+			return
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		finished <- string(body)
+	}()
+	atGate := func(round int) {
+		t.Helper()
+		select {
+		case <-f.provider.childAtGate:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("child request %d never reached the provider", round)
+		}
+	}
+	// route asks the route for the call the parent is waiting on.
+	route := func() (ids []string, running bool, body string) {
+		t.Helper()
+		status, body := f.get(t, "/subagents/call-sub")
+		if status != http.StatusOK {
+			t.Fatalf("route status = %d, body = %s", status, body)
+		}
+		ids, running = routeStepIDs(t, body)
+		return ids, running, body
+	}
+	for round, want := range [][]string{nil, {"1.1"}, {"1.1", "1.2"}} {
+		atGate(round + 1)
+		select {
+		case body := <-finished:
+			t.Fatalf("the parent's call settled while the child waited at its request %d:\n%s", round+1, body)
+		default:
+		}
+		ids, running, body := route()
+		if !running || strings.Join(ids, ",") != strings.Join(want, ",") {
+			t.Fatalf("at child request %d the route gave steps %v running %v, want %v running: %s", round+1, ids, running, want, body)
+		}
+		// Asked again with nothing changed, it says the same (a cache hit, not a new read).
+		if _, _, again := route(); again != body {
+			t.Fatalf("a second read with no new response differs:\n%s\n%s", body, again)
+		}
+		f.provider.childGate <- struct{}{}
+	}
+	// The third request, let through in the last round above, is the child's answer.
+	var live string
+	select {
+	case live = <-finished:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run did not end")
+	}
+	if !strings.Contains(live, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", live)
+	}
+	ids, running, body := route()
+	if running || len(ids) != 3 || strings.Contains(body, `"running"`) {
+		t.Fatalf("finished child: steps %v running %v, body %s", ids, running, body)
+	}
+	// A finished child's body is byte for byte what it was before the flag: the snapshot
+	// alone under "subagent".
+	transcripts, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "call-sub-*"))
+	if err != nil || len(transcripts) != 1 {
+		t.Fatalf("child folders %v (%v)", transcripts, err)
+	}
+	legacy, err := json.Marshal(struct {
+		Subagent *webui.SubagentSnapshot `json:"subagent"`
+	}{readSubagentSnapshot(context.Background(), filepath.Join(f.toolDir, ".subagents"), webui.SubagentCall{CallID: "call-sub"}, defaultSubagentSnapshotLimits)})
+	if err != nil || strings.TrimSpace(body) != string(legacy) {
+		t.Fatalf("finished child's body changed:\n%s\n%s", body, legacy)
 	}
 }
 

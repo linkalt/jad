@@ -319,8 +319,11 @@ type subagentRun struct {
 	handleOwner string
 	// session is the session of the whole run tree and root the top-level run (its own id
 	// for one); they key the nested-start limits.
-	session   string
-	root      string
+	session string
+	root    string
+	// callID is the parent's tool call that started the run (SubagentRequest.CallID); it
+	// names the child's transcript folder and is how a reader finds the run of a call.
+	callID    string
 	agent     string
 	task      string
 	timeoutMS int64
@@ -776,6 +779,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		handleOwner:   spec.handleOwner,
 		session:       spec.session,
 		root:          root,
+		callID:        spec.request.CallID,
 		agent:         spec.request.Agent.Name,
 		task:          subagentTaskPreview(spec.request.Task),
 		timeoutMS:     spec.request.Agent.TimeoutMS,
@@ -1014,6 +1018,23 @@ func (m *SubagentManager) RunTranscript(id string) (dir, owner string, found boo
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	return run.dir, run.owner, true
+}
+
+// CallRunning reports whether a run that the call callID of the session started is queued
+// or running now. It reads the manager's own table, so it is exact for the moment it is
+// asked and says nothing of a run the manager does not hold: one that ended and was pruned,
+// one from before a restart (a run that was going then is loaded as lost, never as running),
+// or a remote one (it has no run here).
+func (m *SubagentManager) CallRunning(session, callID string) bool {
+	if m == nil || callID == "" {
+		return false
+	}
+	for _, run := range m.allRuns() {
+		if run.session == session && run.callID == callID && run.active() {
+			return true
+		}
+	}
+	return false
 }
 
 // stop asks a run to end. It does not wait; the caller waits on run.done.

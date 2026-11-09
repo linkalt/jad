@@ -944,7 +944,7 @@ test('accepts a hosted_tool part and cited text, and drops a message whose hoste
   assert.deepEqual(parts, ['good:0:ws_2']);
 });
 
-test('a malformed subagent summary is dropped from a tool result that stays, a valid one is kept', async () => {
+test('a malformed subagent summary is dropped from a tool result that stays, a valid one (a zero-step one of a handed-off child too) is kept', async () => {
   requests.length = 0;
   responses.length = 0;
   const run = {turn_id: 'turn-1', started_at: '2026-01-01T00:00:00.000Z', status: 'running'};
@@ -956,7 +956,8 @@ test('a malformed subagent summary is dropped from a tool result that stays, a v
     {event: 'ui.message', data: {message: withPart('ok', result(snapshot))}},
     {event: 'ui.message', data: {message: withPart('bad-steps', result({steps: 'no'}))}},
     {event: 'ui.message', data: {message: withPart('bad-step', result({steps: [null]}))}},
-    {event: 'ui.message', data: {message: withPart('bad-count', result({steps: 0}))}},
+    {event: 'ui.message', data: {message: withPart('bad-count', result({steps: -1}))}},
+    {event: 'ui.message', data: {message: withPart('handed-off', result({steps: 0, omitsLastText: true}))}},
     {event: 'ui.message', data: {message: withPart('omits-last-text', result({agent: 'explore', steps: 2, omitsLastText: true}))}},
     {event: 'ui.message', data: {message: withPart('bad-omits', result({steps: 2, omitsLastText: 'yes'}))}},
     {event: 'ui.part', data: {id: 'ok', index: 1, part: result({agent: 3, steps: 2})}},
@@ -974,6 +975,7 @@ test('a malformed subagent summary is dropped from a tool result that stays, a v
     ['bad-steps', undefined],
     ['bad-step', undefined],
     ['bad-count', undefined],
+    ['handed-off', {steps: 0, omitsLastText: true}],
     ['omits-last-text', {agent: 'explore', steps: 2, omitsLastText: true}],
     ['bad-omits', undefined],
   ]);

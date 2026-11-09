@@ -1,36 +1,32 @@
 /**
  * @file subagent-transcript-store.ts
  * @input A call's cache key and a function that fetches its subagent transcript
- * @output The transcript, fetched at most once per key while it stays cached
- * @position Used by components/SubagentTranscript.tsx
+ * @output The latest transcript read for that key, one request per key at a time
+ * @position Used by subagent-transcript-poll.ts (through components/SubagentTranscript.tsx)
  *
- * A subagent transcript is read only when the user opens it, so nothing here runs on
- * mount. The store keeps the most recent `limit` transcripts, so hiding and reopening a
- * transcript (or coming back to the call) does not fetch again, and shares one request
- * between callers that ask for the same key while it is in flight. A failed fetch is not
- * kept: the next `load` asks again. There is no polling and no prefetch.
+ * The store keeps the most recent `limit` transcripts, so hiding and reopening a transcript
+ * (or coming back to the call) can show the last answer at once, and shares one request
+ * between callers that ask for the same key while it is in flight. Every `refresh` asks the
+ * server and replaces the entry: a child that is still running gives a longer answer each
+ * time, so the key does not carry the step count. A failed fetch keeps what the entry held.
+ * The store has no timer of its own; the poller decides when to ask.
  */
 import type {WebUiSubagentTranscript} from './api.ts';
 
 export interface SubagentTranscriptStore {
-  /** The cached transcript for `key`, without starting a fetch. */
+  /** The latest transcript for `key`, without starting a fetch. */
   peek(key: string): WebUiSubagentTranscript | undefined;
-  /** The cached transcript, or the result of `fetch` (one request per key at a time). */
-  load(key: string, fetch: () => Promise<WebUiSubagentTranscript>): Promise<WebUiSubagentTranscript>;
+  /** Ask the server (one request per key at a time), keep the answer in place of the old one and return it. */
+  refresh(key: string, fetch: () => Promise<WebUiSubagentTranscript>): Promise<WebUiSubagentTranscript>;
 }
 
 /**
- * The key of one call's transcript. The step count of the summary is part of it: a child
- * that has finished more steps since (a newer summary) is a different transcript, so a
- * cached partial one is never shown as current.
+ * The key of one call's transcript: session, profile and call id. The summary's step count
+ * is not part of it (it is frozen when the call settles, while the child goes on); each
+ * answer replaces the entry under the same key.
  */
-export function subagentTranscriptKey(
-  sessionRef: string,
-  profile: string | undefined,
-  callId: string,
-  steps: number,
-): string {
-  return JSON.stringify([sessionRef, profile ?? '', callId, steps]);
+export function subagentTranscriptKey(sessionRef: string, profile: string | undefined, callId: string): string {
+  return JSON.stringify([sessionRef, profile ?? '', callId]);
 }
 
 export function createSubagentTranscriptStore(limit: number): SubagentTranscriptStore {
@@ -53,9 +49,7 @@ export function createSubagentTranscriptStore(limit: number): SubagentTranscript
       }
       return transcript;
     },
-    load(key, fetch) {
-      const cached = this.peek(key);
-      if (cached !== undefined) return Promise.resolve(cached);
+    refresh(key, fetch) {
       const inFlight = pending.get(key);
       if (inFlight !== undefined) return inFlight;
       const request = fetch().then(

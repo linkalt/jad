@@ -143,7 +143,9 @@ test('an inline expand inside the snapshot opens no panel', () => {
 
 test('the panel hosts the snapshot below the result and the shared body does not know it', () => {
   const panel = code(component('ActivityPanel.tsx'));
-  assert.match(panel, /<ToolCallDetail[^>]*>\s*\{detail\.result\?\.subagent !== undefined && \(\s*<SubagentTranscript/);
+  // A subagent call has its section from the moment it starts (no result yet), not only with a summary.
+  assert.match(panel, /<ToolCallDetail[^>]*>\s*\{subagent !== undefined && \(\s*<SubagentTranscript/);
+  assert.match(panel, /subagentSectionOf\(detail\.call, detail\.result\)/);
   const parts = code(component('TranscriptParts.tsx'));
   assert.doesNotMatch(parts, /SubagentTranscript|ReadOnlyTranscript/, 'TranscriptParts must not import the read-only view (no cycle)');
 });
@@ -153,7 +155,8 @@ test('the panel shows the transcript behind a disclosure that starts closed on e
   // Closed by default; one click flips it; the control names the action it will take and
   // carries the step count of the summary.
   assert.match(view, /useState\(false\)/);
-  assert.match(view, /\$\{isOpen \? 'Hide' : 'Show'\} Transcript/);
+  assert.match(view, /subagentTranscriptLabel\(\{\s*isOpen,/);
+  assert.match(code(readFileSync(new URL('./subagent-transcript.ts', import.meta.url), 'utf8')), /\$\{isOpen \? 'Hide' : 'Show'\} Transcript/);
   assert.match(view, /onClick=\{\(\) => setIsOpen\(open => !open\)\}/);
   // The heading and the transcript exist only in the open component, mounted while open.
   assert.match(view, /\{isOpen && \(\s*<OpenSubagentTranscript/);

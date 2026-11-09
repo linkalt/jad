@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {completedSubagentSteps, subagentTranscriptMessages} from './subagent-transcript.ts';
+import {
+  completedSubagentSteps,
+  isSubagentToolName,
+  subagentSectionOf,
+  subagentTranscriptLabel,
+  subagentTranscriptMessages,
+} from './subagent-transcript.ts';
 
 const text = value => [{type: 'text', text: value}];
 
@@ -163,4 +169,63 @@ test('a snapshot that does not say so keeps the old rule, bit absent or false', 
   }
   // A malformed bit that reaches the mapper unchecked keeps text rather than hiding it.
   assert.deepEqual(shownWith(steps, 'yes', finished), [call('a'), result('a'), ...text('final'), reasoning('r')]);
+});
+
+// Live: nothing is left out while the parent's call is unsettled or the child still runs.
+const live = (steps, extra, result) => subagentTranscriptMessages({steps, ...extra}, result).flatMap(message => message.parts);
+
+test('no trim while the call is unsettled or the child is running; the trim is unchanged for a settled, finished, uncut result', () => {
+  const steps = [step('1', [call('a'), result('a')]), step('2', [...text('wrap up'), call('b'), result('b')]), step('3', text('final summary'))];
+  const whole = [call('a'), result('a'), ...text('wrap up'), call('b'), result('b'), ...text('final summary')];
+  // Unsettled (no result above holds the text): everything shows, even with omitsLastText absent.
+  assert.deepEqual(live(steps, {}, {unsettled: true}), whole);
+  // Running (the child's last step is not its end): everything shows, though the result is settled and uncut.
+  assert.deepEqual(live(steps, {running: true}, finished), whole);
+  assert.deepEqual(live(steps, {running: true}, {unsettled: true}), whole);
+  // Settled, uncut and finished: today's trim.
+  // (only the trailing text-only step goes; earlier text stays.)
+  const trimmed = [call('a'), result('a'), ...text('wrap up'), call('b'), result('b')];
+  assert.deepEqual(live(steps, {}, {unsettled: false}), trimmed);
+  assert.deepEqual(live(steps, {}, finished), trimmed);
+  assert.deepEqual(live(steps, {running: false}, {omitsLastText: false, unsettled: false}), trimmed);
+});
+
+test('a running child with no completed step shows no message, and a zero-step answer never throws', () => {
+  assert.deepEqual(subagentTranscriptMessages({steps: [], running: true}, {unsettled: true}), []);
+  assert.deepEqual(subagentTranscriptMessages({steps: [], running: true}, omitsLastText), []);
+});
+
+test('the section: a subagent call with no result yet has one; a settled result has one only with a summary', () => {
+  for (const name of ['subagent', 'native.subagent']) {
+    assert.deepEqual(subagentSectionOf({name}, undefined), {settled: false});
+    assert.equal(isSubagentToolName(name), true);
+  }
+  assert.equal(subagentSectionOf({name: 'read'}, undefined), undefined, 'another tool has no section while it runs');
+  assert.equal(isSubagentToolName('profile_message'), false);
+  const summary = {steps: 2, omitsLastText: true};
+  assert.deepEqual(subagentSectionOf({name: 'subagent'}, {subagent: summary}), {summary, settled: true});
+  assert.deepEqual(subagentSectionOf({name: 'subagent'}, {subagent: {steps: 0, omitsLastText: true}}), {summary: {steps: 0, omitsLastText: true}, settled: true});
+  // A settled result without a summary (a child that failed before its first step) has none:
+  // a section shown while the call ran goes away then, as it always did for a settled call.
+  assert.equal(subagentSectionOf({name: 'subagent'}, {}), undefined);
+  assert.equal(subagentSectionOf({name: 'read'}, {subagent: undefined}), undefined);
+});
+
+test('the label: running with no step completed yet, running with a count, or the settled count', () => {
+  const label = input => subagentTranscriptLabel(input);
+  // Unsettled, nothing read yet (closed, loading or starting).
+  assert.equal(label({isOpen: false}), 'Show Transcript · running, no step completed yet');
+  assert.equal(label({isOpen: true}), 'Hide Transcript · running, no step completed yet');
+  // A handed-off child with a summary of no step is running until the panel says otherwise.
+  assert.equal(label({isOpen: false, summary: {steps: 0, omitsLastText: true}}), 'Show Transcript · running, no step completed yet');
+  // A summary with steps is the count, as before.
+  assert.equal(label({isOpen: false, summary: {steps: 1}}), 'Show Transcript · 1 step');
+  assert.equal(label({isOpen: true, summary: {steps: 7}}), 'Hide Transcript · 7 steps');
+  // Open and read: the transcript's own count and running bit.
+  assert.equal(label({isOpen: true, transcript: {steps: [], running: true}}), 'Hide Transcript · running, no step completed yet');
+  assert.equal(label({isOpen: true, transcript: {steps: [step('1', text('a'))], running: true}}), 'Hide Transcript · running, 1 step');
+  assert.equal(label({isOpen: true, summary: {steps: 0}, transcript: {steps: [step('1', text('a')), step('2', text('b'))], running: true}}), 'Hide Transcript · running, 2 steps');
+  assert.equal(label({isOpen: true, summary: {steps: 2}, transcript: {steps: [step('1', text('a')), step('2', text('b'))]}}), 'Hide Transcript · 2 steps');
+  // A handed-off child that ended with no step says so once it has been read.
+  assert.equal(label({isOpen: true, summary: {steps: 0}, transcript: {steps: []}}), 'Hide Transcript · 0 steps');
 });

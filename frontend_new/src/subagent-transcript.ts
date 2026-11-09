@@ -16,7 +16,14 @@
  * or whose snapshot says its last step may not be the child's newest response
  * (`mayHaveNewer`), gets nothing left out. The snapshot and the shared renderer stay whole.
  */
-import {validSubagentTranscript, type WebUiMessageStep, type WebUiPart, type WebUiSubagentStep, type WebUiSubagentTranscript} from './api.ts';
+import {
+  validSubagentTranscript,
+  type WebUiMessageStep,
+  type WebUiPart,
+  type WebUiSubagentStep,
+  type WebUiSubagentSummary,
+  type WebUiSubagentTranscript,
+} from './api.ts';
 import type {ReadOnlyMessage} from './read-only-transcript.ts';
 
 /** The completed steps of a subagent snapshot, in order; empty when absent. */
@@ -34,6 +41,8 @@ const isToolCall = (part: WebUiPart) => part.type === 'tool_call';
 /** What the tool result says of the child's last text; see `WebUiSubagentSummary`. */
 export interface SubagentResultShape {
   omitsLastText?: boolean;
+  /** The parent's call has no result yet, so no copy of the child's last text exists above to leave out. */
+  unsettled?: boolean;
 }
 
 /** Whether the snapshot says its last step may not be the newest response; read as `validSubagentTranscript` does. */
@@ -53,14 +62,16 @@ function mayHaveNewer(subagent: WebUiSubagentTranscript | undefined): boolean {
  * a later response) is shown whole as well, since the result's text may belong to a step the
  * snapshot does not show; that text can then appear twice, which is the cheaper mistake. A
  * snapshot without any tool call is shown whole too, since there the text is all the child
- * did.
+ * did. Nothing is left out while the parent's call is unsettled (no result holds the text
+ * yet) or the child is still running (`running`: its last step is not its end): the trim
+ * applies only to a settled result, an uncut text and a finished child.
  */
 function shownSubagentSteps(
   subagent: WebUiSubagentTranscript | undefined,
   result: SubagentResultShape,
 ): WebUiSubagentStep[] {
   const steps = completedSubagentSteps(subagent);
-  if (result.omitsLastText === true || mayHaveNewer(subagent) || !steps.some(step => step.parts.some(isToolCall))) return steps;
+  if (result.unsettled === true || subagent?.running === true || result.omitsLastText === true || mayHaveNewer(subagent) || !steps.some(step => step.parts.some(isToolCall))) return steps;
   const last = steps[steps.length - 1];
   const parts = last.parts.filter(part => part.type !== 'text');
   return parts.length === 0 ? steps.slice(0, -1) : [...steps.slice(0, -1), {...last, parts}];
@@ -91,4 +102,57 @@ export function subagentTranscriptMessages(
     });
   }
   return parts.length === 0 ? [] : [{key: 'subagent', role: 'assistant', parts, steps}];
+}
+
+/** The native subagent tool's call names, as the server's `IsSubagentTool` takes them. */
+export function isSubagentToolName(name: string): boolean {
+  return name === 'subagent' || name === 'native.subagent';
+}
+
+/** What the right panel needs to show the subagent section of a tool call. */
+export interface SubagentSection {
+  /** The settled result's summary; absent while the call has no result. */
+  summary?: WebUiSubagentSummary;
+  /** The call has its result. */
+  settled: boolean;
+}
+
+/**
+ * The subagent section of a tool block, `undefined` for none. A settled result shows it when
+ * it carries a summary (as before). A subagent call that has no result yet shows it too: its
+ * child is running (or about to), and waiting for the result is what kept the transcript
+ * empty until the child had ended. A settled result without a summary (a child that failed
+ * before its first step) has none, so a section shown while the call ran goes away then.
+ */
+export function subagentSectionOf(
+  call: {name: string},
+  result: {subagent?: WebUiSubagentSummary} | undefined,
+): SubagentSection | undefined {
+  if (result === undefined) {
+    return isSubagentToolName(call.name) ? {settled: false} : undefined;
+  }
+  return result.subagent === undefined ? undefined : {summary: result.subagent, settled: true};
+}
+
+/**
+ * The transcript button's label. `transcript` is what the open panel last read (undefined
+ * while closed, loading or starting: nothing is known then). A running child says so with
+ * the steps it has completed; with no summary yet (the call is unsettled), or a summary of
+ * zero steps, an unread child is taken to be running, since a result without a step comes
+ * only from a handed-off child.
+ */
+export function subagentTranscriptLabel({
+  isOpen,
+  summary,
+  transcript,
+}: {
+  isOpen: boolean;
+  summary?: WebUiSubagentSummary;
+  transcript?: WebUiSubagentTranscript;
+}): string {
+  const steps = transcript === undefined ? (summary?.steps ?? 0) : transcript.steps.length;
+  const running = transcript === undefined ? summary === undefined || summary.steps === 0 : transcript.running === true;
+  const count = `${steps} ${steps === 1 ? 'step' : 'steps'}`;
+  const tail = running ? (steps === 0 ? 'running, no step completed yet' : `running, ${count}`) : count;
+  return `${isOpen ? 'Hide' : 'Show'} Transcript · ${tail}`;
 }

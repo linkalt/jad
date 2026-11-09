@@ -105,7 +105,10 @@ export interface WebUiSubagentStep {
   parts: WebUiPart[];
 }
 
-/** What a tool result says of its subagent run: the agent and how many steps it had completed. */
+/**
+ * What a tool result says of its subagent run: the agent and how many steps it had completed.
+ * A child that was handed off before its first step has `steps: 0`.
+ */
 export interface WebUiSubagentSummary {
   agent?: string;
   steps: number;
@@ -129,6 +132,12 @@ export interface WebUiSubagentTranscript {
    * newest response, and from an older server.
    */
   mayHaveNewer?: boolean;
+  /**
+   * Set while the session still holds a queued or running run for the call, so a client
+   * that polls keeps asking; absent for a finished child and from an older server (which
+   * is read as finished). Never stored by the server: it is the answer of that moment.
+   */
+  running?: true;
 }
 
 export type WebUiPart =
@@ -586,11 +595,23 @@ export async function fetchSessionMessage(
   return value.message as unknown as WebUiMessage;
 }
 
+/** A refused subagent transcript read; `status` 404 means the child's folder is not there (yet). */
+export class SubagentTranscriptError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SubagentTranscriptError';
+    this.status = status;
+  }
+}
+
 /**
- * The completed steps of the child behind one subagent tool call, read when the user opens
- * the transcript (a tool result carries only a summary). A child that is still running
- * gives the steps it has completed so far. The answer is checked here: a body that is not
- * a well-formed transcript is an error, so the caller shows a retry instead of a broken view.
+ * The completed steps of the child behind one subagent tool call, read while the user has
+ * the transcript open (a tool result carries only a summary). A child that is still running
+ * gives the steps it has completed so far and `running: true`, so the panel asks again. The
+ * answer is checked here: a body that is not a well-formed transcript is an error, so the
+ * caller shows a retry instead of a broken view.
  */
 export async function fetchSubagentTranscript(
   sessionId: string,
@@ -605,7 +626,7 @@ export async function fetchSubagentTranscript(
     signal === undefined ? {} : {signal},
   );
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new SubagentTranscriptError(response.status, await readError(response));
   }
   const value: unknown = await response.json();
   const transcript = isRecord(value) ? validSubagentTranscript(value.subagent) : undefined;
@@ -1593,7 +1614,7 @@ function isWebUiSubagentSummary(value: unknown): value is WebUiSubagentSummary {
     (value.agent === undefined || typeof value.agent === 'string') &&
     typeof value.steps === 'number' &&
     Number.isInteger(value.steps) &&
-    value.steps >= 1 &&
+    value.steps >= 0 &&
     (value.omitsLastText === undefined || typeof value.omitsLastText === 'boolean')
   );
 }
@@ -1633,7 +1654,9 @@ export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript
   // field (a non-boolean from a newer or broken server) counts as set.
   const {mayHaveNewer} = value;
   const named = agent === undefined ? {steps} : {agent, steps};
-  return mayHaveNewer === undefined || mayHaveNewer === false ? named : {...named, mayHaveNewer: true};
+  const newer = mayHaveNewer === undefined || mayHaveNewer === false ? named : {...named, mayHaveNewer: true};
+  // Only an explicit true keeps a client polling; anything else reads as a finished child.
+  return value.running === true ? {...newer, running: true} : newer;
 }
 
 function isWebUiPart(value: unknown): value is WebUiPart {

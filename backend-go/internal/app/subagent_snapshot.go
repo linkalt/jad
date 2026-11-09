@@ -106,7 +106,7 @@ func (r *Resolver) subagentSnapshot(ctx context.Context, config sessionfs.Sessio
 
 // ReadSubagentSnapshot answers the subagent route: the completed steps of the child behind
 // callID, as {"subagent": snapshot}, read now (a running child gives the steps it has
-// finished, none before its first). The child is found by the call id alone, in the session
+// finished, none before its first, and carries "running": true). The child is found by the call id alone, in the session
 // profile's subagent storage; no folder is a 404, as is a session without storage.
 func (r *Resolver) ReadSubagentSnapshot(ctx context.Context, reference, profile, callID string) (json.RawMessage, error) {
 	if ctx == nil {
@@ -127,6 +127,11 @@ func (r *Resolver) ReadSubagentSnapshot(ctx context.Context, reference, profile,
 	if callID == "" || config.NativeSubagent == nil || config.NativeSubagent.StorageDir == "" {
 		return nil, notFound
 	}
+	// Liveness is read before the steps. A child that ends between the two reads is then
+	// reported running with its final steps (the next read says it ended); read after, it
+	// could be reported finished with steps that miss its last ones, and a client that
+	// stops asking at "finished" would keep that gap.
+	running := r.subagentCallRunning(location.Reference, config, callID)
 	snapshot, found, err := readSubagentSteps(ctx, config.NativeSubagent.StorageDir, webui.SubagentCall{CallID: callID}, defaultSubagentSnapshotLimits)
 	if err != nil {
 		// A child that is there but cannot be read is not a missing one; the client gets
@@ -139,9 +144,30 @@ func (r *Resolver) ReadSubagentSnapshot(ctx context.Context, reference, profile,
 	if snapshot == nil {
 		snapshot = &webui.SubagentSnapshot{Steps: []webui.SubagentStep{}}
 	}
+	// The cached snapshot is shared and never edited, so the live flag rides beside it in
+	// the body and is never stored: a finished child's body has no "running" key.
 	return json.Marshal(struct {
-		Subagent *webui.SubagentSnapshot `json:"subagent"`
-	}{Subagent: snapshot})
+		Subagent subagentRouteBody `json:"subagent"`
+	}{Subagent: subagentRouteBody{SubagentSnapshot: snapshot, Running: running}})
+}
+
+// subagentRouteBody is the snapshot the route answers with, plus whether the child is
+// running now. Running is a fact of the moment of the request, read from the subagent
+// manager; it is not part of the snapshot, which is cached by the transcript's stat.
+type subagentRouteBody struct {
+	*webui.SubagentSnapshot
+	// Running is true while the session's subagent manager holds a queued or running run
+	// for the call; absent otherwise, and always absent for a child of an earlier server
+	// process or a remote agent, which this server holds no run for.
+	Running bool `json:"running,omitempty"`
+}
+
+// subagentCallRunning asks the storage directory's subagent manager whether the session's
+// call callID has a run going. A directory without a manager built (nothing has started a
+// child in this process) has none; this never builds one.
+func (r *Resolver) subagentCallRunning(reference string, config sessionfs.SessionConfig, callID string) bool {
+	manager := r.existingSubagentManager(config.NativeSubagent.StorageDir)
+	return manager.CallRunning(sessionKey(reference, config.Profile), callID)
 }
 
 // attachSubagentSnapshots adds the summaries of the snapshots (agent and step count) to the

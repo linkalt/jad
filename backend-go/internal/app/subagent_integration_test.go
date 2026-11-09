@@ -54,6 +54,11 @@ type subagentProvider struct {
 	childWritesByTask bool
 	childEntered      chan struct{}
 	childCancelled    chan struct{}
+	// childGate, when set, makes every child request wait for one token on it before it is
+	// answered, so a test lets the child go one response at a time; childAtGate gets a
+	// signal (it needs room for the requests) as each request starts to wait.
+	childGate   chan struct{}
+	childAtGate chan struct{}
 	// childRounds makes the child ask for notes.txt in its first childRounds requests,
 	// whatever its history holds, and answer in the next one. childInputTokens is the
 	// input size every child response reports, which is what a compaction trigger reads.
@@ -176,6 +181,15 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			case <-p.childRelease:
 			}
 			return
+		}
+
+		if body.Model == "child-model" && p.childGate != nil {
+			p.childAtGate <- struct{}{}
+			select {
+			case <-p.childGate:
+			case <-r.Context().Done():
+				return
+			}
 		}
 
 		if body.Model == "child-model" && p.childHold != nil {

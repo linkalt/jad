@@ -1,5 +1,6 @@
 import {useEffect} from 'react';
 import type {ResizableRegion} from '@astryxdesign/core/Resizable';
+import {subagentSectionOf} from '../subagent-transcript';
 import {type ActivityDetail} from './activity-panel';
 import {FloatingPanel} from './FloatingPanel';
 import {SubagentTranscript} from './SubagentTranscript';
@@ -36,6 +37,9 @@ export function ActivityPanel({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
+  // A subagent call shows its section from the moment it starts, not only once its result
+  // (and so its summary) exists.
+  const subagent = detail.kind === 'tool' ? subagentSectionOf(detail.call, detail.result) : undefined;
   const title =
     detail.kind === 'reasoning'
       ? 'Reasoning'
@@ -60,10 +64,11 @@ export function ActivityPanel({
       {detail.kind === 'reasoning' && <ReasoningDetail content={detail.content} steps={detail.steps} />}
       {detail.kind === 'tool' && (
         <ToolCallDetail call={detail.call} result={detail.result} source={detail.source}>
-          {detail.result?.subagent !== undefined && (
+          {subagent !== undefined && (
             <SubagentTranscript
               key={detail.key}
-              summary={detail.result.subagent}
+              summary={subagent.summary}
+              settled={subagent.settled}
               sessionRef={sessionRef}
               profile={profile}
               callId={detail.call.callId}

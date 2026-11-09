@@ -605,6 +605,39 @@ func TestSubagentSummarySaysWhetherTheResultOmitsTheLastText(t *testing.T) {
 	}
 }
 
+// TestHandedOffChildHasASummaryBeforeItsFirstStep: a result that names the run's state (the
+// child is still going) gets a summary of zero steps, so its transcript can be opened and
+// fills in as the child goes; a result that names none gets none for a child without steps.
+// The live run and the replay both build it with SubagentSummaryOf.
+func TestHandedOffChildHasASummaryBeforeItsFirstStep(t *testing.T) {
+	handed := "{\"id\":\"c1\",\"status\":\"ok\",\"summary\":\"Agent explore is still running\"}\n\n--- INFORMATION ---\nrun: sub_0a1b2c3d\nstate: running\nelapsed_ms: 5\n"
+	for name, snapshot := range map[string]*SubagentSnapshot{"no snapshot": nil, "empty snapshot": {}} {
+		message := toolMessage("subagent", `{"agent":"explore"}`, handed)
+		call, ok := SubagentCallOf(message.Parts[0], message.Parts[1])
+		if !ok || !call.HandedOff {
+			t.Fatalf("%s: call = %+v, %v; want a handed-off call", name, call, ok)
+		}
+		want := SubagentSummary{Agent: "explore", Steps: 0, OmitsLastText: true}
+		if got := SubagentSummaryOf(call, snapshot); got == nil || *got != want {
+			t.Fatalf("%s: live summary = %+v, want %+v", name, got, want)
+		}
+		attached := AttachSubagents([]Message{message}, func(SubagentCall) *SubagentSnapshot { return snapshot })
+		if got := attached[0].Parts[1].Subagent; got == nil || *got != want {
+			t.Fatalf("%s: replay summary = %+v, want %+v", name, got, want)
+		}
+	}
+	encoded, _ := json.Marshal(Part{Type: "tool_result", Subagent: &SubagentSummary{Agent: "explore", OmitsLastText: true}})
+	if !strings.Contains(string(encoded), `"subagent":{"agent":"explore","steps":0,"omitsLastText":true}`) {
+		t.Fatalf("zero-step summary JSON = %s", encoded)
+	}
+	// A finished result names no state: no steps still means no summary.
+	finished := toolMessage("subagent", `{"agent":"explore"}`, strings.Replace(handed, "state: running\n", "", 1))
+	call, _ := SubagentCallOf(finished.Parts[0], finished.Parts[1])
+	if call.HandedOff || SubagentSummaryOf(call, nil) != nil {
+		t.Fatalf("a result without a state has a summary of a child with no step: %+v", call)
+	}
+}
+
 func TestCapMessagesLeavesTheSubagentSummaryAlone(t *testing.T) {
 	summary := &SubagentSummary{Agent: "a", Steps: 3}
 	messages := []Message{{ID: "m", Sender: "assistant", Parts: []Part{{Type: "tool_result", CallID: "c", Output: "ok", Subagent: summary}}}}

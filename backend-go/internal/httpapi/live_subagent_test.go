@@ -111,3 +111,50 @@ func TestLiveSubagentResultSaysWhetherItOmitsTheLastText(t *testing.T) {
 		t.Fatalf("finished result summary = %+v", got)
 	}
 }
+
+// emptyRunner is a session whose child has completed no step yet.
+type emptyRunner struct{ snapshotRunner }
+
+func (r *emptyRunner) SubagentSnapshot(call webui.SubagentCall) *webui.SubagentSnapshot {
+	r.asked = append(r.asked, call)
+	return nil
+}
+
+// TestLiveHandedOffResultOfAChildWithNoStepCarriesAZeroStepSummary: a call that handed the
+// child off before it completed a response is published with {agent, steps: 0}, so the
+// browser has a transcript to open at once; a synchronous result of a child with no step
+// still has no summary.
+func TestLiveHandedOffResultOfAChildWithNoStepCarriesAZeroStepSummary(t *testing.T) {
+	registry := newRunRegistry(time.Minute, 1<<30, 0)
+	run, err := registry.begin("key", "turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published []webui.Message
+	emitter := newMessageStreamEmitter(0, func(message webui.Message) error { published = append(published, message); return nil })
+	streaming := webui.NewStreamingRun("turn", "now")
+	streaming.Complete(json.RawMessage(`{"type":"response.completed","response":{"id":"r","output":[
+		{"type":"function_call","call_id":"handed","name":"subagent","arguments":"{\"agent\":\"explore\"}"},
+		{"type":"function_call","call_id":"sync","name":"subagent","arguments":"{\"agent\":\"explore\"}"}]}}`))
+	outputs := map[string]string{
+		"handed": "{\"id\":\"handed\",\"status\":\"ok\",\"summary\":\"Agent explore is still running (run sub_0a1b2c3d)\"}\n\n--- INFORMATION ---\nrun: sub_0a1b2c3d\nstate: running\nelapsed_ms: 5\nlimit_ms: 600000\n",
+		"sync":   "{\"id\":\"sync\",\"status\":\"ok\",\"summary\":\"Agent explore finished\"}\n\n--- INFORMATION ---\nagent: explore\nrounds: 0\n",
+	}
+	runner := &emptyRunner{}
+	for _, callID := range []string{"handed", "sync"} {
+		item, _ := json.Marshal(map[string]string{"type": "function_call_output", "call_id": callID, "output": outputs[callID]})
+		publishToolResult(run, streaming, emitter, item, runner, nil)
+	}
+	summaries := map[string]*webui.SubagentSummary{}
+	for _, part := range published[len(published)-1].Parts {
+		if part.Type == "tool_result" {
+			summaries[part.CallID] = part.Subagent
+		}
+	}
+	if got := summaries["handed"]; got == nil || *got != (webui.SubagentSummary{Agent: "explore", Steps: 0, OmitsLastText: true}) {
+		t.Fatalf("handed-off result summary = %+v", got)
+	}
+	if summaries["sync"] != nil {
+		t.Fatalf("a synchronous result of a child with no step has a summary: %+v", summaries["sync"])
+	}
+}

@@ -8,14 +8,16 @@ import (
 // handleSubagent serves the completed steps of the child behind one subagent tool call.
 //
 //	GET /api/sessions/{reference}/subagents/{callId}[?profile=<profile>]
-//	200 {"subagent": {"agent"?: string, "steps": [{"id", "status": "completed", "parts": [...]}], "mayHaveNewer"?: true}}
+//	200 {"subagent": {"agent"?: string, "steps": [{"id", "status": "completed", "parts": [...]}], "mayHaveNewer"?: true, "running"?: true}}
 //	404 {"error": "subagent transcript not found"}  (no child folder for the call id)
 //
 // The transcript routes carry only {agent?, steps: <count>} on a subagent tool_result; this
 // route is where a browser reads the steps, once, when the user opens them. The child is
 // found by the call id alone and read as it is: a child still running gives the steps it
 // has completed so far (an empty list before the first), and the answer is never cached,
-// since a later read may hold more. "mayHaveNewer" is present (true) only when the last
+// since a later read may hold more. "running" is present (true) only while the session still
+// holds a queued or running run for the call, so a client polling the route knows when to
+// stop; it is read at request time and absent for a finished child. "mayHaveNewer" is present (true) only when the last
 // step shown may not be the child's newest response (webui.SubagentSnapshot). The caller
 // has been authorised already.
 func (h *Handler) handleSubagent(w http.ResponseWriter, r *http.Request, reference, profile, callID string) {

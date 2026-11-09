@@ -1,51 +1,131 @@
 /**
  * @file SubagentTranscript.tsx
- * @input A tool result's `subagent` summary, and where its steps are read from (session, profile, call id)
- * @output The right panel's subagent section: a "Show Transcript · N steps" button that,
- *   once pressed, loads the child's steps and shows them as a read-only conversation under
- *   the "Subagent transcript" heading
+ * @input The parent call's state (its tool result's `subagent` summary, absent while the call is unsettled), and where the steps are read from (session, profile, call id)
+ * @output The right panel's subagent section: a "Show Transcript · …" button that, once
+ *   pressed, shows the child's completed steps as a read-only conversation under the
+ *   "Subagent transcript" heading, filling in while the child runs
  * @position Passed to ToolCallDetail as its children by ActivityPanel
  *
- * The transcript costs nothing until it is asked for. While closed this renders one button
- * whose label reads the summary's step count: no request, no validation of steps, no
- * mapping, no ReadOnlyTranscript (those live in `OpenSubagentTranscript`, mounted only
- * while open). The first open fetches that one call's steps (loading state, then the
- * shared ReadOnlyTranscript; a failure shows the error with a retry). A small store keeps
- * the fetched steps per call, so hiding and reopening does not fetch again; nothing is
- * prefetched or polled. The host keys this component by the open call, so every open, and
- * every switch to another call, starts closed. The shared renderer opens no panel.
+ * The transcript costs nothing until it is asked for. While closed this is one button and
+ * no timer: no request, no mapping, no ReadOnlyTranscript. While open, `useSubagentPoll`
+ * (subagent-transcript-poll.ts) reads the route at once and then every
+ * `subagent_transcript_poll_ms` for as long as the call is unsettled or the answer says the
+ * child is `running`; each answer replaces the store's entry, and the steps appear one
+ * completed response at a time (never token by token, and never the step still waiting for
+ * its tool results). A running child ends the transcript with "Working on step N+1…". The
+ * host keys this component by the open call, so every open, and every switch to another
+ * call, starts closed. The shared renderer opens no panel.
  */
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {Button, Text, VStack} from '@astryxdesign/core';
 import {
   fetchSubagentTranscript,
   validSubagentSummary,
   type WebUiSubagentSummary,
-  type WebUiSubagentTranscript,
 } from '../api';
 import appConfig from '../config.json';
-import {subagentTranscriptMessages} from '../subagent-transcript';
+import {subagentTranscriptLabel, subagentTranscriptMessages} from '../subagent-transcript';
+import {
+  createSubagentPoller,
+  type SubagentPoller,
+  type SubagentPollState,
+  type SubagentVisibility,
+} from '../subagent-transcript-poll';
 import {createSubagentTranscriptStore, subagentTranscriptKey} from '../subagent-transcript-store';
 import {ReadOnlyTranscript} from './ReadOnlyTranscript';
 
 const transcriptStore = createSubagentTranscriptStore(appConfig.subagent_transcript_cache_entries);
 
+const documentVisibility: SubagentVisibility = {
+  isVisible: () => document.visibilityState !== 'hidden',
+  subscribe: listener => {
+    document.addEventListener('visibilitychange', listener);
+    return () => document.removeEventListener('visibilitychange', listener);
+  },
+};
+
 export interface SubagentTranscriptProps {
-  summary: WebUiSubagentSummary;
+  /** The settled result's summary; absent while the call has no result (its child is running). */
+  summary?: WebUiSubagentSummary;
+  /** The call has its result. */
+  settled: boolean;
   /** The session on screen and its profile: the transcript is read from there. */
   sessionRef?: string;
   profile?: string;
   callId: string;
 }
 
-export function SubagentTranscript({summary, sessionRef, profile, callId}: SubagentTranscriptProps) {
+/**
+ * Poll one call's transcript while `enabled` (the panel is open). The effect that owns the
+ * poller depends only on what identifies the call, so the host re-rendering with a fresh
+ * message does not restart it; the call's settled state reaches the running poller through
+ * `update`. Closing stops the poller and with it every timer.
+ */
+function useSubagentPoll({
+  enabled,
+  sessionRef,
+  profile,
+  callId,
+  settled,
+  summarySteps,
+}: {
+  enabled: boolean;
+  sessionRef?: string;
+  profile?: string;
+  callId: string;
+  settled: boolean;
+  summarySteps: number;
+}) {
+  const [state, setState] = useState<SubagentPollState>({phase: 'loading'});
+  const pollerRef = useRef<SubagentPoller | undefined>(undefined);
+  const inputRef = useRef({settled, summarySteps});
+  inputRef.current = {settled, summarySteps};
+  useEffect(() => {
+    if (!enabled || sessionRef === undefined) return undefined;
+    const poller = createSubagentPoller({
+      store: transcriptStore,
+      key: subagentTranscriptKey(sessionRef, profile, callId),
+      fetch: () => fetchSubagentTranscript(sessionRef, callId, profile),
+      pollMs: appConfig.subagent_transcript_poll_ms,
+      maxDelayMs: appConfig.subagent_transcript_poll_max_delay_ms,
+      visibility: documentVisibility,
+      input: inputRef.current,
+      onState: setState,
+    });
+    pollerRef.current = poller;
+    poller.start();
+    return () => {
+      poller.stop();
+      pollerRef.current = undefined;
+    };
+  }, [enabled, sessionRef, profile, callId]);
+  useEffect(() => {
+    pollerRef.current?.update({settled, summarySteps});
+  }, [settled, summarySteps]);
+  return {state, retry: () => pollerRef.current?.retry()};
+}
+
+export function SubagentTranscript({summary, settled, sessionRef, profile, callId}: SubagentTranscriptProps) {
   const [isOpen, setIsOpen] = useState(false);
-  // The panel without a session has nowhere to read the steps from. History is not
-  // validated part by part, so a malformed summary (null, a count below one) shows nothing.
-  if (sessionRef === undefined || validSubagentSummary(summary) === undefined) {
+  // History is not validated part by part, so a malformed summary (null, a negative count)
+  // shows nothing. The panel without a session has nowhere to read the steps from.
+  const isShown = sessionRef !== undefined && (summary === undefined || validSubagentSummary(summary) !== undefined);
+  const {state, retry} = useSubagentPoll({
+    enabled: isOpen && isShown,
+    sessionRef,
+    profile,
+    callId,
+    settled,
+    summarySteps: summary?.steps ?? 0,
+  });
+  if (!isShown) {
     return null;
   }
-  const label = `${isOpen ? 'Hide' : 'Show'} Transcript · ${summary.steps} ${summary.steps === 1 ? 'step' : 'steps'}`;
+  const label = subagentTranscriptLabel({
+    isOpen,
+    summary,
+    transcript: isOpen && state.phase === 'ready' ? state.transcript : undefined,
+  });
   return (
     <VStack gap={2} width="100%">
       <Button
@@ -57,96 +137,79 @@ export function SubagentTranscript({summary, sessionRef, profile, callId}: Subag
       />
       {isOpen && (
         <OpenSubagentTranscript
-          agent={summary.agent}
-          steps={summary.steps}
-          omitsLastText={summary.omitsLastText === true}
-          sessionRef={sessionRef}
-          profile={profile}
-          callId={callId}
+          agent={summary?.agent}
+          omitsLastText={summary?.omitsLastText === true}
+          settled={settled}
+          state={state}
+          onRetry={retry}
         />
       )}
     </VStack>
   );
 }
 
-type Load =
-  | {state: 'loading'}
-  | {state: 'ready'; transcript: WebUiSubagentTranscript}
-  | {state: 'failed'; message: string};
-
 function OpenSubagentTranscript({
   agent,
-  steps,
   omitsLastText,
-  sessionRef,
-  profile,
-  callId,
+  settled,
+  state,
+  onRetry,
 }: {
   agent?: string;
-  steps: number;
   /** The result does not hold the child's last text whole, so it is not left out here. */
   omitsLastText: boolean;
-  sessionRef: string;
-  profile?: string;
-  callId: string;
+  settled: boolean;
+  state: SubagentPollState;
+  onRetry: () => void;
 }) {
-  const key = subagentTranscriptKey(sessionRef, profile, callId, steps);
-  const [attempt, setAttempt] = useState(0);
-  const [load, setLoad] = useState<Load>(() => {
-    const cached = transcriptStore.peek(key);
-    return cached === undefined ? {state: 'loading'} : {state: 'ready', transcript: cached};
-  });
-  useEffect(() => {
-    const cached = transcriptStore.peek(key);
-    if (cached !== undefined) {
-      setLoad({state: 'ready', transcript: cached});
-      return undefined;
-    }
-    let isCurrent = true;
-    setLoad({state: 'loading'});
-    transcriptStore
-      .load(key, () => fetchSubagentTranscript(sessionRef, callId, profile))
-      .then(
-        transcript => isCurrent && setLoad({state: 'ready', transcript}),
-        error => isCurrent && setLoad({state: 'failed', message: error instanceof Error ? error.message : String(error)}),
-      );
-    return () => {
-      isCurrent = false;
-    };
-  }, [key, sessionRef, callId, profile, attempt]);
-  const transcript = load.state === 'ready' ? load.transcript : undefined;
-  // The snapshot's own `mayHaveNewer` rides inside `transcript`, so a refetched snapshot
-  // (a new object) re-maps without a dependency of its own.
+  const transcript = state.phase === 'ready' ? state.transcript : undefined;
+  // The snapshot's own `mayHaveNewer` and `running` ride inside `transcript`, so a refetched
+  // snapshot (a new object) re-maps without a dependency of its own.
   const messages = useMemo(
-    () => (transcript === undefined ? [] : subagentTranscriptMessages(transcript, {omitsLastText})),
-    [transcript, omitsLastText],
+    () => (transcript === undefined ? [] : subagentTranscriptMessages(transcript, {omitsLastText, unsettled: !settled})),
+    [transcript, omitsLastText, settled],
   );
+  const running = transcript?.running === true;
+  const name = agent ?? transcript?.agent;
   return (
     <VStack gap={2} width="100%">
       <Text type="supporting" color="secondary">
-        {agent ? `Subagent transcript · ${agent}` : 'Subagent transcript'}
+        {name ? `Subagent transcript · ${name}` : 'Subagent transcript'}
       </Text>
-      {load.state === 'loading' && (
+      {state.phase === 'loading' && (
         <Text type="supporting" color="secondary">
           Loading transcript…
         </Text>
       )}
-      {load.state === 'failed' && (
+      {state.phase === 'starting' && (
+        <Text type="supporting" color="secondary">
+          Starting…
+        </Text>
+      )}
+      {state.phase === 'failed' && (
         <VStack gap={1} width="100%">
           <Text type="supporting" color="secondary">
-            Could not load the transcript: {load.message}
+            Could not load the transcript: {state.message}
           </Text>
-          <Button label="Retry" variant="ghost" size="sm" onClick={() => setAttempt(count => count + 1)} />
+          <Button label="Retry" variant="ghost" size="sm" onClick={onRetry} />
         </VStack>
       )}
-      {load.state === 'ready' &&
-        (messages.length === 0 ? (
-          <Text type="supporting" color="secondary">
-            No steps to show.
-          </Text>
-        ) : (
-          <ReadOnlyTranscript messages={messages} />
-        ))}
+      {transcript !== undefined && messages.length === 0 && !running && (
+        <Text type="supporting" color="secondary">
+          No steps to show.
+        </Text>
+      )}
+      {messages.length > 0 && <ReadOnlyTranscript messages={messages} />}
+      {running && transcript !== undefined && (
+        <Text type="supporting" color="secondary">
+          Working on step {transcript.steps.length + 1}…
+        </Text>
+      )}
+      {state.phase === 'ready' && state.retryError !== undefined && (
+        <Text type="supporting" color="secondary">
+          Could not refresh, trying again: {state.retryError}
+        </Text>
+      )}
     </VStack>
   );
 }
