@@ -241,9 +241,17 @@ bwrap 0.9.0; nothing was run on macOS.
    reader (`SandboxReader`, §14.3).
    **Departure (§14.4 step 5):** no derived tool set per (toolset, template). The child's calls
    follow `ExecutionContext.Environment` (item 7) for every process they start, so confinement
-   is the agent's; but the exec/tool_smith *descriptions* a sandbox-only agent sees are the
-   session's, and a toolset agent's stdio MCP servers start in the session's sandbox (U4 is fixed:
-   `loadAgentToolsetMCP` now sets the wrapper), not the agent's own.
+   is the agent's. The model-facing text and the toolset servers follow the agent too (P2
+   follow-up): the exec/tool_smith descriptions in an agent's catalog are rebuilt from the
+   definition text plus the agent's sandbox sentence (`describeAgentSandbox`, base texts from
+   the session's and each toolset's definitions), and a toolset agent whose own sandbox covers
+   `mcp` gets that toolset's stdio servers started for it, in its sandbox (`ToolsetMCPKey` =
+   toolset + agent name; `toolsetMCPUses`). Keyed by agent, not by sandbox, so an edited sandbox
+   restarts the servers (the manager compares the wrapper key) instead of leaving old ones;
+   the toolset's other agents share its servers as before (U4: in the toolset's sandbox).
+   Still the session's: the MCP servers of an agent without a toolset (D10, P6); the text of an
+   agent without its own sandbox when its caller is narrower at run time (a nested agent, a
+   confined `profile_message` target), as the catalogs are built at load.
 7. **`ExecutionContext.Environment`** (`tools/catalog.go`): `{Sandbox}` only (holder, tmp and the
    rest come with P3/P4). The bound runner and the remote API set it from the session's sandbox;
    `ForNested` copies it; `callSandbox(tool, configured, execution)` uses it when set (if it
@@ -275,5 +283,6 @@ bwrap 0.9.0; nothing was run on macOS.
 12. **`jad check`** starts sandboxes that differ only in their per-session read-only paths once.
 
 Not done in P2 (later phases or follow-ups): `isolation.base/materialize/share_paths` and delegated
-profile-run isolation (P3/P4); per-call `sandbox` / `sandbox_choice` (P2b); `--bind-fd` for S5; an
-agent-specific tool description and MCP servers; seatbelt read rules on a Mac.
+profile-run isolation (P3/P4); per-call `sandbox` / `sandbox_choice` (P2b); `--bind-fd` for S5;
+seatbelt read rules on a Mac. (The agent-specific tool descriptions and toolset MCP servers were
+done as a P2 follow-up; see item 6.)

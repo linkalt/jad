@@ -200,7 +200,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		if mcp == nil {
 			mcp = NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
 		}
-		tool, err := newSubagentToolRemotes(subagentSettings, childPool, agentToolsets, launcher, mcp, subagentManager, asyncHost, subagentRemotes)
+		tool, err := newSubagentToolDescribed(subagentSettings, childPool, sandboxBaseDescriptions(definitions), agentToolsets, launcher, mcp, subagentManager, asyncHost, subagentRemotes)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -285,11 +285,11 @@ func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resour
 		if resources != nil {
 			taskStore, recordsStore = resources.Resources(derived)
 		}
-		loaded, _, _, err := buildNativeTools(derived, locks, taskStore, recordsStore, asyncHost, nil)
+		loaded, definitions, _, err := buildNativeTools(derived, locks, taskStore, recordsStore, asyncHost, nil)
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("toolset %s: %v", id, err)}
 		}
-		built[id] = subagentToolset{native: loaded}
+		built[id] = subagentToolset{native: loaded, descriptions: sandboxBaseDescriptions(definitions)}
 	}
 	return built, nil
 }

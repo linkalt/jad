@@ -904,30 +904,63 @@ func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore,
 }
 
 // loadAgentToolsetMCP connects the MCP servers of every toolset a sub-agent names and
-// returns their tools by toolset ID. Each toolset has its own manager, so a server that
-// two toolsets use differently is not closed by the other's run.
+// returns their tools by native.ToolsetMCPKey. Each key has its own manager, so a server that
+// two toolsets use differently is not closed by the other's run. The servers start in the
+// sandbox like the session's own (U4): an agent whose own sandbox covers mcp gets servers of
+// its own in that sandbox; the other agents of a toolset share its servers in the toolset's.
 func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.SessionConfig) (map[string]native.ToolsetMCP, error) {
-	if len(config.AgentToolsets) == 0 {
+	uses := toolsetMCPUses(config)
+	if len(uses) == 0 {
 		return nil, nil
 	}
-	loaded := make(map[string]native.ToolsetMCP, len(config.AgentToolsets))
-	for _, id := range slices.Sorted(maps.Keys(config.AgentToolsets)) {
-		derived := config.AgentToolsets[id]
-		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + id)
+	loaded := make(map[string]native.ToolsetMCP, len(uses))
+	for _, use := range uses {
+		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + use.key)
 		if err != nil {
 			return nil, err
 		}
-		// The toolset's stdio servers start in the sandbox like the session's own (U4); an
-		// agent's own sandbox does not reach them, since agents share a toolset's servers.
-		manager.SetCommandWrapper(mcpSandboxWrapper(derived))
-		mcpTools, err := manager.LoadTools(ctx, derived.MCPServers, derived.WorkingDir)
+		manager.SetCommandWrapper(mcpSandboxWrapper(use.config))
+		mcpTools, err := manager.LoadTools(ctx, use.config.MCPServers, use.config.WorkingDir)
 		if err != nil {
-			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, id, err)})
+			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, use.toolset, err)})
 		}
 		// Raw: the subagent tool gates each copy with the owner's lazy set, then hooks it with these hooks.
-		loaded[id] = native.ToolsetMCP{Tools: mcpTools, Hooks: derived.Hooks}
+		loaded[use.key] = native.ToolsetMCP{Tools: mcpTools, Hooks: use.config.Hooks}
 	}
 	return loaded, nil
+}
+
+// toolsetMCPUse is one set of toolset MCP servers: its native.ToolsetMCPKey, the toolset, and
+// the toolset's settings with the sandbox its stdio servers start in.
+type toolsetMCPUse struct {
+	key, toolset string
+	config       sessionfs.SessionConfig
+}
+
+// toolsetMCPUses lists the toolset MCP server sets the agents of config use, by key: one per
+// toolset for the agents without a sandbox of their own that covers mcp, and one per agent with
+// one, in that agent's sandbox.
+func toolsetMCPUses(config sessionfs.SessionConfig) []toolsetMCPUse {
+	if len(config.AgentToolsets) == 0 || config.NativeSubagent == nil {
+		return nil
+	}
+	byKey := make(map[string]toolsetMCPUse)
+	for _, agent := range config.NativeSubagent.Agents {
+		key := native.ToolsetMCPKey(agent)
+		derived, exists := config.AgentToolsets[agent.ToolsetKey()]
+		if key == "" || !exists {
+			continue
+		}
+		if agent.Sandbox.Covers("mcp") {
+			derived.Sandbox = agent.Sandbox
+		}
+		byKey[key] = toolsetMCPUse{key: key, toolset: agent.ToolsetKey(), config: derived}
+	}
+	uses := make([]toolsetMCPUse, 0, len(byKey))
+	for _, key := range slices.Sorted(maps.Keys(byKey)) {
+		uses = append(uses, byKey[key])
+	}
+	return uses
 }
 
 func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {

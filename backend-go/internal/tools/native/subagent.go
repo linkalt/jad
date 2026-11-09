@@ -176,8 +176,8 @@ type ToolsetMCP struct {
 }
 
 // BindToolsets is Bind plus the MCP tools loaded for each toolset an agent names, by
-// toolset ID. An agent with a toolset resolves its mcp: entries against that toolset's
-// tools only, never the session's.
+// ToolsetMCPKey (the toolset ID, with the agent's name when they start in its own sandbox). An
+// agent with a toolset resolves its mcp: entries against those tools only, never the session's.
 func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[string]ToolsetMCP) error {
 	if m == nil || m.tool == nil {
 		return nil
@@ -257,6 +257,8 @@ func newSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []to
 // parent's model never sees them.
 type subagentToolset struct {
 	native []tools.Tool
+	// descriptions are the base descriptions of its sandbox-described tools (sandboxBaseDescriptions).
+	descriptions map[string]string
 }
 
 // childNativePool is the native and extension tools a child may be offered: every one the owner
@@ -285,6 +287,14 @@ func newSubagentToolAsync(settings sessionfs.NativeSubagentSettings, parentTools
 // newSubagentToolRemotes is newSubagentToolAsync plus the remotes folder the session's
 // tools.native.subagent.remotes names are read from.
 func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
+	return newSubagentToolDescribed(settings, parentTools, nil, toolsets, launcher, mcp, manager, host, remotes)
+}
+
+// newSubagentToolDescribed is newSubagentToolRemotes plus the base descriptions of the
+// session's sandbox-described tools, so an agent with a sandbox of its own reads that sandbox
+// in its exec and tool_smith descriptions (describeAgentSandbox). Without them the agent sees
+// the session's descriptions.
+func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, descriptions map[string]string, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
 	schema := modelChoiceSchema(subagentInputSchema, subagentModelProperty, settings.ModelChoice)
 	validator, err := tools.CompileSchema(schema)
 	if err != nil {
@@ -311,14 +321,14 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 		}
 	}
 	for _, agent := range settings.Agents {
-		agentPool := pool
+		agentPool, agentDescriptions := pool, descriptions
 		toolsetKey := agent.ToolsetKey()
 		if toolsetKey != "" {
 			toolset, built := toolsets[toolsetKey]
 			if !built {
 				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s.toolset %q was not loaded", agent.Name, toolsetKey)
 			}
-			agentPool = childNativePool(toolset.native)
+			agentPool, agentDescriptions = childNativePool(toolset.native), toolset.descriptions
 			// A toolset cannot set profile_message; the session's tool is offered to the agent as it is to the others.
 			for _, tool := range pool {
 				if tool.Definition.ID == profileMessageToolID {
@@ -326,6 +336,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 				}
 			}
 		}
+		agentPool = describeAgentSandbox(agentPool, agent.Sandbox, agentDescriptions)
 		entry, err := newSubagentAgent(agent, settings.DenyTools, agentPool, settings.MaxDepth >= 2)
 		if err != nil {
 			if toolsetKey != "" {
@@ -659,8 +670,8 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 		agent := &s.agents[index]
 		pool, hooks, where := session, ownerHooks, ""
 		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
-			hooks = toolsetHooks[toolsetKey]
-			pool = pools[toolsetKey]
+			hooks = toolsetHooks[ToolsetMCPKey(agent.config)]
+			pool = pools[ToolsetMCPKey(agent.config)]
 			if pool.byID == nil {
 				pool = mcpPool{byID: map[string]tools.Tool{}, loadedText: "none"}
 			}
