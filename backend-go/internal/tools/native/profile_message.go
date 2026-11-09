@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"regexp"
 	"slices"
@@ -194,6 +195,12 @@ func (e *ProfileSandboxError) sandboxProblem() *sandboxProblem {
 	return &sandboxProblem{message: fmt.Sprintf("Sandbox %s reaches more than the profile's run would otherwise get, so it cannot be used here: %s", e.Choice, widens), widens: widens}
 }
 
+// FullAnswer reads the whole answer of an outcome whose Text was cut at its source.
+type FullAnswer struct {
+	// Fetch writes the whole answer to w and returns its size.
+	Fetch func(w io.Writer) (int64, error)
+}
+
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
 // last text it wrote when it did not finish. Err is nil for an answer; otherwise one of the
 // ErrProfile* values, a *ProfileFailedError or a *ProfileBusyError. Reason says who ended a
@@ -202,7 +209,14 @@ func (e *ProfileSandboxError) sandboxProblem() *sandboxProblem {
 // Worktree is set when the target ran in a git worktree of its own (OpenDelegatedWorktree):
 // its worktree_* lines, also when the run failed.
 type ProfileMessageOutcome struct {
-	Text        string
+	Text string
+	// Cut says Text is not the whole answer: its source (a remote server's view) already cut
+	// it. A local answer reaches the outcome whole.
+	Cut bool
+	// Full, set with Cut when the source can give the whole answer, reads it (a remote's result
+	// route); the async handle saves it behind ref. Nil for an answer that is whole or cannot be
+	// had. It is a pointer so an outcome stays comparable.
+	Full        *FullAnswer
 	Err         error
 	Reason      string
 	Trace       string
@@ -528,7 +542,7 @@ func (p *profileMessageTool) renderOutcome(callID, profile string, outcome Profi
 	}
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
 	information := append([]tools.Information{{Key: "profile", Value: profile}}, transcripts...)
-	if cut {
+	if cut || outcome.Cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
 	information = append(information, outcome.worktreeInformation()...)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -118,7 +119,7 @@ func (c *Client) StartRun(ctx context.Context, kind string, body map[string]any,
 	}
 	payload["request_id"] = requestID
 	var view View
-	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + kind, Body: payload, Hops: hops, Retry: true}, &view); err != nil {
+	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + kind + c.textMaxQuery(), Body: payload, Hops: hops, Retry: true}, &view); err != nil {
 		return View{}, err
 	}
 	if !runIDPattern.MatchString(view.ID) {
@@ -133,9 +134,9 @@ func (c *Client) PollRun(ctx context.Context, id string, wait time.Duration) (Vi
 	if !runIDPattern.MatchString(id) {
 		return View{}, fmt.Errorf("remote %s: invalid run id", c.entry.Name)
 	}
-	path := apiPrefix + "runs/" + id
+	path := apiPrefix + "runs/" + id + c.textMaxQuery()
 	if wait > 0 {
-		path += "?wait_ms=" + strconv.FormatInt(wait.Milliseconds(), 10)
+		path += "&wait_ms=" + strconv.FormatInt(wait.Milliseconds(), 10)
 	}
 	var view View
 	if err := c.Do(ctx, Request{Method: http.MethodGet, Path: path, Wait: wait}, &view); err != nil {
@@ -145,13 +146,67 @@ func (c *Client) PollRun(ctx context.Context, id string, wait time.Duration) (Vi
 	return view, nil
 }
 
+const (
+	// viewEnvelopeBytes is what a run view may hold besides its text (messages, worktree lines),
+	// capped at half the response limit; jsonGrowth is how many bytes JSON may make of one byte
+	// of text (\u003c for "<").
+	viewEnvelopeBytes = 64 << 10
+	jsonGrowth        = 6
+)
+
+// textMaxQuery is the query that asks the remote for no more answer text in a view than fits
+// this entry's max_response_bytes whatever the text is, so a long answer never makes the poll
+// that carries it too large. The rest of the answer is read with FetchResult.
+func (c *Client) textMaxQuery() string {
+	limit := c.entry.MaxResponseBytes
+	return "?text_max_bytes=" + strconv.FormatInt(max(0, (limit-min(viewEnvelopeBytes, limit/2))/jsonGrowth), 10)
+}
+
+// FetchResult writes the whole text of an ended run to dst, reading it from the remote in parts
+// of at most max_response_bytes, and returns its size. It is how an answer longer than a view
+// can hold is read; the view's cut says when to. The parts are checked against the size the
+// remote reports, so a text that changed or ended early is an error, never a short copy that
+// looks whole. The parts are retried; what was written to dst before a failure is not undone.
+func (c *Client) FetchResult(ctx context.Context, id string, dst io.Writer) (int64, error) {
+	if !runIDPattern.MatchString(id) {
+		return 0, fmt.Errorf("remote %s: invalid run id", c.entry.Name)
+	}
+	var offset, total int64
+	for first := true; ; first = false {
+		var part []byte
+		var header http.Header
+		path := apiPrefix + "runs/" + id + "/result?offset=" + strconv.FormatInt(offset, 10) + "&limit=" + strconv.FormatInt(c.entry.MaxResponseBytes, 10)
+		if err := c.Do(ctx, Request{Method: http.MethodGet, Path: path, Retry: true, Raw: &part, Header: &header}, nil); err != nil {
+			return offset, err
+		}
+		size, err := strconv.ParseInt(header.Get("X-Result-Bytes"), 10, 64)
+		if err != nil || size < 0 {
+			return offset, fmt.Errorf("remote %s: the result answer does not give the size of the result", c.entry.Name)
+		}
+		if !first && size != total {
+			return offset, fmt.Errorf("remote %s: the result changed while it was read", c.entry.Name)
+		}
+		total = size
+		if offset+int64(len(part)) > total || (len(part) == 0 && offset < total) {
+			return offset, fmt.Errorf("remote %s: the result answer does not match the size of the result", c.entry.Name)
+		}
+		if _, err := dst.Write(part); err != nil {
+			return offset, fmt.Errorf("remote %s: save the result: %w", c.entry.Name, err)
+		}
+		offset += int64(len(part))
+		if offset == total {
+			return total, nil
+		}
+	}
+}
+
 // StopRun asks the remote to stop a run; stopping is idempotent there, so it is retried.
 func (c *Client) StopRun(ctx context.Context, id string) (View, error) {
 	if !runIDPattern.MatchString(id) {
 		return View{}, fmt.Errorf("remote %s: invalid run id", c.entry.Name)
 	}
 	var view View
-	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + "runs/" + id + "/stop", Retry: true, Control: true}, &view); err != nil {
+	if err := c.Do(ctx, Request{Method: http.MethodPost, Path: apiPrefix + "runs/" + id + "/stop" + c.textMaxQuery(), Retry: true, Control: true}, &view); err != nil {
 		return View{}, err
 	}
 	view.clean()

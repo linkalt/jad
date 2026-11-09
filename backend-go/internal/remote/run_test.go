@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -283,5 +284,108 @@ func TestStopRunIsNotStarvedByFollowerPolls(t *testing.T) {
 	defer stopCancel()
 	if _, err := client.StopRun(stopCtx, runID); err != nil || !stopped.Load() {
 		t.Fatalf("stop starved behind polls: err=%v reached=%v", err, stopped.Load())
+	}
+}
+
+// serveResult is a result route over text: parts of the asked size, the whole size in a header.
+func serveResult(text string, calls *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		w.Header().Set("X-Result-Bytes", strconv.Itoa(len(text)))
+		_, _ = io.WriteString(w, text[offset:min(len(text), offset+limit)])
+	}
+}
+
+func TestFetchResultJoinsPartsOfAtMostMaxResponseBytes(t *testing.T) {
+	text := strings.Repeat("é日", 5000) + "!"
+	var calls atomic.Int32
+	server := httptest.NewServer(serveResult(text, &calls))
+	t.Cleanup(server.Close)
+	entry := httpEntry(t, server)
+	entry.Retries, entry.MaxResponseBytes = 1, 4096
+	client := newClient(t, entry)
+	var out strings.Builder
+	size, err := client.FetchResult(context.Background(), runID, &out)
+	if err != nil || size != int64(len(text)) || out.String() != text {
+		t.Fatalf("fetch: size %d err %v, equal=%v", size, err, out.String() == text)
+	}
+	if want := int32((len(text) + 4095) / 4096); calls.Load() != want {
+		t.Errorf("%d requests, want %d parts", calls.Load(), want)
+	}
+	// An empty text is one request.
+	calls.Store(0)
+	server2 := httptest.NewServer(serveResult("", &calls))
+	t.Cleanup(server2.Close)
+	entry2 := httpEntry(t, server2)
+	entry2.MaxResponseBytes = 4096
+	if size, err := newClient(t, entry2).FetchResult(context.Background(), runID, io.Discard); err != nil || size != 0 || calls.Load() != 1 {
+		t.Fatalf("empty: %d %v %d", size, err, calls.Load())
+	}
+}
+
+// A remote that gives a part over the limit, a wrong size, an early end or a changing size is an
+// error: what was read is never taken for the whole.
+func TestFetchResultRefusesAnInconsistentRemote(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"no size": func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "abc") },
+		"early end": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Result-Bytes", "10")
+		},
+		"more than the size": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Result-Bytes", "2")
+			_, _ = io.WriteString(w, "abc")
+		},
+		"part over the limit": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Result-Bytes", "100000")
+			_, _ = io.WriteString(w, strings.Repeat("x", 5000))
+		},
+		"missing route": func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
+	}
+	for name, handler := range cases {
+		server := httptest.NewServer(handler)
+		entry := httpEntry(t, server)
+		entry.Retries, entry.MaxResponseBytes = 0, 4096
+		if _, err := newClient(t, entry).FetchResult(context.Background(), runID, io.Discard); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+		server.Close()
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		size := "6"
+		if calls.Add(1) > 1 {
+			size = "9"
+		}
+		w.Header().Set("X-Result-Bytes", size)
+		_, _ = io.WriteString(w, "abc")
+	}))
+	t.Cleanup(server.Close)
+	entry := httpEntry(t, server)
+	entry.Retries, entry.MaxResponseBytes = 0, 3
+	if _, err := newClient(t, entry).FetchResult(context.Background(), runID, io.Discard); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Errorf("a changing size: %v", err)
+	}
+}
+
+// Every view the hub asks for names how much text it can take, from max_response_bytes.
+func TestViewRequestsAskForTextThatFitsTheResponseLimit(t *testing.T) {
+	var mu sync.Mutex
+	var queries []string
+	client := runClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.Query().Get("text_max_bytes"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"` + runID + `","state":"running"}`))
+	}, 5000)
+	_, _ = client.StartRun(context.Background(), "messages", nil, 1)
+	_, _ = client.PollRun(context.Background(), runID, 0)
+	_, _ = client.StopRun(context.Background(), runID)
+	// 1 MiB: (1 MiB - 64 KiB) / 6 of JSON-escaped text fits.
+	want := strconv.Itoa(((1 << 20) - (64 << 10)) / 6)
+	if len(queries) != 3 || queries[0] != want || queries[1] != want || queries[2] != want {
+		t.Fatalf("text_max_bytes of the three requests: %v, want %s", queries, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -75,7 +76,100 @@ func (r *shellRun) stopReason() string {
 
 // shellResultPath is where the full result of run id is kept.
 func (h *AsyncHost) shellResultPath(spec shellAsyncSpec, id string) string {
-	return filepath.Join(h.dir, spec.resultsDir, id+".txt")
+	return h.resultPath(spec.resultsDir, id)
+}
+
+// resultPath is where the full result of handle id is kept in the results folder dir of the
+// async folder: one <id>.txt per handle, whatever the kind.
+func (h *AsyncHost) resultPath(dir, id string) string {
+	return filepath.Join(h.dir, dir, id+".txt")
+}
+
+// saveResult writes text to the result file of handle id in the results folder dir and returns
+// its path. It returns "" when there is nothing to save or the file could not be written (the
+// failure is logged, and a partial file is removed), so a ref is never given for a file that
+// does not hold the text.
+func (h *AsyncHost) saveResult(dir, id, text string) string {
+	if text == "" {
+		return ""
+	}
+	h.sweepResults(dir)
+	path := h.resultPath(dir, id)
+	err := os.MkdirAll(filepath.Dir(path), 0o700)
+	if err == nil {
+		if err = os.WriteFile(path, []byte(text), 0o600); err != nil {
+			_ = os.Remove(path)
+		}
+	}
+	if err != nil {
+		slog.Warn("async result file not saved", "handle", id, "error", err)
+		return ""
+	}
+	return path
+}
+
+// saveFinal saves the whole answer of a profile message or sub-agent (profileFinalText) in the
+// results folder dir and sets result.Ref to the file; with Full it streams the answer
+// from its source instead, behind the worktree line, and sets result.Bytes to the file's size.
+// When the answer cannot be had whole (no file, or the fetch failed after it was started: the
+// failure is logged and the partial file removed) Ref stays empty, and result.Cut stays what it
+// was, true for an answer the source cut, so the delivered text is never presented as whole.
+func (h *AsyncHost) saveFinal(dir, id string, outcome ProfileMessageOutcome, result *asyncmgr.Result) {
+	if outcome.Full == nil {
+		result.Ref = h.saveResult(dir, id, profileFinalText(outcome))
+		return
+	}
+	prefix := ""
+	if outcome.Worktree != nil && outcome.Worktree.Text != "" {
+		prefix = outcome.Worktree.Text + "\n"
+	}
+	path, size, err := h.saveResultFrom(dir, id, prefix, outcome.Full.Fetch)
+	if err != nil {
+		slog.Warn("async full result not saved", "handle", id, "error", err)
+		return
+	}
+	result.Ref, result.Bytes = path, size
+}
+
+// saveResultFrom writes prefix and then what fill writes to the result file of handle id in the
+// results folder dir. The file appears under its name only when fill succeeded, so a ref is never
+// given for a partial one. It returns the file's path and size.
+func (h *AsyncHost) saveResultFrom(dir, id, prefix string, fill func(io.Writer) (int64, error)) (path string, size int64, err error) {
+	h.sweepResults(dir)
+	path = h.resultPath(dir, id)
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", 0, err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), id+".tmp-*")
+	if err != nil {
+		return "", 0, err
+	}
+	temp := file.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(temp)
+		}
+	}()
+	if err = os.Chmod(temp, 0o600); err != nil {
+		_ = file.Close()
+		return "", 0, err
+	}
+	written, err := io.WriteString(file, prefix)
+	if err == nil {
+		var n int64
+		n, err = fill(file)
+		size = int64(written) + n
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(temp, path)
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return path, size, nil
 }
 
 // attachShell registers the driver of the spec's kind once.
@@ -120,25 +214,28 @@ func (h *AsyncHost) dropShellRun(id string) {
 	delete(h.shellRuns, id)
 }
 
-// sweepShellResults removes result files older than the longest time the manager keeps a
+// sweepShellResults sweeps the results folder of a shell kind; see sweepResults.
+func (h *AsyncHost) sweepShellResults(spec shellAsyncSpec) { h.sweepResults(spec.resultsDir) }
+
+// sweepResults removes result files older than the longest time the manager keeps a
 // handle, at most once per shellSweepEvery for each folder.
-func (h *AsyncHost) sweepShellResults(spec shellAsyncSpec) {
+func (h *AsyncHost) sweepResults(resultsDir string) {
 	cfg := h.Config()
 	days := max(cfg.RetentionDays, cfg.UnreadTTLDays)
 	if days <= 0 {
 		return
 	}
 	h.mu.Lock()
-	if time.Since(h.shellSwept[spec.resultsDir]) < shellSweepEvery {
+	if time.Since(h.shellSwept[resultsDir]) < shellSweepEvery {
 		h.mu.Unlock()
 		return
 	}
 	if h.shellSwept == nil {
 		h.shellSwept = map[string]time.Time{}
 	}
-	h.shellSwept[spec.resultsDir] = time.Now()
+	h.shellSwept[resultsDir] = time.Now()
 	h.mu.Unlock()
-	dir := filepath.Join(h.dir, spec.resultsDir)
+	dir := filepath.Join(h.dir, resultsDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return

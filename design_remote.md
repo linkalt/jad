@@ -89,7 +89,8 @@ Only a hash of the token is stored; reload on file change revokes immediately; e
 |---|---|
 | `POST /messages` {session, profile, message, request_id, hops, chain, caller} -> {run_id} (or 409 busy) | message |
 | `POST /subagents` {session, agent, task, request_id, hops, ...} -> {run_id} | subagent |
-| `GET /runs/{id}?wait_ms=` -> {state, final text, failure, started} | status |
+| `GET /runs/{id}?wait_ms=&text_max_bytes=` -> {state, final text, cut, failure, started}; the text is cut to the server's `result_max_bytes` and to `text_max_bytes` when the caller sends it (the hub sends what its `max_response_bytes` takes after JSON escaping, so a poll is never too large), and `cut` says it was cut | status |
+| `GET /runs/{id}/result?offset=&limit=` -> the run's whole final text as plain bytes (a part of at most `limit` bytes from `offset`, default `result_max_bytes`; header `X-Result-Bytes` is the whole size; 409 `not_finished` while the run goes). The hub reads it in parts of `max_response_bytes` into the async result file behind `ref` when the view was cut; the text of a run is not bounded by `result_max_bytes` here | status |
 | `POST /runs/{id}/stop` | stop |
 | `GET /transcripts?...` / `GET /transcript?...` -> rendered text (profiles by the token's `profiles` globs; sub-agent runs also by its `agents` globs, a run of an agent outside them answers like one that does not exist) | transcripts |
 | `GET /profiles?session=` | any |

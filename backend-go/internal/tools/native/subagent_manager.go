@@ -365,8 +365,12 @@ type subagentRun struct {
 	// stopReason is why the host stopped the run; the final stopped state keeps it as reason.
 	stopReason string
 	endedAt    time.Time
-	cut        bool   // the answer was longer than the limit and was cut
-	dir        string // the child's transcript directory, once it exists
+	cut        bool // the answer was longer than the limit and was cut
+	// external is set for a run the remote API serves; full then holds its whole answer, which
+	// the remote API hands out in parts, as the cut result does not.
+	external bool
+	full     string
+	dir      string // the child's transcript directory, once it exists
 	// files are the files the child's write and edit changed, filesOmitted how many
 	// more there were than the list keeps.
 	files        []subagentFileChange
@@ -418,6 +422,7 @@ type subagentRunView struct {
 	result                         SubagentResult
 	resultMax                      int64
 	cut                            bool
+	full                           string
 	changes                        bool
 	files                          []subagentFileChange
 	filesOmitted                   int
@@ -442,7 +447,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, isolated: r.isolated, worktree: r.worktreeCopy(), sandbox: r.sandbox, note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, full: r.full, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, isolated: r.isolated, worktree: r.worktreeCopy(), sandbox: r.sandbox, note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -581,6 +586,8 @@ type subagentStart struct {
 	changedMax int
 	keep       int
 	resultMax  int64
+	// external is set for a run the remote API serves; see subagentRun.external.
+	external bool
 	// async, when set, makes the run a handle of the async manager owned by owner.
 	async *subagentAsyncHandle
 	// asyncHost, when set, is where the child's own handles (owner = the run id) live; the
@@ -813,6 +820,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		changes:       spec.changes,
 		isolated:      spec.worktree != nil,
 		resultMax:     spec.resultMax,
+		external:      spec.external,
 		note:          spec.note,
 		configNote:    spec.configNote,
 		config:        spec.config,
@@ -994,10 +1002,15 @@ func (m *SubagentManager) release() {
 // beyond keep. A run that is still going is never dropped.
 func (m *SubagentManager) finish(run *subagentRun, state string, result SubagentResult, reason string, spec subagentStart) {
 	// The answer is cut once here, so a retained run never holds more than the limit.
+	// The whole answer is kept for the run's async handle, which saves it before this cut.
+	answer := result.Text
 	var cut bool
 	result.Text, cut = cutUTF8(result.Text, spec.resultMax)
 	run.mu.Lock()
 	run.cut = cut
+	if run.external {
+		run.full = answer
+	}
 	run.state = state
 	run.result = result
 	run.reason = reason
@@ -1021,7 +1034,7 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	// The async signal is queued before the waiters wake, so a caller released by done
 	// finds it.
 	if run.async != nil {
-		run.async.end(run.view(), subagentRunRef(run))
+		run.async.end(run.view(), subagentTranscriptRef(run), answer)
 	}
 	// Waiters wake last, so a wait that returns sees the disk already settled.
 	close(run.done)

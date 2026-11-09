@@ -186,6 +186,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		resumedConfig:  from.config,
 		seed:           from.seed,
 		async:          handle,
+		external:       observe != nil,
 		asyncHost:      s.async,
 		childAsync:     agent.hasNativeTool(asyncToolID),
 		launcher:       s.launcher,

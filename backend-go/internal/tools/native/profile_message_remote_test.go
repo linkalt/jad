@@ -157,7 +157,11 @@ func (h *switchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	next.ServeHTTP(w, r)
 }
 
-func startPeer(t *testing.T, grant string) *peer {
+func startPeer(t *testing.T, grant string) *peer { return startPeerWith(t, grant, nil, 0) }
+
+// startPeerWith is startPeer with the remote API's options changed by mutate and, when
+// responseMax is not 0, the hub entry's max_response_bytes set to it.
+func startPeerWith(t *testing.T, grant string, mutate func(*remoteapi.Options), responseMax int64) *peer {
 	t.Helper()
 	sum := sha256.Sum256([]byte(remoteSecret))
 	parsed, err := remoteapi.ParseTokens([]byte(fmt.Sprintf(`{"tokens":[{"id":"peer","sha256":%q,%s}]}`, hex.EncodeToString(sum[:]), grant)))
@@ -165,7 +169,11 @@ func startPeer(t *testing.T, grant string) *peer {
 		t.Fatal(err)
 	}
 	backend := &peerBackend{}
-	api, err := remoteapi.NewServer(remoteapi.Options{Tokens: remoteapi.StaticTokenTable(parsed, nil), Backend: backend, WaitMax: 300 * time.Millisecond})
+	options := remoteapi.Options{Tokens: remoteapi.StaticTokenTable(parsed, nil), Backend: backend, WaitMax: 300 * time.Millisecond}
+	if mutate != nil {
+		mutate(&options)
+	}
+	api, err := remoteapi.NewServer(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +181,11 @@ func startPeer(t *testing.T, grant string) *peer {
 	server := httptest.NewServer(handler)
 	t.Cleanup(func() { server.Close(); api.Close() })
 	dir := t.TempDir()
-	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,"token_env":"JAD_REMOTE_PEER","timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1,"default_session":"main"}}`, server.URL)
+	extra := ""
+	if responseMax > 0 {
+		extra = fmt.Sprintf(`"max_response_bytes":%d,`, responseMax)
+	}
+	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,%s"token_env":"JAD_REMOTE_PEER","timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1,"default_session":"main"}}`, server.URL, extra)
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +204,11 @@ type remoteMessageFixture struct {
 
 func newRemoteMessageFixture(t *testing.T, grant string, mutate func(*sessionfs.NativeProfileMessageSettings)) *remoteMessageFixture {
 	t.Helper()
-	p := startPeer(t, grant)
+	return newRemoteMessageFixtureOn(t, startPeer(t, grant), mutate)
+}
+
+func newRemoteMessageFixtureOn(t *testing.T, p *peer, mutate func(*sessionfs.NativeProfileMessageSettings)) *remoteMessageFixture {
+	t.Helper()
 	hub := remote.NewHub(func(name string) string {
 		if name == "JAD_REMOTE_PEER" {
 			return remoteSecret

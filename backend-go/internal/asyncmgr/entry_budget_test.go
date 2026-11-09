@@ -17,7 +17,7 @@ func TestWorstCaseEntryWithBothResumeFieldsFitsWaitAndStatus(t *testing.T) {
 	f.start(t, "s1", "a")
 	f.finish(t, "a", Result{
 		Code: strings.Repeat("c", codeMaxBytes), Reason: strings.Repeat("r", reasonMaxBytes),
-		Summary: summary, Ref: strings.Repeat("f", refMaxBytes),
+		Summary: summary, Ref: strings.Repeat("f", refMaxBytes), RefTranscript: strings.Repeat("t", refMaxBytes),
 		ResumedFrom: strings.Repeat("p", refMaxBytes), ConfigNote: strings.Repeat("n", ConfigNoteMaxBytes),
 	})
 
@@ -32,8 +32,8 @@ func TestWorstCaseEntryWithBothResumeFieldsFitsWaitAndStatus(t *testing.T) {
 	if size := encodedSize(wait.Signals[0]); size > budget {
 		t.Fatalf("wait entry = %d bytes, want at most %d", size, budget)
 	}
-	if e := wait.Signals[0]; e.ConfigNote != "" || e.ResumedFrom != "" || e.Summary != summary || !e.Cut {
-		t.Fatalf("wait entry kept config_note=%d resumed_from=%d summary=%d cut=%v; want both dropped, summary whole, cut", len(e.ConfigNote), len(e.ResumedFrom), len(e.Summary), e.Cut)
+	if e := wait.Signals[0]; e.ConfigNote != "" || e.ResumedFrom != "" || e.RefTranscript != "" || e.Summary != summary || !e.Cut {
+		t.Fatalf("wait entry kept config_note=%d resumed_from=%d summary=%d cut=%v; want the informational fields dropped, summary whole, cut", len(e.ConfigNote), len(e.ResumedFrom), len(e.Summary), e.Cut)
 	}
 }
 

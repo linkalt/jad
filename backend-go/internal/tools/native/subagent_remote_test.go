@@ -45,7 +45,11 @@ type remoteSubagentFixture struct {
 
 func newRemoteSubagentFixture(t *testing.T, grant string, mutate func(*sessionfs.NativeSubagentSettings)) *remoteSubagentFixture {
 	t.Helper()
-	p := startPeer(t, grant)
+	return newRemoteSubagentFixtureOn(t, startPeer(t, grant), mutate)
+}
+
+func newRemoteSubagentFixtureOn(t *testing.T, p *peer, mutate func(*sessionfs.NativeSubagentSettings)) *remoteSubagentFixture {
+	t.Helper()
 	hub := remote.NewHub(func(name string) string {
 		if name == "JAD_REMOTE_PEER" {
 			return remoteSecret

@@ -99,9 +99,12 @@ type Entry struct {
 	Label   string `json:"label,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	// Cut says the summary was shortened, or a resume field was dropped, to fit the response budget.
-	Cut   bool   `json:"cut,omitempty"`
-	Bytes int64  `json:"bytes,omitempty"`
-	Ref   string `json:"ref,omitempty"`
+	Cut bool `json:"cut,omitempty"`
+	// Bytes is the size of the full result a driver saved in the file Ref names; the summary
+	// may be shorter. RefTranscript is the transcript of the work, for a kind that has one.
+	Bytes         int64  `json:"bytes,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	RefTranscript string `json:"ref_transcript,omitempty"`
 	// ResumedFrom and ConfigNote are set for a remote run that resumed another, and only then.
 	ResumedFrom string `json:"resumed_from,omitempty"`
 	ConfigNote  string `json:"config_note,omitempty"`
@@ -144,6 +147,8 @@ type Record struct {
 	SrcCut bool   `json:"src_cut,omitempty"`
 	Bytes  int64  `json:"bytes,omitempty"`
 	Ref    string `json:"ref,omitempty"`
+	// RefTranscript is the transcript of the work; see Entry.
+	RefTranscript string `json:"ref_transcript,omitempty"`
 	// ResumedFrom and ConfigNote are kept from the result for the entry; see Entry.
 	ResumedFrom string `json:"resumed_from,omitempty"`
 	ConfigNote  string `json:"config_note,omitempty"`
@@ -192,9 +197,12 @@ type Result struct {
 	Reason  string
 	Summary string
 	// Cut says the driver already shortened Summary (for example to its tail).
-	Cut   bool
+	Cut bool
+	// Bytes is the size of the full result saved in the file Ref names (0 when none).
 	Bytes int64
 	Ref   string
+	// RefTranscript is the transcript of the work (a path), for a kind that has one.
+	RefTranscript string
 	// Detail is the full result text kept in the record, cut to status_summary_max_bytes.
 	Detail string
 	// ResumedFrom and ConfigNote tell a resumed remote run apart from a fresh one.

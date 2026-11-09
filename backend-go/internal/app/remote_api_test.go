@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -459,5 +460,43 @@ func TestRemoteAPISubagentResolvesPathsInTheTargetSessionsWorkspace(t *testing.T
 		"session": "other", "profile": "dev/coder", "agent": "explore", "task": "x", "request_id": "req-cwd-00003", "cwd": f.workspace})
 	if status != 400 || body["code"] != "bad_request" {
 		t.Fatalf("a cwd field must be refused: %d %v", status, body)
+	}
+}
+
+// A sub-agent's answer longer than both its own result_max_bytes (32 KiB) and the remote API's
+// view limit (64 KiB) is served whole through the result route, and the view stays bounded.
+func TestRemoteAPISubagentAnswerBeyondTheLimitsIsServedWholeByTheResultRoute(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
+	answer := strings.Repeat("é日", 60_000) + " END"
+	f.provider.childAnswer = answer
+	server := startRemoteServer(t, f, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+	status, body := server.call(t, "POST", remoteapi.Prefix+"/subagents", remoteTestSecret, map[string]any{
+		"session": "demo", "profile": "dev/coder", "agent": "explore", "task": "find the answer", "request_id": "req-big-00001"})
+	if status != 202 {
+		t.Fatalf("start: %d %v", status, body)
+	}
+	id := body["id"].(string)
+	view := server.waitDone(t, id)
+	text := fmt.Sprint(view["text"])
+	if view["state"] != "done" || view["cut"] != true || len(text) > 64<<10 || !strings.HasPrefix(answer, text) {
+		t.Fatalf("view: state=%v cut=%v text=%d bytes", view["state"], view["cut"], len(text))
+	}
+	var joined strings.Builder
+	for joined.Len() < len(answer) {
+		request, _ := http.NewRequest("GET", fmt.Sprintf("%s%s/runs/%s/result?limit=100000&offset=%d", server.url, remoteapi.Prefix, id, joined.Len()), nil)
+		request.Header.Set("Authorization", "Bearer "+remoteTestSecret)
+		response, err := server.server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != 200 || response.Header.Get("X-Result-Bytes") != strconv.Itoa(len(answer)) || len(part) == 0 {
+			t.Fatalf("part at %d: %d size=%q len=%d", joined.Len(), response.StatusCode, response.Header.Get("X-Result-Bytes"), len(part))
+		}
+		joined.Write(part)
+	}
+	if joined.String() != answer {
+		t.Fatalf("the parts joined are %d bytes, not the %d-byte answer", joined.Len(), len(answer))
 	}
 }

@@ -39,13 +39,13 @@ func TestRunViewWritesTheResumeFieldsUnderTheClientsNames(t *testing.T) {
 func TestRunViewWritesTheWorktreeLines(t *testing.T) {
 	server := &Server{opts: Options{ResultMaxBytes: 1024, Now: time.Now}}
 	run := &doneRun{result: RunResult{State: "done", Worktree: []WorktreeLine{{Key: "worktree_branch", Value: "jad/b\nx"}}}}
-	view := server.view(&runEntry{run: run, started: time.Now()}, true)
+	view := server.view(&runEntry{run: run, started: time.Now()}, 1024)
 	data, _ := json.Marshal(view)
 	if !strings.Contains(string(data), `"worktree":[{"key":"worktree_branch","value":"jad/b x"}]`) {
 		t.Fatalf("view = %s", data)
 	}
 	run.result.Worktree = nil
-	data, _ = json.Marshal(server.view(&runEntry{run: run, started: time.Now()}, true))
+	data, _ = json.Marshal(server.view(&runEntry{run: run, started: time.Now()}, 1024))
 	if strings.Contains(string(data), "worktree") {
 		t.Fatalf("view = %s", data)
 	}

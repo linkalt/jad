@@ -157,6 +157,8 @@ type Request struct {
 	Control bool
 	// Raw, when set, receives the body bytes instead of JSON decoding into out.
 	Raw *[]byte
+	// Header, when set, receives the answer's headers.
+	Header *http.Header
 }
 
 // Do sends the request and decodes the JSON answer into out (nil ignores it). A 2xx is
@@ -250,6 +252,9 @@ func (c *Client) once(ctx context.Context, token string, request Request, payloa
 	default:
 		failure := errorOf(c.entry.Name, response.StatusCode, data)
 		return response.StatusCode == http.StatusBadGateway || response.StatusCode == http.StatusServiceUnavailable || response.StatusCode == http.StatusGatewayTimeout, failure
+	}
+	if request.Header != nil {
+		*request.Header = response.Header.Clone()
 	}
 	if request.Raw != nil {
 		*request.Raw = data

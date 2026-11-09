@@ -39,10 +39,20 @@ func (e *ExternalRun) Done() <-chan struct{} { return e.run.done }
 func (e *ExternalRun) Stop(reason string) { e.run.stopWith(reason) }
 
 // Outcome is the final state (done, failed, stopped, timed_out or lost), the answer or the
-// partial text the child left, and the reason. It is meaningful once Done is closed.
+// partial text the child left, and the reason. It is meaningful once Done is closed. The text is
+// whole: the sub-agent's own result_max_bytes does not cut it here, because the remote API
+// bounds what it serves itself and hands the rest out in parts.
 func (e *ExternalRun) Outcome() (state, text, reason string) {
 	view := e.run.view()
-	return view.state, view.result.Text, view.reason
+	return view.state, view.fullText(), view.reason
+}
+
+// fullText is the answer of a run kept whole (an external run), else the cut one.
+func (v subagentRunView) fullText() string {
+	if v.full != "" {
+		return v.full
+	}
+	return v.result.Text
 }
 
 // ResumeFacts is the run's resume facts: the run it continues from ("" for none) and the config

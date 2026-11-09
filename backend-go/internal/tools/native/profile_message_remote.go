@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -262,8 +263,11 @@ func (r *remoteRun) conclude(hubCtx, ctx context.Context, view remote.View, err 
 	reason, stopRequested := r.stopped()
 	switch {
 	case err == nil:
-		outcome := ProfileMessageOutcome{Text: view.Text, Reason: view.Reason, Trace: trace, ResumedFrom: view.ResumedFrom, ConfigNote: view.ConfigNote,
+		outcome := ProfileMessageOutcome{Text: view.Text, Cut: view.Cut, Reason: view.Reason, Trace: trace, ResumedFrom: view.ResumedFrom, ConfigNote: view.ConfigNote,
 			Worktree: remoteWorktree(r.target.Remote, view.Worktree)}
+		if view.Cut {
+			outcome.Full = &FullAnswer{Fetch: func(w io.Writer) (int64, error) { return r.client.FetchResult(hubCtx, r.id, w) }}
+		}
 		switch view.State {
 		case "done":
 			if strings.TrimSpace(view.Text) == "" {

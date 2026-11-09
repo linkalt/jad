@@ -73,7 +73,7 @@ func TestSubagentRunIsAnAsyncHandleOwnedByTheSession(t *testing.T) {
 	}
 	close(release)
 	out := callAsync(t, f.async, "s1", map[string]any{"action": "wait", "wait_ms": int64(5000)})
-	for _, want := range []string{id, "done", "late answer", filepath.Join(f.dir, "sub", ".runs", id+".json")} {
+	for _, want := range []string{id, "done", "late answer", filepath.Join(f.dir, ".async", "subagent", id+".txt")} {
 		if !strings.Contains(out, want) {
 			t.Errorf("wait output lacks %q:\n%s", want, out)
 		}

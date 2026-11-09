@@ -440,6 +440,7 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	rec.Code, _ = cutUTF8(res.Code, codeMaxBytes)
 	rec.Reason, _ = cutUTF8(res.Reason, reasonMaxBytes)
 	rec.Ref, _ = cutUTF8(res.Ref, refMaxBytes)
+	rec.RefTranscript, _ = cutUTF8(res.RefTranscript, refMaxBytes)
 	rec.Summary, rec.Cut = cutUTF8(res.Summary, int(m.cfg.SummaryMaxBytes))
 	rec.SrcCut = res.Cut
 	rec.Detail, rec.DetailCut = cutUTF8(res.Detail, m.detailLimit())

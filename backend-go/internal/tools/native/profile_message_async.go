@@ -195,7 +195,10 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 		host.dropProfileMessageRun(id)
 		// The signal is queued before ended closes, so a call released by it finds it.
 		result := p.asyncResult(profile, outcome)
-		result.Ref = transcriptRef(plan)
+		// The whole answer is saved before the cut the result carries, so ref holds what the
+		// summary and the response budget could not.
+		host.saveFinal(string(asyncKindProfileMessage), id, outcome, &result)
+		result.RefTranscript = transcriptRef(plan)
 		_, _ = host.Manager().Complete(id, result)
 	}()
 
@@ -245,18 +248,18 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 // profileMessageAsyncResult maps how a message ended to the unified result. The answer, or
 // whatever final text the target left, is kept in the record, so it is delivered once even
 // after the target moved on to another caller's task. With no text the summary is the
-// failure itself, so a wait explains it.
+// failure itself, so a wait explains it. The text it delivers is cut to result_max_bytes and
+// says so (cut), also when the remote already cut it; bytes is the size of the whole answer,
+// which profileFinalText gives and the caller saves behind ref.
 func (p *profileMessageTool) asyncResult(profile string, outcome ProfileMessageOutcome) asyncmgr.Result {
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
-	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut, Bytes: int64(len(text)), Trace: outcome.Trace, Reason: outcome.Reason}
+	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut || outcome.Cut, Trace: outcome.Trace, Reason: outcome.Reason}
+	if text != "" {
+		result.Bytes = int64(len(profileFinalText(outcome)))
+	}
 	// A target that ran in a worktree of its own says where its changes are, as a sub-agent's
 	// handle does (subagent_async.go): first, so a cut summary keeps the branch name whole.
-	withWorktree := func(text string) string {
-		if outcome.Worktree == nil || outcome.Worktree.Text == "" {
-			return text
-		}
-		return strings.TrimSpace(outcome.Worktree.Text + "\n" + text)
-	}
+	withWorktree := func(text string) string { return worktreeFirst(outcome.Worktree, text) }
 	if outcome.Err == nil {
 		result.State, result.OK = asyncmgr.StateDone, true
 		result.Summary, result.Detail = withWorktree(result.Summary), withWorktree(result.Detail)
@@ -314,8 +317,26 @@ func (d *profileMessageDriver) Detail(id string, maxBytes int) string {
 	return text
 }
 
-// transcriptRef is the target's messages.jsonl, the ref of the handle: where the full work of a
-// message is, as the ref of a sub-agent handle is.
+// profileFinalText is the whole answer of a message as the handle saves it: the worktree line
+// first, as in the delivered text, then the answer uncut. Empty when the target left no text.
+func profileFinalText(outcome ProfileMessageOutcome) string {
+	text := strings.TrimSpace(outcome.Text)
+	if text == "" {
+		return ""
+	}
+	return worktreeFirst(outcome.Worktree, text)
+}
+
+// worktreeFirst puts the worktree line of a target that ran in a worktree of its own before text.
+func worktreeFirst(worktree *DelegatedWorktreeResult, text string) string {
+	if worktree == nil || worktree.Text == "" {
+		return text
+	}
+	return strings.TrimSpace(worktree.Text + "\n" + text)
+}
+
+// transcriptRef is the target's messages.jsonl, the ref_transcript of the handle: where the
+// full work of a message is. A remote message has none here.
 func transcriptRef(plan ProfileMessagePlan) string {
 	if known, ok := plan.(ProfileMessageTranscripts); ok {
 		target, _ := known.Transcripts()

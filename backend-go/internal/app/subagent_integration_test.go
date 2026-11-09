@@ -46,6 +46,8 @@ type subagentProvider struct {
 	// parentFirstCall, when set, is the (tool name, arguments) the parent makes in its
 	// first round instead of starting a subagent.
 	parentFirstCall [2]string
+	// childAnswer, when set, is the child's final answer instead of "the answer is 42".
+	childAnswer string
 	// parentSteps, when set, scripts the parent's calls in order: round N makes the Nth step
 	// (the results its history already holds count the rounds), and a text answer follows.
 	parentSteps []subagentStep
@@ -257,7 +259,11 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 				events = functionCallEvents("call-read", "skill", notesCall)
 			}
 		default:
-			events = messageEvents("the answer is 42", 17)
+			answer := "the answer is 42"
+			if body.Model == "child-model" && p.childAnswer != "" {
+				answer = p.childAnswer
+			}
+			events = messageEvents(answer, 17)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range events {

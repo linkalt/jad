@@ -41,9 +41,17 @@ func (h *subagentAsyncHandle) abort(id string, cause error) {
 
 // end reports the final state of the run. It is called before the run's done channel
 // closes, so a caller released by done finds the signal queued.
-func (h *subagentAsyncHandle) end(run subagentRunView, ref string) {
+//
+// answer is the child's whole answer, before the cut to result_max_bytes that the run's result
+// carries: it is saved in the result file behind ref, and bytes is its size, so the cut a
+// summary shows is never the end of the answer. transcript is the child's messages.jsonl.
+func (h *subagentAsyncHandle) end(run subagentRunView, transcript, answer string) {
 	result := subagentAsyncResult(run)
-	result.Ref = ref
+	if full := subagentFinalText(run, answer); full != "" {
+		result.Ref = h.host.saveResult(string(asyncKindSubagent), run.id, full)
+		result.Bytes = int64(len(full))
+	}
+	result.RefTranscript = transcript
 	_, _ = h.host.Manager().Complete(run.id, result)
 }
 
@@ -58,15 +66,32 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	// The files a writer changed come first, so the summary's cut keeps them. The answer
 	// gives up what the files line takes, so the summary stays within the run's limit.
 	// The worktree line is not cut: it holds the branch name the parent needs whole.
-	files, _ := cutUTF8(changedListText(run), subagentAsyncFilesBytes)
-	if files = strings.TrimSpace(files + "\n" + strings.TrimSpace(worktreeText(run)+"\n"+sandboxText(run))); files != "" {
-		answer, _ := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
+	if files := subagentFilesText(run); files != "" {
+		answer, cut := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
 		result.Summary = strings.TrimSpace(files + "\n" + answer)
+		result.Cut = result.Cut || cut
 	}
 	// The record keeps the whole text, as profile_message and a remote run do, so wait and
 	// status deliver the answer (to the response budget) instead of its summary_max_bytes head.
 	result.Detail = result.Summary
 	return result
+}
+
+// subagentFilesText is the lines that come before the answer: the changed files (cut), then the
+// worktree and sandbox lines (whole).
+func subagentFilesText(run subagentRunView) string {
+	files, _ := cutUTF8(changedListText(run), subagentAsyncFilesBytes)
+	return strings.TrimSpace(files + "\n" + strings.TrimSpace(worktreeText(run)+"\n"+sandboxText(run)))
+}
+
+// subagentFinalText is what the result file of a run holds: the lines before the answer, then
+// the whole answer. Empty when the child left no text.
+func subagentFinalText(run subagentRunView, answer string) string {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return ""
+	}
+	return strings.TrimSpace(subagentFilesText(run) + "\n" + answer)
 }
 
 func subagentAsyncOutcome(run subagentRunView) asyncmgr.Result {
@@ -88,19 +113,16 @@ func subagentAsyncOutcome(run subagentRunView) asyncmgr.Result {
 	return result
 }
 
-// subagentRunRef is where the full work of a run is: its transcript once the child has
-// one, else the run record. The model reads it with the normal read tool.
-func subagentRunRef(run *subagentRun) string {
+// subagentTranscriptRef is where the full work of a run is: its transcript, once the child has
+// one (a run that ended before it started has none). The model reads it with the normal read tool.
+func subagentTranscriptRef(run *subagentRun) string {
 	run.mu.Lock()
 	dir := run.dir
 	run.mu.Unlock()
-	if dir != "" {
-		return filepath.Join(dir, "messages.jsonl")
-	}
-	if run.store == nil {
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(run.store.dir, run.id+".json")
+	return filepath.Join(dir, "messages.jsonl")
 }
 
 // subagentDriver is the async driver of kind subagent: it finds the sub-agent manager that

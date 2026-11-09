@@ -10,13 +10,16 @@ const shortSummaryBytes = 96
 
 func entryOf(rec Record, summaryLimit, detailLimit int) Entry {
 	e := Entry{ID: rec.ID, Kind: rec.Kind, State: rec.State, OK: rec.OK, Code: rec.Code, Reason: rec.Reason,
-		Label: rec.Label, Cut: rec.Cut, Bytes: rec.Bytes, Ref: rec.Ref, ResumedFrom: rec.ResumedFrom, ConfigNote: rec.ConfigNote}
+		Label: rec.Label, Cut: rec.Cut, Bytes: rec.Bytes, Ref: rec.Ref, RefTranscript: rec.RefTranscript, ResumedFrom: rec.ResumedFrom, ConfigNote: rec.ConfigNote}
 	e.Summary, e.Cut = cutUTF8(rec.Summary, summaryLimit)
 	e.Cut = e.Cut || rec.Cut
 	if rec.Detail != "" {
-		// The record's result text is what the model gets; the summary is only a short form of it.
-		e.Summary, e.Cut = cutUTF8(rec.Detail, detailLimit)
-		e.Cut = e.Cut || rec.DetailCut || rec.SrcCut
+		// The record's result text is what the model gets; the summary is only a short form of
+		// it, so its own cut says nothing about the result: the result is cut when the driver
+		// shortened it or the record or this response could not hold it all.
+		var cut bool
+		e.Summary, cut = cutUTF8(rec.Detail, detailLimit)
+		e.Cut = cut || rec.DetailCut || rec.SrcCut
 	}
 	if rec.State.Terminal() {
 		e.T = formatTime(rec.EndedAt)
@@ -41,14 +44,19 @@ func encodedSize(v any) int {
 }
 
 // fitEntry makes an entry that alone exceeds budget fit it. The resume fields go first, the
-// config note before the resumed_from reference, since they are informational; then only the
-// summary shrinks, never the id and state fields. A summary that cannot be made to fit is dropped.
+// config note before the resumed_from reference, since they are informational; then the
+// transcript reference, which is only a pointer to where the work can be read (ref, the saved
+// result, stays); then only the summary shrinks, never the id and state fields. A summary that
+// cannot be made to fit is dropped.
 func fitEntry(e Entry, budget int) Entry {
 	if encodedSize(e) > budget && e.ConfigNote != "" {
 		e.ConfigNote, e.Cut = "", true
 	}
 	if encodedSize(e) > budget && e.ResumedFrom != "" {
 		e.ResumedFrom, e.Cut = "", true
+	}
+	if encodedSize(e) > budget && e.RefTranscript != "" {
+		e.RefTranscript, e.Cut = "", true
 	}
 	for encodedSize(e) > budget && e.Summary != "" {
 		excess := encodedSize(e) - budget

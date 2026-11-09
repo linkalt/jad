@@ -78,7 +78,9 @@ type SubagentRequest struct {
 // RunResult is how a run ended.
 type RunResult struct {
 	// State is done, failed, stopped or timed_out.
-	State   string
+	State string
+	// Text is the run's whole answer (or the partial text of a run that did not finish); the
+	// view cuts it, and the result route hands it out whole in parts.
 	Text    string
 	Code    string
 	Message string
@@ -286,6 +288,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleProfile(w, r, token)
 	case r.Method == http.MethodGet && len(segments) == 2 && segments[0] == "runs":
 		s.handleRun(w, r, token, segments[1])
+	case r.Method == http.MethodGet && len(segments) == 3 && segments[0] == "runs" && segments[2] == "result":
+		s.handleResult(w, r, token, segments[1])
 	case r.Method == http.MethodPost && len(segments) == 3 && segments[0] == "runs" && segments[2] == "stop":
 		s.handleStop(w, r, token, segments[1])
 	default:
@@ -370,6 +374,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		s.deny(w, token, action, "")
 		return
 	}
+	textMax, ok := s.textMax(w, r)
+	if !ok {
+		return
+	}
 	var body startBody
 	reader := http.MaxBytesReader(w, r.Body, s.opts.BodyMaxBytes)
 	decoder := json.NewDecoder(reader)
@@ -424,7 +432,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		s.startFailure(w, token, status.err)
 		return
 	}
-	writeJSON(w, status.http, s.view(entry, false))
+	writeJSON(w, status.http, s.view(entry, textMax))
 }
 
 type beginStatus struct {
@@ -596,6 +604,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, token Token, 
 		writeError(w, http.StatusNotFound, "no_run", "no such run")
 		return
 	}
+	textMax, ok := s.textMax(w, r)
+	if !ok {
+		return
+	}
 	if value := r.URL.Query().Get("wait_ms"); value != "" {
 		wait, err := strconv.Atoi(value)
 		if err != nil || wait < 0 {
@@ -611,7 +623,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, token Token, 
 		}
 		timer.Stop()
 	}
-	writeJSON(w, http.StatusOK, s.view(entry, true))
+	writeJSON(w, http.StatusOK, s.view(entry, textMax))
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, token Token, id string) {
@@ -624,11 +636,81 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request, token Token,
 		writeError(w, http.StatusNotFound, "no_run", "no such run")
 		return
 	}
+	textMax, ok := s.textMax(w, r)
+	if !ok {
+		return
+	}
 	entry.run.Stop("remote_stop")
-	writeJSON(w, http.StatusOK, s.view(entry, false))
+	writeJSON(w, http.StatusOK, s.view(entry, textMax))
 }
 
-// runView is the JSON of a run. Text is the answer (cut to result_max_bytes) once it ended.
+// textMax reads the text_max_bytes query of a run view: the most text the caller can take in
+// the view (its answer limit divided by how far JSON may grow a text). It is the server's
+// result_max_bytes when absent, and never more than that; a caller that cannot take the whole
+// answer in a view reads the rest from the result route. It answers 400 for a bad value.
+func (s *Server) textMax(w http.ResponseWriter, r *http.Request) (int, bool) {
+	value := r.URL.Query().Get("text_max_bytes")
+	if value == "" {
+		return s.opts.ResultMaxBytes, true
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "text_max_bytes must be a non-negative integer")
+		return 0, false
+	}
+	return min(limit, s.opts.ResultMaxBytes), true
+}
+
+// handleResult serves the whole text of an ended run, up to limit bytes from offset, as plain
+// bytes (a chunk may end inside a character; the parts joined are the text). X-Result-Bytes is
+// the size of the whole text, so a reader knows when it has all of it. This is how a caller
+// gets an answer longer than the view's result_max_bytes, in parts it can take.
+func (s *Server) handleResult(w http.ResponseWriter, r *http.Request, token Token, id string) {
+	if !token.Allows(ActionStatus) {
+		s.deny(w, token, ActionStatus, id)
+		return
+	}
+	entry := s.lookup(token, id)
+	if entry == nil {
+		writeError(w, http.StatusNotFound, "no_run", "no such run")
+		return
+	}
+	offset, limit := 0, s.opts.ResultMaxBytes
+	query := r.URL.Query()
+	for key, target := range map[string]*int{"offset": &offset, "limit": &limit} {
+		value := query.Get(key)
+		if value == "" {
+			continue
+		}
+		number, err := strconv.Atoi(value)
+		if err != nil || number < 0 || (key == "limit" && number == 0) {
+			writeError(w, http.StatusBadRequest, "bad_request", key+" must be a positive integer (offset may be 0)")
+			return
+		}
+		*target = number
+	}
+	limit = min(limit, MaxResultMaxBytes)
+	select {
+	case <-entry.run.Done():
+	default:
+		writeError(w, http.StatusConflict, "not_finished", "the run has not ended")
+		return
+	}
+	text := entry.run.Result().Text
+	if offset > len(text) {
+		writeError(w, http.StatusBadRequest, "bad_request", "offset is past the end of the result")
+		return
+	}
+	part := text[offset:min(len(text), offset+limit)]
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Result-Bytes", strconv.Itoa(len(text)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(part)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, part)
+}
+
+// runView is the JSON of a run. Text is the answer cut to result_max_bytes (or to the text_max_bytes
+// the caller asked for) once it ended; cut says it was cut.
 type runView struct {
 	ID        string `json:"id"`
 	State     string `json:"state"`
@@ -646,7 +728,7 @@ type runView struct {
 	Worktree []WorktreeLine `json:"worktree,omitempty"`
 }
 
-func (s *Server) view(entry *runEntry, withText bool) runView {
+func (s *Server) view(entry *runEntry, textMax int) runView {
 	view := runView{ID: entry.id, Kind: entry.kind, State: "running"}
 	select {
 	case <-entry.run.Done():
@@ -656,7 +738,7 @@ func (s *Server) view(entry *runEntry, withText bool) runView {
 		for _, line := range result.Worktree {
 			view.Worktree = append(view.Worktree, WorktreeLine{Key: safe(line.Key, 64), Value: safe(line.Value, worktreeValueMaxBytes)})
 		}
-		view.Text, view.Cut = cutUTF8(result.Text, s.opts.ResultMaxBytes)
+		view.Text, view.Cut = cutUTF8(result.Text, textMax)
 		s.mu.Lock()
 		ended := entry.ended
 		s.mu.Unlock()
