@@ -41,16 +41,20 @@ and summarizes nothing.
 
 ## 2. The idea
 
-**The kept window works as it does today until it is full.** When it is full, **the whole window
-is summarized** and emptied. Summaries pile up as a list instead of being re-summarized into one,
+**The kept window works as it does today until it is full.** It is full when it holds too many
+turns or would be too big. When it is full, **the whole window is summarized** and emptied. Summaries pile up as a list instead of being re-summarized into one,
 and a limit merges the oldest.
 
 - **Window not full** (fewer than `keep` turns since the last summary): an ordinary compaction,
   exactly as today. Turns are kept and reduced by `keepbatch.turn.type`, and there is no summary
   and no model call.
-- **Window full** (`keep` turns or more since the last summary, counted when a compaction runs):
-  every turn in the window is summarized into one new summary, and the window starts again empty.
-  Nothing is dropped without a summary.
+- **Window full**, checked when a compaction runs, under either of two triggers:
+  - **Turn count:** `keep` turns or more since the last summary.
+  - **Size:** after the ordinary reduction, the window would still be at least
+    `window_ratio × trigger_tokens` (§4.2).
+
+  Every turn in the window is then summarized into one new summary, and the window starts again
+  empty. Nothing is dropped without a summary.
 - **Earlier summaries** are kept byte for byte. They are not counted as turns, and they are not
   stripped or summarized again until the limit merges them (§4.4).
 
@@ -68,15 +72,19 @@ limit reached:     [S1 … Sk] [full window]                 → oldest pair mer
 - **Uneven counts:** the window is checked only when a compaction runs, so it can hold more than
   `keep` turns, for example 25 when the trigger fires late. All 25 are summarized, and turns are
   never split across two summaries.
-- **The keep-20/10-turns case** becomes an ordinary compaction. It no longer tries to summarize,
-  so there is no empty summary call. What remains is the case where an ordinary compaction cannot
-  help, which the escape rule in §4.2 covers.
+- **The keep-20/10-turns case** becomes an ordinary compaction when reducing leaves enough room.
+  It no longer tries to summarize nothing. When the 10 turns are still too big after reducing,
+  which is where today's compaction loops, the size trigger summarizes them.
 
 **What this gives:**
 
 - **The summary is used only when needed.** Recent turns stay verbatim, as reduced by `turn.type`,
   for as long as `keep` allows, and the model call happens only once per `keep` turns.
-- **A summary always has real input:** at least `keep` turns.
+- **A summary always has real input:** at least `keep` turns, or a window of at least
+  `window_ratio × trigger_tokens`.
+- **Room after every compaction.** An ordinary compaction always leaves the context below
+  `window_ratio × trigger_tokens`, so the next trigger needs real growth first. Compaction cannot
+  repeat every round.
 - **No loss along the chain.** An old summary is never summarized again until the limit forces a
   merge. Today, and in the redesign's Option A, the earlier summary is summarized again each time,
   and facts fade with every pass.
@@ -127,10 +135,39 @@ New key `compaction.summary.scope`:
 
 `planCompaction` splits the history into the **summaries** (§4.3) and the **window**, which is
 every other turn, the active turn included, with the preserved response excluded as today. It then
-picks one of three paths.
+picks one of two paths.
 
-**A. Ordinary** (the window has fewer than `keep` turns): today's compaction applied to the window
-only.
+**The window is full** when either trigger holds:
+
+1. **Turn count:** the window holds `keep` turns or more.
+2. **Size:** the estimated size of the window *after* the ordinary reduction is at least
+   `window_ratio × trigger_tokens`. The estimate works as follows.
+   - There is no tokenizer. The response that fired the trigger reports `input_tokens`
+     (`automaticCompactionTrigger`, `session/runner.go:1169`), and that count is scaled by how much
+     the reduction shrinks the history:
+
+     ```
+     estimated_tokens = input_tokens × bytes(reduced window + summaries + active tail)
+                                     / bytes(current history)
+     ```
+
+     Both byte counts come from `compactedInputBytes` (`transcript/maintenance.go:571`), which
+     already compares these two sizes at `:151`.
+   - The fixed part of a request (instructions, tool schemas) is spread over the history in
+     proportion, so the estimate runs a little high and the summary comes slightly early. That is
+     the safe side. **[inferred]**
+   - The runner passes `input_tokens` to the plan in a new `CompactionOptions.TriggerInputTokens`
+     field. With zero tokens (a manual compaction, decision C10), only the turn count applies.
+   - `window_ratio` is 0 means the size trigger is off.
+
+   The size trigger covers today's loop in both its forms:
+   - An ordinary reduction that removes nothing is still at the trigger, so its estimate equals
+     `trigger_tokens`, which is above the ratio. This is today's no-op at
+     `transcript/maintenance.go:151`.
+   - A reduction that removes some, but not enough, would fire the trigger again a round later.
+     The size trigger catches it before it happens.
+
+**A. Ordinary** (the window is not full): today's compaction, applied to the window only.
 
 ```
 [S1 … Sk]  [window turns, reduced by turn.type]  [active tail]
@@ -138,7 +175,7 @@ only.
 
 The summaries go first and are untouched. Nothing is summarized.
 
-**B. Summary** (the window has `keep` turns or more):
+**B. Summary** (the window is full):
 
 ```
 [S1 … Sk, S(k+1)]  [current request]  [active tail]
@@ -161,18 +198,8 @@ The summaries go first and are untouched. Nothing is summarized.
 - **The window restarts empty,** apart from the current request, which becomes the first turn of
   the new window.
 
-**C. Escape: summarize early** (the window is not full, but an ordinary compaction cannot help).
-Path B is taken when either of these holds:
-
-1. The ordinary result is not smaller than the history: today's no-op at
-   `transcript/maintenance.go:151`, the loop described in §1.
-2. The automatic trigger fires again before a new turn has entered the window since the previous
-   ordinary compaction. The context is still over the limit after reducing, so a second ordinary
-   compaction would change nothing. The runner records the window size of its last ordinary
-   compaction in the run state; this is not stored in the cache. Decision C8.
-
-The escape is what fixes the reported case: keep 20, 10 large turns, and the trigger firing again
-and again.
+**Which trigger fired** is logged with each summary (`turns` or `size`, with the estimate), so the
+setting can be tuned from the log.
 
 **The active turn under path A (decision C9).** An ordinary mid-turn compaction under
 `assistant_final` strips the active turn's tool pairs without a summary (redesign P2). Under
@@ -278,10 +305,10 @@ When a compaction would leave more than `max_summaries`, it merges before it app
 - **Small input:** `compaction.summary.min_input_bytes` (redesign §6.1, default 2 000, 0 = off) is
   kept. It is measured on the window only. Below it, path B falls back to path A (an ordinary
   compaction), with the reason logged at info level. Under `window`, a full window is rarely this
-  small, so the guard mostly covers the escape path and very small `keep` values.
-- **No growth:** the size check (`transcript/maintenance.go:151`) stays. Under `window`, a no-op
-  from path A starts the escape (§4.2 C). Path B practically never fails it, because its output is
-  the summaries plus a short tail.
+  small, so the guard mostly covers very small `keep` values.
+- **No growth:** the size check (`transcript/maintenance.go:151`) stays as the last guard. Under
+  `window`, a path A that would be a no-op is caught earlier by the size trigger. Path B practically
+  never fails it, because its output is the summaries plus a short tail.
 - **The transcript changed:** the digest check stays, and now covers the summarized items of the
   active turn too.
 
@@ -317,6 +344,7 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 | Key | Type, default, bounds | Phase |
 |---|---|---|
 | `scope` | `window` \| `dropped`, default `window` (C1) | R1 |
+| `window_ratio` | number, 0.5, 0 = off, otherwise above 0 and below 1 (C8) | R1 |
 | `max_summaries` | int, 4, 1..64 (C3) | R1 |
 | `merge_prompt` | string, default text in §4.4 | R1 |
 | `min_input_bytes` | int, 2000, 0 = off, ≤ `max_input_bytes` | R1 |
@@ -333,8 +361,8 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 | Phase | Content | Main files |
 |---|---|---|
 | R0 | Baseline. Pin today's behavior in tests, including the bug as an expected-failure case: keep 20, 10 turns, no summary, tool work stripped, and a repeated no-op. Golden `messages.jsonl` from the baseline build. Trace the readers in §4.8. | `transcript/*_test.go` |
-| R1 | Settings (`scope`, `max_summaries`, `merge_prompt`, `min_input_bytes`). Cache `summaries` and `summarized_turns`. Plan: summaries are split from the window and excluded from the turn count, plus the old-cache rule. Paths A and B with no run in flight. Merge step. | `sessionfs/compaction_summary_settings.go`, `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/compaction_summary.go` |
-| R2 | Mid-run path B: keep the current request and the newest pair(s), summarize the rest of the active turn. Escape C (no-op, and the trigger firing again) and the active-turn rule (C9). Render priority and `max_tool_output_bytes` (redesign §8). | `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/runner.go`, `session/compaction_summary.go` |
+| R1 | Settings (`scope`, `window_ratio`, `max_summaries`, `merge_prompt`, `min_input_bytes`). Cache `summaries` and `summarized_turns`. Plan: summaries are split from the window and excluded from the turn count, plus the old-cache rule. Paths A and B with no run in flight, both triggers, and `TriggerInputTokens` passed from the runner. Merge step. | `sessionfs/compaction_summary_settings.go`, `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/compaction_summary.go` |
+| R2 | Mid-run path B: keep the current request and the newest pair(s), summarize the rest of the active turn. The active-turn rule (C9). Render priority and `max_tool_output_bytes` (redesign §8). | `transcript/compaction_summary.go`, `transcript/maintenance.go`, `session/runner.go`, `session/compaction_summary.go` |
 | R3 | Overflow recovery always takes path B (C6). Manual compaction (C10). Fork carries `summaries`. | `session/runner.go`, `app/maintenance.go`, `app/session_fork.go` |
 | R4 | Schema, sample settings, docs, `DECISIONS.md` entry. Golden diff, full suite, manual quality comparison (redesign §10.2, adding 3-5 chained compactions with merges). | `sample/schemes/`, docs |
 | later | Optional chunking (C5). Summary model (redesign §7). | |
@@ -350,11 +378,16 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
 3. **After a summary:** `[S1]` plus 10 turns gives path A, with S1 first and byte for byte the
    same, and not counted as a turn. `[S1]` plus 20 turns gives `[S1, S2]`, and `Summarize` gets
    only the 20 turns, with S1 as context.
-4. **Escape:**
-   - Keep 20 and 10 turns whose ordinary result is not smaller: path B is taken, where today the
-     compaction is a no-op.
-   - At the runner level, the trigger firing twice with no new turn in between gives path B on the
-     second compaction.
+4. **Size trigger:**
+   - Keep 20 and 10 turns whose ordinary result is not smaller: path B, where today the
+     compaction is a no-op. This is the reported case.
+   - Keep 20 and 10 turns reduced to an estimate of 0.6 × trigger, with ratio 0.5: path B. Reduced
+     to 0.4 × trigger: path A.
+   - At exactly the threshold: path B.
+   - `window_ratio: 0`: only the turn count applies, which reproduces the no-op.
+   - `TriggerInputTokens: 0`: only the turn count applies.
+   - At the runner level, after a path A compaction the next trigger needs real growth, so no two
+     compactions run in consecutive rounds unless that much was added.
 5. **Active-turn rule (C9):** mid-run with path A, where the active turn has completed pairs that
    would be stripped: path B is taken instead.
 6. **Limit:** `max_summaries: 2`, a third compaction. The merge callback gets S1 and S2, and the
@@ -380,8 +413,8 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
   on the run meter.
 - Overflow recovery under `window` takes path B and removes the active turn's older pairs.
 
-**`sessionfs`:** default, bounds and wrong type of each new key; `min_input_bytes >
-max_input_bytes` is refused.
+**`sessionfs`:** default, bounds and wrong type of each new key. `min_input_bytes >
+max_input_bytes` is refused. `window_ratio` of 1 or above, or below 0, is refused.
 
 **`app`:** manual compaction under `window`; a fork of a session with two summaries keeps both.
 
@@ -430,13 +463,16 @@ max_input_bytes` is refused.
 - **C6.** Should overflow recovery use the same rule (summarize the active turn's older pairs) in
   place of `KeepLatestTurn`? Recommended: yes, because that is the case where keeping the whole
   turn fails.
-- **C8.** Should escape rule 2 (the trigger fires again with no new turn in the window) be built?
-  Rule 1 (the no-op) catches only the case where reducing removes nothing. Recommended: build both.
-  Without rule 2, a reduced window that is still over the trigger makes every round compact again.
+- **C8.** What should `window_ratio` default to? Lower means summaries come more often and leave
+  more room; higher means more verbatim context and more compactions between summaries.
+  Recommended: 0.5. Should it be a share of `trigger_tokens`, or a fixed `window_tokens`?
+  Recommended: the share, so that one setting works for any model's trigger.
 - **C9.** Should a mid-turn path A that would strip the active turn's completed pairs take path B
   instead? Recommended: yes. This is where unsummarized loss hurts most, in a long tool-heavy run.
 - **C10.** Should a manual compaction always force path B (summarize now), or follow the window
-  count? Recommended: follow the count, and add a `summarize: true` request option later if
+  count? It has no triggering response, so the size trigger needs a token count. It could use the
+  last stored response usage (`app/compaction_usage.go`, not traced) or skip the size trigger.
+  Recommended: follow the turn count only, and add a `summarize: true` request option later if
   wanted.
 - **C7.** The redesign is still only a proposal. Should its Phase 1 (guard and P7) be built
   separately first, or folded into R1? Recommended: fold it into R1, since §4.3 replaces its P7 fix.
