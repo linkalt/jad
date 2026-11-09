@@ -29,6 +29,9 @@ type boundRunner struct {
 	reference    string
 	taskStore    *native.TaskStore
 	recordsStore *native.RecordsStore
+	// delegation is set for a run a profile_message started (targetRunner); nil for a
+	// user's run.
+	delegation *profileDelegation
 }
 
 // hold leases the transcript store cached for the session now and points r at it for
@@ -162,6 +165,17 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	options.ToolExecution.SessionDir = r.config.StateDir
 	options.ToolExecution.SessionKey = sessionKey(r.reference, r.config.Profile)
 	options.ToolExecution.Environment = runEnvironment(r.config)
+	if r.delegation != nil && r.delegation.isolation.Mode == sessionfs.SandboxIsolationWorktree {
+		// A delegated run of a profile with isolation worktree works in a git worktree of its
+		// own (docs/isolation-sandbox-design.md §9.7). It writes no file of the session, so
+		// it sets no checkpoint. The worktree is finished once the run and everything it
+		// started have ended (the deferred sweep below runs first).
+		opened, err := r.openDelegatedWorktree(ctx, &options)
+		if err != nil {
+			return session.RunResult{}, err
+		}
+		defer opened.close(ctx)
+	}
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:        r.config.Compaction.AutoEnabled,
 		TriggerTokens:  r.config.Compaction.TriggerTokens,

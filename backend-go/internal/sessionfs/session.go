@@ -240,6 +240,11 @@ type SessionConfig struct {
 	// Sandbox is the sandbox setting when enabled: the tools it covers carry it in their
 	// own settings too. Nil runs every child without one, which is the default.
 	Sandbox *SandboxSettings
+	// Isolation is sandbox.isolation, kept whether or not the sandbox is enabled: a run that
+	// a profile_message starts in this profile works in a git worktree of its own when its
+	// mode is worktree (docs/isolation-sandbox-design.md §9.7). The profile's own runs never do
+	// (D7).
+	Isolation SandboxIsolation `json:",omitzero"`
 	// Budget caps what all the runs of the session use, in total and per day.
 	Budget BudgetSettings
 	// ProjectInstructions finds instruction files such as AGENTS.md by name; off by default.
@@ -407,7 +412,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	sandbox, err := normalizeSandbox(setting["sandbox"], settingPath)
+	sandbox, isolation, err := normalizeSessionSandbox(setting["sandbox"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -680,6 +685,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		MaxRunTokens:             maxRunTokens,
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
+		Isolation:                isolation,
 		Budget:                   budget,
 		ProjectInstructions:      projectInstructions,
 		MaxRunCostUSD:            maxRunCost,

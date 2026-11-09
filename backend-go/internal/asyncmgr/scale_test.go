@@ -1405,3 +1405,20 @@ func BenchmarkListPage10Of10kRows(b *testing.B) {
 		}
 	}
 }
+
+// CancelOwnerSince stops the owner's handles registered at the given time or later (one
+// run's work), not the owner's older ones nor another owner's.
+func TestCancelOwnerSinceStopsOnlyTheNewerHandles(t *testing.T) {
+	f := newFixture(t, nil)
+	f.start(t, "sess|a", "old")
+	f.clock.Advance(time.Second)
+	since := f.m.Now()
+	f.start(t, "sess|a", "new")
+	f.start(t, "sess|b", "other")
+	if n := f.m.CancelOwnerSince("sess|a", since, "run_ended"); n != 1 {
+		t.Fatalf("CancelOwnerSince asked %d, want 1", n)
+	}
+	if got := f.driver.stopped(); !reflect.DeepEqual(got, []string{"new:run_ended"}) {
+		t.Fatalf("stops = %v", got)
+	}
+}

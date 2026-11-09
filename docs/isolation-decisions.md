@@ -317,4 +317,38 @@ Checkout materialiser only (P0: no `--overlay` here). Verified with bwrap 0.9.0 
 7. **Result lines**: `worktree_target`, `worktree_conflicts`, `worktree_start` (isolated runs only).
 
 Not done in this part: delegated profile runs in a worktree (`app/bound_runner.go`, §9.7), the
-W′ check, P4.
+W′ check, P4. (Delegated profile runs: see the next section.)
+
+## P3 implementation, delegated profile runs (2026-11-09)
+
+1. **Which runs** (§9.7, D7): only a run a `profile_message` starts. The `Confine` hook of every
+   profile_message run (`app/profile_delegation.go`, `targetRunner`) marks the target's bound
+   runner as delegated, with the target's own `sandbox.isolation` (`SessionConfig.Isolation`, read
+   whether or not the sandbox is enabled, as for agents). A user's run of the same profile is never
+   isolated. Isolation comes from the target's settings, not from the caller's sandbox it may
+   inherit (D20 narrows where it writes, not whether it is isolated).
+2. **Run** (`boundRunner.runLocked`): after the run's tools are prepared, `native.OpenDelegatedWorktree`
+   makes the worktree from the target's `tools.native.subagent.worktree` settings (defaults when
+   absent; branch `jad/profile-<random>`), points `WorkspaceRoot`/`WorkspaceOrigin`/`PathScope` at it,
+   registers the run (§9.3 step 6), and drops the checkpoint. A target that cannot get a worktree
+   (not a repository) fails the run with a client-safe message.
+3. **Sandbox move (departure, found while tracing):** a target that inherits its caller's sandbox
+   carries the caller's paths filled in (`InheritSandbox`), so `{workspace}` became the session's
+   folder by absolute path, and an isolated run could write the real session folder. The run's
+   environment sandbox is rewritten (`DelegatedWorktree.Sandbox`): a write path inside the session
+   folder moves into the worktree, a write path that holds it becomes the worktree (siblings are
+   left out), read/hidden/read-only paths inside it are kept and moved. Verified with real bwrap.
+4. **End:** after the run and its process groups end, the async handles the run registered (by
+   start time on the manager's clock, `asyncmgr.CancelOwnerSince`) are stopped, then `Close`
+   finishes the worktree in the run's sandbox. The caller's result (direct or async) carries the
+   same `worktree_*` lines as an isolated sub-agent; the async summary starts with the worktree
+   line. The target's own transcript is unchanged.
+5. **Signing (regression of the sub-agent part, fixed):** with `commit.gpgsign` on, jad's collect
+   commit inside a run's sandbox failed (no agent, no network), leaving the work in a kept folder.
+   The collect commit through a launcher is now made with `commit.gpgsign=false`; on the host
+   signing applies as configured.
+6. **Not done:** a message from a remote server's profile (`app/remote_api.go`, `SendMessage`)
+   starts the target without the hook, so it runs in the profile's cwd (the remote API has no
+   field for the worktree lines yet); no record of a delegated run's worktree is kept, so a server stop during such a
+   run leaves its worktree (listed by `git worktree list`) unfinished; hooks run in the session's
+   folder; an LSP or MCP server of the target sees the session's folder (D10); W′; P4.

@@ -249,8 +249,17 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 func (p *profileMessageTool) asyncResult(profile string, outcome ProfileMessageOutcome) asyncmgr.Result {
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
 	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut, Bytes: int64(len(text)), Trace: outcome.Trace, Reason: outcome.Reason}
+	// A target that ran in a worktree of its own says where its changes are, as a sub-agent's
+	// handle does (subagent_async.go): first, so a cut summary keeps the branch name whole.
+	withWorktree := func(text string) string {
+		if outcome.Worktree == nil || outcome.Worktree.Text == "" {
+			return text
+		}
+		return strings.TrimSpace(outcome.Worktree.Text + "\n" + text)
+	}
 	if outcome.Err == nil {
 		result.State, result.OK = asyncmgr.StateDone, true
+		result.Summary, result.Detail = withWorktree(result.Summary), withWorktree(result.Detail)
 		return result
 	}
 	code, message := p.failure(profile, outcome.Err)
@@ -271,6 +280,7 @@ func (p *profileMessageTool) asyncResult(profile string, outcome ProfileMessageO
 	if text == "" {
 		result.Summary, result.Detail = message, message
 	}
+	result.Summary, result.Detail = withWorktree(result.Summary), withWorktree(result.Detail)
 	return result
 }
 

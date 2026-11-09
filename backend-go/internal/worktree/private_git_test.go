@@ -262,3 +262,34 @@ func TestOpenFinishesAnAttachedWorktree(t *testing.T) {
 		}
 	}
 }
+
+// The commit Finish makes through a launcher (in the run's sandbox) is not signed: a signing
+// program there has neither the person's agent nor the network, and a failed signature would
+// leave the run's work behind. On the host the configured signing still applies.
+func TestFinishThroughALauncherDoesNotSign(t *testing.T) {
+	repo := repository(t)
+	for _, setting := range [][]string{{"commit.gpgsign", "true"}, {"gpg.program", "false"}} {
+		gitIn(t, repo, "config", setting[0], setting[1])
+	}
+	tree, err := Create(context.Background(), testOptions(), repo, "unsigned", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(tree.Workspace, "s.txt"), "s\n")
+	launcher := func(git string, args []string, dir string) (Launch, error) {
+		program, err := exec.LookPath(git)
+		return Launch{File: program, Argv0: git, Args: args, Env: os.Environ()}, err
+	}
+	outcome, err := tree.Finish(context.Background(), "collected", launcher)
+	if err != nil || !outcome.Changed {
+		t.Fatalf("outcome = %+v, err %v", outcome, err)
+	}
+	host, err := Create(context.Background(), testOptions(), repo, "signed", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(host.Workspace, "h.txt"), "h\n")
+	if _, err := host.Finish(context.Background(), "collected", nil); err == nil {
+		t.Fatal("the host commit ignored commit.gpgsign")
+	}
+}

@@ -516,6 +516,15 @@ func (m *Manager) CancelOwner(owner, reason string) int {
 	return m.cancel(func(r *row) bool { return r.owner == owner }, reason, endKeep)
 }
 
+// Now is the time on the manager's clock, the one Register records a handle's start with.
+func (m *Manager) Now() time.Time { return m.opts.Now() }
+
+// CancelOwnerSince is CancelOwner for the handles of owner registered at since or later: the
+// work one run started, when the run ends and the folder it worked in goes away.
+func (m *Manager) CancelOwnerSince(owner string, since time.Time, reason string) int {
+	return m.cancel(func(r *row) bool { return r.owner == owner && !r.started.Before(since) }, reason, endKeep)
+}
+
 // CancelOwnersWithPrefix is CancelOwner for every owner that starts with prefix (all the
 // profiles of one session).
 func (m *Manager) CancelOwnersWithPrefix(prefix, reason string) int {

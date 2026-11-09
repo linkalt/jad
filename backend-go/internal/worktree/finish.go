@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -101,6 +102,13 @@ func (t *Tree) collect(ctx context.Context, message string, launcher Launcher) (
 		flags := hostGitFlags
 		if t.options.CommitHooks {
 			flags = commitHooksFlags
+		}
+		if launcher != nil {
+			// In the run's environment a signing program (commit.gpgsign) has neither the
+			// person's agent nor the network, so the commit would fail and the run's work
+			// would stay in the folder. jad's own commit there is not signed; on the host it
+			// is, as configured.
+			flags = append(slices.Clone(flags), "-c", "commit.gpgsign=false")
 		}
 		arguments := append(t.identity(ctx, command), "commit", "--quiet", "--message", message)
 		if !t.options.CommitHooks {

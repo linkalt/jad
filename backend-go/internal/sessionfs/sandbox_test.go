@@ -358,3 +358,31 @@ func TestSandboxTemplateSchemaAgreesWithTheLoader(t *testing.T) {
 		}
 	}
 }
+
+// §9.7: a profile's sandbox.isolation is kept in SessionConfig.Isolation whether or not the
+// sandbox is enabled, so a profile_message target can be isolated without being confined.
+func TestSessionIsolationIsKeptWithAndWithoutTheSandbox(t *testing.T) {
+	for _, test := range []struct {
+		sandbox map[string]any
+		enabled bool
+	}{
+		{map[string]any{"isolation": map[string]any{"mode": "worktree", "base": "working"}}, false},
+		{map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}, "isolation": map[string]any{"mode": "worktree", "base": "working"}}, true},
+	} {
+		fixture := layouttest.Write(t, layouttest.Spec{
+			Native:   map[string]any{"exec": map[string]any{}},
+			Settings: map[string]any{"sandbox": test.sandbox},
+		})
+		config := loadFixtureSession(t, fixture)
+		if config.Isolation != (SandboxIsolation{Mode: SandboxIsolationWorktree, Base: SandboxIsolationBaseWorking}) {
+			t.Fatalf("enabled %v: isolation = %+v", test.enabled, config.Isolation)
+		}
+		if (config.Sandbox != nil) != test.enabled {
+			t.Fatalf("enabled %v: sandbox = %+v", test.enabled, config.Sandbox)
+		}
+	}
+	fixture := layouttest.Write(t, layouttest.Spec{Native: map[string]any{"exec": map[string]any{}}})
+	if config := loadFixtureSession(t, fixture); config.Isolation != (SandboxIsolation{}) {
+		t.Fatalf("no sandbox: %+v", config.Isolation)
+	}
+}

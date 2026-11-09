@@ -213,8 +213,8 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 	readOnly := c.sessionConfigPaths(config)
 	if config.Sandbox != nil {
 		// The tools share this pointer (applySandbox), so they see the paths too. Its
-		// isolation is read but unused: a profile's own runs always work in its cwd (D7), and
-		// delegated profile runs are not isolated before P3.
+		// isolation (also SessionConfig.Isolation) applies only to the runs a profile_message
+		// starts in the profile: its own runs always work in its cwd (D7).
 		config.Sandbox.ReadOnlyPaths = readOnly
 	}
 	return c.resolveAgentSandboxes(config, readOnly)

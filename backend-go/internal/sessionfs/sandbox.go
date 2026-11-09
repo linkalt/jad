@@ -192,6 +192,19 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 	return settings, nil
 }
 
+// normalizeSessionSandbox is normalizeSandbox with the isolation of the sandbox, which is
+// read whether or not it is enabled.
+func normalizeSessionSandbox(raw json.RawMessage, path string) (*SandboxSettings, SandboxIsolation, error) {
+	settings, enabled, err := parseSandbox(raw, path, "sandbox")
+	if err != nil || settings == nil {
+		return nil, SandboxIsolation{}, err
+	}
+	if !enabled {
+		return nil, settings.Isolation, nil
+	}
+	return settings, settings.Isolation, nil
+}
+
 // ParseSandboxSetting reads one inline sandbox object as the loader does (no template names):
 // nil when it is absent or not enabled. path names it in errors.
 func ParseSandboxSetting(raw json.RawMessage, path string) (*SandboxSettings, error) {

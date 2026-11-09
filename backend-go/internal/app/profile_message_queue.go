@@ -211,7 +211,7 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 		Hops:      p.hops,
 		Wait:      wait,
 		BeforeRun: p.beforeRun,
-		Confine:   p.confine,
+		Confine:   targetRunner(p.confine, p.caller, p.message, run.setWorktree),
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				run.lastText.Store(text)
@@ -318,6 +318,9 @@ type profileMessageRun struct {
 	releaseOnce sync.Once
 
 	lastText atomic.Value
+	// worktree is the end of the target's worktree, when it ran in one; set by the target
+	// run before it ends.
+	worktree atomic.Pointer[native.DelegatedWorktreeResult]
 
 	mu           sync.Mutex
 	run          *httpapi.ProfileRun
@@ -523,7 +526,7 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 // conclude turns the end of the target run into the message's outcome. Whatever final text
 // the target left is kept, whether or not it finished.
 func (r *profileMessageRun) conclude(run *httpapi.ProfileRun) native.ProfileMessageOutcome {
-	outcome := native.ProfileMessageOutcome{Trace: r.plan.reference + "/" + r.plan.target + "#" + run.TurnID()}
+	outcome := native.ProfileMessageOutcome{Trace: r.plan.reference + "/" + r.plan.target + "#" + run.TurnID(), Worktree: r.worktree.Load()}
 	switch run.Status() {
 	case "completed":
 		answer := native.SubagentAnswerText(run.Final())
@@ -547,6 +550,11 @@ func (r *profileMessageRun) conclude(run *httpapi.ProfileRun) native.ProfileMess
 		outcome.Err = &native.ProfileFailedError{Message: run.Failure()}
 	}
 	return outcome
+}
+
+// setWorktree records how the target's worktree ended (profileDelegation.report).
+func (r *profileMessageRun) setWorktree(result native.DelegatedWorktreeResult) {
+	r.worktree.Store(&result)
 }
 
 // finish records the outcome once and releases everything the message holds.

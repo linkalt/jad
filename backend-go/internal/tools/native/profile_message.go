@@ -183,6 +183,8 @@ func (e *ProfileSandboxError) Error() string { return e.Message }
 // ErrProfile* values, a *ProfileFailedError or a *ProfileBusyError. Reason says who ended a
 // stopped message. Trace points at the turn in the target's transcript. ResumedFrom and
 // ConfigNote are set by a remote sub-agent resume and only then (see the remote view).
+// Worktree is set when the target ran in a git worktree of its own (OpenDelegatedWorktree):
+// its worktree_* lines, also when the run failed.
 type ProfileMessageOutcome struct {
 	Text        string
 	Err         error
@@ -190,6 +192,15 @@ type ProfileMessageOutcome struct {
 	Trace       string
 	ResumedFrom string
 	ConfigNote  string
+	Worktree    *DelegatedWorktreeResult
+}
+
+// worktreeInformation are the worktree_* lines of the outcome; none without a worktree.
+func (o ProfileMessageOutcome) worktreeInformation() []tools.Information {
+	if o.Worktree == nil {
+		return nil
+	}
+	return o.Worktree.Information
 }
 
 // ProfileMessageRun is a message in flight. It outlives the call that started it: only Stop
@@ -481,13 +492,14 @@ func (p *profileMessageTool) runInline(ctx context.Context, callID, profile stri
 // renderOutcome renders how a message ended: the answer, or the named failure.
 func (p *profileMessageTool) renderOutcome(callID, profile string, outcome ProfileMessageOutcome, transcripts []tools.Information) (string, error) {
 	if outcome.Err != nil {
-		return p.renderFailure(callID, profile, outcome.Err, transcripts...), nil
+		return p.renderFailure(callID, profile, outcome.Err, append(append([]tools.Information(nil), transcripts...), outcome.worktreeInformation()...)...), nil
 	}
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), int64(p.settings.ResultMaxBytes))
 	information := append([]tools.Information{{Key: "profile", Value: profile}}, transcripts...)
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
+	information = append(information, outcome.worktreeInformation()...)
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID:          callID,
 		Status:      tools.StatusOK,
