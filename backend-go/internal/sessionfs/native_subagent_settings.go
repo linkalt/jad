@@ -233,6 +233,9 @@ type NativeSubagentAgent struct {
 	// of their own, and empty otherwise. It is left out of JSON when empty, so the
 	// fingerprint of an agent without it is what it was before the key existed.
 	Isolation string `json:",omitempty"`
+	// IsolationBase is sandbox.isolation.base of the agent's own sandbox: what its worktree
+	// starts from (SandboxIsolationBaseWorking; empty is HEAD). Left out of JSON when empty.
+	IsolationBase string `json:",omitempty"`
 	// Sandbox is the agent's own sandbox (the agent key sandbox: a template name, a template
 	// with overrides or an object), narrowed by the session's (NarrowSandbox); nil runs the
 	// agent in its caller's. Left out of JSON when nil, so the fingerprint of an agent without

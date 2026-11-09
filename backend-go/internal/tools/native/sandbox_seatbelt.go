@@ -19,7 +19,8 @@ import (
 func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expand func(string) string) string {
 	var profile strings.Builder
 	profile.WriteString("(version 1)\n(allow default)\n")
-	writable := sandboxWritableRoots(sandbox.WritablePaths, expand)
+	writes := sandboxWritePaths(sandbox.WritablePaths, place)
+	writable := sandboxWritableRoots(writes, expand)
 	if !sandbox.WholeFileSystemReadable() {
 		// Metadata stays readable so that programs can walk to what they may read.
 		profile.WriteString("(deny file-read*)\n(allow file-read-metadata)\n(allow file-read* (subpath \"/dev\")")
@@ -38,7 +39,7 @@ func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, exp
 	}
 	// A writable path that does not exist yet stays allowed, as before: seatbelt matches
 	// names when the call opens them, so nothing is bound that a symlink could redirect.
-	for _, path := range sandbox.WritablePaths {
+	for _, path := range writes {
 		if path = seatbeltPath(expand(path)); path != "" {
 			if _, err := os.Lstat(path); err != nil {
 				profile.WriteString(" (subpath " + seatbeltString(path) + ")")
@@ -46,7 +47,7 @@ func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, exp
 		}
 	}
 	profile.WriteString(")\n")
-	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(sandbox.WritablePaths, expand))))
+	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(writes, expand))))
 	for _, path := range sandbox.HidePaths {
 		path = seatbeltPath(expand(path))
 		if path == "" {

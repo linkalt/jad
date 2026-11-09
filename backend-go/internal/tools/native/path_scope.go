@@ -198,7 +198,7 @@ func environmentPolicy(policy sessionfs.NativePathPolicy, execution tools.Execut
 	if sandbox.WholeFileSystemReadable() {
 		return mirrored
 	}
-	writable := sandboxWritableRoots(sandbox.WritablePaths, expand)
+	writable := sandboxWritableRoots(sandboxWritePaths(sandbox.WritablePaths, place), expand)
 	reach := append([]string(nil), writable...)
 	for _, read := range sandboxReadRoots(sandbox.ReadPaths, expand, writable) {
 		reach = append(reach, read.real)

@@ -71,7 +71,7 @@ func TestCreateFinishKeepsTheBranchOfAChange(t *testing.T) {
 	}
 	write(t, filepath.Join(tree.Workspace, "a.txt"), "changed\n")
 	write(t, filepath.Join(tree.Workspace, "new.txt"), "new\n")
-	outcome, err := tree.Finish(context.Background(), "jad: test run")
+	outcome, err := tree.Finish(context.Background(), "jad: test run", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestFinishWithoutAChangeDropsTheBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := tree.Finish(context.Background(), "unused")
+	outcome, err := tree.Finish(context.Background(), "unused", nil)
 	if err != nil || outcome.Changed || outcome.Stat != "" || outcome.Commit != tree.Base {
 		t.Fatalf("outcome = %+v, err %v", outcome, err)
 	}
@@ -126,7 +126,7 @@ func TestFinishKeepsTheRunsOwnCommit(t *testing.T) {
 	gitIn(t, tree.Workspace, "add", "c.txt")
 	gitIn(t, tree.Workspace, "commit", "--quiet", "-m", "own")
 	write(t, filepath.Join(tree.Workspace, "d.txt"), "d\n")
-	outcome, err := tree.Finish(context.Background(), "rest")
+	outcome, err := tree.Finish(context.Background(), "rest", nil)
 	if err != nil || !outcome.Changed {
 		t.Fatalf("outcome = %+v, err %v", outcome, err)
 	}
@@ -147,14 +147,14 @@ func TestCreateInASubfolderAndFromABranch(t *testing.T) {
 		t.Fatalf("workspace = %s", first.Workspace)
 	}
 	write(t, filepath.Join(first.Workspace, "b.txt"), "b2\n")
-	if _, err := first.Finish(context.Background(), "first"); err != nil {
+	if _, err := first.Finish(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
 	second, err := Create(context.Background(), testOptions(), repo, "run5", "jad/run4")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = second.Finish(context.Background(), "second") }()
+	defer func() { _, _ = second.Finish(context.Background(), "second", nil) }()
 	if data, _ := os.ReadFile(filepath.Join(second.Workspace, "sub", "b.txt")); string(data) != "b2\n" {
 		t.Fatalf("second run sees b.txt = %q", data)
 	}
@@ -182,7 +182,7 @@ func TestCreateRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = tree.Finish(context.Background(), "x") }()
+	defer func() { _, _ = tree.Finish(context.Background(), "x", nil) }()
 	if _, err := Create(context.Background(), testOptions(), repo, "dup", ""); err == nil {
 		t.Fatal("a second worktree of the same name was created")
 	}
@@ -207,7 +207,7 @@ func TestConcurrentRuns(t *testing.T) {
 				errs <- err
 				return
 			}
-			if _, err := tree.Finish(context.Background(), name); err != nil {
+			if _, err := tree.Finish(context.Background(), name, nil); err != nil {
 				errs <- err
 			}
 		}()
@@ -234,7 +234,7 @@ func TestConfiguredDir(t *testing.T) {
 	if tree.Path != filepath.Join(options.Dir, "run7") {
 		t.Fatalf("path = %s", tree.Path)
 	}
-	if _, err := tree.Finish(context.Background(), "x"); err != nil {
+	if _, err := tree.Finish(context.Background(), "x", nil); err != nil {
 		t.Fatal(err)
 	}
 }

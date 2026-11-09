@@ -13,6 +13,7 @@ import (
 	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/worktree"
 )
 
 // execute runs one call of the subagent tool: a call with a task starts a run and blocks up
@@ -113,8 +114,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	}
 	changes := agent.config.ChangesFiles()
 	// A run in a worktree of its own changes no file of the session, so it is scheduled
-	// like a read-only run: it may be a handle and needs no background writer place.
-	touches := agent.config.ChangesWorkspace()
+	// like a read-only run: it may be a handle and needs no background writer place. With
+	// MCP tools it is a writer all the same (changesWorkspace, D10).
+	touches := agent.changesWorkspace()
 	depth := execution.AgentDepth
 	if s.depthExceeded(depth) {
 		return depthExceededError(callID), nil
@@ -254,7 +256,11 @@ func (s *subagentTool) worktreeStart(agent sessionfs.NativeSubagentAgent, from r
 	if !agent.Isolated() {
 		return nil
 	}
-	return &subagentWorktreeStart{options: worktreeOptions(s.settings.Worktree), from: from.branch}
+	options := worktreeOptions(s.settings.Worktree)
+	if agent.IsolationBase == sessionfs.SandboxIsolationBaseWorking {
+		options.Base = worktree.BaseWorking
+	}
+	return &subagentWorktreeStart{options: options, from: from.branch}
 }
 
 // depthExceeded reports whether a call at depth may not start a sub-agent, local or remote.

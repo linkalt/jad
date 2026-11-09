@@ -33,7 +33,7 @@ func TestHostGitIgnoresRepositoryHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(tree.Workspace, "c.txt"), "c\n")
-	if outcome, err := tree.Finish(context.Background(), "change"); err != nil || !outcome.Changed {
+	if outcome, err := tree.Finish(context.Background(), "change", nil); err != nil || !outcome.Changed {
 		t.Fatalf("outcome = %+v, err %v", outcome, err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -56,7 +56,7 @@ func TestCommitHooksRunOnlyForTheCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(tree.Workspace, "c.txt"), "c\n")
-	if _, err := tree.Finish(context.Background(), "change"); err != nil {
+	if _, err := tree.Finish(context.Background(), "change", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(commitMarker); err != nil {
@@ -90,7 +90,7 @@ func TestHostGitIgnoresFsmonitor(t *testing.T) {
 	}
 	config.Close()
 	write(t, filepath.Join(tree.Workspace, "c.txt"), "c\n")
-	if _, err := tree.Finish(context.Background(), "change"); err != nil {
+	if _, err := tree.Finish(context.Background(), "change", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -99,29 +99,40 @@ func TestHostGitIgnoresFsmonitor(t *testing.T) {
 }
 
 // Open finishes a worktree an earlier server left: it commits what is there, removes the
-// folder and keeps the branch; a folder that is gone is ErrGone.
+// folder and keeps the branch; a folder that is gone is ErrGone. A record of an earlier
+// version names only the folder, branch and base, and still opens.
 func TestOpenFinishesALeftWorktree(t *testing.T) {
 	repo := repository(t)
-	tree, err := Create(context.Background(), testOptions(), repo, "left", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(tree.Workspace, "c.txt"), "c\n")
-	opened, err := Open(context.Background(), testOptions(), tree.Path, tree.Branch, tree.Base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outcome, err := opened.Finish(context.Background(), "recovered")
-	if err != nil || !outcome.Changed || outcome.Kept {
-		t.Fatalf("outcome = %+v, err %v", outcome, err)
-	}
-	if _, err := os.Stat(tree.Path); !os.IsNotExist(err) {
-		t.Fatalf("the worktree folder is still there: %v", err)
-	}
-	if !BranchExists(context.Background(), testOptions(), repo, "jad/left") {
-		t.Fatal("the branch of the recovered run is gone")
-	}
-	if _, err := Open(context.Background(), testOptions(), tree.Path, tree.Branch, tree.Base); !errors.Is(err, ErrGone) {
-		t.Fatalf("Open of a removed folder = %v, want ErrGone", err)
+	for _, legacy := range []bool{false, true} {
+		name := "left"
+		if legacy {
+			name = "left-legacy"
+		}
+		tree, err := Create(context.Background(), testOptions(), repo, name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(tree.Workspace, "c.txt"), "c\n")
+		state := tree.State()
+		if legacy {
+			state = State{Path: tree.Path, Branch: tree.Branch, Base: tree.Base}
+		}
+		opened, err := Open(context.Background(), testOptions(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outcome, err := opened.Finish(context.Background(), "recovered", nil)
+		if err != nil || !outcome.Changed || outcome.Kept {
+			t.Fatalf("legacy %v: outcome = %+v, err %v", legacy, outcome, err)
+		}
+		if _, err := os.Stat(tree.Path); !os.IsNotExist(err) {
+			t.Fatalf("the worktree folder is still there: %v", err)
+		}
+		if !BranchExists(context.Background(), testOptions(), repo, tree.Branch) {
+			t.Fatalf("the branch of the recovered run %s is gone", tree.Branch)
+		}
+		if _, err := Open(context.Background(), testOptions(), state); !errors.Is(err, ErrGone) {
+			t.Fatalf("Open of a removed folder = %v, want ErrGone", err)
+		}
 	}
 }

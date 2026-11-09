@@ -72,7 +72,7 @@ var sandboxKeys = []string{"template", "enabled", "tools", "backend", "executabl
 var (
 	sandboxReadKeys      = []string{"paths", "add_paths"}
 	sandboxWriteKeys     = []string{"paths", "add_paths", "plan_paths", "add_plan_paths"}
-	sandboxIsolationKeys = []string{"mode"}
+	sandboxIsolationKeys = []string{"mode", "base"}
 )
 
 // sandboxAddKeys maps a list key of a sandbox object (or of its read and write objects) to
@@ -111,6 +111,10 @@ func SandboxSystemPaths() []string {
 const (
 	SandboxIsolationNone     = "none"
 	SandboxIsolationWorktree = "worktree"
+	// Bases of sandbox.isolation.base: head starts a run's worktree from HEAD, working from
+	// a snapshot of the session's tracked and untracked, not ignored files.
+	SandboxIsolationBaseHead    = "head"
+	SandboxIsolationBaseWorking = "working"
 )
 
 // SandboxSettings is the sandbox setting: the child processes of the listed tools start
@@ -154,10 +158,14 @@ type SandboxSettings struct {
 	Isolation SandboxIsolation `json:",omitzero"`
 }
 
-// SandboxIsolation is sandbox.isolation. Only mode is read so far; it is read even when the
-// sandbox is not enabled, since a worktree without confinement is the agent key isolation.
+// SandboxIsolation is sandbox.isolation, read even when the sandbox is not enabled, since a
+// worktree without confinement is the agent key isolation. materialize and share_paths come
+// with the overlay materialiser (docs/isolation-sandbox-design.md P4).
 type SandboxIsolation struct {
 	Mode string `json:",omitempty"`
+	// Base is what a run's worktree starts from: SandboxIsolationBaseHead (also when empty)
+	// or SandboxIsolationBaseWorking (docs/isolation-decisions.md D12).
+	Base string `json:",omitempty"`
 }
 
 // WholeFileSystemReadable reports whether ReadPaths cover the whole file system (the default),
@@ -436,15 +444,18 @@ func sandboxIsolation(fields map[string]json.RawMessage, path, section string) (
 	if err != nil {
 		return SandboxIsolation{}, err
 	}
-	raw, exists := object["mode"]
-	if !exists || strings.TrimSpace(string(raw)) == "null" {
-		return SandboxIsolation{}, nil
+	var isolation SandboxIsolation
+	if raw, exists := object["mode"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &isolation.Mode); err != nil || (isolation.Mode != SandboxIsolationNone && isolation.Mode != SandboxIsolationWorktree) {
+			return SandboxIsolation{}, configError("%s: %s.isolation.mode must be %q or %q", path, section, SandboxIsolationNone, SandboxIsolationWorktree)
+		}
 	}
-	var mode string
-	if err := json.Unmarshal(raw, &mode); err != nil || (mode != SandboxIsolationNone && mode != SandboxIsolationWorktree) {
-		return SandboxIsolation{}, configError("%s: %s.isolation.mode must be %q or %q", path, section, SandboxIsolationNone, SandboxIsolationWorktree)
+	if raw, exists := object["base"]; exists && strings.TrimSpace(string(raw)) != "null" {
+		if err := json.Unmarshal(raw, &isolation.Base); err != nil || (isolation.Base != SandboxIsolationBaseHead && isolation.Base != SandboxIsolationBaseWorking) {
+			return SandboxIsolation{}, configError("%s: %s.isolation.base must be %q or %q", path, section, SandboxIsolationBaseHead, SandboxIsolationBaseWorking)
+		}
 	}
-	return SandboxIsolation{Mode: mode}, nil
+	return isolation, nil
 }
 
 // appendNewStrings appends each value not already in list.

@@ -304,7 +304,53 @@ func sandboxFixedRules(place sandboxPlace, writable, configuration, candidates [
 		}
 		rules = append(rules, sandboxRule{kind: sandboxHide, path: runs, dir: true, keep: keep})
 	}
+	return append(rules, linkedWorktreeRules(place.workspace, common, ownGitDir, writable)...)
+}
+
+// linkedWorktreeRules keep the pointers of a linked worktree read-only where a writable path
+// covers them: its .git file and its admin folder's commondir and gitdir. jad finds the
+// repository's git directory through them for the next call's sandbox ({git_common_dir}, the
+// fixed rules), so a call that rewrote them could point that call's writable paths anywhere.
+// They come last, after the hidden worktree folders showed the admin folder again. An
+// isolated run's folders are jad's own record (isolatedRunOf) and need none.
+func linkedWorktreeRules(workspace, common, ownGitDir string, writable []string) []sandboxRule {
+	if ownGitDir == common {
+		return nil
+	}
+	if _, isolated := isolatedRunOf(workspace); isolated {
+		return nil
+	}
+	var rules []sandboxRule
+	files := []string{filepath.Join(ownGitDir, "commondir"), filepath.Join(ownGitDir, "gitdir")}
+	if dotGit := workspaceDotGitFile(workspace); dotGit != "" {
+		files = append(files, dotGit)
+	}
+	for _, file := range files {
+		if info, err := os.Lstat(file); err == nil && info.Mode().IsRegular() && insideAny(file, writable) {
+			rules = append(rules, sandboxRule{kind: sandboxReadOnly, path: file})
+		}
+	}
 	return rules
+}
+
+// workspaceDotGitFile is the .git file of the linked worktree that holds workspace, or empty
+// when the nearest .git is a folder or there is none.
+func workspaceDotGitFile(workspace string) string {
+	for current := filepath.Clean(workspace); ; current = filepath.Dir(current) {
+		dotGit := filepath.Join(current, ".git")
+		if info, err := os.Lstat(dotGit); err == nil {
+			if !info.Mode().IsRegular() {
+				return ""
+			}
+			if resolved, err := filepath.EvalSymlinks(dotGit); err == nil {
+				return resolved
+			}
+			return dotGit
+		}
+		if parent := filepath.Dir(current); parent == current {
+			return ""
+		}
+	}
 }
 
 // sandboxConfigurationRules keep the session's configuration read-only where a writable path
@@ -469,6 +515,9 @@ func sandboxKeepOf(path string, writable []string) sandboxKeep {
 // workspaceGitDir is the git folder of the checkout that holds workspace: a linked worktree's
 // own admin folder (named by its .git file), else common.
 func workspaceGitDir(workspace, common string) string {
+	if run, ok := isolatedRunOf(workspace); ok {
+		return run.admin
+	}
 	for current := filepath.Clean(workspace); ; current = filepath.Dir(current) {
 		dotGit := filepath.Join(current, ".git")
 		if info, err := os.Lstat(dotGit); err == nil {

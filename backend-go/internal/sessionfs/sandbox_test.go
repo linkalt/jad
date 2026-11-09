@@ -207,7 +207,9 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"read":{"paths":["src"]}}`, false},
 		{`{"write":{"plan":["/"]}}`, false},
 		{`{"isolation":{"mode":"overlay"}}`, false},
-		{`{"isolation":{"base":"working"}}`, false},
+		{`{"isolation":{"base":"working"}}`, true},
+		{`{"isolation":{"base":"tip"}}`, false},
+		{`{"isolation":{"materialize":"overlay"}}`, false},
 		{`{"tools":["lsp"],"read":{"paths":["/"]}}`, true},
 	} {
 		if got := schemaAccepts(t, schema, `{"sandbox":`+test.raw+`}`); got != test.accept {

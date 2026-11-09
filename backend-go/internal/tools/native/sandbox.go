@@ -83,9 +83,13 @@ func sandboxed(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configure
 			return sandboxLaunch{}, err
 		}
 		arguments := []string{"-p", seatbeltProfile(sandbox, place, expand), "--"}
+		var variables []string
 		if place.tmp != "" {
+			variables = append(variables, "TMPDIR="+place.tmp)
+		}
+		if variables = append(variables, sandboxRunEnvironment(place)...); len(variables) > 0 {
 			// sandbox-exec cannot set a variable itself.
-			arguments = append(arguments, "/usr/bin/env", "TMPDIR="+place.tmp)
+			arguments = append(append(arguments, "/usr/bin/env"), variables...)
 		}
 		arguments = append(append(arguments, resolved), args...)
 		return sandboxLaunch{configured: sandbox.Executable, resolved: program, args: arguments}, nil
@@ -128,7 +132,8 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	if sandbox.Network {
 		arguments = append(arguments, "--share-net")
 	}
-	writable := sandboxWritableRoots(sandbox.WritablePaths, expand)
+	writes := sandboxWritePaths(sandbox.WritablePaths, place)
+	writable := sandboxWritableRoots(writes, expand)
 	whole := sandbox.WholeFileSystemReadable()
 	var readable []sandboxReadRoot
 	if whole {
@@ -148,7 +153,7 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	for _, path := range writable {
 		arguments = append(arguments, "--bind-try", path, path)
 	}
-	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(sandbox.WritablePaths, expand)))...)
+	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(writes, expand)))...)
 	for _, path := range sandbox.HidePaths {
 		path = expand(path)
 		info, err := os.Stat(path)
@@ -164,6 +169,10 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	}
 	if place.tmp != "" {
 		arguments = append(arguments, "--setenv", "TMPDIR", place.tmp)
+	}
+	for _, variable := range sandboxRunEnvironment(place) {
+		name, value, _ := strings.Cut(variable, "=")
+		arguments = append(arguments, "--setenv", name, value)
 	}
 	if place.cwd != "" {
 		arguments = append(arguments, "--chdir", place.cwd)
@@ -213,8 +222,14 @@ func sandboxExpander(place sandboxPlace) func(string) string {
 	}
 }
 
-// gitCommonDir is the git directory of the repository that holds dir (sessionfs.GitCommonDir).
-func gitCommonDir(dir string) string { return sessionfs.GitCommonDir(dir) }
+// gitCommonDir is the git directory of the repository that holds dir: the one jad recorded
+// for an isolated run's worktree, else found from dir (sessionfs.GitCommonDir).
+func gitCommonDir(dir string) string {
+	if run, ok := isolatedRunOf(dir); ok {
+		return run.common
+	}
+	return sessionfs.GitCommonDir(dir)
+}
 
 // sandboxKey is the part of a standby's identity the sandbox makes: two launches in different
 // sandboxes (or workspaces) are different processes.

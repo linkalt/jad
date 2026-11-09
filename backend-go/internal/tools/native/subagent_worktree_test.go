@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,7 +125,9 @@ func TestIsolatedAgentWorksInAWorktreeAndReturnsABranch(t *testing.T) {
 	if execution.WorkspaceOrigin != repo || !strings.Contains(execution.WorkspaceRoot, filepath.Join(".git", "jad-worktrees", "sub_")) {
 		t.Fatalf("child root %q, origin %q", execution.WorkspaceRoot, execution.WorkspaceOrigin)
 	}
-	for _, want := range []string{"worktree_branch: jad/sub_", "worktree_changes: 2 files changed", "git merge jad/sub_", "path_denied"} {
+	head := strings.TrimSpace(gitCommand(t, repo, "rev-parse", "HEAD"))
+	for _, want := range []string{"worktree_branch: jad/sub_", "worktree_changes: 2 files changed", "git merge jad/sub_", "path_denied",
+		"worktree_target: " + head, "worktree_conflicts: none (it merges cleanly into HEAD " + head[:12] + ")"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("result lacks %q:\n%s", want, out)
 		}
@@ -138,6 +141,9 @@ func TestIsolatedAgentWorksInAWorktreeAndReturnsABranch(t *testing.T) {
 	}
 	if _, err := os.Stat(execution.WorkspaceRoot); !os.IsNotExist(err) {
 		t.Fatalf("worktree folder left behind: %v", err)
+	}
+	if _, registered := isolatedRunOf(execution.WorkspaceRoot); registered {
+		t.Fatal("the ended run's git folders are still registered")
 	}
 	branch := strings.TrimSpace(gitCommand(t, repo, "branch", "--list", "jad/*", "--format=%(refname:short)"))
 	if !strings.HasPrefix(branch, "jad/sub_") || strings.Contains(branch, "\n") {
@@ -279,5 +285,103 @@ func TestIsolatedRunIsAHandleAndItsWaitNamesTheBranch(t *testing.T) {
 	<-child.executions
 	if waited := asyncWait(t, catalog); !strings.Contains(waited, "worktree branch jad/sub_") || !strings.Contains(waited, "1 file changed") {
 		t.Fatalf("wait:\n%s", waited)
+	}
+}
+
+// D10: a worktree of its own does not make an agent with MCP tools a reader, since its MCP
+// servers work in the session's folder; without MCP tools it is one.
+func TestIsolatedAgentWithMCPToolsIsAWriter(t *testing.T) {
+	plain := isolatedAgent("fixer")
+	withMCP := isolatedAgent("mcp-fixer")
+	withMCP.Tools = append(withMCP.Tools, "mcp:zvec:*")
+	catalog, err := buildWithMCP(t, writeSettings(plain, withMCP), &fakeLauncher{}, []tools.Tool{mcpStub(t, "zvec", "search")}, readOnlyTool("read"), writeTool("exec"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[string]bool{"fixer": false, "mcp-fixer": true} {
+		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c", "name": "subagent", "arguments": `{"agent":"` + agent + `","task":"x"}`})
+		if got := catalog.CallMayChangeFiles(call); got != want {
+			t.Errorf("%s: CallMayChangeFiles = %v, want %v", agent, got, want)
+		}
+	}
+}
+
+// An isolated agent's exec description says how git works in its worktree (D13); other
+// agents' does not, and while the run goes its git folders are jad's record.
+func TestIsolatedAgentReadsHowGitWorks(t *testing.T) {
+	repo := gitRepository(t)
+	registered := make(chan bool, 1)
+	launcher := &fakeLauncher{}
+	launcher.run = func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		_, ok := isolatedRunOf(request.Execution.WorkspaceRoot)
+		registered <- ok
+		return SubagentResult{Text: "done"}, nil
+	}
+	settings := writeSettings(isolatedAgent("fixer"), writerAgent("plain", "read", "exec"))
+	settings.StorageDir = t.TempDir()
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
+	worktreeCall(t, catalog, repo, `{"agent":"fixer","task":"x","block_ms":3000}`)
+	if !<-registered {
+		t.Fatal("the running isolated run's git folders are not registered")
+	}
+	worktreeCall(t, catalog, repo, `{"agent":"plain","task":"x","block_ms":3000}`)
+	<-registered
+	if got := childDescriptionOf(t, launcher, "fixer", execToolID); !strings.HasSuffix(got, isolationDescription) {
+		t.Fatalf("isolated exec description = %q", got)
+	}
+	if got := childDescriptionOf(t, launcher, "plain", execToolID); strings.Contains(got, "detached HEAD") {
+		t.Fatalf("plain exec description = %q", got)
+	}
+}
+
+// The result says what merging the branch would conflict on, or why that was not checked,
+// and where a run of base "working" started and where its branch is.
+func TestWorktreeResultLines(t *testing.T) {
+	base := strings.Repeat("b", 40)
+	start := strings.Repeat("5", 40)
+	target := strings.Repeat("7", 40)
+	lines := func(record subagentWorktree) string {
+		var text []string
+		for _, item := range worktreeInformation(subagentRunView{worktree: &record}) {
+			text = append(text, fmt.Sprintf("%s: %v", item.Key, item.Value))
+		}
+		return strings.Join(text, "\n")
+	}
+	record := subagentWorktree{Branch: "jad/r", Base: base, Commit: "c", Changed: true, Stat: "1 file changed", Target: target, Conflicts: []string{"a.txt", "b.txt"}}
+	requireOutput(t, lines(record), "worktree_target: "+target, "worktree_conflicts: 2 path(s) would conflict with HEAD 777777777777: a.txt, b.txt", "git diff bbbbbbbbbbbb jad/r")
+	record.Conflicts, record.CheckError = nil, "git merge-tree failed"
+	requireOutput(t, lines(record), "worktree_conflicts: not checked (git merge-tree failed)")
+	record.CheckError, record.Start = "", start
+	requireOutput(t, lines(record), "worktree_conflicts: none", "worktree_start: the run started from the session's uncommitted files (snapshot 555555555555); the branch holds only the run's own changes, on bbbbbbbbbbbb")
+	record.OnWorkingState = true
+	requireOutput(t, lines(record), "git diff 555555555555 jad/r | git apply --3way", "review with `git diff 555555555555 jad/r`")
+	if text := worktreeText(subagentRunView{worktree: &record}); !strings.Contains(text, "Conflicts with HEAD: none") || !strings.Contains(text, "snapshot 555555555555") {
+		t.Fatalf("text = %s", text)
+	}
+}
+
+// An agent whose sandbox sets isolation.base working starts from the session's uncommitted
+// files; another isolated agent starts from HEAD.
+func TestIsolatedAgentStartsFromTheWorkingState(t *testing.T) {
+	repo := gitRepository(t)
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(chan string, 1)
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		data, _ := os.ReadFile(filepath.Join(request.Execution.WorkspaceRoot, "a.txt"))
+		seen <- string(data)
+		return SubagentResult{Text: "done"}, nil
+	}}
+	working := isolatedAgent("working")
+	working.IsolationBase = sessionfs.SandboxIsolationBaseWorking
+	settings := writeSettings(working, isolatedAgent("head"))
+	settings.StorageDir = t.TempDir()
+	catalog, _ := buildSubagentCatalog(t, settings, launcher, readOnlyTool("read"), writeTool("exec"))
+	for agent, want := range map[string]string{"working": "dirty\n", "head": "a\n"} {
+		worktreeCall(t, catalog, repo, `{"agent":"`+agent+`","task":"x","block_ms":3000}`)
+		if got := <-seen; got != want {
+			t.Errorf("%s saw a.txt = %q, want %q", agent, got, want)
+		}
 	}
 }

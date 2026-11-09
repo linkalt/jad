@@ -273,6 +273,9 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 				agent.Isolation = SubagentIsolationWorktree
 			}
 		}
+		if own.Isolation.Base == SandboxIsolationBaseWorking {
+			agent.IsolationBase = SandboxIsolationBaseWorking
+		}
 		if !enabled {
 			continue
 		}

@@ -1,19 +1,21 @@
 // Package worktree gives a run its own git worktree of the session's repository and turns
-// what the run changed there into a branch.
+// what the run changed there into a branch (docs/isolation-sandbox-design.md §5).
 //
-// Create adds a worktree on a new branch at the repository's HEAD (or at a given revision);
-// Finish commits whatever the run left in it, removes the folder and keeps the branch when
-// the run changed something, or drops the branch too when it changed nothing. Uncommitted
-// changes of the session's own checkout are not in a new worktree: it starts from a commit.
+// Create checks out a commit in a new linked worktree on a detached HEAD: HEAD of the
+// session's repository, a given revision, or a snapshot of the session's working state (base
+// "working"). The run's own git objects go to a private folder inside the worktree's admin
+// folder, with the repository's objects as a read-only alternate, so a run needs no write
+// access to the shared git directory and cannot make branches or tags there. Finish commits
+// what the run left (inside the run's environment when a Launcher is given), imports the run's
+// objects into the repository as a pack, creates the branch, checks it against the session's
+// HEAD with merge-tree, and removes the worktree; a run that changed nothing leaves no branch.
 package worktree
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +26,18 @@ import (
 // worktrees when Options.Dir is empty. Inside .git the session's own search tools never
 // list them.
 const DefaultDirName = "jad-worktrees"
+
+// ObjectsDirName is the run's private object folder inside its worktree admin folder.
+const ObjectsDirName = "jad-objects"
+
+// Bases a run's files can start from (sandbox.isolation.base).
+const (
+	// BaseHead starts from the repository's HEAD (or the given revision).
+	BaseHead = "head"
+	// BaseWorking starts from a snapshot of the session's tracked and untracked, not
+	// ignored files; the branch still carries only the run's own changes.
+	BaseWorking = "working"
+)
 
 // ErrNotRepository is returned by Create for a working directory outside a git repository.
 var ErrNotRepository = errors.New("the working directory is not inside a git repository")
@@ -37,14 +51,18 @@ type Options struct {
 	Dir string
 	// BranchPrefix starts the name of each run's branch; the run's name follows it.
 	BranchPrefix string
-	// AuthorName and AuthorEmail sign the commit Finish makes when the repository has no
+	// AuthorName and AuthorEmail sign the commits Finish makes when the repository has no
 	// user.name or user.email of its own; a configured identity always wins.
 	AuthorName  string
 	AuthorEmail string
-	// CommitHooks runs the repository's commit hooks for that commit; off passes --no-verify.
+	// CommitHooks runs the repository's commit hooks for the commit of the run's changes;
+	// off passes --no-verify.
 	CommitHooks bool
 	// Timeout bounds each git command.
 	Timeout time.Duration
+	// Base is BaseHead (also when empty) or BaseWorking. A run started from a revision (a
+	// resume) always starts from that revision.
+	Base string
 }
 
 // Tree is one run's worktree.
@@ -57,15 +75,68 @@ type Tree struct {
 	Path      string
 	Workspace string
 	Branch    string
-	// Base is the commit the worktree started from.
-	Base string
+	// Base is the commit the branch starts from: the repository's HEAD, or the given
+	// revision. Start is the commit the files started from: Base, or the snapshot of the
+	// session's working state for base "working".
+	Base  string
+	Start string
+	// Admin is the worktree's admin folder in the repository's git directory, Objects the
+	// run's private object folder inside it. Objects is empty for a worktree an earlier
+	// version made, whose branch is checked out (attached).
+	Admin    string
+	Objects  string
+	attached bool
+}
+
+// State is what a run records about its tree, so that Open can finish it after a restart.
+type State struct {
+	Path      string
+	Workspace string
+	Branch    string
+	Base      string
+	Start     string
+	Admin     string
+	Common    string
+	Top       string
+}
+
+// State returns what Open needs to finish the tree after a restart.
+func (t *Tree) State() State {
+	return State{Path: t.Path, Workspace: t.Workspace, Branch: t.Branch, Base: t.Base, Start: t.Start, Admin: t.Admin, Common: t.common, Top: t.top}
+}
+
+// Common is the repository's common git directory.
+func (t *Tree) Common() string { return t.common }
+
+// RunEnvironment are the variables every process of the run gets: its new objects go to the
+// private folder, the repository's objects are read through an alternate, and git's automatic
+// maintenance (which would write the shared git directory) stays off. Empty for a worktree of
+// an earlier version.
+func (t *Tree) RunEnvironment() []string {
+	if t.Objects == "" {
+		return nil
+	}
+	return []string{
+		"GIT_OBJECT_DIRECTORY=" + t.Objects,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + filepath.Join(t.common, "objects"),
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0",
+		"GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
+	}
+}
+
+// collectEnvironment is RunEnvironment with the worktree named outright, so the commands
+// that collect the run's work read neither the .git file the run could rewrite nor the
+// admin folder's commondir: the repository's own configuration is the only one they read.
+func (t *Tree) collectEnvironment() []string {
+	return append(t.RunEnvironment(), "GIT_DIR="+t.Admin, "GIT_COMMON_DIR="+t.common, "GIT_WORK_TREE="+t.Path)
 }
 
 // Outcome is what Finish found.
 type Outcome struct {
 	Branch string
 	Base   string
-	// Commit is the branch's last commit; Changed reports whether it differs from Base.
+	// Commit is the branch's last commit; Changed reports whether the run changed anything.
 	// A run that changed nothing has no branch left: Branch is still its name.
 	Commit  string
 	Changed bool
@@ -73,6 +144,17 @@ type Outcome struct {
 	Stat string
 	// Kept is set when the worktree folder could not be cleaned up and is still at Path.
 	Kept bool
+	// Target is the session's HEAD the branch was checked against, Conflicts the paths
+	// that would conflict when merging the branch into it. CheckError says why the check
+	// could not run; both are empty for a run that changed nothing.
+	Target     string
+	Conflicts  []string
+	CheckError string
+	// Start is the working-state snapshot a run of base "working" started from (empty
+	// otherwise). OnWorkingState is set when the run's changes could not be moved from it
+	// onto Base: the branch then holds the snapshot's changes too.
+	Start          string
+	OnWorkingState bool
 }
 
 // repositoryLocks serializes the commands that change a repository's worktree list and
@@ -84,8 +166,9 @@ func lockFor(common string) *sync.Mutex {
 	return lock.(*sync.Mutex)
 }
 
-// Create adds a worktree named name for the repository that holds workspace. The branch is
-// BranchPrefix+name and starts at from, or at HEAD when from is empty.
+// Create adds a worktree named name for the repository that holds workspace, on a detached
+// HEAD at from, or at HEAD when from is empty (or at a snapshot of the working state, for
+// base "working"). The branch BranchPrefix+name is created only when the run is finished.
 func Create(ctx context.Context, options Options, workspace, name, from string) (*Tree, error) {
 	workspace, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
@@ -123,6 +206,12 @@ func Create(ctx context.Context, options Options, workspace, name, from string) 
 	if err != nil || strings.HasPrefix(relative, "..") {
 		return nil, fmt.Errorf("the working directory %s is not inside the repository %s", workspace, top)
 	}
+	start := base
+	if options.Base == BaseWorking && from == "" {
+		if start, err = workingSnapshot(ctx, options, top, base, name); err != nil {
+			return nil, fmt.Errorf("snapshot the working state: %w", err)
+		}
+	}
 	dir := options.Dir
 	if dir == "" {
 		dir = filepath.Join(common, DefaultDirName)
@@ -130,98 +219,51 @@ func Create(ctx context.Context, options Options, workspace, name, from string) 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create the worktree folder: %w", err)
 	}
-	tree := &Tree{options: options, top: top, common: common, Path: filepath.Join(dir, name), Branch: options.BranchPrefix + name, Base: base}
+	tree := &Tree{options: options, top: top, common: common, Path: filepath.Join(dir, name), Branch: options.BranchPrefix + name, Base: base, Start: start}
 	tree.Workspace = filepath.Join(tree.Path, relative)
-	lock := lockFor(common)
-	lock.Lock()
-	defer lock.Unlock()
-	if _, err := run(ctx, options, top, "worktree", "add", "--quiet", "-b", tree.Branch, tree.Path, base); err != nil {
-		return nil, fmt.Errorf("git worktree add: %w", err)
+	if err := tree.add(ctx); err != nil {
+		return nil, err
 	}
 	if _, err := os.Stat(tree.Workspace); err != nil {
 		// The session's folder is not in the commit (it is new or ignored): the run gets
 		// the folder empty rather than not at all.
 		if err := os.MkdirAll(tree.Workspace, 0o755); err != nil {
-			tree.remove(ctx, true)
+			_ = tree.remove(ctx, false)
 			return nil, fmt.Errorf("create the working directory in the worktree: %w", err)
 		}
 	}
 	return tree, nil
 }
 
-// Finish commits what the run left in the worktree (message is the commit message), then
-// removes the worktree folder. The branch stays when it has commits the base has not, and
-// is deleted otherwise. A commit that fails leaves the folder in place (Outcome.Kept) and
-// returns the error, so nothing the run wrote is lost.
-func (t *Tree) Finish(ctx context.Context, message string) (Outcome, error) {
-	outcome := Outcome{Branch: t.Branch, Base: t.Base}
-	status, err := run(ctx, t.options, t.Path, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		outcome.Kept = true
-		return outcome, fmt.Errorf("git status: %w", err)
-	}
-	if status != "" {
-		if _, err := run(ctx, t.options, t.Path, "add", "--all"); err != nil {
-			outcome.Kept = true
-			return outcome, fmt.Errorf("git add: %w", err)
-		}
-		flags := hostGitFlags
-		if t.options.CommitHooks {
-			flags = commitHooksFlags
-		}
-		if _, err := runFlags(ctx, t.options, t.Path, flags, t.commitArguments(ctx, message)...); err != nil {
-			outcome.Kept = true
-			return outcome, fmt.Errorf("git commit: %w", err)
-		}
-	}
-	head, err := run(ctx, t.options, t.Path, "rev-parse", "HEAD")
-	if err != nil {
-		outcome.Kept = true
-		return outcome, fmt.Errorf("git rev-parse HEAD: %w", err)
-	}
-	outcome.Commit = head
-	outcome.Changed = head != t.Base
-	if outcome.Changed {
-		if stat, err := run(ctx, t.options, t.Path, "diff", "--shortstat", t.Base, head); err == nil {
-			outcome.Stat = strings.TrimSpace(stat)
-		}
-	}
-	if err := t.remove(ctx, !outcome.Changed); err != nil {
-		outcome.Kept = true
-		return outcome, err
-	}
-	return outcome, nil
-}
-
-// commitArguments are the arguments of the commit Finish makes: the configured author
-// only when the repository has no identity, and --no-verify unless hooks are wanted.
-func (t *Tree) commitArguments(ctx context.Context, message string) []string {
-	var arguments []string
-	if name, _ := run(ctx, t.options, t.Path, "config", "--get", "user.name"); name == "" {
-		arguments = append(arguments, "-c", "user.name="+t.options.AuthorName)
-	}
-	if email, _ := run(ctx, t.options, t.Path, "config", "--get", "user.email"); email == "" {
-		arguments = append(arguments, "-c", "user.email="+t.options.AuthorEmail)
-	}
-	arguments = append(arguments, "commit", "--quiet", "--message", message)
-	if !t.options.CommitHooks {
-		arguments = append(arguments, "--no-verify")
-	}
-	return arguments
-}
-
-// remove deletes the worktree folder and, with dropBranch, the branch.
-func (t *Tree) remove(ctx context.Context, dropBranch bool) error {
+// add checks Start out at Path on a detached HEAD and makes the private object folder. It
+// runs under the repository's lock; the branch name must be free, since Finish creates it.
+func (t *Tree) add(ctx context.Context) error {
 	lock := lockFor(t.common)
 	lock.Lock()
 	defer lock.Unlock()
-	if _, err := run(ctx, t.options, t.top, "worktree", "remove", "--force", t.Path); err != nil {
-		return fmt.Errorf("git worktree remove: %w", err)
+	if BranchExists(ctx, t.options, t.top, t.Branch) {
+		return fmt.Errorf("the branch %s already exists", t.Branch)
 	}
-	if dropBranch {
-		if _, err := run(ctx, t.options, t.top, "branch", "--quiet", "-D", t.Branch); err != nil {
-			return fmt.Errorf("git branch -D: %w", err)
-		}
+	if _, err := run(ctx, t.options, t.top, "worktree", "add", "--quiet", "--detach", t.Path, t.Start); err != nil {
+		return fmt.Errorf("git worktree add: %w", err)
+	}
+	admin, err := run(ctx, t.options, t.Path, "rev-parse", "--absolute-git-dir")
+	if err == nil {
+		admin, err = filepath.EvalSymlinks(admin)
+	}
+	if err == nil && filepath.Dir(admin) != filepath.Join(t.common, "worktrees") {
+		err = fmt.Errorf("git placed it at %s, outside %s", admin, filepath.Join(t.common, "worktrees"))
+	}
+	if err != nil {
+		_ = os.RemoveAll(t.Path)
+		_, _ = run(ctx, t.options, t.top, "worktree", "prune")
+		return fmt.Errorf("find the worktree's admin folder: %w", err)
+	}
+	t.Admin, t.Objects = admin, filepath.Join(admin, ObjectsDirName)
+	if err := os.Mkdir(t.Objects, 0o755); err != nil {
+		t.removeFolders()
+		_, _ = run(ctx, t.options, t.top, "worktree", "prune")
+		return fmt.Errorf("create the run's object folder: %w", err)
 	}
 	return nil
 }
@@ -229,71 +271,48 @@ func (t *Tree) remove(ctx context.Context, dropBranch bool) error {
 // ErrGone is returned by Open when the worktree folder no longer exists.
 var ErrGone = errors.New("the worktree folder is gone")
 
-// Open is the Tree of a worktree an earlier server created at path on branch, started from
-// base, so that a run the server lost when it stopped can still be finished: Finish commits
-// what the run left there and removes the folder like at the end of a run. Its git commands
-// that change the worktree list run in the repository's git directory.
-func Open(ctx context.Context, options Options, path, branch, base string) (*Tree, error) {
-	if info, err := os.Stat(path); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("%w: %s", ErrGone, path)
+// Open is the Tree of a worktree an earlier server created, so that a run the server lost
+// when it stopped can still be finished: Finish commits what the run left there and removes
+// the folder like at the end of a run. A state without Admin (an earlier version's record)
+// finds the git folders the way that version did, from the worktree itself.
+func Open(ctx context.Context, options Options, state State) (*Tree, error) {
+	if info, err := os.Stat(state.Path); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("%w: %s", ErrGone, state.Path)
 	}
-	common, err := run(ctx, options, path, "rev-parse", "--git-common-dir")
+	tree := &Tree{options: options, top: state.Top, common: state.Common, Path: state.Path, Workspace: state.Workspace, Branch: state.Branch, Base: state.Base, Start: state.Start, Admin: state.Admin}
+	if tree.Workspace == "" {
+		tree.Workspace = tree.Path
+	}
+	if tree.Start == "" {
+		tree.Start = tree.Base
+	}
+	if tree.Admin != "" && tree.common != "" {
+		tree.Objects = filepath.Join(tree.Admin, ObjectsDirName)
+		return tree, nil
+	}
+	common, err := run(ctx, options, state.Path, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return nil, fmt.Errorf("%w (%v)", ErrNotRepository, err)
 	}
 	if !filepath.IsAbs(common) {
-		common = filepath.Join(path, common)
+		common = filepath.Join(state.Path, common)
 	}
-	if common, err = filepath.EvalSymlinks(common); err != nil {
+	if tree.common, err = filepath.EvalSymlinks(common); err != nil {
 		return nil, fmt.Errorf("resolve the git directory: %w", err)
 	}
-	return &Tree{options: options, top: common, common: common, Path: path, Workspace: path, Branch: branch, Base: base}, nil
+	if tree.Admin, err = run(ctx, options, state.Path, "rev-parse", "--absolute-git-dir"); err != nil {
+		return nil, fmt.Errorf("find the worktree's admin folder: %w", err)
+	}
+	if info, err := os.Stat(filepath.Join(tree.Admin, ObjectsDirName)); err == nil && info.IsDir() {
+		tree.Objects = filepath.Join(tree.Admin, ObjectsDirName)
+	}
+	_, err = run(ctx, options, state.Path, "symbolic-ref", "--quiet", "HEAD")
+	tree.attached = err == nil
+	return tree, nil
 }
 
 // BranchExists reports whether the repository that holds workspace has the branch.
 func BranchExists(ctx context.Context, options Options, workspace, branch string) bool {
 	_, err := run(ctx, options, workspace, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
-}
-
-// hostGitFlags make every git command jad runs on the host ignore what a sandboxed run could
-// have written into the repository's git directory: its hooks (a post-checkout hook would run
-// outside the sandbox on the next worktree add) and an fsmonitor command in its config (run
-// by the next status). Command-line configuration wins over every config file.
-var hostGitFlags = []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}
-
-// commitHooksFlags are hostGitFlags for the commit Finish makes when commit_hooks is on: the
-// repository's hooks run for it, as the setting asks; the fsmonitor stays off.
-var commitHooksFlags = []string{"-c", "core.fsmonitor=false"}
-
-// run runs git in dir and returns its standard output without the trailing newline. A
-// failure carries the first line of git's error output. The repository's hooks and its
-// fsmonitor never run (hostGitFlags).
-func run(ctx context.Context, options Options, dir string, arguments ...string) (string, error) {
-	return runFlags(ctx, options, dir, hostGitFlags, arguments...)
-}
-
-func runFlags(ctx context.Context, options Options, dir string, flags []string, arguments ...string) (string, error) {
-	if options.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, options.Timeout)
-		defer cancel()
-	}
-	command := exec.CommandContext(ctx, options.Git, append(append([]string(nil), flags...), arguments...)...)
-	command.Dir = dir
-	// A command never waits for a password, and the messages stay parseable.
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
-		if line, _, found := strings.Cut(message, "\n"); found {
-			message = line
-		}
-		if message == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%v: %s", err, message)
-	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
 }

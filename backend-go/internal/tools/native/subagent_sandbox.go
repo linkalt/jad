@@ -50,6 +50,22 @@ func describeAgentSandbox(pool []tools.Tool, sandbox *sessionfs.SandboxSettings,
 	return described
 }
 
+// isolationDescription is the sentence an isolated agent's exec description ends with: how
+// git works in its worktree (docs/isolation-decisions.md D13).
+const isolationDescription = " Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
+
+// describeAgentIsolation is pool with isolationDescription added to exec's description; pool
+// itself is not changed.
+func describeAgentIsolation(pool []tools.Tool) []tools.Tool {
+	described := append([]tools.Tool(nil), pool...)
+	for index, tool := range described {
+		if tool.Definition.ID == execToolID {
+			described[index].Definition.Description += isolationDescription
+		}
+	}
+	return described
+}
+
 // ToolsetMCPKey is the key of the MCP servers an agent that names a toolset uses: the
 // toolset's key, shared by every agent of that toolset, or, when the agent's own sandbox
 // covers mcp, the toolset's key and the agent's name, so the servers start in that agent's

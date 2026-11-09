@@ -282,7 +282,39 @@ bwrap 0.9.0; nothing was run on macOS.
     `sample/jad/sandbox/{workspace-writer,reader}.json`.
 12. **`jad check`** starts sandboxes that differ only in their per-session read-only paths once.
 
-Not done in P2 (later phases or follow-ups): `isolation.base/materialize/share_paths` and delegated
-profile-run isolation (P3/P4); per-call `sandbox` / `sandbox_choice` (P2b); `--bind-fd` for S5;
+Not done in P2 (later phases or follow-ups): `isolation.materialize/share_paths` (P4) and delegated
+profile-run isolation (P3 remainder; `isolation.base` came with P3); per-call `sandbox` / `sandbox_choice` (P2b); `--bind-fd` for S5;
 seatbelt read rules on a Mac. (The agent-specific tool descriptions and toolset MCP servers were
 done as a P2 follow-up; see item 6.)
+
+## P3 implementation, sub-agent runs (2026-11-09)
+
+Checkout materialiser only (P0: no `--overlay` here). Verified with bwrap 0.9.0 and git 2.43.0.
+
+1. **Private git** (`worktree/{worktree,finish,snapshot,git}.go`): detached HEAD; the run's objects
+   in `<common>/worktrees/<R>/jad-objects` with the shared objects as alternate (`Tree.RunEnvironment`,
+   also `gc.auto=0`, `maintenance.auto=false`, C9). The design's `<R>/objects` sits inside the admin
+   folder instead, so P1's S4 rule (own admin folder shown, others hidden) covers it unchanged.
+2. **Collect in the environment** (§3 step 8): status/add/commit/rev-parse/`pack-objects` through the
+   run's sandbox (`collectLauncher`), with `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE` set so no
+   run-written pointer is followed; the admin folder is added to the write set for these commands
+   only. Host: `index-pack --fix-thin`, `rev-list --objects` check, `update-ref` with an empty old
+   value, `merge-tree` (§5.3), folders removed with `os.RemoveAll` (git's own removal would read the
+   worktree), `worktree prune`. A run without a sandbox, and recovery, collect on the host with the
+   same variables (no sandbox is known at startup).
+3. **Write narrowing** (§9.3 step 6): `{git_common_dir}` in an isolated run's write set is its
+   admin folder; a sub-path is kept only inside it. The run's folders come from jad's record
+   (`isolatedRunOf`), never from its `.git` file. **Found while tracing:** P1/P2 found
+   `{git_common_dir}` and the run's own admin folder through the `.git` file and `commondir`, which
+   the run could rewrite, so a sandboxed call could make its next call's writable set any folder.
+   Closed for isolated runs by the record, and for a session in a linked worktree by keeping
+   `.git`, `commondir` and `gitdir` read-only.
+4. **`base: "working"`** (D12, §5.2): as designed; `Validate` checks only against HEAD, not against
+   a dirty-session snapshot W′ (departure).
+5. **D10**: an isolated (or sandbox-reader) agent with MCP tools counts as changing the workspace.
+6. **D13**: an isolated agent's exec description says it works on a detached HEAD and that
+   branches, tags and stashes are not taken back.
+7. **Result lines**: `worktree_target`, `worktree_conflicts`, `worktree_start` (isolated runs only).
+
+Not done in this part: delegated profile runs in a worktree (`app/bound_runner.go`, §9.7), the
+W′ check, P4.

@@ -42,7 +42,8 @@ func TestRestartFinishesTheWorktreeOfALostRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	writeLostWorktreeRun(t, root, "sub_0000eeee", subagentWorktree{Branch: tree.Branch, Base: tree.Base, Path: tree.Path})
+	state := tree.State()
+	writeLostWorktreeRun(t, root, "sub_0000eeee", subagentWorktree{Branch: tree.Branch, Base: tree.Base, Path: tree.Path, Workspace: state.Workspace, Admin: state.Admin, Common: state.Common, Top: state.Top})
 	manager := NewPersistentSubagentManager(SubagentManagerOptions{StorageDir: root, Keep: 10})
 	t.Cleanup(func() { _ = manager.Close() })
 	run := manager.byID("sub_0000eeee")

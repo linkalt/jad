@@ -888,7 +888,7 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	// The worktree is committed once nothing of the child runs any more, whatever the
 	// end, so what it did is on its branch before the run is reported ended.
 	if tree != nil {
-		m.closeWorktree(run, tree)
+		m.closeWorktree(run, tree, spec.request.Execution)
 	}
 	m.finish(run, state, result, reason, spec)
 }

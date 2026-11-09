@@ -112,12 +112,24 @@ type subagentAgent struct {
 	background bool
 }
 
+// changesWorkspace reports whether a run of the agent can change the session's own files
+// (NativeSubagentAgent.ChangesWorkspace). A worktree of its own or a sandbox that writes only
+// scratch does not make an agent with MCP tools a reader: its stdio MCP servers are the
+// session's (or its toolset's) and work in the session's folder (docs/isolation-decisions.md
+// D10), so such a run is scheduled and checkpointed like any writer.
+func (a subagentAgent) changesWorkspace() bool {
+	if a.config.ChangesWorkspace() {
+		return true
+	}
+	return a.config.ChangesFiles() && len(a.mcpTools) > 0
+}
+
 // backgroundSafe reports whether a writer agent may run as a handle: the session turned
 // background_writers on, the async tool is there to collect the run, and the agent
 // has a tool that changes the session's files. An agent with isolation worktree is
 // handed off like a reader without it.
 func backgroundSafe(settings sessionfs.NativeSubagentSettings, agent subagentAgent, host *AsyncHost) bool {
-	if !settings.BackgroundWriters || host == nil || !agent.config.ChangesWorkspace() {
+	if !settings.BackgroundWriters || host == nil || !agent.changesWorkspace() {
 		return false
 	}
 	return true
@@ -337,6 +349,9 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 			}
 		}
 		agentPool = describeAgentSandbox(agentPool, agent.Sandbox, agentDescriptions)
+		if agent.Isolated() {
+			agentPool = describeAgentIsolation(agentPool)
+		}
 		entry, err := newSubagentAgent(agent, settings.DenyTools, agentPool, settings.MaxDepth >= 2)
 		if err != nil {
 			if toolsetKey != "" {
@@ -456,7 +471,7 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 		return false
 	}
 	agent, problem := s.selectAgent(arguments)
-	return problem == "" && agent.config.ChangesWorkspace()
+	return problem == "" && agent.changesWorkspace()
 }
 
 // subagentListText is the text appended to the manifest description: the agent list, or,
@@ -692,6 +707,8 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 			agent.mcpTools = append(agent.mcpTools, hook(hooks, gated))
 		}
 		agent.mcpBound = true
+		// Bound MCP tools can make an isolated agent a writer (changesWorkspace).
+		agent.background = backgroundSafe(s.settings, *agent, s.async)
 		if err := s.checkAgentHasTools(agent); err != nil {
 			return err
 		}

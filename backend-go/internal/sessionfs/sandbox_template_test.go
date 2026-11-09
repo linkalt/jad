@@ -91,7 +91,8 @@ func TestSandboxNewKeyRefusals(t *testing.T) {
 		"system in hide":       {`{"hide_paths":["{system}"]}`, "{system} is a read path of its own"},
 		"relative read":        {`{"read":{"paths":["src"]}}`, "read.paths[0] must be an absolute path"},
 		"isolation mode":       {`{"isolation":{"mode":"overlay"}}`, `isolation.mode must be "none" or "worktree"`},
-		"isolation later key":  {`{"isolation":{"base":"working"}}`, "sandbox.isolation"},
+		"isolation later key":  {`{"isolation":{"materialize":"overlay"}}`, "sandbox.isolation"},
+		"isolation base":       {`{"isolation":{"base":"tip"}}`, `isolation.base must be "head" or "working"`},
 		"blank template":       {`{"template":" "}`, "template must be the name"},
 		"string":               {`"workspace-writer"`, "needs the catalog layout"},
 	} {
@@ -318,8 +319,20 @@ func TestAgentSandboxIsNarrowedByTheSession(t *testing.T) {
 	isolated := map[string]any{"enabled": false, "isolation": map[string]any{"mode": "worktree"}}
 	fixture = layouttest.Write(t, layouttest.Spec{Settings: map[string]any{"sandbox": session}, Native: agents(isolated, nil)})
 	config = mustLoadFixtureSession(t, fixture)
-	if agent, _ := config.NativeSubagent.Agent("explore"); agent.Isolation != SubagentIsolationWorktree || agent.Sandbox != nil {
+	if agent, _ := config.NativeSubagent.Agent("explore"); agent.Isolation != SubagentIsolationWorktree || agent.Sandbox != nil || agent.IsolationBase != "" {
 		t.Fatalf("agent = %+v", agent)
+	}
+	// sandbox.isolation.base working is the agent's worktree base, with either form of isolation.
+	for _, extra := range []map[string]any{nil, {"isolation": "worktree"}} {
+		working := map[string]any{"enabled": false, "isolation": map[string]any{"base": "working"}}
+		if extra == nil {
+			working["isolation"] = map[string]any{"mode": "worktree", "base": "working"}
+		}
+		fixture = layouttest.Write(t, layouttest.Spec{Settings: map[string]any{"sandbox": session}, Native: agents(working, extra)})
+		config = mustLoadFixtureSession(t, fixture)
+		if agent, _ := config.NativeSubagent.Agent("explore"); agent.Isolation != SubagentIsolationWorktree || agent.IsolationBase != SandboxIsolationBaseWorking {
+			t.Fatalf("agent = %+v", agent)
+		}
 	}
 }
 
