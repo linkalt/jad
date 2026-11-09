@@ -872,6 +872,16 @@ plus `read`, `write`, `isolation` of §9.1) with the catalog file header:
 - `enabled` is **required** in a template file (refused when absent): a file someone names to confine
   a run must say whether it confines it (D19). Everything else keeps the loader's defaults.
 - A template cannot name another template (`template` is refused inside a file): no chains (D17).
+- **`tools` is not tied to the tool set of the run that uses it** (D25). It names the tools the
+  environment wraps *when the run has them*; it is never checked against a profile's `tools.allow` /
+  `tools.deny`, its toolset, or an agent's `tools` list. A listed tool the run does not have (not
+  registered, hidden by the profile, absent from the agent's catalog) is not an error and has no
+  effect, so one template serves a profile that shows only `read` and `search` and another that runs
+  `exec`, `hooks` and `lsp`. This is today's behaviour and stays so: `applySandbox` hands the sandbox
+  only to tool settings that exist (`sessionfs/sandbox.go:276-291`), the profile filter
+  (`applyProfileTools`) runs after and never looks at the sandbox, and `jad check` reports nothing for
+  such an entry. Only the spelling is checked: each entry must be one of `SandboxTools`
+  (`sessionfs/sandbox.go:38`, refusal `:126-127`), no entry twice, so a typo still fails at load.
 - `schema_version` and `description` are the only keys outside the sandbox object.
 - Schema: new hand-written `sample/schemes/sandbox.schema.json`, whose properties are the
   `sandbox` definition of `setting.schema.json:627-678` (shared through `$ref`), plus the header and
@@ -956,7 +966,7 @@ agent, the template and the path, rather than silently cut (D18).
 | no sandbox | `P` nil → `C` (a child may be more confined than its parent); `C` nil → `P` |
 | `enabled` | `P.enabled ∨ C.enabled` |
 | `backend` | must be equal when both are enabled; `command` only when both commands are identical |
-| `tools` | union (a child covers at least what its parent covers) |
+| `tools` | union (a child covers at least what its parent covers); never compared with either run's tool set (D25) |
 | `read.paths`, `write.paths`, `write.plan_paths` | every `C` entry must lie inside some `P` entry; entries compare by placeholder and remainder (`{workspace}/src` ⊂ `{workspace}`; `{system}` and absolute paths compare after expanding `{system}`); `["/"]` contains everything |
 | `hide_paths` | union |
 | `network` | `C.network` only if `P.network` |
@@ -992,7 +1002,9 @@ defaults overridden by a profile's object; edit of a template invalidates the se
 `NarrowSandbox` table (every row of §14.5, accept and refuse); an agent with a template builds its own
 exec description and standby key; a profile and two agents sharing one template each get their own
 `{workspace}` and `{tmp}`; catalog API save/delete/in-use for `sandbox`; schema agreement between
-`sandbox.schema.json` and the template loader.
+`sandbox.schema.json` and the template loader; a template whose `tools` lists `exec`, `tool_smith`,
+`hooks`, `mcp` and `lsp` loads for a profile whose `tools.allow` is `["read", "search"]` and for an
+agent whose catalog has none of them (D25), while an unknown entry is still refused with `tools[i]`.
 
 ---
 
@@ -1236,7 +1248,7 @@ allowed only when no sandbox is enabled, which is the user's explicit configurat
 
 | Existing key | New design | Status |
 |---|---|---|
-| `sandbox.enabled`, `tools`, `backend`, `executable`, `network`, `network_allow`, `proxy_port`, `command`, `check_timeout_ms` | unchanged; `tools` gains `lsp` | kept |
+| `sandbox.enabled`, `tools`, `backend`, `executable`, `network`, `network_allow`, `proxy_port`, `command`, `check_timeout_ms` | unchanged; `tools` gains `lsp`; `tools` stays independent of the run's tool set (D25) | kept |
 | `sandbox.writable_paths` | `sandbox.write.paths` | old spelling accepted; both set → refused (D11) |
 | `sandbox.plan_writable_paths` | `sandbox.write.plan_paths` | same |
 | `sandbox.hide_paths` | unchanged, highest precedence | kept |
@@ -1298,6 +1310,7 @@ Decided: see `docs/isolation-decisions.md` (D1–D24, with corrections).
 | D22 | A resume without `sandbox` keeps the source run's recorded template | resume in the agent's default | low |
 | D23 | Child tools for a chosen template are built lazily on first use and cached per (agent, template) | build all choices at catalog time (MCP servers started for choices never made) | low |
 | D24 | `Resolve`/`LoadSessionSettings` take `sessionfs.RunChoice{ModelPath, Sandbox}` instead of a second trailing string | add a positional `sandbox string` (smaller diff, easy to swap with `modelPath`) | low |
+| D25 | `sandbox.tools` is independent of the run's tool set: a listed tool the profile or agent does not have is accepted and ignored; only unknown names are refused (decided by the user) | refuse or warn when `tools` names a tool the run cannot use | low |
 
 ---
 

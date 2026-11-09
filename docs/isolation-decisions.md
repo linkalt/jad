@@ -23,7 +23,7 @@ which phase, and what still needs the user.
 | D13 | accept | Agents' git works on a detached HEAD; branches and tags fail by environment, and the tool description says so. | Refused by a read-only directory, not by a tool. | P3 |
 | D14 | accept | Depend on `nsenter` to join the holder; `jad check` reports it missing and `auto` falls back to checkout. | Go cannot join a user namespace itself; a C helper is more to maintain. | P0 check, P4 |
 
-## D15–D24
+## D15–D25
 
 | # | Verdict | Decision | Reason | Phase | [USER] |
 |---|---|---|---|---|---|
@@ -37,6 +37,7 @@ which phase, and what still needs the user.
 | D22 | accept with correction | A resume without `sandbox` keeps the source run's recorded template, re-resolved by name and narrowed again by the current agent and session; a missing or now-widening template refuses the resume, as does a choice that changes `isolation.mode`. | Falling back to the agent's default could silently widen a run started narrower. | P2b | |
 | D23 | accept with correction | Child tools and MCP servers for a chosen template are built lazily and cached per (agent, template); `NarrowSandbox` for every (agent, choice) pair is computed at load. | Choices nobody makes start no MCP servers, while a broken environment is still caught at load. | P2b | |
 | D24 | accept with correction | `Resolve`/`LoadSessionSettings` take `sessionfs.RunChoice{ModelPath, Sandbox, Ceiling}` where `Ceiling` is the caller's resolved sandbox; `lockedConfigKey` hashes both. | The sandbox travels as a resolved object, not a string, and two adjacent strings could be swapped silently. | P2 struct + Ceiling, P2b Sandbox | |
+| D25 | accept (user) | `sandbox.tools` is independent of the run's tool set: a listed tool the profile (`tools.allow`/`deny`), toolset or agent catalog does not have is accepted and has no effect; only names outside `SandboxTools` and duplicates are refused. | One template must serve profiles with different tool sets; the user ruled that e.g. a profile allowing `read`, `search` with a template listing more is not an error. Matches today's `applySandbox`. | P2 (test only; no code change needed) | user |
 
 ## Corrections to the design
 
