@@ -29,7 +29,7 @@ func TestChildGetsAsyncOnlyWhenItsToolsListNamesIt(t *testing.T) {
 		agent sessionfs.NativeSubagentAgent
 		want  string
 	}{
-		"default tools": {agentNamed("plain"), "read"},
+		"default tools": {agentNamed("plain"), "read,async"},
 		"listed":        {listsAsync, "read,async"},
 	} {
 		t.Run(name, func(t *testing.T) {

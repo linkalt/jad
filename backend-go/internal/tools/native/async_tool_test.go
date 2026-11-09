@@ -117,20 +117,12 @@ func TestAsyncToolChangesStateOnlyForStop(t *testing.T) {
 	}
 }
 
-// Decided 2026-10-22: a sub-agent may use async (scoped to its own run), but only when its
-// tools list names it; a child with no list never gets it, and scripts never call it.
-func TestAsyncToolIsOptInForASubagentAndNeverInAScript(t *testing.T) {
+// A sub-agent has async by default (scoped to its own run), like a profile, and scripts never call it.
+func TestAsyncToolIsDefaultForASubagentAndNeverInAScript(t *testing.T) {
 	tool, _, _ := newAsyncToolFixture(t)
-	if !tool.ReadOnly {
-		t.Fatal("async must be ReadOnly to be in the read-only pool")
-	}
-	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{}, []tools.Tool{readOnlyTool("read"), tool})
-	if !containsName(poolNames(readOnly), "async") {
-		t.Fatalf("async must be available to an agent that lists it: %v", poolNames(readOnly))
-	}
-	chosen, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil)
-	if err != nil || containsName(poolNames(chosen), "async") {
-		t.Fatalf("a child without a tools list got async: %v %v", poolNames(chosen), err)
+	chosen := childNamesOf(t, agentNamed("plain"), nil, readOnlyTool("read"), tool)
+	if !containsName(chosen, "async") {
+		t.Fatalf("a child without a tools list did not get async: %v", chosen)
 	}
 	if !containsName(sessionfs.NativeToolSmithExcludedTools(), "async") {
 		t.Fatal("tool_smith scripts may call async")

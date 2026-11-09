@@ -24,3 +24,8 @@ const removedProcessMaxRunningHint = "it limited a child's managed processes, an
 
 // removedAllowWriteHint: allow_write only existed to gate children behind approvals.
 const removedAllowWriteHint = "an agent's tools list alone decides whether a child can write, edit or run commands; delete the key"
+
+// removedAgentReadOnlyHint: an agent's read_only made its exec calls read-only. Subagents have no
+// read-only mode now; a child's protection is its tool set and isolation, and ignoring the key
+// would turn an agent that was protected into one that writes the workspace.
+const removedAgentReadOnlyHint = "protection now comes only from isolation; remove the key, and set isolation to \"worktree\" if this child must not write the workspace"

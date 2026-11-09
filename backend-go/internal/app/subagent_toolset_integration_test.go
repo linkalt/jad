@@ -27,8 +27,8 @@ func TestSubagentToolsetGivesTheChildAToolTheSessionDoesNotRegister(t *testing.T
 	if got := strings.Join(parent[0].Tools, ","); got != "async,subagent" {
 		t.Errorf("parent tools = %q, want only async and subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "skill" {
-		t.Errorf("child tools = %q, want skill from its toolset", got)
+	if got := strings.Join(child[0].Tools, ","); got != "skill,subagent" {
+		t.Errorf("child tools = %q, want skill from its toolset and the session's subagent", got)
 	}
 	if !strings.Contains(child[1].Text, "the secret is 42") {
 		t.Errorf("the child's skill call did not run:\n%s", child[1].Text)
@@ -43,8 +43,8 @@ func TestSubagentWithoutToolsetKeepsTheSessionTools(t *testing.T) {
 	})
 	f.run(t)
 	child := f.provider.forModel("child-model")
-	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "skill" {
-		t.Fatalf("child requests %+v, want the session's skill", child)
+	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "async,skill,subagent" {
+		t.Fatalf("child requests %+v, want the session's async, skill and subagent", child)
 	}
 }
 
@@ -143,12 +143,12 @@ func TestSubagentToolsetExecHidesTheModelsAPIKeyFromTheChild(t *testing.T) {
 	}
 }
 
-// The profile's tools.deny reaches the toolset's tools: skill is denied, so the toolset
+// The profile's tools.deny reaches the toolset's tools: skill and subagent are denied, so the toolset
 // gives the agent nothing and the session refuses to build, naming the deny.
 func TestSubagentToolsetToolDeniedByTheProfileIsNotGiven(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "toolset": "extra/reader",
-		"__session":  profileSession(map[string]any{"deny": []string{"skill"}}),
+		"__session":  profileSession(map[string]any{"deny": []string{"skill", "subagent"}}),
 		"__toolsets": map[string]any{"extra/reader": map[string]any{"native": map[string]any{"skill": map[string]any{}}}},
 	})
 	status, body := f.runStatus(t, "ask the explorer")
@@ -157,7 +157,7 @@ func TestSubagentToolsetToolDeniedByTheProfileIsNotGiven(t *testing.T) {
 	}
 	status, body = f.sessionTools(t)
 	body = errorText([]byte(body))
-	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: skill") {
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: skill, subagent") {
 		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
 	if len(f.provider.forModel("parent-model")) != 0 {

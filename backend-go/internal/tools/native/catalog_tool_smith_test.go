@@ -63,29 +63,24 @@ func TestBuildCatalogRequiresTheToolSmithManifest(t *testing.T) {
 	}
 }
 
-// Flipped on purpose (nesting, design_nesting_and_approval.md): tool_smith is in the pool a
-// child draws from, but like async it reaches a child only when its tools list names it.
-func TestToolSmithIsInTheSubagentPoolButOnlyAnAgentThatListsItGetsIt(t *testing.T) {
+// A child is a profile: tool_smith is in its set by default, and only its own allow list or a
+// deny list (its own, or the profile's tools.deny) takes it away.
+func TestToolSmithIsInEveryChildByDefaultAndOnlyADenyOrAllowListTakesItAway(t *testing.T) {
 	smith, err := NewToolSmithTool(sessionfs.NativeToolSmithSettings{}, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !smith.ReadOnly {
-		t.Fatal("tool_smith must be ReadOnly to be in the read-only pool")
-	}
-	readOnly, _ := childToolPools(sessionfs.NativeSubagentSettings{}, []tools.Tool{readOnlyTool("read"), smith})
-	if !containsName(poolNames(readOnly), "tool_smith") {
-		t.Fatalf("read-only pool = %v, want tool_smith in it", poolNames(readOnly))
-	}
-	plain, _, err := subagentChildTools(agentNamed("plain"), readOnly, nil)
-	if err != nil || containsName(poolNames(plain), "tool_smith") {
-		t.Fatalf("a child without a tools list got tool_smith: %v %v", poolNames(plain), err)
+	plain := childNamesOf(t, agentNamed("plain"), nil, readOnlyTool("read"), smith)
+	if !containsName(plain, "tool_smith") {
+		t.Fatalf("a child without a tools list did not get tool_smith: %v", plain)
 	}
 	listed := agentNamed("scripter")
-	listed.Tools, listed.HasTools = []string{"read", "tool_smith"}, true
-	chosen, _, err := subagentChildTools(listed, readOnly, nil)
-	if err != nil || !containsName(poolNames(chosen), "tool_smith") {
-		t.Fatalf("a child that lists tool_smith got %v, %v", poolNames(chosen), err)
+	listed.Tools, listed.HasTools = []string{"read"}, true
+	if chosen := childNamesOf(t, listed, nil, readOnlyTool("read"), smith); containsName(chosen, "tool_smith") {
+		t.Fatalf("a child whose own allow list leaves tool_smith out got %v", chosen)
+	}
+	if chosen := childNamesOf(t, agentNamed("plain"), []string{"tool_smith"}, readOnlyTool("read"), smith); containsName(chosen, "tool_smith") {
+		t.Fatalf("the profile's tools.deny did not take tool_smith from the child: %v", chosen)
 	}
 }
 

@@ -36,13 +36,23 @@
       "description": "Files appended to the agent's prompt after instructions (and after prompt.md for a folder agent), each separated by a blank line. A relative path is taken from the session's cwd, or from the agent's folder for a folder agent; ~ is expanded. The files are read when the session loads, and a missing file is a configuration error. The calling session's own prompt_documents are not used."
     },
     "tools": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
-      "uniqueItems": true,
-      "description": "Tools the agent may use: enabled tools by name (read, grep, glob, fetch, skill, decide_systemone, web_search, and write, edit, bash, exec and process, which the agent's list alone grants; a child that lists process sees and stops only the processes it started, and they are stopped when its run ends), and, by name only, subagent, tool_smith, profile_message and load_tool when the session enables them (load_tool only for a child of a profile with tools.lazy, which runs MCP and extension tools only) (profile_message also needs another profile to message; with a toolset, both come from the session, not from the toolset), and MCP tools by ID, written mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports). Absent means every enabled read-only native or extension tool and no MCP tool. An MCP tool is never added because its server calls it read-only: you name each one, so you vouch that it cannot change anything you care about. mcp:<server>:* gives the agent every loaded tool of that server (each once, even if also named exactly); a wildcard that matches no tool is a configuration error naming the server. An agent that lists write, edit, bash or exec runs them at once like the session does, takes the checkpoint like a write, and runs to its end instead of being handed off unless tools.native.subagent.background_writers is on. A name that is not loaded is a configuration error that lists the loaded ones; it is checked when the session loads."
+      "description": "The agent's own narrowing of its tools, written like a profile's tools block. A sub-agent is just another profile: with no tools key it has every tool the session registers (every native and extension tool, every MCP tool, and the subagent tool while max_depth allows nesting), minus the session profile's tools.deny. An array is the allow list: native tools by name, mcp:<server>:<tool> (the server id from mcp_servers and the tool name the server reports) and mcp:<server>:* (every loaded tool of that server); an object has allow and deny arrays of the same entries, and deny wins. A name that names no enabled tool is a configuration error that lists the enabled ones. A list that names only async, exec, tool_smith, subagent, profile_message and load_tool (the old opt-in names) restricts nothing: it is ignored with a warning, so remove it. An agent that has exec (or tool_smith, profile_message, or subagent when max_depth is 2 or more) can change files: it takes the checkpoint like a write and runs to its end instead of being handed off unless tools.native.subagent.background_writers is on; an agent whose tools leave none of them is a reader.",
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "allow": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "deny": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        }
+      ]
     },
     "toolset": {
       "anyOf": [
@@ -83,12 +93,7 @@
       "type": "string",
       "enum": ["none", "worktree"],
       "default": "none",
-      "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit."
-    },
-    "read_only": {
-      "type": "boolean",
-      "default": false,
-      "description": "true makes every exec call of the agent a read_only one, whatever the model sends, so exec does not make it an agent that changes files: a call to it needs no checkpoint and may run beside other calls or as an async handle. Under a bwrap or seatbelt sandbox its exec calls get sandbox.plan_writable_paths (by default only the temp folder) and cannot write the project; without a sandbox it is the agent's promise, and with tools.native.exec.read_only_calls sandboxed the agent is refused unless such a sandbox covers exec. Needs exec in tools and no other tool that changes files (tool_smith, subagent, profile_message); not with isolation worktree."
+      "description": "none (default) runs the child in the session's working directory. worktree runs each run in a git worktree of its own, on a new branch (worktree.branch_prefix + run id) made from HEAD; the session's uncommitted changes are not in it. When the run ends, whatever it left is committed to the branch and the worktree folder is removed; the branch stays when the run changed something and is deleted otherwise, and the result names it with its diff stat. A worktree run changes no file of the session, so it needs no checkpoint and may run beside other runs as an async handle; the path rules apply to the same paths inside the worktree. MCP tools still act on the session's own folder. A resume starts from the branch of the run it continues. Needs a tool that changes files and a working directory inside a git repository with a commit. A child has no read-only mode: its protection is its tool set and this key. A worktree is not a sandbox: the child's commands can still reach any absolute path, the session's own folder included."
     },
     "timeout_ms": {
       "type": "integer",

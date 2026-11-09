@@ -134,6 +134,9 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 			if key == "paths" {
 				return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingsPath, subagentDirSection, removedAgentPathsHint)
 			}
+			if key == "read_only" {
+				return NativeSubagentAgent{}, configError("%s: %s.read_only was removed; %s", settingsPath, subagentDirSection, removedAgentReadOnlyHint)
+			}
 			if !containsString(nativeSubagentAgentKeys, key) {
 				return NativeSubagentAgent{}, unsupportedToolKey(settingsPath+": "+subagentDirSection, key, nativeSubagentAgentKeys, "")
 			}

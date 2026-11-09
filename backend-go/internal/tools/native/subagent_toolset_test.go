@@ -114,11 +114,11 @@ func TestSubagentToolsetIsStillSubjectToProfileDeny(t *testing.T) {
 	}
 }
 
-// A change tool in a toolset is given by the agent's tools list alone, and counts as a file
-// changer.
+// A change tool in a toolset is in the child's set like any other tool, unless its own allow list
+// leaves it out, and counts as a file changer.
 func TestSubagentToolsetChangeToolFollowsTheToolsList(t *testing.T) {
 	toolset := []tools.Tool{readOnlyTool("grep"), writeTool("exec")}
-	// With no tools list the change tool is never given.
+	// An allow list that names the change tool gives it.
 	allowed := subagentSettings(toolsetAgent("fixer", "grep", "exec"))
 	launcher := &fakeLauncher{}
 	catalog, err := buildWithToolset(t, allowed, launcher, toolset, readOnlyTool("read"))
@@ -135,8 +135,8 @@ func TestSubagentToolsetChangeToolFollowsTheToolsList(t *testing.T) {
 		t.Fatal(err)
 	}
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := childToolsOf(launcher, "viewer"); got != "grep" {
-		t.Errorf("viewer tools = %q, want grep only: change tools must be named", got)
+	if got := childToolsOf(launcher, "viewer"); got != "grep,exec" {
+		t.Errorf("viewer tools = %q, want grep,exec: a child has every tool of its toolset", got)
 	}
 }
 
@@ -153,8 +153,8 @@ func TestSubagentToolsetChangeToolCountsAsAFileChange(t *testing.T) {
 	}
 }
 
-// A toolset that lists the subagent tool does not give it to a child by itself: like async and
-// tool_smith it is opt-in through the agent's own tools list.
+// A toolset that lists the subagent tool does not give its copy to a child: the only subagent tool a
+// child may have is the owner's nested copy (and with max_depth 1 there is none).
 func TestSubagentToolsetNeverGivesTheChildTheSubagentTool(t *testing.T) {
 	launcher := &fakeLauncher{}
 	nested := tools.Tool{Definition: tools.Definition{ID: subagentToolID, Source: "native", Name: "subagent", Description: "x"}, ReadOnly: true}

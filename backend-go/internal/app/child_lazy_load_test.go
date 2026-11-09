@@ -32,9 +32,9 @@ func TestChildOfAParentWithLazyToolsRunsThemThroughItsLoadToolInTheOwningProfile
 	requireNoLazyFile(t, f)
 }
 
-// An owner with no tools.lazy gives its children no load_tool, even when the agent names it: load_tool
-// is offered only through the owner's set. The child's request lists no load_tool.
-func TestChildOfAParentWithoutLazyToolsGetsNoLoadTool(t *testing.T) {
+// An owner that enables load_tool but has no tools.lazy still gives its children one, as its own model
+// has: it is the owner's, and lists and runs nothing because the set is empty.
+func TestChildOfAParentWithoutLazyToolsGetsALoadToolOverAnEmptySet(t *testing.T) {
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "load_tool"}, "__load_tool": true}, false, nil, nil)
 	f.provider.childFirstCall = [2]string{"skill", notesCall}
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
@@ -44,7 +44,7 @@ func TestChildOfAParentWithoutLazyToolsGetsNoLoadTool(t *testing.T) {
 	if len(child) < 1 {
 		t.Fatal("child made no request")
 	}
-	if slices.Contains(child[0].Tools, "load_tool") {
-		t.Fatalf("a child of a profile with no tools.lazy was sent load_tool: %v", child[0].Tools)
+	if !slices.Contains(child[0].Tools, "load_tool") {
+		t.Fatalf("a child of a profile that enables load_tool was not sent it: %v", child[0].Tools)
 	}
 }

@@ -137,7 +137,9 @@ func TestBackgroundWriterIsHandedOffWhenTheListNamesIt(t *testing.T) {
 func TestBackgroundSafeNeedsTheSettingTheAsyncHostAndAWriter(t *testing.T) {
 	host := newTestAsyncHost(t)
 	plain := subagentAgent{config: writerAgent("w", "read", "exec"), nativeTools: withExecutors(t, readOnlyTool("read"), writeTool("exec"))}
-	reader := subagentAgent{config: agentNamed("r"), nativeTools: withExecutors(t, readOnlyTool("read"))}
+	readerConfig := agentNamed("r")
+	readerConfig.NoChangeTools = true
+	reader := subagentAgent{config: readerConfig, nativeTools: withExecutors(t, readOnlyTool("read"))}
 	on := backgroundWriterSettings(1)
 	off := on
 	off.BackgroundWriters = false
@@ -240,7 +242,7 @@ func TestBackgroundWriterIsReachedByStopResetAndDelete(t *testing.T) {
 }
 
 func TestBackgroundWriterDoesNotChangeTheListMarkerOfOtherAgents(t *testing.T) {
-	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "exec"), writerAgent("careful", "read", "exec")}
+	agents := []sessionfs.NativeSubagentAgent{writerAgent("reader", "read"), writerAgent("fixer", "read", "exec"), writerAgent("careful", "read", "exec")}
 	list := subagentAgentList(agents, 4096, map[string]bool{"fixer": true})
 	for _, want := range []string{"- fixer [can change files; may run in the background]", "- careful [can change files; runs to its end]", "- reader\n"} {
 		if !strings.Contains(list+"\n", want) {

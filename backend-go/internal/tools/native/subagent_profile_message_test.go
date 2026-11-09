@@ -82,7 +82,9 @@ func TestAChildListingProfileMessageGetsItAndOthersDoNot(t *testing.T) {
 	}
 }
 
-func TestProfileMessageIsGovernedByTheToolsListAlone(t *testing.T) {
+// profile_message is in a child's set by default, like a profile's own; a list that names only the old
+// opt-in names restricts nothing.
+func TestProfileMessageIsInAChildByDefault(t *testing.T) {
 	settings := subagentSettings(nestingAgent("asker", "profile_message"))
 	var got []string
 	catalog := profileMessageChild(t, settings, &childMessenger{}, func(_ context.Context, request SubagentRequest) (SubagentResult, error) {
@@ -92,8 +94,8 @@ func TestProfileMessageIsGovernedByTheToolsListAlone(t *testing.T) {
 	if out := subagentCall(t, catalog, `{"task":"x"}`); !strings.Contains(out, "finished") {
 		t.Fatalf("agent with only profile_message: %s", out)
 	}
-	if len(got) != 1 || got[0] != "profile_message" {
-		t.Errorf("tools = %v, want profile_message only", got)
+	if strings.Join(got, ",") != "read,profile_message" {
+		t.Errorf("tools = %v, want read,profile_message", got)
 	}
 }
 

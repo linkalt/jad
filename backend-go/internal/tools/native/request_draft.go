@@ -99,6 +99,10 @@ func executeNativeRequestDraft(ctx context.Context, arguments map[string]any, ex
 		answer = autoAcceptRequestDraft(ctx, policy.HeadlessAutoAcceptTimeoutMS)
 	} else {
 		answer, err = execution.RequestInteraction(ctx, tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}, question)
+		if errors.Is(err, tools.ErrNoInteractionChannel) {
+			// A sub-agent's handler for a run with no user behind it: the headless fallback, as without a handler.
+			answer, err = autoAcceptRequestDraft(ctx, policy.HeadlessAutoAcceptTimeoutMS), nil
+		}
 		if err != nil {
 			return "", err
 		}

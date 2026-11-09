@@ -51,15 +51,15 @@ func TestBuildCatalogLoadsConfiguredDecideSystemoneAndRequiresItsManifest(t *tes
 	}
 }
 
-func TestSubagentCanListDecideSystemoneBecauseItIsReadOnly(t *testing.T) {
+func TestSubagentCanListDecideSystemone(t *testing.T) {
 	tool, err := extension.NewDecideSystemoneTool(sessionfs.ExtensionDecideSystemoneSettings{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	agent := sessionfs.NativeSubagentAgent{Name: "triager", HasTools: true, Tools: []string{"decide_systemone"}}
-	chosen, _, err := subagentChildTools(agent, []tools.Tool{tool}, nil)
-	if err != nil || len(chosen) != 1 || chosen[0].Definition.Name != "decide_systemone" {
-		t.Fatalf("chosen = %v, err %v", chosen, err)
+	chosen := childNamesOf(t, agent, nil, tool)
+	if len(chosen) != 1 || chosen[0] != "decide_systemone" {
+		t.Fatalf("chosen = %v", chosen)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestSubagentRefusesTheOldDecideName(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := sessionfs.NativeSubagentAgent{Name: "triager", HasTools: true, Tools: []string{"decide"}}
-	_, _, err = subagentChildTools(agent, []tools.Tool{tool}, nil)
+	_, err = newSubagentAgent(agent, nil, []tools.Tool{tool}, false)
 	if err == nil || !strings.Contains(err.Error(), `lists "decide", which is not an enabled`) {
 		t.Fatalf("old name error = %v", err)
 	}

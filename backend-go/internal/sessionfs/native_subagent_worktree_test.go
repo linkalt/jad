@@ -39,7 +39,6 @@ func TestNativeSubagentWorktreeRefusals(t *testing.T) {
 	for name, test := range map[string]struct{ section, want string }{
 		"unknown isolation":    {`{"agents":{"a":{"tools":["exec"],"isolation":"container"}}}`, `isolation must be "none" or "worktree"`},
 		"isolation not text":   {`{"agents":{"a":{"tools":["exec"],"isolation":true}}}`, "isolation must be a non-empty string"},
-		"read-only isolated":   {`{"agents":{"a":{"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
 		"read tools isolated":  {`{"agents":{"a":{"tools":["read_image"],"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
 		"worktree not object":  {`{"worktree":[],"agents":{}}`, "worktree must be an object"},
 		"unknown worktree key": {`{"worktree":{"keep":true},"agents":{}}`, "keep"},

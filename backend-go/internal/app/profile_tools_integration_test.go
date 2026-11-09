@@ -19,8 +19,8 @@ func profileSession(tools map[string]any) map[string]any {
 	return map[string]any{"__profile_extra": map[string]any{"tools": tools}}
 }
 
-// A profile that shows its model only the subagent tool: the child still reads a file,
-// although `read` is not among the tools the parent was sent.
+// A profile that shows its model only the subagent tool: its child is another profile, so the profile's
+// own allow list does not narrow it (only tools.deny and the agent's own tools do).
 func TestProfileToolsHideAToolFromTheParentButNotFromAChild(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
@@ -35,8 +35,8 @@ func TestProfileToolsHideAToolFromTheParentButNotFromAChild(t *testing.T) {
 	if got := strings.Join(parent[0].Tools, ","); got != "subagent" {
 		t.Errorf("parent tools = %q, want only subagent", got)
 	}
-	if got := strings.Join(child[0].Tools, ","); got != "skill" {
-		t.Errorf("child tools = %q, want skill, which the profile hides from the parent", got)
+	if got := strings.Join(child[0].Tools, ","); got != "async,skill,subagent" {
+		t.Errorf("child tools = %q, want async,skill,subagent: the profile's allow list does not narrow its children", got)
 	}
 	if !strings.Contains(child[len(child)-1].Text, "function_call_output") {
 		t.Errorf("the child's read call did not run:\n%s", child[len(child)-1].Text)
@@ -381,16 +381,16 @@ func TestProfileToolsDenyEntryThatIsNotRegisteredIsAConfigError(t *testing.T) {
 	}
 }
 
-// Denying the only tool an agent can use fails the load of the whole session with a
+// Denying every tool an agent can use fails the load of the whole session with a
 // message that names the deny list, not a silent agent that cannot do anything.
 func TestProfileToolsDenyThatEmptiesAnAgentFailsTheLoad(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "description": "Reads files.",
-		"__session": profileSession(map[string]any{"deny": []string{"skill"}}),
+		"__session": profileSession(map[string]any{"deny": []string{"async", "skill", "subagent"}}),
 	})
 	status, raw := f.sessionTools(t)
 	body := errorText([]byte(raw))
-	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: skill") {
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "agents.explore has no tool to use") || !strings.Contains(body, "the profile's tools.deny is in effect: async, skill, subagent") {
 		t.Fatalf("tools route: status %d, body %s", status, body)
 	}
 }

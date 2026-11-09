@@ -83,7 +83,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
-	config.Warnings = built.warnings
+	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
 	config.RemotesDir = layout.Remotes
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
@@ -197,15 +197,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		}
 		return err
 	}
-	// Checked here, for the session's agents only: an agent's exec is its toolset's or the
-	// session's. The load of a toolset above would also check the agents that toolset
-	// defines, which are dropped, so loadSessionSettingsFrom does not check.
-	return checkReadOnlyAgentsHonored(config.NativeSubagent, func(agent NativeSubagentAgent) *NativeExecSettings {
-		if key := agent.ToolsetKey(); key != "" {
-			return config.AgentToolsets[key].NativeExec
-		}
-		return config.NativeExec
-	}, c.sessionPath)
+	return nil
 }
 
 // resolveSubagentModels turns an agent's model ID ("<category>/<name>") into the model
@@ -688,4 +680,20 @@ func withDefaultEnvFile(native map[string]json.RawMessage, envFile json.RawMessa
 		result[name] = encoded
 	}
 	return result, nil
+}
+
+// deprecatedAgentToolsWarnings names the agents whose tools list names only the opt-in tools
+// of the old restricted child set: the list restricts nothing now (a child has every tool), so it
+// is ignored and should be removed.
+func deprecatedAgentToolsWarnings(settings *NativeSubagentSettings, sessionPath string) []string {
+	if settings == nil {
+		return nil
+	}
+	var warnings []string
+	for _, agent := range settings.Agents {
+		if agent.ToolsListDeprecated() {
+			warnings = append(warnings, fmt.Sprintf("%s: tools.native.subagent agent %s: tools lists only %s, which a sub-agent has by default now; the list is ignored (remove it, or list the tools to allow)", sessionPath, agent.Name, strings.Join(agent.Tools, ", ")))
+		}
+	}
+	return warnings
 }

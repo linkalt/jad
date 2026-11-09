@@ -39,28 +39,33 @@ func TestSubagentChildGetsExactlyTheChangeToolsItLists(t *testing.T) {
 	}
 }
 
-func TestSubagentAgentWithoutAToolsListNeverGetsChangeTools(t *testing.T) {
+func TestSubagentAgentWithoutAToolsListGetsTheChangeToolsToo(t *testing.T) {
 	launcher := &fakeLauncher{}
 	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("plain")), launcher,
 		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"))
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read" {
-		t.Fatalf("an agent with no tools list got %q; change tools must be named", got)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "read,exec,tool_smith" {
+		t.Fatalf("an agent with no tools list got %q, want every tool", got)
 	}
 }
 
-func TestSubagentChangeToolListDoesNotLetAnythingElseThrough(t *testing.T) {
-	// A mutating tool that is not one of exec, tool_smith, subagent and profile_message is
-	// not a change tool.
-	_, err := NewSubagentTool(writeSettings(writerAgent("fixer", "read", "task")),
-		withExecutors(t, readOnlyTool("read"), writeTool("task")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "task"`) {
-		t.Fatalf("task was accepted for a child: %v", err)
+// A tool that is not one of exec, tool_smith, subagent and profile_message is not a change tool: an agent
+// that has only such tools is a reader.
+func TestSubagentToolsThatAreNotChangeToolsLeaveAnAgentAReader(t *testing.T) {
+	built, err := newSubagentAgent(writerAgent("fixer", "read", "task"), nil, childNativePool(withExecutors(t, readOnlyTool("read"), writeTool("task"), writeTool("exec"))), true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err = NewSubagentTool(writeSettings(writerAgent("fixer", "subagent")),
-		withExecutors(t, readOnlyTool("read")), nil)
-	if err == nil || !strings.Contains(err.Error(), `lists "subagent"`) {
-		t.Fatalf("subagent was accepted for a child: %v", err)
+	if built.config.ChangesFiles() {
+		t.Fatalf("an agent with read and task counts as a file changer: %v", poolNames(built.nativeTools))
+	}
+	// Nesting alone does not make an agent a writer: a child it starts that changes files is a call of the
+	// agent's own run. exec does, for an agent that is not read_only.
+	if built, err = newSubagentAgent(agentNamed("nester"), nil, childNativePool(withExecutors(t, readOnlyTool("read"))), true); err != nil || built.config.ChangesFiles() {
+		t.Fatalf("an agent that may only nest is a writer: %v", err)
+	}
+	if built, err = newSubagentAgent(agentNamed("any"), nil, childNativePool(withExecutors(t, readOnlyTool("read"), writeTool("exec"))), false); err != nil || !built.config.ChangesFiles() {
+		t.Fatalf("an agent with exec is a reader: %v", err)
 	}
 }
 
@@ -73,7 +78,7 @@ func TestSubagentChangeToolsMustBeEnabledInTheSession(t *testing.T) {
 }
 
 func TestSubagentCallMayChangeFilesOnlyForAnAgentThatCan(t *testing.T) {
-	catalog, tool := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "exec")), &fakeLauncher{},
+	catalog, tool := buildSubagentCatalog(t, writeSettings(writerAgent("reader", "read"), writerAgent("fixer", "read", "exec")), &fakeLauncher{},
 		readOnlyTool("read"), writeTool("exec"))
 	if tool.MayChangeFiles == nil || !tool.ReadOnly {
 		t.Fatalf("the tool must stay ReadOnly and carry the per-call hook: readOnly=%v hook=%v", tool.ReadOnly, tool.MayChangeFiles != nil)
@@ -100,7 +105,7 @@ func TestSubagentCallMayChangeFilesOnlyForAnAgentThatCan(t *testing.T) {
 }
 
 func TestSubagentListMarksTheAgentsThatCanChangeFiles(t *testing.T) {
-	agents := []sessionfs.NativeSubagentAgent{agentNamed("reader"), writerAgent("fixer", "read", "exec")}
+	agents := []sessionfs.NativeSubagentAgent{writerAgent("reader", "read"), writerAgent("fixer", "read", "exec")}
 	list := subagentAgentList(agents, 4096, nil)
 	if !strings.Contains(list, "- fixer [can change files; runs to its end]") || strings.Contains(list, "reader [can") {
 		t.Fatalf("agent list:\n%s", list)
@@ -137,7 +142,7 @@ func TestSubagentWriterIsNeverHandedOffAndBlockMSIsIgnored(t *testing.T) {
 func TestSubagentReaderIsStillHandedOffNextToWriters(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Int64
-	catalog, _ := buildSubagentCatalog(t, writeSettings(agentNamed("reader"), writerAgent("fixer", "read", "exec")), blockedLauncher(release, &cancelled), readOnlyTool("read"), writeTool("exec"))
+	catalog, _ := buildSubagentCatalog(t, writeSettings(writerAgent("reader", "read"), writerAgent("fixer", "read", "exec")), blockedLauncher(release, &cancelled), readOnlyTool("read"), writeTool("exec"))
 	defer close(release)
 	out := subagentCall(t, catalog, `{"agent":"reader","task":"look","block_ms":0}`)
 	if !strings.Contains(out, "still running") {

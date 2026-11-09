@@ -481,8 +481,10 @@ func TestSampleSubagentFolderLoadsAndMatchesTheSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	explore, ok := got.Agent("explore")
-	if !ok || explore.Description == "" || !strings.Contains(explore.PromptText, "read-only research helper") ||
-		strings.Join(explore.Tools, ",") != "exec" {
+	// The sample has no read-only mode and no isolation (a worktree is made from HEAD, so an explore
+	// child would read stale files): it is a workspace writer that is told not to edit.
+	if !ok || !strings.Contains(explore.Description, "does not edit files") || !strings.Contains(explore.PromptText, "do not edit files") ||
+		!explore.ToolsUnrestricted() || explore.Isolated() || !explore.ChangesWorkspace() {
 		t.Fatalf("explore = %+v", explore)
 	}
 	compiler := jsonschema.NewCompiler()

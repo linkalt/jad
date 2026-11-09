@@ -7,49 +7,52 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// A load_tool in the parent's pool is never a child's tool by itself: it reaches a child only when
-// the child's agent names it and the owning profile set one with SetLazy.
-func TestChildLoadToolComesOnlyFromTheOwnerAndOnlyWhenNamed(t *testing.T) {
+// A load_tool in the parent's pool is never a child's tool by itself: it reaches a child only from the
+// owning profile (SetLazy), and then by default, like a profile's own, unless the agent's allow list
+// leaves it out.
+func TestChildLoadToolComesOnlyFromTheOwnerAndByDefault(t *testing.T) {
 	loadTool := readOnlyTool("load_tool")
-	// The pool holds load_tool, as the parent's native tools do, but no child reads it from there.
-	if readOnly, _ := childToolPools(subagentSettings(), []tools.Tool{readOnlyTool("read"), loadTool}); !containsTool(readOnly, "load_tool") {
-		t.Fatalf("childToolPools dropped load_tool from the pool it reads: %v", readOnly)
+	loadTool.Definition.ID = loadToolID
+	// The pool holds load_tool, as a hand-built parent list may, but no child reads it from there.
+	if pool := childNativePool([]tools.Tool{readOnlyTool("read"), loadTool}); containsTool(pool, "load_tool") {
+		t.Fatalf("childNativePool kept load_tool, which only the owner hands out: %v", pool)
 	}
-	named := agentNamed("explore")
-	named.Tools, named.HasTools = []string{"read", "load_tool"}, true
-	unnamed := agentNamed("plain")
-	unnamed.Tools, unnamed.HasTools = []string{"read"}, true
+	plain := agentNamed("plain")
+	narrowed := agentNamed("narrowed")
+	narrowed.Tools, narrowed.HasTools = []string{"read"}, true
 
-	// No owner set: a child that names load_tool gets none.
+	// No owner set: no child gets one.
 	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, subagentSettings(named), launcher, readOnlyTool("read"), loadTool)
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(plain), launcher, readOnlyTool("read"), loadTool)
 	subagentCall(t, catalog, `{"task":"x"}`)
 	if got := toolNames(launcher.requests[0].Tools); strings.Join(got, ",") != "read" {
 		t.Fatalf("child with no owning load_tool got %v, want read only", got)
 	}
 
-	// The owner gives its load_tool: the child that names it gets exactly one, after read.
+	// The owner gives its load_tool: a child gets exactly one, unless its allow list leaves it out.
 	launcher = &fakeLauncher{}
 	hook := &SubagentMCP{}
 	parentTools := withExecutors(t, readOnlyTool("read"), loadTool)
-	tool, err := NewSubagentToolWithMCP(subagentSettings(named, unnamed), parentTools, launcher, hook)
+	tool, err := NewSubagentToolWithMCP(subagentSettings(plain, narrowed), parentTools, launcher, hook)
 	if err != nil {
 		t.Fatalf("NewSubagentToolWithMCP: %v", err)
 	}
 	// The owner's load_tool is a real, validated tool, as BuildCatalogWithAsync builds it.
 	owned := withExecutors(t, loadTool)[0]
-	hook.SetLazy(nil, &owned)
+	if err := hook.SetLazy(nil, &owned); err != nil {
+		t.Fatal(err)
+	}
 	catalog, err = tools.NewCatalog(append(parentTools, tool))
 	if err != nil {
 		t.Fatal(err)
 	}
-	subagentCall(t, catalog, `{"task":"x","agent":"explore"}`)
-	if got := toolNames(launcher.requests[0].Tools); strings.Join(got, ",") != "read,load_tool" {
-		t.Fatalf("child that names load_tool got %v, want read,load_tool", got)
-	}
 	subagentCall(t, catalog, `{"task":"x","agent":"plain"}`)
+	if got := toolNames(launcher.requests[0].Tools); strings.Join(got, ",") != "read,load_tool" {
+		t.Fatalf("child with the owner's load_tool got %v, want read,load_tool", got)
+	}
+	subagentCall(t, catalog, `{"task":"x","agent":"narrowed"}`)
 	if got := toolNames(launcher.requests[1].Tools); strings.Join(got, ",") != "read" {
-		t.Fatalf("child that does not name load_tool got %v, want read only", got)
+		t.Fatalf("child whose allow list is read got %v, want read only", got)
 	}
 	// The parent's order is unchanged: load_tool is in the parent's own pool, not added after.
 	if strings.Join(toolNames(catalog), ",") != "read,load_tool,subagent" {
@@ -66,34 +69,21 @@ func containsTool(list []tools.Tool, name string) bool {
 	return false
 }
 
-// An agent with no tools list gets every read-only tool of the pool it is built from. A load_tool in
-// that pool must not reach it: the owner's load_tool is offered only to an agent that names it.
-func TestAgentWithoutAToolsListGetsNoLoadToolFromTheParentPool(t *testing.T) {
-	loadTool := readOnlyTool("load_tool")
-	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher, readOnlyTool("read"), loadTool)
-	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := toolNames(launcher.requests[0].Tools); strings.Join(got, ",") != "read" {
-		t.Fatalf("child with no tools list got %v, want read only (load_tool came from the parent pool)", got)
-	}
-}
-
-// A second SetLazy with a load_tool the child's catalog already holds makes NewCatalog reject the
-// duplicate name; SetLazy must return that error rather than leave the child without load_tool.
-func TestSetLazyReturnsTheCatalogErrorForADuplicateLoadTool(t *testing.T) {
-	named := agentNamed("explore")
-	named.Tools, named.HasTools = []string{"read", "load_tool"}, true
+// SetLazy builds the catalogs again from the same parts, so a second call leaves one load_tool and
+// not a duplicate.
+func TestSetLazyTwiceLeavesOneLoadTool(t *testing.T) {
 	parentTools := withExecutors(t, readOnlyTool("read"))
 	hook := &SubagentMCP{}
-	if _, err := NewSubagentToolWithMCP(subagentSettings(named), parentTools, &fakeLauncher{}, hook); err != nil {
+	if _, err := NewSubagentToolWithMCP(subagentSettings(agentNamed("explore")), parentTools, &fakeLauncher{}, hook); err != nil {
 		t.Fatalf("NewSubagentToolWithMCP: %v", err)
 	}
 	owned := withExecutors(t, readOnlyTool("load_tool"))[0]
-	if err := hook.SetLazy(nil, &owned); err != nil {
-		t.Fatalf("first SetLazy: %v", err)
+	for range 2 {
+		if err := hook.SetLazy(nil, &owned); err != nil {
+			t.Fatalf("SetLazy: %v", err)
+		}
 	}
-	err := hook.SetLazy(nil, &owned)
-	if err == nil || !strings.Contains(err.Error(), "duplicate tool name load_tool") {
-		t.Fatalf("second SetLazy error = %v, want duplicate tool name load_tool", err)
+	if got := strings.Join(toolNames(hook.tool.agents[0].catalog), ","); got != "read,load_tool" {
+		t.Fatalf("child tools = %q, want read,load_tool", got)
 	}
 }

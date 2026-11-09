@@ -62,7 +62,7 @@ func TestSubagentChangedFilesOffAndReadersSayNothing(t *testing.T) {
 	if out := subagentCall(t, catalog, `{"task":"fix"}`); strings.Contains(out, "written_files") {
 		t.Fatalf("changed_files_max 0 still printed a list:\n%s", out)
 	}
-	reader := writeSettings(agentNamed("reader"))
+	reader := writeSettings(writerAgent("reader", "read"))
 	reader.ChangedFilesMax = 100
 	launcher := &fakeLauncher{}
 	catalog, _ = buildSubagentCatalog(t, reader, launcher, readOnlyTool("read"), writeTool("exec"))

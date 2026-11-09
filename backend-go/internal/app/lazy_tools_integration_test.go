@@ -818,10 +818,9 @@ func TestLazyPatternOverTheLimitOnALargeServerDescribesNothing(t *testing.T) {
 	requireNoLazyFile(t, f)
 }
 
-// load_tool is not in a subagent child's catalog: the child is built from the parent's native tools
-// before load_tool exists, so the child's call is refused as an unknown tool, and it cannot load
-// lazy tools for the parent, whose state file is never written.
-func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
+// A child has the owner's load_tool, over the owner's lazy set: it can describe the lazy tools, but it
+// writes nothing to the parent's state file and reaches no MCP server by describing.
+func TestChildLoadToolDescribesTheOwnersLazyToolsAndWritesNothing(t *testing.T) {
 	calls := &atomic.Int32{}
 	profileTools := map[string]any{"allow": []string{"subagent", "skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools), "__load_tool": true}, false, nil, &mcpFixture{calls: calls})
@@ -834,14 +833,14 @@ func TestChildCannotLoadLazyToolsForTheParent(t *testing.T) {
 		t.Fatalf("child made %d requests", len(child))
 	}
 	history := child[len(child)-1].Text
-	if !strings.Contains(history, "unknown_tool") {
-		t.Errorf("the child's load_tool call was not refused as unknown:\n%s", history)
+	if strings.Contains(history, "unknown_tool") || !strings.Contains(history, "mcp:fixture:lookup") {
+		t.Errorf("the child's load_tool call did not describe the owner's lazy tool:\n%s", history)
 	}
 	// The parent's set is opened when its run is prepared, so the file exists with an empty loaded
 	// list; the child's refused call must not have added to it.
 	requireNoLazyFile(t, f)
 	if calls.Load() != 0 {
-		t.Errorf("the child reached the MCP server through load_tool's refusal (%d calls)", calls.Load())
+		t.Errorf("the child reached the MCP server by describing a lazy tool (%d calls)", calls.Load())
 	}
 }
 

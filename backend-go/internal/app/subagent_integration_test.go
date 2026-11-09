@@ -753,9 +753,10 @@ func TestHTTPRunHandsATaskToASubagentWithItsOwnModelAndContext(t *testing.T) {
 	if strings.Join(parent[0].Tools, ",") != "async,skill,subagent" {
 		t.Fatalf("parent tools = %v", parent[0].Tools)
 	}
-	// The child sees read and nothing else: no subagent, so it cannot start another child.
-	if strings.Join(child[0].Tools, ",") != "skill" {
-		t.Fatalf("child tools = %v, want skill only", child[0].Tools)
+	// The child is just another profile: it has every tool of the session, the subagent tool included
+	// (the depth check, not the tool list, stops the nesting).
+	if strings.Join(child[0].Tools, ",") != "async,skill,subagent" {
+		t.Fatalf("child tools = %v, want async,skill,subagent", child[0].Tools)
 	}
 	// The child's context is its instructions and the task, not the parent's conversation.
 	if !strings.Contains(child[0].Text, "You are the explorer.") || !strings.Contains(child[0].Text, "find the answer") {
@@ -871,8 +872,8 @@ func TestSubagentLoadedFromAFolderRunsWithTheFoldersModelAndPrompt(t *testing.T)
 	if len(parent) != 2 || len(child) != 2 {
 		t.Fatalf("provider requests: parent %d (want 2), child %d (want 2)", len(parent), len(child))
 	}
-	if strings.Join(child[0].Tools, ",") != "skill" {
-		t.Fatalf("child tools = %v, want skill only", child[0].Tools)
+	if strings.Join(child[0].Tools, ",") != "async,skill,subagent" {
+		t.Fatalf("child tools = %v, want async,skill,subagent", child[0].Tools)
 	}
 	prompt := child[0].Text
 	first := strings.Index(prompt, "FOLDER PROMPT: you are the explorer.")
@@ -921,13 +922,15 @@ func TestSubagentCallsAnMCPToolItsListNamesThroughTheSharedConnection(t *testing
 	}
 }
 
-func TestSubagentWithoutAnMCPListGetsNoMCPTool(t *testing.T) {
+// A child with no tools config has the MCP tools too, as a profile does.
+func TestSubagentWithoutAToolsConfigGetsTheMCPToolsToo(t *testing.T) {
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json"}, false, nil, &mcpFixture{calls: calls})
 	f.run(t)
 	child := f.provider.forModel("child-model")
-	if len(child) == 0 || strings.Join(child[0].Tools, ",") != "skill" {
-		t.Fatalf("child tools = %v, want skill only", child)
+	want := "async,skill,subagent," + mcpToolNameFor("fixture", "lookup")
+	if len(child) == 0 || strings.Join(child[0].Tools, ",") != want {
+		t.Fatalf("child tools = %v, want %s", child, want)
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("the MCP server saw %d calls", calls.Load())
@@ -1545,8 +1548,8 @@ func TestSubagentSendsTheHostedToolsOfItsOwnModelFileAndTheParentDoesNot(t *test
 	if got := strings.Join(parent[0].ToolTypes, ","); got != "function,function,function" {
 		t.Fatalf("parent tool types = %s, want its two function tools and no hosted tool", got)
 	}
-	if got := strings.Join(child[0].ToolTypes, ","); got != "function,web_search" {
-		t.Fatalf("child tool types = %s, want read then the hosted web_search", got)
+	if got := strings.Join(child[0].ToolTypes, ","); got != "function,function,function,web_search" {
+		t.Fatalf("child tool types = %s, want its three function tools then the hosted web_search", got)
 	}
 }
 

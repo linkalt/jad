@@ -54,7 +54,7 @@ var (
 	allowedNativeSubagentStates     = map[string]struct{}{
 		"queued": {}, "running": {}, "done": {}, "failed": {}, "timed_out": {}, "stopped": {}, "lost": {},
 	}
-	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation", "read_only"}
+	nativeSubagentAgentKeys = []string{"description", "model", "tools", "toolset", "instructions", "prompt_documents", "max_tool_rounds", "max_run_tokens", "timeout_ms", "auto_compaction", "compaction_trigger_tokens", "state_context", "isolation"}
 	subagentNamePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
@@ -160,11 +160,20 @@ type NativeSubagentStateContextSettings struct {
 	DetailStates []string
 }
 
-// SubagentChangeTools are the native tools that let a child change files or run code.
-// An agent may list them when the session enables them, and a call to an agent that
-// lists one is a change the checkpoint and the scheduler must know of. exec and tool_smith
-// run code, and subagent and profile_message start runs that may change files.
-var SubagentChangeTools = []string{"exec", "tool_smith", "subagent", "profile_message"}
+// agentChangeTools are the native tools that let a child change files or run code: exec and
+// tool_smith run code, and subagent and profile_message start runs that may change files. They
+// are not a restriction on what a child may use (every tool of the session is offered to it);
+// they tell a restricted agent's tools list apart from a reading one (ChangesFiles).
+var agentChangeTools = []string{"exec", "tool_smith", "subagent", "profile_message"}
+
+// IsChangeTool reports whether the named native tool can change files or run code, so an agent that
+// has it can change files.
+func IsChangeTool(name string) bool { return containsString(agentChangeTools, name) }
+
+// deprecatedAgentTools are the names an agent's tools list needed to opt in to a tool the
+// default child set left out. Every tool is in a child's set now, so a list that names only
+// these restricts nothing (ToolsUnrestricted).
+var deprecatedAgentTools = []string{"async", "exec", "tool_smith", "subagent", "profile_message", LoadToolName}
 
 // NativeSubagentAgent is one configured child agent.
 type NativeSubagentAgent struct {
@@ -188,11 +197,20 @@ type NativeSubagentAgent struct {
 	// Dir is the agent's folder when it was loaded from agents_dir; empty for an
 	// agent defined inline in setting.json.
 	Dir string
-	// Tools names the native tools the child may use: read-only ones, and the change tools
-	// in SubagentChangeTools when the session enables them. HasTools is false when the key
-	// is absent, which means every read-only native tool.
+	// Tools is the agent's own allow list, written like a profile's tools.allow: native
+	// tool names, mcp:<server>:<tool> and mcp:<server>:*. HasTools is false when the key
+	// is absent, which means every tool the session registers (minus the session profile's
+	// tools.deny), exactly as a profile without a tools block. A list naming only
+	// deprecatedAgentTools restricts nothing either (ToolsUnrestricted).
 	Tools    []string
 	HasTools bool
+	// DenyTools is the agent's own deny list (tools.deny of the object form of the tools
+	// key), in the same entry form; it wins over Tools. Left out of JSON when empty, so the
+	// fingerprint of an agent without it is what it was before the key existed.
+	DenyTools []string `json:",omitempty"`
+	// ToolsObject is true when the tools key is the object form (allow and deny written like a profile's
+	// block). Its allow list is taken as written; only an array of the old opt-in names restricts nothing.
+	ToolsObject bool `json:",omitempty"`
 	// Toolset lists the "<category>/<name>" of the toolset files this agent draws its tools
 	// from instead of the session's own toolset, first one winning a clash; empty means
 	// the session's.
@@ -215,11 +233,10 @@ type NativeSubagentAgent struct {
 	// of their own, and empty otherwise. It is left out of JSON when empty, so the
 	// fingerprint of an agent without it is what it was before the key existed.
 	Isolation string `json:",omitempty"`
-	// ReadOnly makes every exec call of the agent a read_only one, so exec does not make it
-	// an agent that changes files: it is scheduled like a reader and may run as a handle.
-	// Under a sandbox its exec calls cannot write the project; without one it is the
-	// agent's promise. Left out of JSON when false, like Isolation.
-	ReadOnly bool `json:",omitempty"`
+	// NoChangeTools is set by the subagent tool when it builds the agent's catalog and finds no
+	// tool in it that can change files (exec, tool_smith, profile_message, or subagent when it may
+	// nest): the agent is then a reader, whatever its settings allowed. It is not read from a file.
+	NoChangeTools bool `json:",omitempty"`
 }
 
 // Agent returns the configured agent with the given name.
@@ -457,6 +474,9 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 		if key == "paths" {
 			return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingPath, section, removedAgentPathsHint)
 		}
+		if key == "read_only" {
+			return NativeSubagentAgent{}, configError("%s: %s.read_only was removed; %s", settingPath, section, removedAgentReadOnlyHint)
+		}
 		if !containsString(nativeSubagentAgentKeys, key) {
 			return NativeSubagentAgent{}, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentAgentKeys, "")
 		}
@@ -506,7 +526,7 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if strings.TrimSpace(promptFile) != "" {
 		agent.PromptDocuments = append([]string{promptFilePath}, agent.PromptDocuments...)
 	}
-	if agent.Tools, agent.HasTools, err = optionalSubagentTools(fields, settingPath, section); err != nil {
+	if agent.Tools, agent.HasTools, agent.DenyTools, agent.ToolsObject, err = optionalSubagentTools(fields, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	if agent.Toolset, err = optionalSubagentToolsets(fields, settingPath, section); err != nil {
@@ -533,32 +553,10 @@ func buildNativeSubagentAgent(name string, fields map[string]json.RawMessage, so
 	if agent.StateContext, _, err = optionalSubagentBool(fields, "state_context", settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
-	if agent.ReadOnly, err = subagentReadOnly(fields, agent, settingPath, section); err != nil {
-		return NativeSubagentAgent{}, err
-	}
 	if agent.Isolation, err = subagentIsolation(fields, agent, settingPath, section); err != nil {
 		return NativeSubagentAgent{}, err
 	}
 	return agent, nil
-}
-
-// subagentReadOnly reads an agent's read_only key; absent or null is false. It only changes
-// exec, so an agent with it must list exec and no other tool that changes files.
-func subagentReadOnly(fields map[string]json.RawMessage, agent NativeSubagentAgent, settingPath, section string) (bool, error) {
-	readOnly, _, err := optionalSubagentBool(fields, "read_only", settingPath, section)
-	if err != nil || !readOnly {
-		return false, err
-	}
-	changers := agent.ChangeTools()
-	if !containsString(changers, "exec") {
-		return false, configError("%s: %s.read_only only makes exec calls read-only, and tools does not list exec", settingPath, section)
-	}
-	for _, name := range changers {
-		if name != "exec" {
-			return false, configError("%s: %s.read_only does not cover %s, which changes files or starts runs that may; remove it from tools, or remove read_only", settingPath, section, name)
-		}
-	}
-	return true, nil
 }
 
 // loadSubagentPrompt reads the agent's prompt_documents the way the session reads its
@@ -644,14 +642,29 @@ func optionalSubagentToolsets(fields map[string]json.RawMessage, settingPath, se
 	return ids, nil
 }
 
-func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, section string) ([]string, bool, error) {
+// optionalSubagentTools reads an agent's tools key: an array of tool names (the allow list),
+// or an object with allow and deny arrays, written like a profile's tools block. It returns
+// the allow list, whether there is one, and the deny list.
+func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, section string) (allow []string, hasAllow bool, deny []string, object bool, err error) {
 	raw, exists := fields["tools"]
 	if !exists || strings.TrimSpace(string(raw)) == "null" {
-		return nil, false, nil
+		return nil, false, nil, false, nil
 	}
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), "{") {
+		settings, err := normalizeProfileTools(raw, settingPath+": "+section)
+		if err != nil {
+			return nil, false, nil, false, err
+		}
+		return settings.Allow, settings.HasAllow, settings.Deny, true, nil
+	}
+	names, hasAllow, err := subagentToolNames(raw, settingPath, section)
+	return names, hasAllow, nil, false, err
+}
+
+func subagentToolNames(raw json.RawMessage, settingPath, section string) ([]string, bool, error) {
 	var names []string
 	if err := json.Unmarshal(raw, &names); err != nil || names == nil {
-		return nil, false, configError("%s: %s.tools must be an array of tool names", settingPath, section)
+		return nil, false, configError("%s: %s.tools must be an array of tool names, or an object with allow and deny", settingPath, section)
 	}
 	seen := make(map[string]struct{}, len(names))
 	for index, name := range names {
@@ -674,23 +687,67 @@ func optionalSubagentTools(fields map[string]json.RawMessage, settingPath, secti
 }
 
 // ChangeTools returns the tools of the agent's list that can change files or run code,
-// in list order. An agent without a tools list has none: it gets read-only tools only. A
-// read_only agent's exec is not one: its every call is read_only.
+// in list order.
 func (a NativeSubagentAgent) ChangeTools() []string {
 	var names []string
 	for _, name := range a.Tools {
-		if a.ReadOnly && name == "exec" {
-			continue
-		}
-		if containsString(SubagentChangeTools, name) {
+		if containsString(agentChangeTools, name) {
 			names = append(names, name)
 		}
 	}
 	return names
 }
 
-// ChangesFiles reports whether the agent lists a tool that can change files.
-func (a NativeSubagentAgent) ChangesFiles() bool { return len(a.ChangeTools()) > 0 }
+// ToolsUnrestricted reports whether the agent's own tools list leaves the whole catalog in
+// place: no list, or an array that names only the deprecated opt-in tools (async, exec, tool_smith,
+// subagent, profile_message, load_tool), which a child has by default now. An empty list is a
+// list: it allows nothing, as an empty tools.allow does; so is an allow of the object form.
+func (a NativeSubagentAgent) ToolsUnrestricted() bool {
+	if !a.HasTools {
+		return true
+	}
+	if len(a.Tools) == 0 || a.ToolsObject {
+		return false
+	}
+	for _, name := range a.Tools {
+		if !containsString(deprecatedAgentTools, name) {
+			return false
+		}
+	}
+	return true
+}
+
+// ToolsListDeprecated reports whether the agent's tools list is one that names only the
+// deprecated opt-in tools, which the loader ignores (and warns about).
+func (a NativeSubagentAgent) ToolsListDeprecated() bool {
+	return a.HasTools && len(a.Tools) > 0 && !a.ToolsObject && a.ToolsUnrestricted()
+}
+
+// ToolSettings is the agent's own narrowing as a profile's tools block: its allow list when it
+// restricts, and its deny list and the session profile's tools.deny (sessionDeny). The child
+// catalog is the registered one shown by it, the way applyProfileTools shows a profile's.
+func (a NativeSubagentAgent) ToolSettings(sessionDeny []string) ProfileToolSettings {
+	settings := ProfileToolSettings{Restricted: true}
+	if !a.ToolsUnrestricted() {
+		settings.HasAllow, settings.Allow = true, a.Tools
+	}
+	settings.Deny = append(append([]string(nil), sessionDeny...), a.DenyTools...)
+	return settings
+}
+
+// ChangesFiles reports whether the agent can change files: it can when it has no tools list;
+// with a list, when the list names a tool that can. Once the subagent tool has built the
+// agent's catalog, NoChangeTools says there is no such tool in it. There is no read-only mode:
+// whether the files a run changes are the session's own is isolation's to say (ChangesWorkspace).
+func (a NativeSubagentAgent) ChangesFiles() bool {
+	if a.NoChangeTools {
+		return false
+	}
+	if a.ToolsUnrestricted() {
+		return true
+	}
+	return len(a.ChangeTools()) > 0
+}
 
 // ToolsetKeySeparator joins the toolset IDs of an agent into one key. An ID never holds
 // it, and the order of the IDs is their precedence, so [a, b] and [b, a] are two keys.

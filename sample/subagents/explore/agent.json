@@ -1,8 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Code search. Use it to find files and symbols and report paths and line numbers; every exec call it makes is read_only.",
-  "tools": ["exec"],
-  "read_only": true,
+  "description": "Code search. Use it to find files and symbols and report paths and line numbers. It investigates and does not edit files (its instruction, not something enforced: it has the session's tools and works in the session's folder).",
   "max_tool_rounds": 30,
   "timeout_ms": 600000
 }

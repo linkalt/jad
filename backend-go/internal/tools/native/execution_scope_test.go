@@ -109,26 +109,24 @@ func TestToolSmithBridgeKeepsTheWholeRunScopeOfTheOuterCall(t *testing.T) {
 }
 
 // TestSubagentChildExecutionContextKeepsTheRunScope checks the second copy: the child keeps
-// the run it belongs to and does not inherit what belongs to the parent's call.
+// the run it belongs to, including the question channel and the change listener of the caller (a
+// child is a run of the same session), and does not inherit what belongs to the parent's call.
 func TestSubagentChildExecutionContextKeepsTheRunScope(t *testing.T) {
 	root := t.TempDir()
 	parent := filledRunScope(root)
 	child := childExecutionContext(parent, sessionfs.NativeSubagentAgent{Name: "fixer"})
 	reportRunScope(t, child, parent, map[string]string{
-		"CallID":                "the catalog sets the child call's own id",
-		"ToolName":              "the catalog sets the child call's own tool name",
-		"RawArguments":          "the catalog sets the child call's own arguments",
-		"AgentName":             "the child is the agent its run names",
-		"PathScope":             "the child's scope is narrowed to its own paths",
-		"RequestInteraction":    "the child asks its own questions, not the parent's call",
-		"OnInteractionResolved": "it belongs to the parent's interaction handler",
-		"OnFileChange":          "the manager names the child's own run when it starts it",
+		"CallID":       "the catalog sets the child call's own id",
+		"ToolName":     "the catalog sets the child call's own tool name",
+		"RawArguments": "the catalog sets the child call's own arguments",
+		"AgentName":    "the child is the agent its run names",
+		"PathScope":    "the child's scope is narrowed to its own paths",
 	})
 	if child.AgentName != "fixer" {
 		t.Fatalf("the child runs as %q", child.AgentName)
 	}
-	if child.RequestInteraction != nil || child.OnInteractionResolved != nil || child.OnFileChange != nil {
-		t.Fatalf("the child inherited a hook of the parent's call: %+v", child)
+	if child.RequestInteraction == nil || child.OnInteractionResolved == nil || child.OnFileChange == nil {
+		t.Fatalf("the child lost the question channel or the change listener of its caller: %+v", child)
 	}
 	// The narrowed scope: the parent allowed src, the agent allows nothing of its own.
 	if child.PathScope == nil || len(child.PathScope.Allow) != 1 || child.PathScope.Allow[0] != root+"/src" {

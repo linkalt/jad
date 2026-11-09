@@ -74,7 +74,7 @@ func subagentIsolation(fields map[string]json.RawMessage, agent NativeSubagentAg
 		return "", nil
 	case SubagentIsolationWorktree:
 		if !agent.ChangesFiles() {
-			return "", configError("%s: %s.isolation worktree needs a tool that changes files (%s) in tools", settingPath, section, strings.Join(SubagentChangeTools, ", "))
+			return "", configError("%s: %s.isolation worktree needs a tool that changes files (%s) in tools, or no tools list", settingPath, section, strings.Join(agentChangeTools, ", "))
 		}
 		return value, nil
 	}

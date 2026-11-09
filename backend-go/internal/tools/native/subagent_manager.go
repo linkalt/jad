@@ -812,7 +812,14 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
 		changedMax, changedBytes := spec.changedMax, spec.resultMax
-		spec.request.Execution.OnFileChange = func(path, action string) { run.recordChange(path, action, changedMax, changedBytes) }
+		// The caller's own listener (a run started by a child is also a change of that child) hears it too.
+		outer := spec.request.Execution.OnFileChange
+		spec.request.Execution.OnFileChange = func(path, action string) {
+			run.recordChange(path, action, changedMax, changedBytes)
+			if outer != nil {
+				outer(path, action)
+			}
+		}
 	}
 	m.runs[id] = run
 	m.active.Add(1)

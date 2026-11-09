@@ -149,20 +149,16 @@ func TestExecReadOnlyCallCannotWriteTheProjectUnderBwrap(t *testing.T) {
 	}
 }
 
-// exec is ReadOnly now, so it sits in the read-only pool; a child still gets it only when its
-// tools list names it.
-func TestSubagentWithoutAToolsListDoesNotGetExec(t *testing.T) {
+// A child has exec like a profile does; its own allow list can leave it out.
+func TestSubagentWithoutAToolsListGetsExec(t *testing.T) {
 	_, execTool := execReadOnlyCatalog(t, t.TempDir())
-	readOnly, changers := childToolPools(subagentSettings(), []tools.Tool{readOnlyTool("lsp"), execTool})
-	plain, _, err := subagentChildTools(agentNamed("plain"), readOnly, changers)
-	if err != nil || strings.Join(poolNames(plain), ",") != "lsp" {
-		t.Fatalf("a child without a tools list got %v (%v)", poolNames(plain), err)
+	if plain := childNamesOf(t, agentNamed("plain"), nil, readOnlyTool("lsp"), execTool); strings.Join(plain, ",") != "lsp,exec" {
+		t.Fatalf("a child without a tools list got %v", plain)
 	}
 	listed := agentNamed("finder")
-	listed.Tools, listed.HasTools = []string{"exec"}, true
-	chosen, _, err := subagentChildTools(listed, readOnly, changers)
-	if err != nil || strings.Join(poolNames(chosen), ",") != "exec" {
-		t.Fatalf("a child listing exec got %v (%v)", poolNames(chosen), err)
+	listed.Tools, listed.HasTools = []string{"lsp"}, true
+	if chosen := childNamesOf(t, listed, nil, readOnlyTool("lsp"), execTool); strings.Join(chosen, ",") != "lsp" {
+		t.Fatalf("a child whose allow list names lsp got %v", chosen)
 	}
 }
 
@@ -190,56 +186,6 @@ func TestExecDefinitionFileWithoutReadOnlyStillLoads(t *testing.T) {
 	other.InputSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 	if _, err := requireExecDefinition(config, map[string]tools.Definition{execToolID: other}); err == nil {
 		t.Fatal("a different exec schema was accepted")
-	}
-}
-
-// A read_only agent's exec sets read_only on every call, whatever the model sent: the call
-// to the agent is no change, its list entry has no change marker, and inside the child a
-// call without read_only still runs in plan mode.
-func TestReadOnlyAgentForcesReadOnlyExecCalls(t *testing.T) {
-	root := t.TempDir()
-	_, execTool := execReadOnlyCatalog(t, root)
-	finder := agentNamed("finder")
-	finder.Tools, finder.HasTools, finder.ReadOnly = []string{"exec"}, true, true
-	fixer := agentNamed("fixer")
-	fixer.Tools, fixer.HasTools = []string{"exec"}, true
-	launcher := &fakeLauncher{}
-	host := newTestAsyncHost(t)
-	manager := NewSubagentManager()
-	t.Cleanup(func() { _ = manager.Close() })
-	parentTools := []tools.Tool{execTool}
-	tool, err := newSubagentToolAsync(subagentSettings(finder, fixer), parentTools, nil, launcher, nil, manager, host)
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog := catalogWithAsync(t, host, parentTools, tool)
-	for agent, want := range map[string]bool{"finder": false, "fixer": true} {
-		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "c", "name": "subagent", "arguments": `{"agent":"` + agent + `","task":"look"}`})
-		if got := catalog.CallMayChangeFiles(call); got != want {
-			t.Errorf("%s: CallMayChangeFiles = %v, want %v", agent, got, want)
-		}
-	}
-	if list := subagentCall(t, catalog, `{}`); strings.Contains(list, "finder [can") || !strings.Contains(list, "fixer [can change files") {
-		t.Fatalf("agent list:\n%s", list)
-	}
-
-	subagentCall(t, catalog, `{"agent":"finder","task":"look"}`)
-	child := launcher.requests[0].Tools
-	if child.ChangesState(execROCall(`{"code":"touch made.txt"}`)) {
-		t.Fatal("a read_only agent's exec call without read_only counts as a change")
-	}
-	plan, err := child.PlanMode(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	output := runExecCall(t, plan, `{"code":"echo ran","read_only":false}`, root)
-	if !strings.Contains(output, "ran") || strings.Contains(output, "plan_mode") {
-		t.Fatalf("the forced read_only call was refused in plan mode:\n%s", output)
-	}
-	launcher.requests = nil
-	subagentCall(t, catalog, `{"agent":"fixer","task":"fix"}`)
-	if !launcher.requests[0].Tools.ChangesState(execROCall(`{"code":"touch made.txt"}`)) {
-		t.Fatal("a writer agent's exec call is no change")
 	}
 }
 

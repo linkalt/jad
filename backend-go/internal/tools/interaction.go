@@ -3,7 +3,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrNoInteractionChannel is what a question handler returns when the run it stands in for has no
+// channel to a user (a headless run): the tool then does what it does without a handler, as if
+// RequestInteraction were nil. Any other error from a handler is a failure the tool reports.
+var ErrNoInteractionChannel = errors.New("no interaction channel")
 
 type InteractionDecision string
 
@@ -111,6 +117,7 @@ const (
 	InteractionExtendAtMax    InteractionExtendStatus = "at_max"
 )
 
+// InteractionHandler asks the user of the run a question and returns the answer.
 type InteractionHandler func(context.Context, InteractionIdentity, InteractionQuestion) (InteractionAnswer, error)
 
 type InteractionResolvedHandler func(InteractionIdentity, InteractionAnswer, json.RawMessage) error

@@ -1,6 +1,6 @@
 # Design: nesting (tool_smith / subagent / profile_message in children) and removal of the approval system
 
-Status: PROPOSAL, uncommitted. Nothing in the code was changed. Line numbers are from the tree at HEAD (4461dee) and were read, not run; items I did not verify are listed in section C.
+Status: PROPOSAL, uncommitted. Superseded in part by T-118 (backend-go/DECISIONS.md): a child no longer opts in to tools by name; it has every tool of its session like a profile, narrowed only by the profile's tools.deny and its agent's own tools key. Nothing in the code was changed. Line numbers are from the tree at HEAD (4461dee) and were read, not run; items I did not verify are listed in section C.
 
 User decisions taken as given:
 (a) A sub-agent may use tool_smith, another subagent and profile_message.

@@ -42,7 +42,9 @@ func (r *Resolver) subagentLauncherFor(config sessionfs.SessionConfig) native.Su
 
 // Run starts one child with a fresh transcript and returns its final answer. The
 // child is an ordinary session.Runner run: its own store, its own model client and
-// the catalog the tool chose, with no approval or checkpoint. It compacts its own
+// the catalog the tool chose, with the question channel and the change listener of the call
+// that started it (request.Execution). It takes no checkpoint of its own: the calling run's
+// checkpoint is taken before a call that may change files and covers what the child writes. It compacts its own
 // transcript when the agent's trigger is reached, and sees the session's newest
 // state-context block when the agent asks for it.
 func (l subagentLauncher) Run(ctx context.Context, request native.SubagentRequest) (native.SubagentResult, error) {

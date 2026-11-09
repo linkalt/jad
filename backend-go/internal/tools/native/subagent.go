@@ -44,7 +44,7 @@ type SubagentRequest struct {
 	Task  string
 	// CallID is the parent's tool call, used to name the child's transcript.
 	CallID string
-	// Tools is the child's catalog: read-only native tools, plus subagent, tool_smith or profile_message when the agent lists them.
+	// Tools is the child's catalog: every tool of the session, narrowed only by the profile's tools.deny and the agent's own tools lists (the nested subagent tool is absent at the deepest level).
 	Tools *tools.Catalog
 	// Execution carries the workspace roots the child's tools resolve paths against.
 	Execution tools.ExecutionContext
@@ -91,13 +91,22 @@ func (a subagentAgent) hasNativeTool(id string) bool {
 
 type subagentAgent struct {
 	config sessionfs.NativeSubagentAgent
-	// catalog is what the child may call. It is nil for an agent that lists MCP tools
-	// until SubagentMCP.Bind has seen the loaded MCP tools.
+	// catalog is what the child may call; leaf is the same without the subagent tool, for a
+	// child that is at the deepest level (see buildCatalogs). Both are nil for an agent whose allow
+	// list names MCP tools until SubagentMCP.Bind has seen the loaded MCP tools.
 	catalog *tools.Catalog
-	// nativeTools and mcpIDs are the two halves of the agent's tools list; mcpIDs is
-	// empty for an agent that uses native tools only.
+	leaf    *tools.Catalog
+	// filter is the agent's own narrowing, written as a profile's tools block (see
+	// NativeSubagentAgent.ToolSettings): what a profile's applyProfileTools would apply to it.
+	filter sessionfs.ProfileToolSettings
+	// nativeTools are the pool's native tools the filter shows, without subagent and load_tool
+	// (buildCatalogs adds them); mcpTools are the MCP tools it shows once bound (bindMCP).
 	nativeTools []tools.Tool
-	mcpIDs      []string
+	mcpTools    []tools.Tool
+	// needsMCP is true when the allow list names MCP tools, so the catalog waits for bindMCP;
+	// mcpBound is true once it ran.
+	needsMCP bool
+	mcpBound bool
 	// background is set when a call to this agent may run as an async handle although
 	// the agent can change files; see backgroundSafe.
 	background bool
@@ -144,7 +153,8 @@ func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
 
 // SetLazy gives the owning profile's lazy set to the children: each child's MCP tools in that set are
 // gated with it. loadTool is the child's load_tool, built by the owner from the
-// same set and manifest; nil when the owner enables no load_tool. A child gets it only when its tools list names it.
+// same set and manifest; nil when the owner enables no load_tool. A child gets it when its own
+// settings show it, as a profile gets its own.
 func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
 	if m == nil || m.tool == nil {
 		return nil
@@ -152,7 +162,7 @@ func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
 	m.tool.lazy = lazy
 	m.tool.loadTool = loadTool
 	if loadTool != nil {
-		return m.tool.addLoadToolToNestingAgents()
+		return m.tool.buildAllCatalogs()
 	}
 	return nil
 }
@@ -217,15 +227,15 @@ type subagentTool struct {
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
-// catalog. A child may use the read-only ones, optionally narrowed by its agent's tools
-// list; subagent, tool_smith and profile_message are there only for an agent that lists them, and the
-// depth is bounded by max_depth.
+// catalog. A child is just another profile: it has every one of them (and the subagent tool, bounded
+// by max_depth), narrowed only by the session profile's tools.deny and its agent's own tools
+// allow and deny lists.
 func NewSubagentTool(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher) (tools.Tool, error) {
 	return NewSubagentToolWithMCP(settings, parentTools, launcher, nil)
 }
 
 // NewSubagentToolWithMCP is NewSubagentTool plus the hook that later gives the tool
-// the MCP tools an agent lists. A nil mcp is allowed; an agent that lists an MCP tool
+// the MCP tools a child may use. A nil mcp is allowed; an agent whose allow list names an MCP tool
 // then cannot start a child.
 func NewSubagentToolWithMCP(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, launcher SubagentLauncher, mcp *SubagentMCP) (tools.Tool, error) {
 	return NewSubagentToolWithManager(settings, parentTools, launcher, mcp, nil)
@@ -249,24 +259,21 @@ type subagentToolset struct {
 	native []tools.Tool
 }
 
-// childToolPools splits tools into the read-only ones and the ones that change files,
-// leaving out what the profile's tools.deny covers. Only native tools are taken.
-func childToolPools(settings sessionfs.NativeSubagentSettings, available []tools.Tool) (readOnly, changers []tools.Tool) {
+// childNativePool is the native and extension tools a child may be offered: every one the owner
+// built, except subagent and load_tool, which the owner hands to each child itself (nestedSelf,
+// SetLazy) so a child's copy is the owner's. MCP tools come through bindMCP.
+func childNativePool(available []tools.Tool) []tools.Tool {
+	pool := make([]tools.Tool, 0, len(available))
 	for _, tool := range available {
-		if (tool.Definition.Source != "native" && tool.Definition.Source != "extension") || tools.AnyEntryMatches(settings.DenyTools, tool.Definition) {
+		if tool.Definition.Source != "native" && tool.Definition.Source != "extension" {
 			continue
 		}
-		switch {
-		case tool.Definition.ID == profileMessageToolID:
-			// Listed by name like async: the agent's tools list alone decides.
-			readOnly = append(readOnly, tool)
-		case tool.ReadOnly:
-			readOnly = append(readOnly, tool)
-		case containsName(sessionfs.SubagentChangeTools, tool.Definition.Name):
-			changers = append(changers, tool)
+		if tool.Definition.ID == subagentToolID || tool.Definition.ID == loadToolID {
+			continue
 		}
+		pool = append(pool, tool)
 	}
-	return readOnly, changers
+	return pool
 }
 
 // newSubagentToolAsync is newSubagentTool plus the async host that tracks every read-only run
@@ -292,7 +299,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 	if manager == nil {
 		manager = NewSubagentManager()
 	}
-	readOnly, changers := childToolPools(settings, parentTools)
+	pool := childNativePool(parentTools)
 	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host, mcp: mcp}
 	if remotes != nil && len(settings.Remotes) > 0 {
 		runtime.remotes = remoteAgentSettings{names: settings.Remotes, directory: remotes, timeout: time.Duration(settings.RemoteTimeoutMs) * time.Millisecond}
@@ -304,23 +311,22 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 		}
 	}
 	for _, agent := range settings.Agents {
-		agent = withoutDeniedTools(agent, settings.DenyTools)
-		agentReadOnly, agentChangers := readOnly, changers
+		agentPool := pool
 		toolsetKey := agent.ToolsetKey()
 		if toolsetKey != "" {
 			toolset, built := toolsets[toolsetKey]
 			if !built {
 				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s.toolset %q was not loaded", agent.Name, toolsetKey)
 			}
-			agentReadOnly, agentChangers = childToolPools(settings, toolset.native)
-			// A toolset cannot set profile_message; the session's tool is offered to the agent that lists it.
-			for _, tool := range readOnly {
+			agentPool = childNativePool(toolset.native)
+			// A toolset cannot set profile_message; the session's tool is offered to the agent as it is to the others.
+			for _, tool := range pool {
 				if tool.Definition.ID == profileMessageToolID {
-					agentReadOnly = append(agentReadOnly[:len(agentReadOnly):len(agentReadOnly)], tool)
+					agentPool = append(agentPool[:len(agentPool):len(agentPool)], tool)
 				}
 			}
 		}
-		childTools, mcpIDs, err := subagentChildTools(agent, agentReadOnly, agentChangers)
+		entry, err := newSubagentAgent(agent, settings.DenyTools, agentPool, settings.MaxDepth >= 2)
 		if err != nil {
 			if toolsetKey != "" {
 				err = fmt.Errorf("%w (its tools come from toolset %s)", err, toolsetKey)
@@ -329,17 +335,6 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 				err = fmt.Errorf("%w (the profile's tools.deny is in effect: %s)", err, strings.Join(settings.DenyTools, ", "))
 			}
 			return tools.Tool{}, err
-		}
-		if agent.ReadOnly {
-			childTools = withReadOnlyExec(childTools)
-		}
-		entry := subagentAgent{config: agent, nativeTools: childTools, mcpIDs: mcpIDs}
-		if len(mcpIDs) == 0 {
-			catalog, err := tools.NewCatalog(childTools)
-			if err != nil {
-				return tools.Tool{}, fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.Name, err)
-			}
-			entry.catalog = catalog
 		}
 		entry.background = backgroundSafe(settings, entry, host)
 		runtime.agents = append(runtime.agents, entry)
@@ -352,7 +347,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(settings, runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings),
+			Description: subagentDescription + subagentListText(runtime.resolvedSettings(), runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings),
 			InputSchema: schema,
 		},
 		Validator:        validator,
@@ -369,35 +364,10 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 		},
 	}
 	runtime.self = self
-	if err := runtime.addSelfToNestingAgents(); err != nil {
+	if err := runtime.buildAllCatalogs(); err != nil {
 		return tools.Tool{}, err
 	}
 	return self, nil
-}
-
-// addSelfToNestingAgents gives the subagent tool to the agents whose tools list names it,
-// so such a child can start children of its own (bounded by max_depth and the run caps).
-// An agent that lists MCP tools gets it when its catalog is built in bindMCP.
-func (s *subagentTool) addSelfToNestingAgents() error {
-	for index := range s.agents {
-		agent := &s.agents[index]
-		if !containsName(agent.config.Tools, "subagent") {
-			continue
-		}
-		if s.settings.MaxDepth < 2 {
-			return fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"subagent\", but tools.native.subagent.max_depth is %d: raise it to 2 or more, or remove it from the list", agent.config.Name, max(s.settings.MaxDepth, 1))
-		}
-		agent.nativeTools = append(agent.nativeTools, s.nestedSelf())
-		if len(agent.mcpIDs) > 0 {
-			continue
-		}
-		catalog, err := tools.NewCatalog(agent.nativeTools)
-		if err != nil {
-			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
-		}
-		agent.catalog = catalog
-	}
-	return nil
 }
 
 // nestedSelf is the subagent tool as a nesting child gets it: the owner's tool, hooked with the owner's
@@ -406,48 +376,50 @@ func (s *subagentTool) nestedSelf() tools.Tool {
 	return s.mcp.hookTool(s.self)
 }
 
-// addLoadToolToNestingAgents gives load_tool to the agents whose tools list names it. A child with
-// MCP tools gets it in bindMCP, which builds its catalog from nativeTools; a child without any gets
-// its catalog rebuilt here.
-func (s *subagentTool) addLoadToolToNestingAgents() error {
-	for index := range s.agents {
-		agent := &s.agents[index]
-		if !containsName(agent.config.Tools, sessionfs.LoadToolName) {
-			continue
+// buildCatalogs builds the two catalogs of an agent from its native tools, the owner's load_tool
+// (when the agent's settings show it) and the MCP tools bound so far. catalog is what a child gets
+// that may still start a child of its own: it holds the subagent tool when the agent's settings show
+// it and max_depth is 2 or more. leaf is the same without it, for a child at the deepest level,
+// where a call would only be refused (startRunFrom picks one by depth; the depth check stays the
+// gate). An agent that lists MCP tools has no catalog until bindMCP has seen them.
+func (s *subagentTool) buildCatalogs(agent *subagentAgent) error {
+	if agent.needsMCP && !agent.mcpBound {
+		agent.catalog, agent.leaf = nil, nil
+		return nil
+	}
+	leaf := append([]tools.Tool(nil), agent.nativeTools...)
+	var loadTool []tools.Tool
+	if s.loadTool != nil && tools.ProfileShows(agent.filter, s.loadTool.Definition) {
+		loadTool = []tools.Tool{*s.loadTool}
+	}
+	leaf = append(append(leaf, loadTool...), agent.mcpTools...)
+	full := leaf
+	if s.settings.MaxDepth >= 2 && tools.ProfileShows(agent.filter, s.self.Definition) {
+		full = append(append(append(append([]tools.Tool(nil), agent.nativeTools...), s.nestedSelf()), loadTool...), agent.mcpTools...)
+	}
+	var err error
+	if agent.leaf, err = tools.NewCatalog(leaf); err != nil {
+		return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+	}
+	agent.catalog = agent.leaf
+	if len(full) != len(leaf) {
+		if agent.catalog, err = tools.NewCatalog(full); err != nil {
+			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
 		}
-		agent.nativeTools = append(agent.nativeTools, *s.loadTool)
-		if len(agent.mcpIDs) > 0 {
-			continue
-		}
-		catalog, err := tools.NewCatalog(agent.nativeTools)
-		if err != nil {
-			return err
-		}
-		agent.catalog = catalog
 	}
 	return nil
 }
 
-// withoutDeniedTools drops from an agent's tools list every entry the profile's
-// tools.deny covers, so a denied tool cannot be reached through a child. An agent
-// without a tools list is returned as it is: its default set is filtered when built.
-// A wildcard entry that covers only some tools is expanded in bindMCP.
-func withoutDeniedTools(agent sessionfs.NativeSubagentAgent, deny []string) sessionfs.NativeSubagentAgent {
-	if !agent.HasTools || len(deny) == 0 {
-		return agent
-	}
-	kept := make([]string, 0, len(agent.Tools))
-	for _, name := range agent.Tools {
-		definition := tools.Definition{ID: name, Source: "native", Name: name}
-		if strings.HasPrefix(name, mcpToolIDPrefix) {
-			definition = tools.Definition{ID: name, Source: "mcp"}
-		}
-		if !tools.AnyEntryMatches(deny, definition) {
-			kept = append(kept, name)
+// buildAllCatalogs builds the catalog of every agent; the caller holds no lock.
+func (s *subagentTool) buildAllCatalogs() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.agents {
+		if err := s.buildCatalogs(&s.agents[index]); err != nil {
+			return err
 		}
 	}
-	agent.Tools = kept
-	return agent
+	return nil
 }
 
 func containsName(names []string, name string) bool {
@@ -483,6 +455,17 @@ func subagentListText(settings sessionfs.NativeSubagentSettings, background map[
 		return "\n" + noAgentsText(settings)
 	}
 	return subagentAgentList(settings.Agents, settings.ListMaxBytes, background)
+}
+
+// resolvedSettings is the tool's settings with each agent as it was built (NoChangeTools set), which is
+// what the agent list shows the model.
+func (s *subagentTool) resolvedSettings() sessionfs.NativeSubagentSettings {
+	resolved := s.settings
+	resolved.Agents = make([]sessionfs.NativeSubagentAgent, len(s.agents))
+	for index, agent := range s.agents {
+		resolved.Agents[index] = agent.config
+	}
+	return resolved
 }
 
 // backgroundNames are the agents whose calls may be handed off although they can change files.
@@ -589,108 +572,70 @@ func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, s
 	})
 }
 
-// withReadOnlyExec returns the child tools of a read_only agent: its exec sets read_only on
-// every call, whatever the model sent, so each call counts as one that changes no file and
-// runs in the plan-mode sandbox when there is a sandbox. The other tools are unchanged.
-func withReadOnlyExec(childTools []tools.Tool) []tools.Tool {
-	wrapped := append([]tools.Tool(nil), childTools...)
-	for index, tool := range wrapped {
-		if tool.Definition.ID != execToolID {
-			continue
-		}
-		normalize, execute := tool.NormalizeArguments, tool.Execute
-		tool.NormalizeArguments = func(arguments map[string]any) map[string]any {
-			if normalize != nil {
-				arguments = normalize(arguments)
-			}
-			return forcedReadOnly(arguments)
-		}
-		if execute != nil {
-			tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
-				return execute(ctx, forcedReadOnly(arguments), execution)
-			}
-		}
-		wrapped[index] = tool
-	}
-	return wrapped
-}
-
-// forcedReadOnly returns a copy of arguments with read_only true.
-func forcedReadOnly(arguments map[string]any) map[string]any {
-	forced := make(map[string]any, len(arguments)+1)
-	for key, value := range arguments {
-		forced[key] = value
-	}
-	forced[execReadOnlyProperty] = true
-	return forced
-}
-
-// subagentChildTools picks the native tools one agent may use from the enabled ones, and
-// returns separately the MCP tool IDs its list names. An agent without a tools list gets
-// every native read-only tool except the opt-in ones (async, exec, tool_smith, subagent,
-// profile_message, load_tool), and no MCP tool.
-func subagentChildTools(agent sessionfs.NativeSubagentAgent, readOnly, changers []tools.Tool) ([]tools.Tool, []string, error) {
-
-	available := make([]string, 0, len(readOnly)+len(changers))
-	byName := make(map[string]tools.Tool, len(readOnly)+len(changers))
-	for _, tool := range append(append([]tools.Tool(nil), readOnly...), changers...) {
+// newSubagentAgent builds one agent from the native tools it may be offered. Its own settings
+// narrow the pool exactly as a profile's tools block narrows the registered tools: the agent's
+// allow list (when it restricts), its deny list and the session profile's tools.deny. Nothing else
+// does: a child has every native tool of the pool, not only the read-only ones. An allow entry that
+// names no tool of the pool is an error that lists what is enabled, so a typo is not a quiet gap.
+func newSubagentAgent(agent sessionfs.NativeSubagentAgent, sessionDeny []string, pool []tools.Tool, nesting bool) (subagentAgent, error) {
+	filter := agent.ToolSettings(sessionDeny)
+	available := make([]string, 0, len(pool))
+	byName := make(map[string]struct{}, len(pool))
+	for _, tool := range pool {
 		available = append(available, tool.Definition.Name)
-		byName[tool.Definition.Name] = tool
+		byName[tool.Definition.Name] = struct{}{}
 	}
 	sort.Strings(available)
-	const kind = "native tool"
-	// async, exec, tool_smith, subagent, profile_message and load_tool are opt-in: a child gets them only when its tools list names them.
-	chosen := make([]tools.Tool, 0, len(readOnly))
-	for _, tool := range readOnly {
-		if tool.Definition.ID != asyncToolID && tool.Definition.ID != execToolID && tool.Definition.ID != toolSmithToolID && tool.Definition.ID != subagentToolID && tool.Definition.ID != profileMessageToolID && tool.Definition.ID != loadToolID {
-			chosen = append(chosen, tool)
+	mcpListed := false
+	for _, name := range filter.Allow {
+		if strings.HasPrefix(name, mcpToolIDPrefix) {
+			mcpListed = true
+			continue
+		}
+		// The two tools the owner builds for each child: subagent (nestedSelf) and load_tool (SetLazy).
+		if name == "subagent" || name == sessionfs.LoadToolName {
+			continue
+		}
+		if _, exists := byName[name]; exists {
+			continue
+		}
+		switch name {
+		case "tool_smith":
+			return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"tool_smith\", but the session does not enable tools.native.tool_smith: add it under tools.native, or remove it from the list", agent.Name)
+		case "profile_message":
+			return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"profile_message\", but the session does not enable tools.native.profile_message (or has no other profile to message): add it under tools.native, or remove it from the list", agent.Name)
+		case "async":
+			return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"async\", but the session does not enable tools.native.async: add \"async\": {} under tools.native, or remove it from the list", agent.Name)
+		}
+		return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled native tool (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, strings.Join(available, ", "))
+	}
+	shown := make([]tools.Tool, 0, len(pool))
+	for _, tool := range pool {
+		if tools.ProfileShows(filter, tool.Definition) {
+			shown = append(shown, tool)
 		}
 	}
-	var mcpIDs []string
-	if agent.HasTools {
-		wanted := make(map[string]struct{}, len(agent.Tools))
-		for _, name := range agent.Tools {
-			if strings.HasPrefix(name, mcpToolIDPrefix) {
-				mcpIDs = append(mcpIDs, name)
-				continue
-			}
-			if name == "subagent" {
-				// The tool being built; the caller adds it to this agent's catalog.
-				continue
-			}
-			// load_tool is offered by addLoadToolToNestingAgents, once the owning profile's set is known.
-			if name == sessionfs.LoadToolName {
-				continue
-			}
-			if _, exists := byName[name]; !exists {
-				switch name {
-				case "tool_smith":
-					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"tool_smith\", but the session does not enable tools.native.tool_smith: add it under tools.native, or remove it from the list", agent.Name)
-				case "profile_message":
-					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"profile_message\", but the session does not enable tools.native.profile_message (or has no other profile to message): add it under tools.native, or remove it from the list", agent.Name)
-				case "async":
-					return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists \"async\", but the session does not enable tools.native.async: add \"async\": {} under tools.native, or remove it from the list", agent.Name)
-				}
-				return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not an enabled %s (enabled: %s); an MCP tool is written mcp:<server>:<tool>", agent.Name, name, kind, strings.Join(available, ", "))
-			}
-			wanted[name] = struct{}{}
-		}
-		chosen = make([]tools.Tool, 0, len(wanted))
-		for _, tool := range append(append([]tools.Tool(nil), readOnly...), changers...) {
-			if _, ok := wanted[tool.Definition.Name]; ok {
-				chosen = append(chosen, tool)
-			}
+	// A child with no tool that can change files is a reader: it is scheduled as one and may run as a handle.
+	// Nesting alone does not make it a writer: a child it starts that changes files is a call of its own run,
+	// which that run's checkpoint and change list cover.
+	selfShown := nesting && tools.ProfileShows(filter, tools.Definition{ID: subagentToolID, Source: "native", Name: "subagent"})
+	changes := false
+	for _, tool := range shown {
+		if sessionfs.IsChangeTool(tool.Definition.Name) {
+			changes = true
 		}
 	}
-	if len(chosen) == 0 && len(mcpIDs) == 0 && !containsName(agent.Tools, "subagent") {
-		return nil, nil, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: list exec, or enable at least one read-only native tool (read_image, lsp, skill, transcript, decide_systemone or web_search)", agent.Name)
+	agent.NoChangeTools = !changes
+	if filter.HasAllow && len(shown) == 0 && !mcpListed && !selfShown {
+		return subagentAgent{}, fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: its tools list and the profile's tools.deny leave none of the session's tools (enabled: %s)", agent.Name, strings.Join(available, ", "))
 	}
-	return chosen, mcpIDs, nil
+	return subagentAgent{config: agent, filter: filter, nativeTools: shown, needsMCP: mcpListed}, nil
 }
 
-// bindMCP builds the catalog of every agent that lists MCP tools. Only the tools an
-// agent names are given; a tool is never added because its server calls it read-only,
-// since that is the server's own claim.
+// bindMCP gives every agent the MCP tools it may use and builds its catalog. An agent sees the
+// MCP tools its own settings show, the way a profile's tools block shows the registered ones: all of
+// the session's (or its toolset's) MCP tools, narrowed by the agent's allow and deny lists and the
+// session profile's tools.deny.
 //
 // Each child's copy is the raw tool, gated by the owner's lazy set (the gate wraps the tool it is
 // given, so a toolset's copy stays the toolset's) and then wrapped by hook: with the owner's hooks
@@ -709,58 +654,76 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 	defer s.mu.Unlock()
 	for index := range s.agents {
 		agent := &s.agents[index]
-		if len(agent.mcpIDs) == 0 {
-			continue
-		}
-		byID, loadedText := session.byID, session.loadedText
-		where := ""
-		hooks := ownerHooks
+		pool, hooks, where := session, ownerHooks, ""
 		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
 			hooks = toolsetHooks[toolsetKey]
-			pool := pools[toolsetKey]
-			byID, loadedText = pool.byID, pool.loadedText
-			if byID == nil {
-				byID, loadedText = map[string]tools.Tool{}, "none"
+			pool = pools[toolsetKey]
+			if pool.byID == nil {
+				pool = mcpPool{byID: map[string]tools.Tool{}, loadedText: "none"}
 			}
 			where = " of toolset " + toolsetKey
 		}
-		childTools := append([]tools.Tool(nil), agent.nativeTools...)
-		added := make(map[string]struct{}, len(agent.mcpIDs))
-		add := func(tool tools.Tool) {
-			if tools.AnyEntryMatches(s.settings.DenyTools, tool.Definition) {
-				return
-			}
-			if _, done := added[tool.Definition.ID]; !done {
-				added[tool.Definition.ID] = struct{}{}
-				// The owning profile's lazy set gates the child's copy: a lazy tool is never in the child's
-				// tools array, and runs only through the child's load_tool (run). GateFor leaves the set's
-				// one-shot gate to the parent.
-				gated, _ := s.lazy.GateFor(tool)
-				childTools = append(childTools, hook(hooks, gated))
-			}
+		if err := checkMCPEntries(agent, pool, where); err != nil {
+			return err
 		}
-		for _, id := range agent.mcpIDs {
-			if server, wildcard := strings.CutSuffix(id, ":*"); wildcard {
-				matched, err := expandMCPWildcard(agent.config.Name, id, server, byID)
-				if err != nil {
-					return err
-				}
-				for _, tool := range matched {
-					add(tool)
-				}
+		agent.mcpTools = nil
+		for _, tool := range pool.ordered {
+			if !tools.ProfileShows(agent.filter, tool.Definition) {
 				continue
 			}
-			tool, exists := byID[id]
-			if !exists {
-				return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not a loaded MCP tool%s (loaded: %s)", agent.config.Name, id, where, loadedText)
+			// The owning profile's lazy set gates the child's copy: a lazy tool is never in the child's
+			// tools array, and runs only through the child's load_tool (run). GateFor leaves the set's
+			// one-shot gate to the parent.
+			gated, _ := s.lazy.GateFor(tool)
+			agent.mcpTools = append(agent.mcpTools, hook(hooks, gated))
+		}
+		agent.mcpBound = true
+		if err := s.checkAgentHasTools(agent); err != nil {
+			return err
+		}
+		if err := s.buildCatalogs(agent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkAgentHasTools refuses an agent that has no tool at all once the MCP tools are bound: its own lists
+// and the profile's tools.deny leave nothing, so a run of it could do nothing but answer. The message says
+// when the deny list is in effect, so the cause is not mistaken for a typo in the agent file.
+func (s *subagentTool) checkAgentHasTools(agent *subagentAgent) error {
+	if len(agent.nativeTools) > 0 || len(agent.mcpTools) > 0 {
+		return nil
+	}
+	if s.settings.MaxDepth >= 2 && tools.ProfileShows(agent.filter, s.self.Definition) {
+		return nil
+	}
+	if s.loadTool != nil && tools.ProfileShows(agent.filter, s.loadTool.Definition) {
+		return nil
+	}
+	err := fmt.Errorf("tools.native.subagent.agents.%s has no tool to use: its tools lists and the profile's tools.deny leave none of the session's tools", agent.config.Name)
+	if len(s.settings.DenyTools) > 0 {
+		err = fmt.Errorf("%w (the profile's tools.deny is in effect: %s)", err, strings.Join(s.settings.DenyTools, ", "))
+	}
+	return err
+}
+
+// checkMCPEntries refuses an allow entry of the agent that names an MCP tool, or a server, the
+// pool did not load, so a typo is a configuration error and not a tool that is quietly absent.
+func checkMCPEntries(agent *subagentAgent, pool mcpPool, where string) error {
+	for _, id := range agent.filter.Allow {
+		if !strings.HasPrefix(id, mcpToolIDPrefix) {
+			continue
+		}
+		if server, wildcard := strings.CutSuffix(id, ":*"); wildcard {
+			if _, err := expandMCPWildcard(agent.config.Name, id, server, pool.byID); err != nil {
+				return err
 			}
-			add(tool)
+			continue
 		}
-		catalog, err := tools.NewCatalog(childTools)
-		if err != nil {
-			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+		if _, exists := pool.byID[id]; !exists {
+			return fmt.Errorf("tools.native.subagent.agents.%s.tools lists %q, which is not a loaded MCP tool%s (loaded: %s)", agent.config.Name, id, where, pool.loadedText)
 		}
-		agent.catalog = catalog
 	}
 	return nil
 }
@@ -768,15 +731,19 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 // mcpPool is the MCP tools one source loaded (the session, or one toolset), by ID, with
 // the sorted IDs ready for an error message.
 type mcpPool struct {
-	byID       map[string]tools.Tool
+	byID map[string]tools.Tool
+	// ordered are the tools in the order the source loaded them, as a profile's catalog holds them.
+	ordered    []tools.Tool
 	loadedText string
 }
 
 func newMCPPool(mcpTools []tools.Tool) mcpPool {
 	byID := make(map[string]tools.Tool, len(mcpTools))
+	var ordered []tools.Tool
 	for _, tool := range mcpTools {
 		if tool.Definition.Source == "mcp" {
 			byID[tool.Definition.ID] = tool
+			ordered = append(ordered, tool)
 		}
 	}
 	loaded := make([]string, 0, len(byID))
@@ -788,7 +755,7 @@ func newMCPPool(mcpTools []tools.Tool) mcpPool {
 	if len(loaded) > 0 {
 		loadedText = strings.Join(loaded, ", ")
 	}
-	return mcpPool{byID: byID, loadedText: loadedText}
+	return mcpPool{byID: byID, ordered: ordered, loadedText: loadedText}
 }
 
 // expandMCPWildcard returns the loaded tools of one server, by ID order, for an entry

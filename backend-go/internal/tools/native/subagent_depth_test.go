@@ -66,18 +66,11 @@ func TestNestedSubagentCopyIsNeverGated(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, tool := range mcp.tool.agents[0].nativeTools {
-		if tool.Definition.ID != subagentToolID {
-			continue
-		}
-		found = true
-		if tool.Refused != nil {
-			t.Fatal("the nested subagent copy has a Refused rule: a native tool is never lazy")
-		}
-	}
-	if !found {
+	if !mcp.tool.agents[0].catalog.Has("subagent") {
 		t.Fatal("the child holds no nested subagent copy")
+	}
+	if mcp.tool.nestedSelf().Refused != nil {
+		t.Fatal("the nested subagent copy has a Refused rule: a native tool is never lazy")
 	}
 }
 

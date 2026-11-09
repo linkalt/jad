@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/asyncmgr"
@@ -48,15 +49,14 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 }
 
 // childExecutionContext is the context of a sub-agent's tools. It is this call's context
-// with its run scope carried over (ForNested), minus what belongs to the calling call and
-// not to the run: the child asks its own questions and reports its own changes, and the
-// manager fills ProcessOwner, ProcessAsync, AgentDepth, RootRun and OnFileChange when it
-// starts the run. The caller's path scope (a worktree) carries over.
+// with its run scope carried over (ForNested): the child is a run of the same session, so it
+// asks the same user (RequestInteraction, OnInteractionResolved: a child's request_draft reaches
+// the parent's channel, or the headless fallback when the parent has none) and its file changes
+// are reported to the caller's OnFileChange as well as to the manager's own list. The manager
+// fills ProcessOwner, ProcessAsync, AgentDepth and RootRun when it starts the run. The caller's
+// path scope (a worktree) carries over.
 func childExecutionContext(execution tools.ExecutionContext, agent sessionfs.NativeSubagentAgent) tools.ExecutionContext {
 	child := execution.ForNested()
-	child.RequestInteraction = nil
-	child.OnInteractionResolved = nil
-	child.OnFileChange = nil
 	child.AgentName = agent.Name
 	child.PathScope = narrowScope(execution.WorkspaceRoot, execution.PathScope, nil)
 	return child
@@ -86,6 +86,11 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable",
 			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
+	// A child at the deepest level gets no subagent tool: a call to it could only be refused.
+	childCatalog := agent.catalog
+	if s.depthExceeded(execution.AgentDepth+1) && agent.leaf != nil {
+		childCatalog = agent.leaf
+	}
 	changes := agent.config.ChangesFiles()
 	// A run in a worktree of its own changes no file of the session, so it is scheduled
 	// like a read-only run: it may be a handle and needs no background writer place.
@@ -111,6 +116,14 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	observe := externalObserver(ctx)
 	if observe == nil && s.async != nil && (!touches || background) && canHandle {
 		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task))
+	}
+	// The question channel is the caller's only while the call is open: a run that outlives it
+	// (a handle, a background writer) fails a question closed instead of asking nobody.
+	callOpen := &atomic.Bool{}
+	callOpen.Store(true)
+	defer callOpen.Store(false)
+	if handle != nil || background {
+		childExecution.RequestInteraction = closedChannelGuard(childExecution.RequestInteraction, callOpen)
 	}
 	config, err := subagentFingerprint(agent.config, agent.catalog)
 	if err != nil {
@@ -144,7 +157,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 			Agent:     agent.config,
 			Task:      task,
 			CallID:    callID,
-			Tools:     agent.catalog,
+			Tools:     childCatalog,
 			Execution: childExecution,
 			// Values only: a background child outlives the call that started it.
 			CallerValues: context.WithoutCancel(ctx),
@@ -186,6 +199,26 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		wait = s.blockFor(arguments, execution)
 	}
 	return s.await(ctx, callID, run, wait, handle == nil)
+}
+
+// errChildChannelClosed is what a question of a child that outlived its call is answered with.
+var errChildChannelClosed = errors.New("the user cannot be asked: this sub-agent outlived the call that started it, so nobody is waiting to answer; decide without asking, or end the run with what is known")
+
+// closedChannelGuard is the question channel of a child whose run may outlive the call that
+// started it. While the call is open it is the caller's channel (or, when the caller has none, the
+// no-channel answer, so the tool applies its headless fallback exactly as for the caller itself);
+// once the call has returned, a question fails with an error and is never auto-accepted: an
+// unattended background run must not accept a draft nobody saw.
+func closedChannelGuard(inner tools.InteractionHandler, open *atomic.Bool) tools.InteractionHandler {
+	return func(ctx context.Context, identity tools.InteractionIdentity, question tools.InteractionQuestion) (tools.InteractionAnswer, error) {
+		switch {
+		case !open.Load():
+			return tools.InteractionAnswer{}, errChildChannelClosed
+		case inner == nil:
+			return tools.InteractionAnswer{}, tools.ErrNoInteractionChannel
+		}
+		return inner(ctx, identity, question)
+	}
 }
 
 // worktreeStart is the worktree of a run of agent, or nil for an agent without isolation

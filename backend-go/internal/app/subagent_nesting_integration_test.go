@@ -27,6 +27,9 @@ func TestNestedSubagentThroughTheRealLauncherCarriesDepthAndSessionKey(t *testin
 	}
 }
 
+// A child at the deepest level is not offered the subagent tool (a call to it could only be refused),
+// and the level it is at is the one the launcher carried: a launcher that lost AgentDepth would hand the
+// grandchild the nesting catalog.
 func TestNestedSubagentThroughTheRealLauncherStopsAtMaxDepth(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{
 		"model": "child.json", "tools": []string{"skill", "subagent"},
@@ -35,11 +38,20 @@ func TestNestedSubagentThroughTheRealLauncherStopsAtMaxDepth(t *testing.T) {
 	if body := f.run(t); !strings.Contains(body, "event: completed") {
 		t.Fatalf("run did not complete:\n%s", body)
 	}
-	var all strings.Builder
+	nesting, leaf := 0, 0
 	for _, request := range f.provider.forModel("child-model") {
-		all.WriteString(request.Text)
+		hasSubagent := false
+		for _, name := range request.Tools {
+			hasSubagent = hasSubagent || name == "subagent"
+		}
+		switch {
+		case hasSubagent:
+			nesting++
+		case strings.Contains(request.Text, "go deeper"):
+			leaf++
+		}
 	}
-	if !strings.Contains(all.String(), "subagent_depth_exceeded") {
-		t.Fatalf("the grandchild did not hit the depth cap; the launcher lost AgentDepth:\n%s", all.String())
+	if nesting == 0 || leaf == 0 {
+		t.Fatalf("child requests with the subagent tool: %d, grandchild requests without it: %d; the launcher lost AgentDepth", nesting, leaf)
 	}
 }

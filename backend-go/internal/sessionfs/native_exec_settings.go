@@ -179,8 +179,8 @@ func (s NativeExecSettings) ReadOnlyEnforced() bool {
 }
 
 // ReadOnlyHonored reports whether a call's read_only counts: it is scheduled beside other
-// reads, runs in plan mode and keeps a read_only agent from being a writer. It always does
-// with read_only_calls trusted, and only where ReadOnlyEnforced with sandboxed.
+// reads and runs in plan mode. It always does with read_only_calls trusted, and only where
+// ReadOnlyEnforced with sandboxed.
 func (s NativeExecSettings) ReadOnlyHonored() bool {
 	return s.ReadOnlyCalls != NativeExecReadOnlyCallsSandboxed || s.ReadOnlyEnforced()
 }
@@ -355,25 +355,6 @@ func normalizeNativeExecReadOnlyCalls(fields map[string]json.RawMessage, path st
 		return "", configError("%s must be %q or %q", path, NativeExecReadOnlyCallsTrusted, NativeExecReadOnlyCallsSandboxed)
 	}
 	return value, nil
-}
-
-// checkReadOnlyAgentsHonored refuses a read_only agent whose exec would not honor read_only
-// (read_only_calls sandboxed with no bwrap or seatbelt sandbox on exec): its runs would count
-// as reads while every exec call of it counts as a change. execFor gives the exec settings
-// the agent's tools come from (the session's, or its toolset's); nil means no exec.
-func checkReadOnlyAgentsHonored(subagents *NativeSubagentSettings, execFor func(NativeSubagentAgent) *NativeExecSettings, settingPath string) error {
-	if subagents == nil {
-		return nil
-	}
-	for _, agent := range subagents.Agents {
-		if !agent.ReadOnly {
-			continue
-		}
-		if exec := execFor(agent); exec != nil && !exec.ReadOnlyHonored() {
-			return configError("%s: tools.native.subagent.agents.%s.read_only is not honored: tools.native.exec.read_only_calls is %q and exec runs under no bwrap or seatbelt sandbox; add one, set read_only_calls to %q, or remove read_only", settingPath, agent.Name, NativeExecReadOnlyCallsSandboxed, NativeExecReadOnlyCallsTrusted)
-		}
-	}
-	return nil
 }
 
 // normalizeNativeExecDefaultLang resolves the language a call without `lang` runs to its

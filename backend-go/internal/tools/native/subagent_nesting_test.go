@@ -84,8 +84,9 @@ func holdUntilCancelled(cancelled *atomic.Int64) nestedBehaviour {
 }
 
 func TestNestedStartIsRefusedBeyondMaxDepth(t *testing.T) {
-	var midSaw, bossSaw string
-	catalog, _, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent"), nestingAgent("mid", "read", "subagent"), agentNamed("leaf")),
+	var midSaw, midGate, bossSaw string
+	var owner *tools.Catalog
+	catalog, _, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent"), nestingAgent("mid", "read", "subagent"), nestingAgent("leaf", "read")),
 		map[string]nestedBehaviour{
 			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 				bossSaw = childCall(t, ctx, request, "subagent", `{"task":"go on","agent":"mid"}`)
@@ -93,20 +94,31 @@ func TestNestedStartIsRefusedBeyondMaxDepth(t *testing.T) {
 			},
 			"mid": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 				midSaw = childCall(t, ctx, request, "subagent", `{"task":"go on","agent":"leaf"}`)
+				// The tool is hidden at the deepest level; the depth check is the gate behind it.
+				call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "gate", "name": "subagent", "arguments": `{"task":"go on","agent":"leaf"}`})
+				raw, err := owner.ExecuteFunctionCall(ctx, call, request.Execution)
+				if err != nil {
+					t.Errorf("owner call: %v", err)
+				}
+				midGate = string(raw)
 				return SubagentResult{Text: "mid done"}, nil
 			},
 			"leaf": func(context.Context, SubagentRequest) (SubagentResult, error) {
 				return SubagentResult{Text: "leaf"}, nil
 			},
 		})
+	owner = catalog
 	if out := subagentCall(t, catalog, `{"task":"x","agent":"boss"}`); !strings.Contains(out, "Agent boss finished") {
 		t.Fatalf("boss: %s", out)
 	}
 	if !strings.Contains(bossSaw, "Agent mid finished") {
 		t.Errorf("a child at depth 1 could not start a child at depth 2: %s", bossSaw)
 	}
-	if !strings.Contains(midSaw, "subagent_depth_exceeded") {
-		t.Errorf("a child at depth 2 started a third level: %s", midSaw)
+	if strings.Contains(midSaw, "Agent leaf finished") || !strings.Contains(midSaw, "unknown_tool") {
+		t.Errorf("a child at depth 2 was offered the subagent tool or started a third level: %s", midSaw)
+	}
+	if !strings.Contains(midGate, "subagent_depth_exceeded") {
+		t.Errorf("the depth check did not refuse a start at depth 2: %s", midGate)
 	}
 }
 
@@ -122,7 +134,7 @@ func TestNestedStartsAreBoundedPerRootAndPerSessionAndNeverQueue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var outputs []string
-			settings := nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf"))
+			settings := nestingSettings(nestingAgent("boss", "read", "subagent", "async"), nestingAgent("leaf", "read"))
 			tc.tune(&settings)
 			catalog, manager, _ := nestingFixture(t, settings, map[string]nestedBehaviour{
 				"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
@@ -161,7 +173,7 @@ func TestStoppingARunCancelsItsDescendantsAndLeavesNoGoroutines(t *testing.T) {
 	baseline := baselineCount()
 	var cancelled atomic.Int64
 	leafStarted := make(chan string, 1)
-	catalog, manager, host := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), nestingAgent("mid", "read", "subagent", "async"), agentNamed("leaf")),
+	catalog, manager, host := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), nestingAgent("mid", "read", "subagent", "async"), nestingAgent("leaf", "read")),
 		map[string]nestedBehaviour{
 			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 				childCall(t, ctx, request, "subagent", `{"task":"t","agent":"mid","block_ms":0}`)
@@ -180,7 +192,7 @@ func TestStoppingARunCancelsItsDescendantsAndLeavesNoGoroutines(t *testing.T) {
 	bossID := runIDOf(t, subagentCall(t, catalog, `{"task":"x","agent":"boss","block_ms":0}`))
 	select {
 	case out := <-leafStarted:
-		if !strings.Contains(out, "depth_exceeded") && !strings.Contains(out, "is still running") {
+		if !strings.Contains(out, "unknown_tool") && !strings.Contains(out, "depth_exceeded") && !strings.Contains(out, "is still running") {
 			t.Fatalf("unexpected result of the third level: %s", out)
 		}
 	case <-time.After(5 * time.Second):
@@ -204,7 +216,7 @@ func TestAChildSeesOnlyTheHandlesItsOwnRunStarted(t *testing.T) {
 	siblingSaw := make(chan string, 1)
 	var bossOne atomic.Value
 	release := make(chan struct{})
-	settings := nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf"))
+	settings := nestingSettings(nestingAgent("boss", "read", "subagent", "async"), nestingAgent("leaf", "read"))
 	settings.BackgroundWriters, settings.MaxBackgroundWriters = true, 4
 	catalog, _, _ := nestingFixture(t, settings,
 		map[string]nestedBehaviour{
@@ -265,7 +277,7 @@ func TestNestedRunBelongsToTheSessionThatStartedTheTree(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	grandchild := make(chan string, 1)
-	catalog, manager, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), agentNamed("leaf")),
+	catalog, manager, _ := nestingFixture(t, nestingSettings(nestingAgent("boss", "read", "subagent", "async"), nestingAgent("leaf", "read")),
 		map[string]nestedBehaviour{
 			"boss": func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
 				grandchild <- childCall(t, ctx, request, "subagent", `{"task":"deep","agent":"leaf","block_ms":5}`)

@@ -198,18 +198,28 @@ func TestSubagentSmallestCallRunsTheOnlyAgentAndRendersTheAnswer(t *testing.T) {
 	}
 }
 
-func TestSubagentChildGetsOnlyReadOnlyNativeToolsAndNeverItself(t *testing.T) {
+// A child is a profile: with no tools config it has every native tool of the session (and the
+// subagent tool when max_depth allows a child to nest), minus the profile's tools.deny.
+func TestSubagentChildGetsTheFullCatalogMinusToolsDeny(t *testing.T) {
 	launcher := &fakeLauncher{}
 	catalog, _ := buildSubagentCatalog(t, subagentSettings(agentNamed("explore")), launcher,
 		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"), mcpReadOnlyTool("lookup"), readOnlyTool("grep"))
 	subagentCall(t, catalog, `{"task":"x"}`)
 
 	got := toolNames(launcher.requests[0].Tools)
-	if strings.Join(got, ",") != "read,grep" {
-		t.Fatalf("child tools = %v, want read and grep only (no exec, tool_smith, MCP tool or subagent)", got)
+	if strings.Join(got, ",") != "read,exec,tool_smith,grep" {
+		t.Fatalf("child tools = %v, want every native tool (an MCP tool comes through Bind; max_depth 1 leaves no subagent)", got)
 	}
 	if strings.Join(toolNames(catalog), ",") != "read,exec,tool_smith,lookup,grep,subagent,async" {
 		t.Fatalf("parent catalog changed: %v", toolNames(catalog))
+	}
+
+	denied := &fakeLauncher{}
+	catalog, _ = buildSubagentCatalog(t, withDeny(subagentSettings(agentNamed("explore")), "tool_smith", "grep"), denied,
+		readOnlyTool("read"), writeTool("exec"), writeTool("tool_smith"), readOnlyTool("grep"))
+	subagentCall(t, catalog, `{"task":"x"}`)
+	if got := strings.Join(toolNames(denied.requests[0].Tools), ","); got != "read,exec" {
+		t.Fatalf("child tools with tools.deny = %q, want read,exec", got)
 	}
 }
 
@@ -229,9 +239,8 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 	}{
 		"unknown tool": {[]string{"nope"}, `lists "nope"`},
 		"mcp tool":     {[]string{"lookup"}, `lists "lookup"`},
-		"subagent":     {[]string{"subagent"}, `lists "subagent", but tools.native.subagent.max_depth is 1`},
 		"async":        {[]string{"read", "async"}, `lists "async", but the session does not enable tools.native.async`},
-		"tool_smith":   {[]string{"tool_smith"}, `lists "tool_smith", but the session does not enable tools.native.tool_smith`},
+		"tool_smith":   {[]string{"read", "tool_smith"}, `lists "tool_smith", but the session does not enable tools.native.tool_smith`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := agentNamed("bad")
@@ -244,16 +253,21 @@ func TestSubagentToolsListNarrowsAndRejectsAnUnavailableName(t *testing.T) {
 	}
 }
 
-// Flipped on purpose (allow_write removed, B-4b): "exec" in a child's tools list is no
-// longer refused; the list alone grants it, as long as the session enables exec.
+// An allow list that names exec together with real tools keeps exec as written, as long as the session
+// enables exec. A list of only the old opt-in names (exec, async, ...) restricts nothing.
 func TestSubagentToolsListMayNameAChangeToolTheSessionEnables(t *testing.T) {
 	agent := agentNamed("writer")
-	agent.Tools, agent.HasTools = []string{"exec"}, true
+	agent.Tools, agent.HasTools = []string{"exec", "grep"}, true
 	launcher := &fakeLauncher{}
-	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), launcher, readOnlyTool("read"), writeTool("exec"))
+	catalog, _ := buildSubagentCatalog(t, subagentSettings(agent), launcher, readOnlyTool("read"), writeTool("exec"), readOnlyTool("grep"))
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "exec" {
-		t.Fatalf("child tools = %q, want exec", got)
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "exec,grep" {
+		t.Fatalf("child tools = %q, want exec,grep", got)
+	}
+	deprecated := agentNamed("old")
+	deprecated.Tools, deprecated.HasTools = []string{"exec", "async"}, true
+	if got := childNamesOf(t, deprecated, nil, readOnlyTool("read"), writeTool("exec"), readOnlyTool("grep")); strings.Join(got, ",") != "read,exec,grep" {
+		t.Fatalf("a list of only opt-in names restricted the child to %v", got)
 	}
 	_, err := NewSubagentTool(subagentSettings(agent), withExecutors(t, readOnlyTool("read")), nil)
 	if err == nil || !strings.Contains(err.Error(), `lists "exec", which is not an enabled native tool (enabled: read)`) {
@@ -261,8 +275,8 @@ func TestSubagentToolsListMayNameAChangeToolTheSessionEnables(t *testing.T) {
 	}
 }
 
-func TestSubagentNeedsAtLeastOneReadOnlyToolToGiveAChild(t *testing.T) {
-	_, err := NewSubagentTool(subagentSettings(agentNamed("explore")), withExecutors(t, writeTool("exec")), nil)
+func TestSubagentNeedsAtLeastOneToolToGiveAChild(t *testing.T) {
+	_, err := NewSubagentTool(withDeny(subagentSettings(agentWithTools("explore", "read")), "read"), withExecutors(t, readOnlyTool("read")), nil)
 	if err == nil || !strings.Contains(err.Error(), "agents.explore has no tool to use") {
 		t.Fatalf("error = %v", err)
 	}
@@ -622,7 +636,8 @@ func agentWithTools(name string, names ...string) sessionfs.NativeSubagentAgent 
 	return agent
 }
 
-func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
+// A child sees the MCP tools its own settings show: all of them without a list, only the listed ones with one.
+func TestSubagentChildGetsTheMCPToolsItsSettingsShow(t *testing.T) {
 	launcher := &fakeLauncher{}
 	mcpTools := []tools.Tool{
 		mcpStub(t, "zvec", "search"),
@@ -640,8 +655,8 @@ func TestSubagentChildGetsOnlyTheMCPToolsItsListNames(t *testing.T) {
 	for agent, want := range map[string]string{
 		"finder":  "read,mcp_zvec_search_0123456789",
 		"mcponly": "mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789",
-		// No tools list: native read-only tools only, never an MCP tool.
-		"plain": "read,grep",
+		// No tools list: every native tool and every MCP tool, as a profile has them.
+		"plain": "read,grep,mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789,mcp_browser_click_0123456789",
 	} {
 		subagentCall(t, catalog, `{"task":"x","agent":"`+agent+`"}`)
 		var got string
@@ -701,7 +716,7 @@ func TestSubagentWildcardGivesTheChildEveryToolOfThatServerOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for agent, want := range map[string]string{
-		"wild": "read,mcp_zvec_reindex_0123456789,mcp_zvec_search_0123456789",
+		"wild": "read,mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789",
 		"both": "mcp_zvec_search_0123456789,mcp_zvec_reindex_0123456789",
 	} {
 		subagentCall(t, catalog, `{"task":"x","agent":"`+agent+`"}`)
@@ -729,7 +744,7 @@ func TestSubagentWildcardNamesAnEmptyServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	subagentCall(t, catalog, `{"task":"x"}`)
-	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "mcp_mixed_gated_0123456789,mcp_mixed_open_0123456789" {
+	if got := strings.Join(toolNames(launcher.requests[0].Tools), ","); got != "mcp_mixed_open_0123456789,mcp_mixed_gated_0123456789" {
 		t.Errorf("child tools = %q, want every tool of the server", got)
 	}
 	for name, tc := range map[string]struct{ entry, want string }{
@@ -769,7 +784,7 @@ func TestSubagentProfileDenyRemovesToolsFromEveryChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	for agent, want := range map[string]string{
-		"plain":  "read,glob",
+		"plain":  "read,glob,mcp_zvec_search_0123456789,mcp_zvecx_other_0123456789",
 		"listed": "read",
 		"wild":   "read,mcp_zvec_search_0123456789",
 		"exact":  "mcp_zvec_search_0123456789",
@@ -810,21 +825,23 @@ func TestSubagentProfileDenyOfAWholeServerAndOfNothing(t *testing.T) {
 func TestSubagentProfileDenyThatEmptiesAnAgentIsAnError(t *testing.T) {
 	loaded := []tools.Tool{mcpStub(t, "zvec", "search")}
 	for name, tc := range map[string]struct {
-		agent sessionfs.NativeSubagentAgent
-		deny  []string
-		want  string
+		agent  sessionfs.NativeSubagentAgent
+		deny   []string
+		loaded []tools.Tool
+		want   string
 	}{
-		"listed tools all denied":  {agentWithTools("a", "read"), []string{"read"}, "agents.a has no tool to use"},
-		"default set all denied":   {agentNamed("a"), []string{"read"}, "agents.a has no tool to use"},
-		"wildcard server denied":   {agentWithTools("a", "mcp:zvec:*"), []string{"mcp:zvec:*"}, "agents.a has no tool to use"},
-		"exact mcp tool denied":    {agentWithTools("a", "mcp:zvec:search"), []string{"mcp:zvec:search"}, "agents.a has no tool to use"},
-		"message names the reason": {agentWithTools("a", "read"), []string{"read"}, "the profile's tools.deny is in effect: read"},
+		"listed tools all denied":  {agentWithTools("a", "read"), []string{"read"}, loaded, "agents.a has no tool to use"},
+		"default set all denied":   {agentNamed("a"), []string{"read"}, nil, "agents.a has no tool to use"},
+		"wildcard server denied":   {agentWithTools("a", "mcp:zvec:*"), []string{"mcp:zvec:*"}, loaded, "agents.a has no tool to use"},
+		"exact mcp tool denied":    {agentWithTools("a", "mcp:zvec:search"), []string{"mcp:zvec:search"}, loaded, "agents.a has no tool to use"},
+		"message names the reason": {agentWithTools("a", "read"), []string{"read"}, loaded, "the profile's tools.deny is in effect: read"},
+		"bind names the reason":    {agentNamed("a"), []string{"read"}, nil, "the profile's tools.deny is in effect: read"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			hook := &SubagentMCP{}
 			_, err := NewSubagentToolWithMCP(withDeny(subagentSettings(tc.agent), tc.deny...), withExecutors(t, readOnlyTool("read")), &fakeLauncher{}, hook)
 			if err == nil {
-				err = hook.Bind(loaded)
+				err = hook.Bind(tc.loaded)
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
@@ -911,7 +928,7 @@ func TestSubagentBindIgnoresAToolThatIsNotFromMCP(t *testing.T) {
 }
 
 func describedAgent(name, description string) sessionfs.NativeSubagentAgent {
-	agent := agentNamed(name)
+	agent := agentWithTools(name, "read")
 	agent.Description = description
 	return agent
 }
@@ -919,7 +936,7 @@ func describedAgent(name, description string) sessionfs.NativeSubagentAgent {
 func TestSubagentAgentListShrinksWithItsBudgetAtTheByteBoundaries(t *testing.T) {
 	// Long descriptions, so the names text is shorter than the full text.
 	long := strings.Repeat("d", 100)
-	agents := []sessionfs.NativeSubagentAgent{describedAgent("alpha", long), describedAgent("beta", long), agentNamed("gamma")}
+	agents := []sessionfs.NativeSubagentAgent{describedAgent("alpha", long), describedAgent("beta", long), agentWithTools("gamma", "read")}
 	full := "\nAgents:\n- alpha: " + long + "\n- beta: " + long + "\n- gamma"
 	names := "\nAgents: alpha, beta, gamma. Call without a task to list them with descriptions."
 	count := "\n3 agents configured. Call without a task to list them with descriptions."
@@ -1118,4 +1135,32 @@ func TestSubagentAgentNamesAreReadWhileTheMCPToolsBind(t *testing.T) {
 		_ = hook.tool.agentNames()
 	}
 	<-done
+}
+
+// childNamesOf returns the names of the native tools a child of agent is given from a pool of
+// parent tools, with the session profile's tools.deny sessionDeny. The pool is built the way the
+// subagent tool builds it (childNativePool).
+func childNamesOf(t *testing.T, agent sessionfs.NativeSubagentAgent, sessionDeny []string, parent ...tools.Tool) []string {
+	t.Helper()
+	built, err := newSubagentAgent(agent, sessionDeny, childNativePool(parent), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return poolNames(built.nativeTools)
+}
+
+// A child whose only tool is the nested subagent tool has a tool to use, so it loads; with max_depth 1 it has none.
+func TestSubagentWhoseOnlyToolIsTheNestedSubagentLoads(t *testing.T) {
+	for depth, wantErr := range map[int64]bool{2: false, 1: true} {
+		settings := withDeny(subagentSettings(agentNamed("a")), "read")
+		settings.MaxDepth = depth
+		hook := &SubagentMCP{}
+		_, err := NewSubagentToolWithMCP(settings, withExecutors(t, readOnlyTool("read")), &fakeLauncher{}, hook)
+		if err == nil {
+			err = hook.Bind(nil)
+		}
+		if (err != nil) != wantErr {
+			t.Errorf("max_depth %d: error = %v, want error %v", depth, err, wantErr)
+		}
+	}
 }

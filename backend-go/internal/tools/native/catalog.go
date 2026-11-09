@@ -176,7 +176,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}
-	// Last, because a child gets the read-only tools that are already enabled here.
+	// Last, because a child gets the tools that are already enabled here.
 	if config.NativeSubagent != nil {
 		definition, err := requireModelChoiceDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema, subagentModelProperty)
 		if err != nil {
