@@ -403,7 +403,7 @@ keys), `sample/schemes/setting.schema.json` (`additionalProperties: false`) and 
    kept. A user message that starts with the header *after* index 0 is not a summary.
 10. **`scope: dropped`:** byte for byte the same results as R0's baseline.
 11. **Digest:** an item appended during `Summarize` or the merge is refused.
-12. **`min_input_bytes`:** a tiny window on the escape path falls back to path A, with no model
+12. **`min_input_bytes`:** a tiny window that met only the size trigger falls back to path A, with no model
     call.
 
 **`session`:**
