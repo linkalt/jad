@@ -34,7 +34,10 @@ const (
 
 // SandboxTools are the tools whose child processes a sandbox can wrap. hooks (the commands of
 // the hooks setting) and mcp (the session's stdio MCP servers) are choices: the default
-// covers only the tools the model drives.
+// covers only the tools the model drives. sandbox.tools is a filter, not a list checked
+// against this one or against the run's tool set: a sandbox file is shared by profiles and
+// sub-agents with different tools, so a listed tool the run lacks or that starts no child is
+// accepted and has no effect.
 var SandboxTools = []string{"exec", "tool_smith", "hooks", "mcp"}
 
 var defaultSandboxTools = []string{"exec", "tool_smith"}
@@ -116,20 +119,16 @@ func normalizeSandbox(raw json.RawMessage, path string) (*SandboxSettings, error
 	if raw, exists := fields["tools"]; exists && strings.TrimSpace(string(raw)) != "null" {
 		var names []string
 		if err := json.Unmarshal(raw, &names); err != nil || len(names) == 0 {
-			return nil, configError("%s: %s.tools must list one or more of %s", path, section, strings.Join(SandboxTools, ", "))
+			return nil, configError("%s: %s.tools must be a non-empty array of tool names", path, section)
 		}
 		settings.Tools = nil
 		for index, name := range names {
-			if hint, removed := removedNativeTools[name]; removed {
-				return nil, configError("%s: %s.tools[%d]: tools.native.%s was removed; %s", path, section, index, name, removedToolListHint(hint))
+			if strings.TrimSpace(name) == "" {
+				return nil, configError("%s: %s.tools[%d] must be a non-empty tool name", path, section, index)
 			}
-			if !containsString(SandboxTools, name) {
-				return nil, configError("%s: %s.tools[%d] must be one of %s", path, section, index, strings.Join(SandboxTools, ", "))
+			if !containsString(settings.Tools, name) {
+				settings.Tools = append(settings.Tools, name)
 			}
-			if containsString(settings.Tools, name) {
-				return nil, configError("%s: %s.tools lists %s twice", path, section, name)
-			}
-			settings.Tools = append(settings.Tools, name)
 		}
 	}
 	if raw, exists := fields["backend"]; exists && strings.TrimSpace(string(raw)) != "null" {

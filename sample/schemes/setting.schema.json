@@ -633,10 +633,9 @@
         "tools": {
           "type": "array",
           "minItems": 1,
-          "uniqueItems": true,
-          "items": {"enum": ["exec", "tool_smith", "hooks", "mcp"]},
+          "items": {"type": "string", "pattern": "\\S"},
           "default": ["exec", "tool_smith"],
-          "description": "Tools whose child processes start in the sandbox. hooks (every command of the hooks setting) is not in the default: hook commands come from this file, not from the model, and checks such as go test often write outside the workspace. mcp (Go backend only) starts the session's stdio MCP servers in the sandbox, from their own cwd; a changed sandbox reconnects them. It is not in the default because a server often needs the network or files outside the project."
+          "description": "Tools whose child processes start in the sandbox, when the run has them. A filter, not a check: any tool name is accepted, a name the profile or sub-agent does not have, or a tool that starts no child process (only exec, tool_smith, hooks and mcp do), has no effect, and a name listed twice counts once, so one sandbox can be shared by profiles and sub-agents with different tool sets. hooks (every command of the hooks setting) is not in the default: hook commands come from this file, not from the model, and checks such as go test often write outside the workspace. mcp (Go backend only) starts the session's stdio MCP servers in the sandbox, from their own cwd; a changed sandbox reconnects them. It is not in the default because a server often needs the network or files outside the project."
         },
         "backend": {"enum": ["bwrap", "seatbelt", "command"], "default": "bwrap", "description": "bwrap builds a bubblewrap call from the settings below; seatbelt (macOS, Go backend only) builds a sandbox-exec profile from them; command uses command as given."},
         "executable": {"type": "string", "pattern": "\\S", "default": "bwrap", "description": "bubblewrap program for backend bwrap, sandbox-exec for backend seatbelt (its default there): a PATH name or an absolute path."},

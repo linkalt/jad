@@ -53,11 +53,9 @@ func TestSandboxRefusals(t *testing.T) {
 		"not an object":       {`[]`, "sandbox must be an object"},
 		"unknown key":         {`{"enabled":true,"netwrk":true}`, "did you mean network"},
 		"enabled not bool":    {`{"enabled":"yes"}`, "sandbox.enabled must be a boolean"},
-		"unknown tool":        {`{"tools":["lsp"]}`, "tools[0] must be one of"},
-		"removed bash":        {`{"tools":["exec","bash"]}`, "tools[1]: tools.native.bash was removed; exec runs shell commands"},
-		"removed process":     {`{"tools":["process"]}`, "tools[0]: tools.native.process was removed"},
-		"empty tools":         {`{"tools":[]}`, "tools must list one or more"},
-		"tool twice":          {`{"tools":["exec","exec"]}`, "lists exec twice"},
+		"empty tools":         {`{"tools":[]}`, "tools must be a non-empty array of tool names"},
+		"tools not a list":    {`{"tools":"exec"}`, "tools must be a non-empty array of tool names"},
+		"blank tool name":     {`{"tools":["exec"," "]}`, "tools[1] must be a non-empty tool name"},
 		"backend":             {`{"backend":"docker"}`, `backend must be "bwrap", "seatbelt" or "command"`},
 		"relative path":       {`{"writable_paths":["build"]}`, "writable_paths[0] must be an absolute path"},
 		"relative plan path":  {`{"plan_writable_paths":["/x","build"]}`, "plan_writable_paths[1] must be an absolute path"},
@@ -101,6 +99,45 @@ func TestApplySandboxReachesOnlyTheCoveredTools(t *testing.T) {
 	}
 	applySandbox(sandbox, nil, nil, nil)
 	applySandbox(nil, execSettings, smith, hooks)
+}
+
+// sandbox.tools is a filter, not a check: a sandbox is shared by profiles and sub-agents with
+// different tool sets, so a listed tool the run does not have, or one that starts no child,
+// loads and has no effect; a name listed twice counts once.
+func TestSandboxToolsAcceptAnyToolName(t *testing.T) {
+	got, err := normalizeSandbox(json.RawMessage(`{"enabled":true,"backend":"command","command":["env"],"tools":["read","search","write","exec","lsp","bash","exec"]}`), "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Tools, []string{"read", "search", "write", "exec", "lsp", "bash"}) || !got.Covers("exec") || got.Covers("tool_smith") {
+		t.Fatalf("tools = %v", got.Tools)
+	}
+}
+
+// A profile that shows only task keeps loading with a sandbox listing tools it does not show
+// or the session does not register; the registered exec still gets the sandbox.
+func TestSandboxToolsAreNotTiedToTheProfileTools(t *testing.T) {
+	fixture := layouttest.Write(t, layouttest.Spec{
+		Native:       map[string]any{"exec": map[string]any{}, "task": map[string]any{}, "async": map[string]any{}},
+		ProfileExtra: map[string]any{"tools": map[string]any{"allow": []string{"task"}}},
+		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"},
+			"tools": []string{"read", "search", "write", "exec", "tool_smith", "hooks", "mcp", "lsp"}}},
+	})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := Resolve(config.Roots, fixture.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.NativeExec == nil || loaded.NativeExec.Child.Sandbox != loaded.Sandbox || loaded.NativeToolSmith != nil {
+		t.Fatalf("exec sandbox %v, tool_smith %v", loaded.NativeExec, loaded.NativeToolSmith)
+	}
 }
 
 // The sandbox key is a setting of the layout: a session's settings carry it to the tools.
@@ -151,11 +188,12 @@ func TestSandboxSchemaAgreesWithTheLoader(t *testing.T) {
 		{`{"command":["env"]}`, false},
 		{`{"backend":"command","command":["env"],"executable":"env"}`, false},
 		{`{"backend":"docker"}`, false},
-		{`{"tools":["lsp"]}`, false},
-		{`{"tools":["bash"]}`, false},
-		{`{"tools":["process"]}`, false},
+		{`{"tools":["lsp"]}`, true},
+		{`{"tools":["read","search","write"]}`, true},
+		{`{"tools":["bash"]}`, true},
+		{`{"tools":["exec","exec"]}`, true},
 		{`{"tools":[]}`, false},
-		{`{"tools":["exec","exec"]}`, false},
+		{`{"tools":[""]}`, false},
 		{`{"writable_paths":["build"]}`, false},
 		{`{"enabled":"yes"}`, false},
 		{`{"netwrk":true}`, false},
@@ -262,7 +300,6 @@ func TestSandboxNetworkAllowSeatbeltAndMCP(t *testing.T) {
 		"allow not a list":      {`{"network_allow":"a.com"}`, "network_allow must be"},
 		"proxy port":            {`{"proxy_port":0}`, "proxy_port"},
 		"seatbelt with command": {`{"backend":"seatbelt","command":["env"]}`, "command is for backend"},
-		"unknown tool":          {`{"tools":["lsp"]}`, "tools[0] must be one of"},
 	} {
 		if _, err := normalizeSandbox(json.RawMessage(test.raw), "s"); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: error = %v, want %q", name, err, test.want)

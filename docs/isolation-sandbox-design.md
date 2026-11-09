@@ -880,8 +880,10 @@ plus `read`, `write`, `isolation` of §9.1) with the catalog file header:
   `exec`, `hooks` and `lsp`. This is today's behaviour and stays so: `applySandbox` hands the sandbox
   only to tool settings that exist (`sessionfs/sandbox.go:276-291`), the profile filter
   (`applyProfileTools`) runs after and never looks at the sandbox, and `jad check` reports nothing for
-  such an entry. Only the spelling is checked: each entry must be one of `SandboxTools`
-  (`sessionfs/sandbox.go:38`, refusal `:126-127`), no entry twice, so a typo still fails at load.
+  such an entry. `tools` is a filter, not a check: **any tool name is accepted** (implemented
+  2026-11-09), a name outside the wrappable set (`SandboxTools`, `sessionfs/sandbox.go:38`, which
+  gains `lsp`) or not in the run's tool set has no effect, and a name listed twice counts once. Only
+  the shape is refused: not an array, an empty array, or a blank name.
 - `schema_version` and `description` are the only keys outside the sandbox object.
 - Schema: new hand-written `sample/schemes/sandbox.schema.json`, whose properties are the
   `sandbox` definition of `setting.schema.json:627-678` (shared through `$ref`), plus the header and
@@ -1004,7 +1006,7 @@ exec description and standby key; a profile and two agents sharing one template 
 `{workspace}` and `{tmp}`; catalog API save/delete/in-use for `sandbox`; schema agreement between
 `sandbox.schema.json` and the template loader; a template whose `tools` lists `exec`, `tool_smith`,
 `hooks`, `mcp` and `lsp` loads for a profile whose `tools.allow` is `["read", "search"]` and for an
-agent whose catalog has none of them (D25), while an unknown entry is still refused with `tools[i]`.
+agent whose catalog has none of them (D25); a name that wraps nothing (`read`, `search`) loads too.
 
 ---
 
@@ -1310,7 +1312,7 @@ Decided: see `docs/isolation-decisions.md` (D1–D24, with corrections).
 | D22 | A resume without `sandbox` keeps the source run's recorded template | resume in the agent's default | low |
 | D23 | Child tools for a chosen template are built lazily on first use and cached per (agent, template) | build all choices at catalog time (MCP servers started for choices never made) | low |
 | D24 | `Resolve`/`LoadSessionSettings` take `sessionfs.RunChoice{ModelPath, Sandbox}` instead of a second trailing string | add a positional `sandbox string` (smaller diff, easy to swap with `modelPath`) | low |
-| D25 | `sandbox.tools` is independent of the run's tool set: a listed tool the profile or agent does not have is accepted and ignored; only unknown names are refused (decided by the user) | refuse or warn when `tools` names a tool the run cannot use | low |
+| D25 | `sandbox.tools` is a filter independent of the run's tool set: any tool name is accepted, a listed tool the profile or agent does not have (or that starts no child) has no effect (decided by the user; implemented) | refuse or warn when `tools` names a tool the run cannot use | low |
 
 ---
 
