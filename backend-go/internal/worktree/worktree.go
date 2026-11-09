@@ -165,7 +165,11 @@ func (t *Tree) Finish(ctx context.Context, message string) (Outcome, error) {
 			outcome.Kept = true
 			return outcome, fmt.Errorf("git add: %w", err)
 		}
-		if _, err := run(ctx, t.options, t.Path, t.commitArguments(ctx, message)...); err != nil {
+		flags := hostGitFlags
+		if t.options.CommitHooks {
+			flags = commitHooksFlags
+		}
+		if _, err := runFlags(ctx, t.options, t.Path, flags, t.commitArguments(ctx, message)...); err != nil {
 			outcome.Kept = true
 			return outcome, fmt.Errorf("git commit: %w", err)
 		}
@@ -222,21 +226,60 @@ func (t *Tree) remove(ctx context.Context, dropBranch bool) error {
 	return nil
 }
 
+// ErrGone is returned by Open when the worktree folder no longer exists.
+var ErrGone = errors.New("the worktree folder is gone")
+
+// Open is the Tree of a worktree an earlier server created at path on branch, started from
+// base, so that a run the server lost when it stopped can still be finished: Finish commits
+// what the run left there and removes the folder like at the end of a run. Its git commands
+// that change the worktree list run in the repository's git directory.
+func Open(ctx context.Context, options Options, path, branch, base string) (*Tree, error) {
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("%w: %s", ErrGone, path)
+	}
+	common, err := run(ctx, options, path, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return nil, fmt.Errorf("%w (%v)", ErrNotRepository, err)
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(path, common)
+	}
+	if common, err = filepath.EvalSymlinks(common); err != nil {
+		return nil, fmt.Errorf("resolve the git directory: %w", err)
+	}
+	return &Tree{options: options, top: common, common: common, Path: path, Workspace: path, Branch: branch, Base: base}, nil
+}
+
 // BranchExists reports whether the repository that holds workspace has the branch.
 func BranchExists(ctx context.Context, options Options, workspace, branch string) bool {
 	_, err := run(ctx, options, workspace, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
 }
 
+// hostGitFlags make every git command jad runs on the host ignore what a sandboxed run could
+// have written into the repository's git directory: its hooks (a post-checkout hook would run
+// outside the sandbox on the next worktree add) and an fsmonitor command in its config (run
+// by the next status). Command-line configuration wins over every config file.
+var hostGitFlags = []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}
+
+// commitHooksFlags are hostGitFlags for the commit Finish makes when commit_hooks is on: the
+// repository's hooks run for it, as the setting asks; the fsmonitor stays off.
+var commitHooksFlags = []string{"-c", "core.fsmonitor=false"}
+
 // run runs git in dir and returns its standard output without the trailing newline. A
-// failure carries the first line of git's error output.
+// failure carries the first line of git's error output. The repository's hooks and its
+// fsmonitor never run (hostGitFlags).
 func run(ctx context.Context, options Options, dir string, arguments ...string) (string, error) {
+	return runFlags(ctx, options, dir, hostGitFlags, arguments...)
+}
+
+func runFlags(ctx context.Context, options Options, dir string, flags []string, arguments ...string) (string, error) {
 	if options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, options.Timeout)
 		defer cancel()
 	}
-	command := exec.CommandContext(ctx, options.Git, arguments...)
+	command := exec.CommandContext(ctx, options.Git, append(append([]string(nil), flags...), arguments...)...)
 	command.Dir = dir
 	// A command never waits for a password, and the messages stay parseable.
 	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/worktree"
 )
 
@@ -123,6 +124,10 @@ type SubagentManagerOptions struct {
 	// DeleteTranscripts deletes a run's transcript folder when keep_finished drops the
 	// run, including at startup. Off keeps every folder.
 	DeleteTranscripts bool
+	// Worktree is tools.native.subagent.worktree of the session that built the manager, the
+	// only one known at startup: it runs the git commands that finish the worktree of a run
+	// the last server lost while it went.
+	Worktree sessionfs.NativeSubagentWorktreeSettings
 }
 
 // NewPersistentSubagentManager returns a manager that writes a manifest per run and
@@ -136,15 +141,16 @@ func NewPersistentSubagentManager(options SubagentManagerOptions) *SubagentManag
 	if options.DeleteTranscripts {
 		manager.transcriptRoot = filepath.Clean(options.StorageDir)
 	}
-	manager.recover(options.Keep)
+	manager.recover(options.Keep, worktreeOptions(options.Worktree))
 	return manager
 }
 
 // recover loads the stored runs, marks the ones a restart interrupted as lost, and
 // drops each owner's oldest ended runs beyond keep. keep is the setting of the session that
 // built the manager, the only one known at startup; each session's own keep_finished applies
-// again as its runs end.
-func (m *SubagentManager) recover(keep int) {
+// again as its runs end. A lost run's worktree is finished with worktreeOptions: its work is
+// committed to its branch and the folder removed, instead of being left where nobody looks.
+func (m *SubagentManager) recover(keep int, worktreeOptions worktree.Options) {
 	manifests := m.store.load()
 	now := m.now()
 	for _, manifest := range manifests {
@@ -160,6 +166,7 @@ func (m *SubagentManager) recover(keep int) {
 			run.reason = "the server stopped while the run was going"
 			run.endedAt = now
 			m.store.save(run)
+			recoverWorktree(context.Background(), run, worktreeOptions)
 		}
 		m.runs[run.id] = run
 		m.finished = append(m.finished, run.id)

@@ -20,7 +20,16 @@ func TestMain(m *testing.M) {
 		runFakeLSP(os.Stdin, os.Stdout)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	// The sandbox temp folders of the tests go in a folder of their own, removed afterwards.
+	parent, err := os.MkdirTemp(toolSmithShortTempDir, "jad-native-test-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	sandboxTempParent = func() string { return parent }
+	code := m.Run()
+	os.RemoveAll(parent)
+	os.Exit(code)
 }
 
 func runFakeLSP(in io.Reader, out io.Writer) {

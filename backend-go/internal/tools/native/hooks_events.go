@@ -198,6 +198,7 @@ func fireToolEvent(ctx context.Context, hooks sessionfs.HooksSettings, apiKeyEnv
 			cwd:           execution.WorkspaceRoot,
 			stdin:         payload,
 			onFailureOnly: hook.OnFailureOnly,
+			call:          &execution,
 			rawStdout:     rewrite,
 		})
 		if section != "" {

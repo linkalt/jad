@@ -158,11 +158,18 @@ func TestBwrapArgumentsOrderAndPlaceholders(t *testing.T) {
 		HidePaths:     []string{"{workspace}/hidden", "{workspace}/absent"},
 	}
 	t.Setenv("HOME", "/home/someone")
+	useOwnTempDir(t)
+	tmpRoot, err := ensureSandboxTempRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The writable paths that do not exist ({cwd}/out, {home}/.cache) are left out, as
+	// --bind-try left them out; {git_common_dir} names no repository here.
 	place := sandboxPlace{workspace: root, cwd: root + "/sub"}
 	got := bwrapArguments(sandbox, place, sandboxExpander(place), nil, "bash", "/usr/bin/bash", []string{"-c", "true"})
 	want := []string{
 		"--die-with-parent", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-		"--bind-try", root, root, "--bind-try", root + "/sub/out", root + "/sub/out", "--bind-try", "/home/someone/.cache", "/home/someone/.cache",
+		"--bind-try", root, root, "--tmpfs", tmpRoot, "--remount-ro", tmpRoot,
 		"--tmpfs", hidden, "--chdir", root + "/sub", "--argv0", "bash", "--", "/usr/bin/bash", "-c", "true",
 	}
 	if !reflect.DeepEqual(got, want) {

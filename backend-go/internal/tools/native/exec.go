@@ -311,7 +311,11 @@ func executeNativeExecAsync(
 		if standby != nil {
 			workDir = standby.workDir
 		} else {
-			created, err := makeExecWorkDir()
+			tmp, err := callTempDir(callSandbox(settings.Child.Sandbox, execution), execution)
+			if err != nil {
+				return shellRunResult{text: sandboxTempError(callID, err)}
+			}
+			created, err := makeExecWorkDir(tmp)
 			if err != nil {
 				return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
 					tools.Information{Key: "system_error", Value: err.Error()})}
@@ -469,9 +473,21 @@ func execTemplateError(callID string, plan execPlan, err error) string {
 		tools.Information{Key: "suggestion", Value: "fix or remove functions_dir/" + plan.langName + "/_template" + plan.lang.Ext})
 }
 
-// makeExecWorkDir is the private scratch directory of one exec run or standby.
-func makeExecWorkDir() (string, error) {
-	return os.MkdirTemp("", "exec-")
+// makeExecWorkDir is the private scratch directory of one exec run or standby, in the call's
+// temp folder tmp (callTempDir): the system temp folder when tmp is empty.
+func makeExecWorkDir(tmp string) (string, error) {
+	return os.MkdirTemp(tmp, "exec-")
+}
+
+// execWorkDirIn makes exec scratch directories in tmp, for a standby pool.
+func execWorkDirIn(tmp string) func() (string, error) {
+	return func() (string, error) { return makeExecWorkDir(tmp) }
+}
+
+// sandboxTempError is the result of a call whose sandbox temp folder could not be made.
+func sandboxTempError(callID string, err error) string {
+	return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The sandbox's temp folder could not be made",
+		tools.Information{Key: "system_error", Value: err.Error()})
 }
 
 // takeExecStandby returns a waiting interpreter started exactly as this call would start one,
@@ -494,26 +510,34 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 		return nil
 	}
 	spawnFor := func(execution tools.ExecutionContext) func(workDir string) (standbySpawn, error) {
+		sandbox := callSandbox(settings.Child.Sandbox, execution)
+		tmp, tmpErr := callTempDir(sandbox, execution)
 		return func(workDir string) (standbySpawn, error) {
+			if tmpErr != nil {
+				return standbySpawn{}, tmpErr
+			}
 			if pipe {
 				// The call's own launch: argv, environment and code file path are what a fresh
 				// start of this call would have; only the code file is a named pipe for now.
 				launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
 				environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
-				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
+				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}, nil
 			}
 			launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
 			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
 			files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
-			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}, nil
+			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}, nil
 		}
 	}
 	spawn := spawnFor(execution)
-	keyed, _ := spawn(standbyKeyDir)
+	keyed, err := spawn(standbyKeyDir)
+	if err != nil {
+		return nil
+	}
 	key := standbyKey(keyed)
 	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
 	process := execStandby.take(key, idle)
-	execStandby.refill(key, makeExecWorkDir, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	execStandby.refill(key, execWorkDirIn(keyed.tmp), spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
 	// Under a bwrap or seatbelt sandbox a read_only call starts in the plan-mode sandbox, so
 	// it cannot take a standby a call that may write started. A call outside plan mode also
 	// warms that form, after its own, so the run's read_only calls find one waiting too. A
@@ -523,7 +547,7 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 		readOnly.PlanMode = true
 		readOnlySpawn := spawnFor(readOnly)
 		if keyed, err := readOnlySpawn(standbyKeyDir); err == nil {
-			execStandby.refill(standbyKey(keyed), makeExecWorkDir, readOnlySpawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+			execStandby.refill(standbyKey(keyed), execWorkDirIn(keyed.tmp), readOnlySpawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
 		}
 	}
 	return process

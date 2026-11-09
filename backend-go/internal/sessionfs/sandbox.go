@@ -57,8 +57,10 @@ var sandboxPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
 // sandboxPlaceholders are what a sandbox path or command may name; each is filled in when a
 // child starts: the call's workspace root, its working directory, the git directory shared by
-// the workspace's repository and its worktrees, the system temp folder and the user's home
-// folder. One that names nothing (no repository, no home) leaves its path out.
+// the workspace's repository and its worktrees, the call's own temp folder (one per session,
+// workspace and plan-mode form; the system temp folder for a process outside a call, such as
+// an MCP server) and the user's home folder. One that names nothing (no repository, no home)
+// leaves its path out.
 var sandboxPlaceholders = map[string]bool{"workspace": true, "cwd": true, "git_common_dir": true, "tmp": true, "home": true}
 
 const sandboxPlaceholderList = "{workspace}, {cwd}, {git_common_dir}, {tmp}, {home}"

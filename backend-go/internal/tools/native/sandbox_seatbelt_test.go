@@ -28,7 +28,7 @@ func TestSeatbeltProfileFollowsTheSettings(t *testing.T) {
 	}
 	sandbox := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendSeatbelt, WritablePaths: []string{"{workspace}", "/does/not/matter", "{home}"}, HidePaths: []string{secret, key, filepath.Join(root, "missing")}}
 	place := sandboxPlace{workspace: link, cwd: link}
-	profile := seatbeltProfile(sandbox, sandboxExpander(place))
+	profile := seatbeltProfile(sandbox, place, sandboxExpander(place))
 	resolvedWorkspace, _ := filepath.EvalSymlinks(workspace)
 	resolvedSecret, _ := filepath.EvalSymlinks(secret)
 	resolvedKey, _ := filepath.EvalSymlinks(key)
@@ -47,7 +47,7 @@ func TestSeatbeltProfileFollowsTheSettings(t *testing.T) {
 		t.Errorf("a hidden path that does not exist is in the profile:\n%s", profile)
 	}
 	sandbox.Network = true
-	if strings.Contains(seatbeltProfile(sandbox, sandboxExpander(place)), "network") {
+	if strings.Contains(seatbeltProfile(sandbox, place, sandboxExpander(place)), "network") {
 		t.Error("network true still denies the network")
 	}
 	if got := seatbeltString(`a "b" \c`); got != `"a \"b\" \\c"` {

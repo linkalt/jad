@@ -59,9 +59,11 @@ type bashChildRequest struct {
 	// extraFiles are the child's fd 3 and up; the caller closes its copies.
 	extraFiles []*os.File
 	// sandbox, when set, is the sandbox the child starts in; workspace is the call's
-	// workspace root, which its {workspace} placeholder names.
+	// workspace root, which its {workspace} placeholder names, and tmp the call's own temp
+	// folder (callTempDir), which {tmp} names.
 	sandbox   *sessionfs.SandboxSettings
 	workspace string
+	tmp       string
 }
 
 type bashChildResult struct {
@@ -115,7 +117,7 @@ func runBashCommand(ctx context.Context, request bashChildRequest) bashChildResu
 	resolvedFile, err := resolveBashExecutable(request.file, request.environment, request.cwd)
 	var launch sandboxLaunch
 	if err == nil {
-		launch, err = sandboxed(request.sandbox, sandboxPlace{workspace: request.workspace, cwd: request.cwd}, request.file, resolvedFile, request.args)
+		launch, err = sandboxed(request.sandbox, sandboxPlace{workspace: request.workspace, cwd: request.cwd, tmp: request.tmp}, request.file, resolvedFile, request.args)
 	}
 	if err != nil {
 		_ = stdoutReader.Close()

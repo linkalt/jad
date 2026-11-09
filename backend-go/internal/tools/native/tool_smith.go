@@ -193,7 +193,11 @@ func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunRes
 	if standby != nil {
 		workDir, token = standby.workDir, standby.token
 	} else {
-		created, err := makeToolSmithPrivateDir()
+		tmp, err := callTempDir(callSandbox(settings.Child.Sandbox, execution), execution)
+		if err != nil {
+			return shellRunResult{text: sandboxTempError(callID, err)}
+		}
+		created, err := makeToolSmithPrivateDir(tmp)
 		if err != nil {
 			return shellRunResult{text: tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The working files could not be created",
 				tools.Information{Key: "system_error", Value: err.Error()})}
@@ -313,10 +317,15 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	if info, err := os.Stat(resolved.realPath); err != nil || !info.IsDir() {
 		return nil
 	}
+	sandbox := callSandbox(settings.Child.Sandbox, execution)
+	tmp, err := callTempDir(sandbox, execution)
+	if err != nil {
+		return nil
+	}
 	build := func(workDir, token string) standbySpawn {
 		launch := toolSmithLaunch(settings, workDir, bridged, token)
 		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, apiKeyEnv)
-		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: callSandbox(settings.Child.Sandbox, execution), workspace: execution.WorkspaceRoot}
+		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp}
 	}
 	spawn := func(workDir string) (standbySpawn, error) {
 		token := ""
@@ -331,13 +340,20 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	key := standbyKey(build(standbyKeyDir, standbyKeyToken))
 	idle := time.Duration(settings.StandbyIdleMs) * time.Millisecond
 	process := execStandby.take(key, idle)
-	execStandby.refill(key, makeToolSmithPrivateDir, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
+	execStandby.refill(key, func() (string, error) { return makeToolSmithPrivateDir(tmp) }, spawn, int(settings.StandbyPool), int(settings.StandbyMax), idle)
 	return process
 }
 
-// makeToolSmithPrivateDir is the private (0700) work directory of one run or standby.
-func makeToolSmithPrivateDir() (string, error) {
-	dir, err := makeToolSmithWorkDir(os.TempDir(), toolSmithShortTempDir)
+// makeToolSmithPrivateDir is the private (0700) work directory of one run or standby, in the
+// call's temp folder tmp (callTempDir), or in the system temp folder when tmp is empty. A
+// sandboxed call has no fallback: only its own temp folder is writable for it, and
+// sandboxTempRoot already keeps the socket path short enough.
+func makeToolSmithPrivateDir(tmp string) (string, error) {
+	base, fallback := os.TempDir(), toolSmithShortTempDir
+	if tmp != "" {
+		base, fallback = tmp, tmp
+	}
+	dir, err := makeToolSmithWorkDir(base, fallback)
 	if err != nil {
 		return "", err
 	}

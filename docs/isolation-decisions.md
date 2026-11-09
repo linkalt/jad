@@ -32,7 +32,7 @@ which phase, and what still needs the user.
 | D17 | accept | No template chaining: `template` inside a template is refused. | `extends` costs little later; chains hide what a run can touch. | P2 | |
 | D18 | accept with correction | An agent template that widens its parent is refused at load, naming agent, template and path; read containment is checked against the parent's read ∪ write, write against the parent's write. | Silently cutting it would run the agent in an environment nobody wrote. | P2 | |
 | D19 | accept | A template file must state `enabled` or is refused. | A file named to confine runs must say whether it confines them. | P2 | |
-| D20 | **reverse the design** **[USER]** | A `profile_message` target is narrowed by the caller's resolved sandbox exactly like a sub-agent: a target with no sandbox inherits the caller's; a target whose own template is wider is refused (`widens:`); a per-call `sandbox` narrows further. | Otherwise a confined profile can delegate to an unconfined one — the same kind of escape as the writable `.git/hooks`, against "limit the environment". | P2 | [USER] |
+| D20 | **reverse the design** (user: yes, 2026-11-09) | A `profile_message` target is narrowed by the caller's resolved sandbox exactly like a sub-agent: a target with no sandbox inherits the caller's; a target whose own template is wider is refused (`widens:`); a per-call `sandbox` narrows further. | Otherwise a confined profile can delegate to an unconfined one — the same kind of escape as the writable `.git/hooks`, against "limit the environment". | P2 | [USER] |
 | D21 | accept | `sandbox_choice` is an explicit list of template names. | The config owner decides which environments are offered; dropping a file in `.jad/sandbox/` never offers it. | P2b | |
 | D22 | accept with correction | A resume without `sandbox` keeps the source run's recorded template, re-resolved by name and narrowed again by the current agent and session; a missing or now-widening template refuses the resume, as does a choice that changes `isolation.mode`. | Falling back to the agent's default could silently widen a run started narrower. | P2b | |
 | D23 | accept with correction | Child tools and MCP servers for a chosen template are built lazily and cached per (agent, template); `NarrowSandbox` for every (agent, choice) pair is computed at load. | Choices nobody makes start no MCP servers, while a broken environment is still caught at load. | P2b | |
@@ -87,10 +87,10 @@ which phase, and what still needs the user.
 2. **D7:** "Profiles' sandboxes will confine the interactive session, but it keeps editing your
    checkout in place. Do you also want interactive sessions to work in a private worktree with an
    explicit integrate step?"
-3. **D20:** "Should a profile reached through `profile_message` from a sandboxed caller be confined
-   by the caller's sandbox? A target with no sandbox would inherit the caller's, and a target whose
-   own template is wider would be refused with `widens:`. This may refuse delegations that work today
-   from a sandboxed profile to a wider one."
+3. **D20 — answered 2026-11-09: yes, narrow by the caller.** A profile reached through
+   `profile_message` from a sandboxed caller is confined by the caller's sandbox; a target with no
+   sandbox inherits the caller's, and a target whose own template is wider is refused with `widens:`.
+   Corrections 7, 8, 10 and 13 and D24's `Ceiling` are therefore part of P2, no longer waiting.
 
 ## Implementable now without user input
 
@@ -98,10 +98,9 @@ D1, D2 (normal calls stay off), D4, D5, D6, D7 (delegated scope), D8, D9, D10 (w
 rule), D11 (with the sunset), D12, D13, D14, D15, D16, D17, D18, D19, D21, D22, D23, D26, D27, D28, D24 (`RunChoice`
 and `Sandbox`; `Ceiling` waits on D20).
 
-P0, P1, P3 and P4 can start now in the order of §12, and so can P2 except two parts that wait for the
-D20 answer: the narrowing of `profile_message` targets by the caller (§14.4 step 6, corrections 7, 8
-and 10) and D24's `Ceiling` in `RunChoice` and the `lockedConfigKey` hash (correction 13). D3's
-removal of `read_only_calls` (P5) waits for the D3 answer.
+P0, P1, P3 and P4 can start now in the order of §12, and so can all of P2 (D20 is answered, so the
+narrowing of `profile_message` targets by the caller and D24's `Ceiling` are in it). D3's removal of
+`read_only_calls` (P5) waits for the D3 answer.
 
 ## Phase risk
 
@@ -109,3 +108,74 @@ The S5 fix relies on bwrap `--bind-fd`, which is unverified. This record places 
 following §12 (P1 "Depends on: P0 for S5 only"), because S5 already exists with today's
 `writable_paths`. If P0 finds the installed bwrap lacks `--bind-fd`, P1 must refuse write paths that
 lie under a writable parent instead of binding them, and P2 keeps that refusal for `write.paths`.
+
+## P0 results (2026-11-09, the cloud container this phase was built in)
+
+Measured with `bwrap` and the commands of P1's tests; nothing here was measured on the design's own
+machine (§1.8), on macOS or on Ubuntu with AppArmor.
+
+| Check | Result |
+|---|---|
+| bwrap | 0.9.0 (Ubuntu package `bubblewrap 0.9.0-1ubuntu0.3`), unprivileged user namespaces work, kernel 6.18 |
+| `--overlay-src`/`--overlay` | **absent** (needs bwrap ≥ 0.10): the overlay materialiser (P4) cannot be tested here; `auto` must fall back to checkout on this host |
+| `--bind-fd` | present, and the descriptor is **not** inherited by the child (`/proc/self/fd` of the child has no fd 7) |
+| `nsenter` | present (`/usr/bin/nsenter`) |
+| git | 2.43.0, so `merge-tree --write-tree` (≥ 2.38) is available for P3 |
+| A read-only bind of `.git/hooks` alone | does **not** stop the run renaming `.git` itself away (rename of a folder that holds a mount point succeeds) — so S1 needs `.git` pinned by its own bind; pinned, rename, unlink and writes fail with `EBUSY`/`EROFS` |
+| `--tmpfs X`, then a bind inside X, then `--remount-ro X` | works: X is empty and read-only, the bind inside keeps its own mode |
+| A named pipe on a read-only bind | **is still writable** (`echo > fifo` succeeds): S3 cannot be closed by read-only binds, the other sessions' temp folders must be hidden |
+| AppArmor user-namespace restriction, seatbelt `(deny file-read*)`, `{system}` on macOS | not testable here (no AppArmor profile in the container, no macOS) |
+
+## P1 implementation (2026-11-09)
+
+What P1 changed, and where it departs from the design text:
+
+1. **S1/S2 host git** (`worktree/worktree.go`): every git command of `worktree` runs with
+   `-c core.hooksPath=/dev/null -c core.fsmonitor=false`. With `commit_hooks` on, the commit Finish
+   makes keeps the repository's hooks (it is what the setting asks for) and only drops the fsmonitor;
+   the design moves those hooks into the run's environment in P3. Checkpoint git is unchanged
+   (accepted in R2: own `GIT_DIR`, fixed config).
+2. **S1/S2 sandbox** (`tools/native/sandbox_rules.go`): when a writable path covers the git common
+   directory it is pinned (`--bind` onto itself; seatbelt: write of the folder's own name denied),
+   `hooks` is read-only (a missing one becomes an empty read-only folder, which bwrap creates as an
+   empty folder on the host), and `config`, `config.worktree` and the linked worktree's own
+   `config.worktree` are read-only when they exist. Not covered: a `core.hooksPath` that the
+   repository's config already points into the workspace (for example husky's `.githooks`) stays
+   writable under `{workspace}`; jad's own host git ignores it (item 1), the user's git does not.
+3. **S3** — `{tmp}` is the call's own folder `<temp>/jad-sandbox-<uid>/<16 hex>` (0700, owner
+   checked), keyed by session key, workspace root **and plan-mode form**: the design keys it per
+   session and run only; the form is added because a `read_only`/plan-mode call sharing a folder with
+   writer calls could feed a waiting writer standby's code pipe (P0: pipes stay writable on read-only
+   binds), which R1 requires closed before `read_only_calls` goes. The whole `jad-sandbox-<uid>`
+   folder is hidden in every bwrap/seatbelt sandbox except the call's own folder; the child's
+   `TMPDIR` is set to it (bwrap `--setenv`, seatbelt through `/usr/bin/env`); exec and tool_smith
+   scratch dirs (and standbys) are made in it. The uid is in the name so users of one machine never
+   share the root. A process outside a call (stdio MCP server, `jad check`) keeps the system temp
+   folder as `{tmp}`. Folders untouched for `staleScratchAge` are swept at startup with the other
+   scratch.
+4. **S4** — `<common>/worktrees` and `<common>/jad-worktrees` are hidden (empty, read-only) in every
+   sandbox; the call's own admin folder and own run folder are shown again, writable when they were.
+   A configured `tools.native.subagent.worktree.dir` outside the common directory is not hidden.
+5. **S5** — **not** `--bind-fd`: a writable path is left out of the binds when resolving it, name by
+   name, looks a name up in a folder another writable path covers (so a sandboxed call could have
+   renamed or replaced it). The covering bind already makes whatever is really there writable, so
+   nothing legitimate is lost, and a symlink planted in its place no longer redirects a bind. Kept
+   paths are bound by their resolved name. The rule closes the swap from inside one session's
+   sandboxes without passing descriptors through every launch path (MCP's `SandboxCommand` has no way
+   to pass files). Left open: a swap by a *different* session whose writable set covers this
+   session's writable path's parent, during the microseconds between resolving and bwrap's own open;
+   `--bind-fd` (present here, P0) would close it and stays the follow-up. Changed behaviour: a
+   writable path that is a symlink out of another writable path (e.g. `{workspace}/cache` →
+   `~/.cache`) is no longer made writable; list its target instead.
+6. **U1** — hooks fired for a tool call (`pre_tool`/`post_tool`, `post_edit`) start in
+   `callSandbox` of that call, so plan mode and `read_only` reach them, with the call's `{tmp}`. Run
+   events (`run_start`, `stop`, …) carry no call and still use the configured sandbox.
+7. **Recover** — a run that was queued or running when the server stopped, and has a worktree
+   record without an outcome, is finished at the next start (`worktree.Open` + `Finish`: committed to
+   its branch, folder removed); a folder that is gone is recorded as a worktree error. It uses the
+   `tools.native.subagent.worktree` settings of the session that builds the manager, the only ones
+   known at startup (as `keep_finished`).
+8. **Not covered in P1 (P2):** the in-process `write`/`edit` tools are not sandboxed and no default
+   path rule refuses `.git` (the only `.git` default is the file listing's ignore list,
+   `sessionfs/file_settings.go:53`), so a model can still write `.git/hooks/*` through them; P2's
+   in-process mirror of the environment (§2.4, §9.3) closes it.

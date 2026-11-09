@@ -826,7 +826,7 @@ func (r *Resolver) finishSubagentBuild(storageKey string, build *subagentBuild, 
 	if config.NativeSubagent.PersistRuns {
 		manager = r.newPersistentSubagentManager(native.SubagentManagerOptions{
 			StorageDir: config.NativeSubagent.StorageDir, Keep: int(config.NativeSubagent.KeepFinished), Logger: r.logger,
-			DeleteTranscripts: config.NativeSubagent.DeleteTranscripts,
+			DeleteTranscripts: config.NativeSubagent.DeleteTranscripts, Worktree: config.NativeSubagent.Worktree,
 		})
 	} else {
 		manager = native.NewSubagentManager()

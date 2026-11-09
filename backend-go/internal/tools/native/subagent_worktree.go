@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -97,7 +98,39 @@ func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, sp
 func (m *SubagentManager) closeWorktree(run *subagentRun, tree *worktree.Tree) {
 	view := run.view()
 	message := fmt.Sprintf("jad sub-agent %s (run %s)\n\n%s", view.agent, view.id, view.task)
-	outcome, err := tree.Finish(context.WithoutCancel(run.ctx), message)
+	finishWorktree(context.WithoutCancel(run.ctx), run, tree, message)
+}
+
+// recoverWorktree finishes the worktree of a run the last server lost while it went, the
+// way closeWorktree would have: what the run left there is committed to its branch and the
+// folder is removed. A folder that is gone, or a finish that fails, is recorded on the run
+// (the folder's path stays in the record when the folder is still there).
+func recoverWorktree(ctx context.Context, run *subagentRun, options worktree.Options) {
+	view := run.view()
+	record := view.worktree
+	if record == nil || record.Commit != "" || record.Error != "" || record.Path == "" {
+		return
+	}
+	tree, err := worktree.Open(ctx, options, record.Path, record.Branch, record.Base)
+	if err != nil {
+		run.mu.Lock()
+		failed := *run.worktree
+		failed.Error = boundedReason("the server stopped while the run was going, and its worktree could not be finished: " + err.Error())
+		if errors.Is(err, worktree.ErrGone) {
+			failed.Path = ""
+		}
+		run.worktree = &failed
+		run.mu.Unlock()
+		run.store.save(run)
+		return
+	}
+	message := fmt.Sprintf("jad sub-agent %s (run %s, finished after the server stopped)\n\n%s", view.agent, view.id, view.task)
+	finishWorktree(ctx, run, tree, message)
+}
+
+// finishWorktree commits and removes tree and records the outcome on run.
+func finishWorktree(ctx context.Context, run *subagentRun, tree *worktree.Tree, message string) {
+	outcome, err := tree.Finish(ctx, message)
 	run.mu.Lock()
 	record := subagentWorktree{Branch: outcome.Branch, Base: outcome.Base, Commit: outcome.Commit, Changed: outcome.Changed, Stat: outcome.Stat}
 	if run.worktree != nil {

@@ -68,7 +68,7 @@ func runPostEditHooks(ctx context.Context, hooks sessionfs.HooksSettings, apiKey
 		if !hookMatchesExtension(hook, extension) {
 			continue
 		}
-		if section := runPostEditHook(ctx, hook, hooks, apiKeyEnv, execution.WorkspaceRoot, file); section != "" {
+		if section := runPostEditHook(ctx, hook, hooks, apiKeyEnv, execution, file); section != "" {
 			sections = append(sections, section)
 		}
 	}
@@ -87,7 +87,8 @@ func hookMatchesExtension(hook sessionfs.PostEditHook, extension string) bool {
 	return false
 }
 
-func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks sessionfs.HooksSettings, apiKeyEnv, workspaceRoot, file string) string {
+func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks sessionfs.HooksSettings, apiKeyEnv string, execution tools.ExecutionContext, file string) string {
+	workspaceRoot := execution.WorkspaceRoot
 	cwd, found := hookWorkingDirectory(hook, workspaceRoot, file)
 	if !found {
 		marker := strings.TrimPrefix(hook.Cwd, sessionfs.HookCwdNearestPrefix)
@@ -103,6 +104,7 @@ func runPostEditHook(ctx context.Context, hook sessionfs.PostEditHook, hooks ses
 		cwd:           cwd,
 		watched:       file,
 		onFailureOnly: hook.OnFailureOnly,
+		call:          &execution,
 	})
 }
 
@@ -119,6 +121,10 @@ type hookChild struct {
 	// rawStdout keeps the long lines of the standard output whole, for a command whose
 	// output is read as JSON; the output is still cut to hooks.max_output_bytes.
 	rawStdout bool
+	// call is the tool call the command runs for, nil for a run event. A command of a call
+	// starts in that call's sandbox: in a plan-mode run (or for a read_only exec call) the
+	// sandbox's plan-mode form, with the call's own temp folder.
+	call *tools.ExecutionContext
 }
 
 // runHookChild runs one hook command under the hooks' own child-process settings and
@@ -155,6 +161,14 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		maxLineChars,
 		hooks.StripANSI,
 	)
+	sandbox, tmp := hooks.Sandbox, ""
+	if hook.call != nil {
+		sandbox = callSandbox(sandbox, *hook.call)
+		var err error
+		if tmp, err = callTempDir(sandbox, *hook.call); err != nil {
+			return "[" + hook.name + "] could not start: " + err.Error() + " (setting: " + hook.setting + ")", false, bashStreamOutput{}
+		}
+	}
 	child := runBashCommand(ctx, bashChildRequest{
 		file:                     hook.argv[0],
 		args:                     hook.argv[1:],
@@ -167,8 +181,9 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		drainAfterExit:           time.Duration(hooks.DrainAfterExitMs) * time.Millisecond,
 		killProcessGroupWhenDone: hooks.KillProcessGroup == "always",
 		collector:                collector,
-		sandbox:                  hooks.Sandbox,
+		sandbox:                  sandbox,
 		workspace:                workspaceRoot,
+		tmp:                      tmp,
 	})
 	label := "[" + hook.name + "] "
 	timing := fmt.Sprintf("%d ms, in %s", child.durationMs, displayPath(workspaceRoot, cwd))

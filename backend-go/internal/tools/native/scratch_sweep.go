@@ -25,7 +25,35 @@ func sweepStaleScratchOnce() {
 		for _, dir := range staleScratchDirs() {
 			sweepStaleScratch(dir, now, staleScratchAge)
 		}
+		sweepStaleSandboxTemp(sandboxTempRoot(), now, staleScratchAge)
 	})
+}
+
+// sweepStaleSandboxTemp removes the sandbox temp folders (callTempDir) in root that nothing
+// used for longer than maxAge: a folder gets an entry for every call that runs in it, so one
+// untouched that long belongs to a session no live call uses. Links and files are left alone,
+// and so is a root that is not this user's private folder. It returns how many it removed.
+func sweepStaleSandboxTemp(root string, now time.Time, maxAge time.Duration) int {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || !ownedByCurrentUser(info) {
+		return 0
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || now.Sub(info.ModTime()) <= maxAge {
+			continue
+		}
+		if os.RemoveAll(path) == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 // staleScratchDirs is every directory the tools put scratch in: the temporary directory, and

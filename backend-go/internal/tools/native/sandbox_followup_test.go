@@ -18,7 +18,7 @@ func TestSandboxDescriptionNamesWhatTheSandboxAllows(t *testing.T) {
 	sandbox := bwrapSandbox()
 	sandbox.HidePaths = []string{"{home}/.ssh"}
 	got := sandboxDescription(sandbox)
-	for _, want := range []string{"bubblewrap sandbox", "Writable: <workspace>, <repository git directory>, " + os.TempDir(), "Read-only file system", "Hidden (empty): ~/.ssh.", "Network: off"} {
+	for _, want := range []string{"bubblewrap sandbox", "Writable: <workspace>, <repository git directory>, $TMPDIR (this session's own temp folder)", "Read-only file system", "git hooks and config stay read-only", "Hidden (empty): ~/.ssh.", "Network: off"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
 		}

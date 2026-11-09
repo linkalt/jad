@@ -140,6 +140,11 @@ func runShellChildDetailed(
 		watch.set(collector)
 	}
 	environment := shellChildEnvironment(run, settings, apiKeyEnv)
+	sandbox := callSandbox(settings.Sandbox, execution)
+	tmp, err := callTempDir(sandbox, execution)
+	if err != nil {
+		return shellRunResult{text: sandboxTempError(execution.CallID, err)}
+	}
 	request := bashChildRequest{
 		file:                     run.file,
 		args:                     run.argv,
@@ -155,8 +160,9 @@ func runShellChildDetailed(
 		spill:                    spillWriters,
 		stdin:                    run.stdin,
 		extraFiles:               run.extraFiles,
-		sandbox:                  callSandbox(settings.Sandbox, execution),
+		sandbox:                  sandbox,
 		workspace:                execution.WorkspaceRoot,
+		tmp:                      tmp,
 	}
 	var child bashChildResult
 	if run.standby != nil {

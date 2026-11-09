@@ -88,7 +88,7 @@ func TestCallSandboxUsesThePlanPathsOnlyInPlanMode(t *testing.T) {
 	if callSandbox(command, tools.ExecutionContext{PlanMode: true}) != command {
 		t.Fatal("a command backend was changed")
 	}
-	if got := sandboxDescription(sandbox); !strings.Contains(got, "In plan mode, writable: "+os.TempDir()+".") {
+	if got := sandboxDescription(sandbox); !strings.Contains(got, "In plan mode, writable: $TMPDIR (this session's own temp folder).") {
 		t.Fatalf("description = %s", got)
 	}
 	sandbox.PlanWritablePaths = sandbox.WritablePaths
