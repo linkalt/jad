@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -18,10 +19,12 @@ import (
 // (docs/isolation-sandbox-design.md §9.7). It is made and finished like a sub-agent's
 // (openWorktree, closeWorktree), and its result carries the same worktree_* lines.
 //
-// Unlike a sub-agent's, no record of it is kept: a server that stops while such a run goes
-// leaves its worktree in place (git worktree list shows it), with the run's work uncommitted.
+// While the run goes the worktree is recorded in the target session's state folder, so a
+// server that stops meanwhile finishes it at its next start (RecoverDelegatedWorktrees).
 type DelegatedWorktree struct {
 	tree *worktree.Tree
+	// record is the file the worktree is recorded in; empty without one.
+	record string
 }
 
 // DelegatedWorktreeResult is what the end of a delegated run's worktree is reported as.
@@ -36,8 +39,10 @@ type DelegatedWorktreeResult struct {
 // execution.WorkspaceRoot and points execution at it, as openWorktree does for a sub-agent.
 // settings are the target's tools.native.subagent settings (nil takes the defaults of its
 // worktree key); isolation.Base "working" starts the run from the session's uncommitted
-// files.
-func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubagentSettings, isolation sessionfs.SandboxIsolation, execution *tools.ExecutionContext) (*DelegatedWorktree, error) {
+// files. The worktree is recorded in stateDir, the target session's state folder, with
+// message, the commit message its work gets if a restart has to finish it; an empty stateDir
+// keeps no record.
+func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubagentSettings, isolation sessionfs.SandboxIsolation, execution *tools.ExecutionContext, stateDir, message string) (*DelegatedWorktree, error) {
 	var worktreeSettings sessionfs.NativeSubagentWorktreeSettings
 	if settings != nil {
 		worktreeSettings = settings.Worktree
@@ -55,13 +60,21 @@ func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubage
 	if err != nil {
 		return nil, err
 	}
+	record, err := writeDelegatedWorktreeRecord(stateDir, tree, message)
+	if err != nil {
+		// Without a record a restart could not finish the worktree, so the run does not start.
+		if _, finishErr := tree.Finish(context.WithoutCancel(ctx), message, nil); finishErr != nil {
+			return nil, fmt.Errorf("%w (and the new worktree at %s could not be removed: %v)", err, tree.Path, finishErr)
+		}
+		return nil, err
+	}
 	if execution.WorkspaceOrigin == "" {
 		execution.WorkspaceOrigin = parentRoot
 	}
 	execution.WorkspaceRoot = tree.Workspace
 	execution.PathScope = movedScope(execution.PathScope, parentRoot, tree.Workspace)
 	registerIsolatedRun(tree)
-	return &DelegatedWorktree{tree: tree}, nil
+	return &DelegatedWorktree{tree: tree, record: record}, nil
 }
 
 // Sandbox is sandbox for the run's calls, with its absolute paths moved from origin (the
@@ -145,8 +158,11 @@ func appendNew(list []string, value string) []string {
 func (d *DelegatedWorktree) Close(ctx context.Context, execution tools.ExecutionContext, message string) DelegatedWorktreeResult {
 	defer forgetIsolatedRun(d.tree)
 	outcome, err := d.tree.Finish(context.WithoutCancel(ctx), message, collectLauncher(execution, d.tree))
-	record := subagentWorktree{Branch: outcome.Branch, Base: outcome.Base, Start: outcome.Start, Commit: outcome.Commit, Changed: outcome.Changed, Stat: outcome.Stat,
-		Target: outcome.Target, Conflicts: outcome.Conflicts, CheckError: outcome.CheckError, OnWorkingState: outcome.OnWorkingState}
+	if d.record != "" {
+		// Tried once: a folder kept on failure is reported to the caller with its path.
+		_ = os.Remove(d.record)
+	}
+	record := worktreeRecord(outcome)
 	if err != nil {
 		record.Error = boundedReason(err.Error())
 	}

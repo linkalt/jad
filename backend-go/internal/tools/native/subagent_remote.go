@@ -340,17 +340,18 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 			return tools.RenderToolResult(tools.ResultOptions{
 				ID: callID, Status: tools.StatusOK,
 				Summary:     fmt.Sprintf("Agent %s was stopped%s", target.String(), stopReasonNote(subagentRunView{reason: outcome.Reason})),
-				Information: append([]tools.Information{{Key: "partial", Value: true}}, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...),
+				Information: append(append([]tools.Information{{Key: "partial", Value: true}}, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...), outcome.worktreeInformation()...),
 				Content:     &tools.Content{Encoding: "utf8", Text: text},
 			})
 		}
-		return s.renderRemoteFailure(callID, target, outcome.Err, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...), nil
+		return s.renderRemoteFailure(callID, target, outcome.Err, append(remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote), outcome.worktreeInformation()...)...), nil
 	}
 	information := append([]tools.Information{{Key: "agent", Value: target.String()}}, remoteRunInformation(reference)...)
 	information = append(information, remoteResumeInformation(outcome.ResumedFrom, outcome.ConfigNote)...)
 	if cut {
 		information = append(information, tools.Information{Key: "truncated", Value: true})
 	}
+	information = append(information, outcome.worktreeInformation()...)
 	return tools.RenderToolResult(tools.ResultOptions{
 		ID: callID, Status: tools.StatusOK,
 		Summary:     fmt.Sprintf("Agent %s finished", target.String()),
@@ -363,6 +364,10 @@ func (s *subagentTool) renderRemoteOutcome(callID string, target remote.Target, 
 func (s *subagentTool) remoteAsyncResult(target remote.Target, outcome ProfileMessageOutcome) asyncmgr.Result {
 	text, cut := cutUTF8(strings.TrimSpace(outcome.Text), s.settings.ResultMaxBytes)
 	result := asyncmgr.Result{Summary: text, Detail: text, Cut: cut, Bytes: int64(len(text)), Reason: outcome.Reason, ResumedFrom: outcome.ResumedFrom, ConfigNote: outcome.ConfigNote}
+	if outcome.Worktree != nil && outcome.Worktree.Text != "" {
+		// As a local isolated run's summary starts with its worktree line.
+		result.Summary = strings.TrimSpace(outcome.Worktree.Text + "\n" + result.Summary)
+	}
 	if outcome.Err == nil {
 		result.State, result.OK = asyncmgr.StateDone, true
 		return result
@@ -384,6 +389,9 @@ func (s *subagentTool) remoteAsyncResult(target remote.Target, outcome ProfileMe
 	}
 	if text == "" {
 		result.Summary, result.Detail = message, message
+		if outcome.Worktree != nil && outcome.Worktree.Text != "" {
+			result.Summary = outcome.Worktree.Text + "\n" + message
+		}
 	}
 	return result
 }

@@ -309,8 +309,8 @@ Checkout materialiser only (P0: no `--overlay` here). Verified with bwrap 0.9.0 
    the run could rewrite, so a sandboxed call could make its next call's writable set any folder.
    Closed for isolated runs by the record, and for a session in a linked worktree by keeping
    `.git`, `commondir` and `gitdir` read-only.
-4. **`base: "working"`** (D12, §5.2): as designed; `Validate` checks only against HEAD, not against
-   a dirty-session snapshot W′ (departure).
+4. **`base: "working"`** (D12, §5.2): as designed. The check against a dirty-session snapshot W′
+   came with the P3 completion (below).
 5. **D10**: an isolated (or sandbox-reader) agent with MCP tools counts as changing the workspace.
 6. **D13**: an isolated agent's exec description says it works on a detached HEAD and that
    branches, tags and stashes are not taken back.
@@ -352,6 +352,43 @@ W′ check, P4. (Delegated profile runs: see the next section.)
    field for the worktree lines yet); no record of a delegated run's worktree is kept, so a server stop during such a
    run leaves its worktree (listed by `git worktree list`) unfinished; hooks run in the session's
    folder; an LSP or MCP server of the target sees the session's folder (D10); W′; P4.
+
+## P3 completion: W′, recovery of delegated worktrees, remote runs (2026-11-09)
+
+1. **W′ check** (§5.3): when a run's branch changed something, `Finish` also checks it against the
+   session's uncommitted files: a snapshot of them on HEAD (`workingSnapshot`, the same temporary
+   index as `base: "working"`; the session's index, files and refs are not touched). It reports
+   the paths the branch changes that also have uncommitted changes (`git merge` refuses those
+   until they are committed or stashed) and those of them a three-way merge with the snapshot
+   conflicts on (`merge-tree -z`). **Departure:** the design asked only for the conflicts; the
+   overlap is added because a clean merge-tree still leaves `git merge` refused. New result line
+   `worktree_uncommitted` (and a sentence in the async summary), only for a run whose session had
+   uncommitted files when it ended; the run record keeps it (`uncommitted`).
+2. **Recovery of delegated worktrees** (§10.3): while a delegated profile run goes, its worktree is
+   recorded in the target session's state folder (`<state>/<id>/delegated-worktrees/<name>.json`:
+   the folders `worktree.Open` needs, the server's identity and the commit message), written
+   atomically and removed at the run's end. The state folder is read-only in every sandbox (D27),
+   so a run cannot plant a record that points the host's git at folders of its choosing; a record
+   is still checked (absolute folders, admin folder inside `<common>/worktrees`) and dropped
+   otherwise. The first `Resolve` of a session in a server finishes, once per state folder, the
+   records whose server has stopped (`RecoverDelegatedWorktrees`): the work is committed on the
+   host to the run's branch (message "… (finished after the server stopped)") and the folders
+   removed. A record of this server, or of another server that still runs, is left alone. Each
+   record is tried once and the outcome is logged; nobody is waiting for the run any more.
+   A record that cannot be written stops the run before it starts (and removes the new worktree).
+3. **Remote messages** (`app/remote_api.go`, `SendMessage`): a message from another server's
+   profile now goes through the same `Confine` hook (`targetRunner` without a caller sandbox:
+   the caller's sandbox is on its own server), so a target whose `sandbox.isolation.mode` is
+   `worktree` works in a worktree there too. The remote API's run view gains `worktree`, a list of
+   `{key, value}` lines, for a message or a sub-agent run that worked in a worktree; an older
+   client ignores it and an older server sends none. The calling side keeps only `worktree_*` keys
+   (at most 16, each value on one line and at most 2048 bytes) and adds `worktree_remote: remote
+   <name>: the branch and the commands below are in that server's repository`, so a caller does
+   not run `git merge` in its own repository. Remote sub-agent results (`renderRemoteOutcome`,
+   async summary) carry the same lines.
+4. **Still not done:** hooks of a delegated run run in the session's folder, and its LSP and MCP
+   servers see the session's folder (D10; per-run servers in P6); a delegated run's worktree is
+   not narrowed by a remote caller's sandbox (it is not known here); P4.
 
 ## P2b implementation, per-call sandbox choice (2026-11-09)
 

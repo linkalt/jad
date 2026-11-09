@@ -155,6 +155,22 @@ type Outcome struct {
 	// onto Base: the branch then holds the snapshot's changes too.
 	Start          string
 	OnWorkingState bool
+	// Uncommitted is the check against the session's uncommitted files when the run ended
+	// (W′, docs/isolation-sandbox-design.md §5.3); nil when the session had none or the
+	// HEAD check did not run.
+	Uncommitted *UncommittedCheck
+}
+
+// UncommittedCheck is what the session's uncommitted files mean for the run's branch: Working
+// is the snapshot of them (a commit on Target), Overlap the paths the branch changes that
+// also have uncommitted changes (git merge refuses those until they are committed or stashed),
+// Conflicts those of them a three-way merge with the snapshot conflicts on. Error says why
+// the check could not run.
+type UncommittedCheck struct {
+	Working   string
+	Overlap   []string
+	Conflicts []string
+	Error     string
 }
 
 // repositoryLocks serializes the commands that change a repository's worktree list and

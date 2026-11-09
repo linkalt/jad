@@ -3,7 +3,9 @@ package remoteapi
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The server's runView writes the resume fields under the names the client's View reads, and the
@@ -31,3 +33,30 @@ func TestRunViewWritesTheResumeFieldsUnderTheClientsNames(t *testing.T) {
 		t.Fatalf("a run that did not resume writes resumed_from: %s", data)
 	}
 }
+
+// A run's worktree lines are written under "worktree" with the keys the client reads, each value
+// on one line, and the field is left out for a run without a worktree.
+func TestRunViewWritesTheWorktreeLines(t *testing.T) {
+	server := &Server{opts: Options{ResultMaxBytes: 1024, Now: time.Now}}
+	run := &doneRun{result: RunResult{State: "done", Worktree: []WorktreeLine{{Key: "worktree_branch", Value: "jad/b\nx"}}}}
+	view := server.view(&runEntry{run: run, started: time.Now()}, true)
+	data, _ := json.Marshal(view)
+	if !strings.Contains(string(data), `"worktree":[{"key":"worktree_branch","value":"jad/b x"}]`) {
+		t.Fatalf("view = %s", data)
+	}
+	run.result.Worktree = nil
+	data, _ = json.Marshal(server.view(&runEntry{run: run, started: time.Now()}, true))
+	if strings.Contains(string(data), "worktree") {
+		t.Fatalf("view = %s", data)
+	}
+}
+
+type doneRun struct{ result RunResult }
+
+func (r *doneRun) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (r *doneRun) Result() RunResult { return r.result }
+func (r *doneRun) Stop(string)       {}

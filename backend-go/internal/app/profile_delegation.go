@@ -86,7 +86,7 @@ func (r boundRunner) openDelegatedWorktree(ctx context.Context, options *session
 		opened.since = opened.async.Now()
 	}
 	origin := options.ToolExecution.WorkspaceRoot
-	tree, err := native.OpenDelegatedWorktree(ctx, r.config.NativeSubagent, r.delegation.isolation, &options.ToolExecution)
+	tree, err := native.OpenDelegatedWorktree(ctx, r.config.NativeSubagent, r.delegation.isolation, &options.ToolExecution, r.config.StateDir, r.delegation.commitMessage)
 	if err != nil {
 		return nil, &delegatedWorktreeError{err: err}
 	}

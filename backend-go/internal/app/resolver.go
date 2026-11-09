@@ -100,6 +100,10 @@ type Resolver struct {
 	storeSessions map[string]map[string]struct{}
 	mutationLock  *native.PathLocks
 	closed        bool
+	// delegatedRecovered holds, by session state folder, a *sync.Once that finishes the
+	// worktrees its delegated runs lost when the last server stopped, the first time the
+	// session is resolved.
+	delegatedRecovered sync.Map
 
 	// remotes owns the clients and follower goroutines of remote profile_message calls.
 	remotes *remote.Hub
@@ -437,6 +441,7 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 		}
 		r.logConfigWarnings(location.Reference, config)
 	}
+	r.recoverDelegatedWorktrees(ctx, config)
 	// The runner leases the store again for each operation (boundRunner.hold); this
 	// open only reports a store that cannot be used before the run is registered.
 	shared, release, err := r.sharedStore(config)
@@ -449,6 +454,21 @@ func (r *Resolver) Resolve(ctx context.Context, reference, profile, modelPath st
 		Profile:   config.Profile,
 		Runner:    boundRunner{resolver: r, shared: shared, config: config, reference: location.Reference},
 	}, nil
+}
+
+// recoverDelegatedWorktrees finishes, once per session state folder, the worktrees of the
+// delegated profile runs (profile_message into a profile with sandbox.isolation.mode worktree)
+// that the last server lost when it stopped: their work goes to their branches and the folders
+// are removed (native.RecoverDelegatedWorktrees). Every profile of a session shares the
+// folder, so the first resolve of any of them does it.
+func (r *Resolver) recoverDelegatedWorktrees(ctx context.Context, config sessionfs.SessionConfig) {
+	if config.StateDir == "" {
+		return
+	}
+	once, _ := r.delegatedRecovered.LoadOrStore(filepath.Clean(config.StateDir), &sync.Once{})
+	once.(*sync.Once).Do(func() {
+		native.RecoverDelegatedWorktrees(context.WithoutCancel(ctx), config.StateDir, config.NativeSubagent, r.logger)
+	})
 }
 
 // preparedRun is everything a run needs beyond the session settings.

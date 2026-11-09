@@ -45,6 +45,27 @@ type subagentWorktree struct {
 	Conflicts      []string `json:"conflicts,omitempty"`
 	CheckError     string   `json:"check_error,omitempty"`
 	OnWorkingState bool     `json:"on_working_state,omitempty"`
+	// Uncommitted is the check against the session's uncommitted files when the run ended
+	// (W′); nil when the session had none.
+	Uncommitted *worktreeUncommitted `json:"uncommitted,omitempty"`
+}
+
+// worktreeUncommitted is worktree.UncommittedCheck as a run records it.
+type worktreeUncommitted struct {
+	Working   string   `json:"working,omitempty"`
+	Overlap   []string `json:"overlap,omitempty"`
+	Conflicts []string `json:"conflicts,omitempty"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// worktreeRecord is what a run records of its worktree's end.
+func worktreeRecord(outcome worktree.Outcome) subagentWorktree {
+	record := subagentWorktree{Branch: outcome.Branch, Base: outcome.Base, Start: outcome.Start, Commit: outcome.Commit, Changed: outcome.Changed, Stat: outcome.Stat,
+		Target: outcome.Target, Conflicts: outcome.Conflicts, CheckError: outcome.CheckError, OnWorkingState: outcome.OnWorkingState}
+	if check := outcome.Uncommitted; check != nil {
+		record.Uncommitted = &worktreeUncommitted{Working: check.Working, Overlap: check.Overlap, Conflicts: check.Conflicts, Error: check.Error}
+	}
+	return record
 }
 
 // state is what worktree.Open needs to finish the record's worktree.
@@ -164,8 +185,7 @@ func recoverWorktree(ctx context.Context, run *subagentRun, options worktree.Opt
 func finishWorktree(ctx context.Context, run *subagentRun, tree *worktree.Tree, message string, launcher worktree.Launcher) {
 	outcome, err := tree.Finish(ctx, message, launcher)
 	run.mu.Lock()
-	record := subagentWorktree{Branch: outcome.Branch, Base: outcome.Base, Start: outcome.Start, Commit: outcome.Commit, Changed: outcome.Changed, Stat: outcome.Stat,
-		Target: outcome.Target, Conflicts: outcome.Conflicts, CheckError: outcome.CheckError, OnWorkingState: outcome.OnWorkingState}
+	record := worktreeRecord(outcome)
 	if run.worktree != nil {
 		record.Note = run.worktree.Note
 	}
@@ -231,6 +251,9 @@ func worktreeInformation(run subagentRunView) []tools.Information {
 			information = append(information, tools.Information{Key: "worktree_target", Value: record.Target})
 		}
 		information = append(information, tools.Information{Key: "worktree_conflicts", Value: record.conflictsText()})
+		if record.Uncommitted != nil {
+			information = append(information, tools.Information{Key: "worktree_uncommitted", Value: record.uncommittedText()})
+		}
 		if record.Start != "" {
 			information = append(information, tools.Information{Key: "worktree_start", Value: record.startText()})
 		}
@@ -266,6 +289,9 @@ func worktreeText(run subagentRunView) string {
 	case record.Changed:
 		text = fmt.Sprintf("worktree branch %s (from %s): %s. The session's files are unchanged: review with `git diff %s %s`, take the work with `git merge %s`, drop it with `git branch -D %s`. Conflicts with HEAD: %s",
 			record.Branch, shortCommit(record.Base), record.Stat, shortCommit(record.diffBase()), record.Branch, record.Branch, record.Branch, record.conflictsText())
+		if record.Uncommitted != nil {
+			text += ". Uncommitted files of the session: " + record.uncommittedText()
+		}
 		if record.Start != "" {
 			text += ". " + record.startText()
 		}
@@ -304,6 +330,26 @@ func (w subagentWorktree) conflictsText() string {
 	default:
 		return boundedReason(fmt.Sprintf("%d path(s) would conflict with HEAD %s: %s", len(w.Conflicts), shortCommit(w.Target), strings.Join(w.Conflicts, ", ")))
 	}
+}
+
+// uncommittedText says what the session's uncommitted files, as the run's end found them,
+// mean for taking the branch.
+func (w subagentWorktree) uncommittedText() string {
+	check := w.Uncommitted
+	switch {
+	case check.Error != "":
+		return "not checked (" + check.Error + ")"
+	case len(check.Overlap) == 0:
+		return "the session has uncommitted changes, none in a path the branch changes"
+	}
+	text := fmt.Sprintf("%d path(s) the branch changes also have uncommitted changes in the session (snapshot %s), so `git merge` refuses until they are committed or stashed: %s",
+		len(check.Overlap), shortCommit(check.Working), strings.Join(check.Overlap, ", "))
+	if len(check.Conflicts) == 0 {
+		text += "; none of them conflicts"
+	} else {
+		text += fmt.Sprintf("; %d of them would conflict: %s", len(check.Conflicts), strings.Join(check.Conflicts, ", "))
+	}
+	return boundedReason(text)
 }
 
 // startText says that the run started from the session's working state, and where its

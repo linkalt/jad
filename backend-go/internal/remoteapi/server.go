@@ -87,6 +87,15 @@ type RunResult struct {
 	// resume; both are empty when they do not apply.
 	ResumedFrom string
 	ConfigNote  string
+	// Worktree are the worktree_* lines of a run that worked in a git worktree of its own
+	// (sandbox.isolation.mode worktree): where its work is on this server's repository.
+	Worktree []WorktreeLine
+}
+
+// WorktreeLine is one worktree_* line of a run's result.
+type WorktreeLine struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // Run is a started piece of work. Result is valid after Done closes. Stop does not wait.
@@ -633,6 +642,8 @@ type runView struct {
 	// ResumedFrom and ConfigNote are set for a run that resumed another, and only then.
 	ResumedFrom string `json:"resumed_from,omitempty"`
 	ConfigNote  string `json:"config_note,omitempty"`
+	// Worktree is set for a run that worked in a git worktree of its own, and only then.
+	Worktree []WorktreeLine `json:"worktree,omitempty"`
 }
 
 func (s *Server) view(entry *runEntry, withText bool) runView {
@@ -642,6 +653,9 @@ func (s *Server) view(entry *runEntry, withText bool) runView {
 		result := entry.run.Result()
 		view.State, view.Code, view.Message, view.Reason = result.State, result.Code, safe(result.Message, 1024), safe(result.Reason, 128)
 		view.ResumedFrom, view.ConfigNote = result.ResumedFrom, result.ConfigNote
+		for _, line := range result.Worktree {
+			view.Worktree = append(view.Worktree, WorktreeLine{Key: safe(line.Key, 64), Value: safe(line.Value, worktreeValueMaxBytes)})
+		}
 		view.Text, view.Cut = cutUTF8(result.Text, s.opts.ResultMaxBytes)
 		s.mu.Lock()
 		ended := entry.ended
@@ -655,6 +669,9 @@ func (s *Server) view(entry *runEntry, withText bool) runView {
 	}
 	return view
 }
+
+// worktreeValueMaxBytes bounds one worktree line's value in a run's view.
+const worktreeValueMaxBytes = 2048
 
 func cutUTF8(text string, limit int) (string, bool) {
 	if len(text) <= limit {

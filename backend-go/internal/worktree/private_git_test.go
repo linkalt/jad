@@ -293,3 +293,53 @@ func TestFinishThroughALauncherDoesNotSign(t *testing.T) {
 		t.Fatal("the host commit ignored commit.gpgsign")
 	}
 }
+
+// With uncommitted changes in the session, Finish also checks the branch against them (W′):
+// the paths both change, and those of them a merge with the working state conflicts on. A
+// clean session gets no such check.
+func TestFinishChecksTheSessionsUncommittedFiles(t *testing.T) {
+	repo := repository(t)
+	head := gitIn(t, repo, "rev-parse", "HEAD")
+	clean, err := Create(context.Background(), testOptions(), repo, "clean", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(clean.Workspace, "a.txt"), "run\n")
+	outcome, err := clean.Finish(context.Background(), "clean", nil)
+	if err != nil || outcome.Uncommitted != nil {
+		t.Fatalf("clean session: outcome = %+v, err %v", outcome, err)
+	}
+	gitIn(t, repo, "branch", "-D", clean.Branch)
+
+	tree, err := Create(context.Background(), testOptions(), repo, "dirty", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(tree.Workspace, "a.txt"), "run\n")
+	write(t, filepath.Join(tree.Workspace, "b.txt"), "run b\n")
+	write(t, filepath.Join(tree.Workspace, "only-run.txt"), "r\n")
+	// The session changes a.txt the other way (a conflict), adds b.txt with the same text
+	// (overlap, no conflict) and has an untracked file the run does not touch.
+	write(t, filepath.Join(repo, "a.txt"), "session\n")
+	write(t, filepath.Join(repo, "b.txt"), "run b\n")
+	write(t, filepath.Join(repo, "untracked.txt"), "u\n")
+	status := gitIn(t, repo, "status", "--porcelain")
+	outcome, err = tree.Finish(context.Background(), "dirty", nil)
+	if err != nil || outcome.Target != head || len(outcome.Conflicts) != 0 {
+		t.Fatalf("outcome = %+v, err %v", outcome, err)
+	}
+	check := outcome.Uncommitted
+	if check == nil || check.Error != "" || check.Working == "" || check.Working == head {
+		t.Fatalf("uncommitted = %+v", check)
+	}
+	if !slices.Equal(check.Overlap, []string{"a.txt", "b.txt"}) || !slices.Equal(check.Conflicts, []string{"a.txt"}) {
+		t.Fatalf("overlap %v, conflicts %v", check.Overlap, check.Conflicts)
+	}
+	// The check leaves the session's files, index and refs alone.
+	if got := gitIn(t, repo, "status", "--porcelain"); got != status {
+		t.Fatalf("status after = %q, before %q", got, status)
+	}
+	if got := gitIn(t, repo, "rev-parse", "HEAD"); got != head {
+		t.Fatal("HEAD moved")
+	}
+}

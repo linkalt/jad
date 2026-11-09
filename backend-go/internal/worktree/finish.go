@@ -77,6 +77,9 @@ func (t *Tree) Finish(ctx context.Context, message string, launcher Launcher) (O
 		outcome.Stat = strings.TrimSpace(stat)
 	}
 	outcome.Target, outcome.Conflicts, outcome.CheckError = t.check(ctx, branchTip)
+	if outcome.CheckError == "" {
+		outcome.Uncommitted = t.checkUncommitted(ctx, outcome.Target, branchTip)
+	}
 	if err := t.remove(ctx, false); err != nil {
 		outcome.Kept = true
 		return outcome, err
@@ -232,6 +235,71 @@ func (t *Tree) check(ctx context.Context, commit string) (string, []string, stri
 		}
 	}
 	return target, conflicts, ""
+}
+
+// checkUncommitted checks commit against the session's uncommitted files (W′): a snapshot of
+// them on target, the session's HEAD, as base "working" takes one. It is nil when the session
+// has none.
+func (t *Tree) checkUncommitted(ctx context.Context, target, commit string) *UncommittedCheck {
+	working, err := workingSnapshot(ctx, t.options, t.top, target, t.Branch)
+	if err != nil {
+		return &UncommittedCheck{Error: "the session's uncommitted files could not be read: " + err.Error()}
+	}
+	if working == target {
+		return nil
+	}
+	check := &UncommittedCheck{Working: working}
+	dirty, err := t.changedPaths(ctx, target, working)
+	if err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	// The branch's own changes, from where it left the session's history.
+	changed, err := t.changedPaths(ctx, target+"..."+commit)
+	if err != nil {
+		check.Error = err.Error()
+		return check
+	}
+	for _, path := range changed {
+		if slices.Contains(dirty, path) {
+			check.Overlap = append(check.Overlap, path)
+		}
+	}
+	if len(check.Overlap) == 0 {
+		return check
+	}
+	output, code, err := runGit(ctx, t.options, gitCommand{dir: t.common, args: []string{"merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", working, commit}, exitCodes: []int{1}})
+	if err != nil {
+		check.Error = "git merge-tree failed: " + err.Error()
+		return check
+	}
+	if code != 0 {
+		// The tree's name, then the conflicted paths, each ended by NUL.
+		paths := strings.Split(output, "\x00")
+		for _, path := range paths[1:] {
+			if path != "" && !slices.Contains(check.Conflicts, path) {
+				check.Conflicts = append(check.Conflicts, path)
+			}
+		}
+	}
+	return check
+}
+
+// changedPaths are the paths git diff --name-only reports for revisions, without rename
+// detection, so a moved file counts as both its paths.
+func (t *Tree) changedPaths(ctx context.Context, revisions ...string) ([]string, error) {
+	arguments := append([]string{"diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", "-z"}, revisions...)
+	output, err := run(ctx, t.options, t.common, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list the changed paths: %w", err)
+	}
+	var paths []string
+	for _, path := range strings.Split(output, "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
 
 func containsString(list []string, value string) bool {

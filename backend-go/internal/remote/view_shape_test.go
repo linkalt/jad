@@ -30,3 +30,23 @@ func TestViewNamesMatchTheServersRunJSON(t *testing.T) {
 		}
 	}
 }
+
+// A remote's worktree lines are kept only with a worktree_* key, at most worktreeLinesMax of
+// them, each value on one line and bounded.
+func TestViewCleanBoundsTheWorktreeLines(t *testing.T) {
+	view := View{Worktree: []WorktreeLine{{Key: "error_code", Value: "x"}, {Key: "worktree_branch", Value: "jad/b\nstatus: ok"}, {Key: "worktree_Branch", Value: "x"}}}
+	for range worktreeLinesMax + 4 {
+		view.Worktree = append(view.Worktree, WorktreeLine{Key: "worktree_note", Value: string(make([]byte, worktreeValueMaxBytes+10))})
+	}
+	view.clean()
+	if len(view.Worktree) != worktreeLinesMax || view.Worktree[0] != (WorktreeLine{Key: "worktree_branch", Value: "jad/b status: ok"}) {
+		t.Fatalf("lines = %d, first %+v", len(view.Worktree), view.Worktree[0])
+	}
+	if len(view.Worktree[1].Value) > worktreeValueMaxBytes {
+		t.Fatalf("value of %d bytes", len(view.Worktree[1].Value))
+	}
+	var decoded View
+	if err := json.Unmarshal([]byte(`{"id":"rr_0123456789abcdef","state":"done","worktree":[{"key":"worktree_branch","value":"jad/b"}]}`), &decoded); err != nil || len(decoded.Worktree) != 1 {
+		t.Fatalf("decoded %+v, %v", decoded, err)
+	}
+}

@@ -219,6 +219,10 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 			}
 		},
 		OnEnd: run.ended,
+		// The target's own sandbox.isolation applies as for a local profile_message: an
+		// isolated target works in a git worktree of its own and the result says where its
+		// work is. The caller's sandbox is on its own server and does not narrow this one.
+		Confine: targetRunner(nil, request.Caller, request.Message, run.setWorktree),
 	})
 	if errors.Is(err, httpapi.ErrSessionBusy) {
 		return nil, remoteapi.ErrBusy
@@ -246,6 +250,26 @@ type remoteMessageRun struct {
 	finished bool
 	timer    *time.Timer
 	result   remoteapi.RunResult
+	// worktree are the worktree_* lines of a target that worked in a worktree; set before
+	// the run ends.
+	worktree []remoteapi.WorktreeLine
+}
+
+// setWorktree keeps the end of the target's worktree for the run's result.
+func (r *remoteMessageRun) setWorktree(result native.DelegatedWorktreeResult) {
+	lines := remoteWorktreeLines(result.Information)
+	r.mu.Lock()
+	r.worktree = lines
+	r.mu.Unlock()
+}
+
+// remoteWorktreeLines are worktree_* lines as the remote API carries them.
+func remoteWorktreeLines(information []tools.Information) []remoteapi.WorktreeLine {
+	var lines []remoteapi.WorktreeLine
+	for _, item := range information {
+		lines = append(lines, remoteapi.WorktreeLine{Key: item.Key, Value: fmt.Sprint(item.Value)})
+	}
+	return lines
 }
 
 func (r *remoteMessageRun) Done() <-chan struct{} { return r.done }
@@ -297,10 +321,10 @@ func (r *remoteMessageRun) ended(started *httpapi.ProfileRun) {
 	if r.timer != nil {
 		r.timer.Stop()
 	}
-	timed, reason := r.timed, r.reason
+	timed, reason, worktree := r.timed, r.reason, r.worktree
 	r.mu.Unlock()
 	partial, _ := r.lastText.Load().(string)
-	result := remoteapi.RunResult{Reason: reason}
+	result := remoteapi.RunResult{Reason: reason, Worktree: worktree}
 	switch {
 	case timed:
 		result.State, result.Text = "timed_out", partial
@@ -471,7 +495,8 @@ func (r *remoteSubagentRun) Stop(reason string)    { r.run.Stop(reason) }
 func (r *remoteSubagentRun) Result() remoteapi.RunResult {
 	state, text, reason := r.run.Outcome()
 	resumedFrom, configNote := r.run.ResumeFacts()
-	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(resumedFrom), ConfigNote: configNote}
+	result := remoteapi.RunResult{State: state, Text: text, Reason: reason, ResumedFrom: r.runs.remoteIDOf(resumedFrom), ConfigNote: configNote,
+		Worktree: remoteWorktreeLines(r.run.WorktreeInformation())}
 	if state == "failed" {
 		result.Code, result.Message = "subagent_failed", reason
 	}

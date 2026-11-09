@@ -262,7 +262,8 @@ func (r *remoteRun) conclude(hubCtx, ctx context.Context, view remote.View, err 
 	reason, stopRequested := r.stopped()
 	switch {
 	case err == nil:
-		outcome := ProfileMessageOutcome{Text: view.Text, Reason: view.Reason, Trace: trace, ResumedFrom: view.ResumedFrom, ConfigNote: view.ConfigNote}
+		outcome := ProfileMessageOutcome{Text: view.Text, Reason: view.Reason, Trace: trace, ResumedFrom: view.ResumedFrom, ConfigNote: view.ConfigNote,
+			Worktree: remoteWorktree(r.target.Remote, view.Worktree)}
 		switch view.State {
 		case "done":
 			if strings.TrimSpace(view.Text) == "" {
@@ -295,6 +296,23 @@ func (r *remoteRun) conclude(hubCtx, ctx context.Context, view remote.View, err 
 		return ProfileMessageOutcome{Err: &RemoteFailedError{Code: remoteCode(failure), Message: remoteMessage(r.target.Remote, failure)}, Trace: trace}
 	}
 	return ProfileMessageOutcome{Err: &RemoteFailedError{Code: "remote_failed", Message: err.Error()}, Trace: trace}
+}
+
+// remoteWorktree is the worktree of a remote run as its view reports it, with a line saying
+// that the branch is in the remote's repository; nil without worktree lines.
+func remoteWorktree(remoteName string, lines []remote.WorktreeLine) *DelegatedWorktreeResult {
+	if len(lines) == 0 {
+		return nil
+	}
+	where := fmt.Sprintf("remote %s: the branch and the commands below are in that server's repository, not in this session's", remoteName)
+	result := &DelegatedWorktreeResult{Information: []tools.Information{{Key: "worktree_remote", Value: where}}}
+	parts := []string{"worktree on " + where}
+	for _, line := range lines {
+		result.Information = append(result.Information, tools.Information{Key: line.Key, Value: line.Value})
+		parts = append(parts, line.Key+": "+line.Value)
+	}
+	result.Text = strings.Join(parts, "; ")
+	return result
 }
 
 // stopRemote sends one best-effort stop, from the follow goroutine, so the hub waits for it.

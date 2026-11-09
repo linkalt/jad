@@ -16,6 +16,7 @@ import (
 	"jad/backend-go/internal/asyncmgr"
 	"jad/backend-go/internal/checkpoint"
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
@@ -350,5 +351,86 @@ func TestIsolatedTargetInASandboxedCallersSandboxWritesItsWorktree(t *testing.T)
 	if files := gitIn(t, f.cwd, "show", "--name-only", "--format=", branch); files != "made.txt" {
 		data, _ := os.ReadFile(boundRunnerOf(t, f, "review/reviewer").config.MessagesPath)
 		t.Fatalf("files on %s = %q; transcript:\n%s", branch, files, data)
+	}
+}
+
+// §10.3: the worktree of a delegated run the last server lost is finished the first time the
+// next server resolves the target's session: the run's work is on its branch, the folder gone.
+func TestResolveFinishesALostDelegatedWorktree(t *testing.T) {
+	f := isolatedTargetFixture(t, `{"mode":"worktree"}`)
+	resolved, err := f.service.resolver.Resolve(context.Background(), "local:demo", "review/reviewer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := resolved.Runner.(boundRunner).config.StateDir
+	execution := tools.ExecutionContext{WorkspaceRoot: f.cwd}
+	if _, err := native.OpenDelegatedWorktree(context.Background(), nil, sessionfs.SandboxIsolation{Mode: sessionfs.SandboxIsolationWorktree}, &execution, stateDir, "jad profile run review/reviewer (message from dev/coder)"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(execution.WorkspaceRoot, "made.txt"), []byte("lost\n"))
+	records, _ := filepath.Glob(filepath.Join(stateDir, "delegated-worktrees", "*.json"))
+	if len(records) != 1 {
+		t.Fatalf("records = %v", records)
+	}
+	// The server that wrote the record has stopped.
+	data, _ := os.ReadFile(records[0])
+	var record map[string]any
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	record["server"] = map[string]any{"pid": 1 << 30}
+	data, _ = json.Marshal(record)
+	writeFile(t, records[0], data)
+	branch, _ := record["branch"].(string)
+	// This resolver already looked at the folder; a new server would look once.
+	f.service.resolver.delegatedRecovered.Delete(filepath.Clean(stateDir))
+	if _, err := f.service.resolver.Resolve(context.Background(), "local:demo", "dev/coder", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitIn(t, f.cwd, "show", branch+":made.txt"); got != "lost" {
+		t.Fatalf("made.txt on %s = %q", branch, got)
+	}
+	if list := gitIn(t, f.cwd, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 1 {
+		t.Fatalf("the lost worktree was not removed:\n%s", list)
+	}
+	if _, err := os.Stat(records[0]); !os.IsNotExist(err) {
+		t.Fatalf("the record is still there: %v", err)
+	}
+}
+
+// A message from another server's profile (remote API) to a profile whose sandbox.isolation.mode
+// is worktree runs it in a worktree too, and the run's result carries the worktree lines.
+func TestRemoteMessageToAnIsolatedProfileWorksInAWorktree(t *testing.T) {
+	f := isolatedTargetFixture(t, `{"mode":"worktree"}`)
+	backend := remoteBackend{resolver: f.service.resolver, runTimeout: time.Minute, runs: &remoteRunIndex{}}
+	run, err := backend.SendMessage(context.Background(), remoteapi.MessageRequest{Session: "demo", Profile: "review/reviewer", Message: "write it", Caller: "remote:peer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-run.Done():
+	case <-time.After(time.Minute):
+		t.Fatal("the message did not end")
+	}
+	result := run.Result()
+	if result.State != "done" {
+		t.Fatalf("result = %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(f.cwd, "made.txt")); !os.IsNotExist(err) {
+		t.Fatalf("the target wrote into the session's folder: %v", err)
+	}
+	lines := map[string]string{}
+	for _, line := range result.Worktree {
+		lines[line.Key] = line.Value
+	}
+	branch := lines["worktree_branch"]
+	if !strings.HasPrefix(branch, "jad/profile-") || !strings.HasPrefix(lines["worktree_conflicts"], "none") {
+		t.Fatalf("worktree lines = %+v", result.Worktree)
+	}
+	if got := gitIn(t, f.cwd, "show", branch+":made.txt"); got != "by the target" {
+		t.Fatalf("made.txt on %s = %q", branch, got)
+	}
+	if message := gitIn(t, f.cwd, "log", "-1", "--format=%B", branch); !strings.Contains(message, "(message from remote:peer)") {
+		t.Fatalf("commit message = %q", message)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/worktree"
 )
 
 // gitRepository makes a repository with one commit holding a.txt and keep/secret.txt,
@@ -357,6 +358,28 @@ func TestWorktreeResultLines(t *testing.T) {
 	requireOutput(t, lines(record), "git diff 555555555555 jad/r | git apply --3way", "review with `git diff 555555555555 jad/r`")
 	if text := worktreeText(subagentRunView{worktree: &record}); !strings.Contains(text, "Conflicts with HEAD: none") || !strings.Contains(text, "snapshot 555555555555") {
 		t.Fatalf("text = %s", text)
+	}
+	// A clean session has no worktree_uncommitted line; a dirty one says what its
+	// uncommitted files mean for the branch (W′).
+	if got := lines(record); strings.Contains(got, "worktree_uncommitted") {
+		t.Fatalf("clean session: %s", got)
+	}
+	working := strings.Repeat("9", 40)
+	record.Uncommitted = &worktreeUncommitted{Working: working}
+	requireOutput(t, lines(record), "worktree_uncommitted: the session has uncommitted changes, none in a path the branch changes")
+	record.Uncommitted = &worktreeUncommitted{Working: working, Overlap: []string{"a.txt", "b.txt"}, Conflicts: []string{"a.txt"}}
+	requireOutput(t, lines(record), "worktree_uncommitted: 2 path(s) the branch changes also have uncommitted changes in the session (snapshot 999999999999), so `git merge` refuses until they are committed or stashed: a.txt, b.txt; 1 of them would conflict: a.txt")
+	if text := worktreeText(subagentRunView{worktree: &record}); !strings.Contains(text, "Uncommitted files of the session: 2 path(s)") {
+		t.Fatalf("text = %s", text)
+	}
+	record.Uncommitted = &worktreeUncommitted{Working: working, Overlap: []string{"b.txt"}}
+	requireOutput(t, lines(record), "stashed: b.txt; none of them conflicts")
+	record.Uncommitted = &worktreeUncommitted{Error: "boom"}
+	requireOutput(t, lines(record), "worktree_uncommitted: not checked (boom)")
+	// The record keeps the check across a restart.
+	encoded, err := json.Marshal(worktreeRecord(worktree.Outcome{Branch: "jad/r", Changed: true, Uncommitted: &worktree.UncommittedCheck{Working: working, Overlap: []string{"a.txt"}}}))
+	if err != nil || !strings.Contains(string(encoded), `"uncommitted":{"working":"`+working+`","overlap":["a.txt"]}`) {
+		t.Fatalf("record = %s, %v", encoded, err)
 	}
 }
 

@@ -42,7 +42,27 @@ type View struct {
 	// ResumedFrom and ConfigNote are set for a run that resumed another, and only then.
 	ResumedFrom string `json:"resumed_from,omitempty"`
 	ConfigNote  string `json:"config_note,omitempty"`
+	// Worktree are the worktree_* lines of a run that worked in a git worktree of its own on
+	// the remote's repository; empty for another run, or from a remote that does not send them.
+	Worktree []WorktreeLine `json:"worktree,omitempty"`
 }
+
+// WorktreeLine is one worktree_* line of a remote run's view.
+type WorktreeLine struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// worktreeKeyPattern is the form of a worktree line's key; a line with another key is dropped,
+// so a remote cannot add lines of another kind to the caller's result.
+var worktreeKeyPattern = regexp.MustCompile(`^worktree_[a-z_]{1,32}$`)
+
+const (
+	// worktreeLinesMax and worktreeValueMaxBytes bound what a remote's worktree lines add to
+	// the caller's result.
+	worktreeLinesMax      = 16
+	worktreeValueMaxBytes = 2048
+)
 
 // clean bounds the remote's short texts and strips control characters: they reach the
 // model's context and the async records, so a remote must not be able to forge lines there.
@@ -54,6 +74,17 @@ func (v *View) clean() {
 	v.Reason = safeText(v.Reason, 128)
 	v.ResumedFrom = safeText(v.ResumedFrom, 64)
 	v.ConfigNote = safeText(v.ConfigNote, asyncmgr.ConfigNoteMaxBytes)
+	var lines []WorktreeLine
+	for _, line := range v.Worktree {
+		if len(lines) == worktreeLinesMax {
+			break
+		}
+		if !worktreeKeyPattern.MatchString(line.Key) {
+			continue
+		}
+		lines = append(lines, WorktreeLine{Key: line.Key, Value: safeText(line.Value, worktreeValueMaxBytes)})
+	}
+	v.Worktree = lines
 }
 
 // Terminal reports whether the run has ended.

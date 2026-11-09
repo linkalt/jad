@@ -1,6 +1,10 @@
 package native
 
-import "context"
+import (
+	"context"
+
+	"jad/backend-go/internal/tools"
+)
 
 type externalRunKey struct{}
 
@@ -46,4 +50,10 @@ func (e *ExternalRun) Outcome() (state, text, reason string) {
 func (e *ExternalRun) ResumeFacts() (resumedFrom, configNote string) {
 	view := e.run.view()
 	return view.resumedFrom, view.configNote
+}
+
+// WorktreeInformation are the worktree_* lines of a run that worked in a git worktree of its
+// own; empty for another run. Meaningful once Done is closed.
+func (e *ExternalRun) WorktreeInformation() []tools.Information {
+	return worktreeInformation(e.run.view())
 }
