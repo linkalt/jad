@@ -59,7 +59,7 @@ func subagentAsyncResult(run subagentRunView) asyncmgr.Result {
 	// gives up what the files line takes, so the summary stays within the run's limit.
 	// The worktree line is not cut: it holds the branch name the parent needs whole.
 	files, _ := cutUTF8(changedListText(run), subagentAsyncFilesBytes)
-	if files = strings.TrimSpace(files + "\n" + worktreeText(run)); files != "" {
+	if files = strings.TrimSpace(files + "\n" + strings.TrimSpace(worktreeText(run)+"\n"+sandboxText(run))); files != "" {
 		answer, _ := cutUTF8(result.Summary, max(run.resultMax-int64(len(files))-1, 0))
 		result.Summary = strings.TrimSpace(files + "\n" + answer)
 	}

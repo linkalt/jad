@@ -23,11 +23,16 @@ const profileMessageToolID = "native.profile_message"
 const profileMessageModelProperty = `
     "model":{"type":"string","description":"Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."},`
 
+// profileMessageSandboxProperty is the schema line of the sandbox argument; the tool has it
+// only with tools.native.profile_message.sandbox_choice set.
+const profileMessageSandboxProperty = `
+    "sandbox":{"type":"string","description":"Sandbox template the profile answers this message in: one of the sandboxes listed below. Omit to use the profile's own sandbox. It can only narrow that sandbox; one that would widen it is refused."},`
+
 var profileMessageInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
-    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},` + profileMessageModelProperty + `
+    "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},` + profileMessageModelProperty + profileMessageSandboxProperty + `
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer before an id is returned; collect it with the async tool."}
   },
   "required":["profile","message"],
@@ -168,15 +173,26 @@ type ProfileMessageRequest struct {
 	// would reach more than the caller is refused with a *ProfileSandboxError.
 	Environment *tools.Environment
 	CallerPlace sessionfs.SandboxPlace
+	// Sandbox is the sandbox template the call picked (sandbox_choice, resolved in the
+	// caller's session): it narrows the target's run further. Nil picks none.
+	Sandbox *sessionfs.SandboxChoice
 }
 
 // ProfileSandboxError refuses a message to a profile whose own sandbox reaches more than the
-// caller's: the target would run outside the environment the caller is confined to.
+// caller's: the target would run outside the environment the caller is confined to. Choice is
+// set when it is the call's sandbox choice that would reach more than the target's run gets.
 type ProfileSandboxError struct {
 	Message string
+	Choice  string
 }
 
 func (e *ProfileSandboxError) Error() string { return e.Message }
+
+// sandboxProblem is the sandbox_unavailable problem of a refused sandbox choice.
+func (e *ProfileSandboxError) sandboxProblem() *sandboxProblem {
+	widens := strings.TrimPrefix(e.Message, sessionfs.SandboxWidensPrefix)
+	return &sandboxProblem{message: fmt.Sprintf("Sandbox %s reaches more than the profile's run would otherwise get, so it cannot be used here: %s", e.Choice, widens), widens: widens}
+}
 
 // ProfileMessageOutcome is how a message ended. Text is the target's final answer, or the
 // last text it wrote when it did not finish. Err is nil for an answer; otherwise one of the
@@ -301,7 +317,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 	if settings.ResultMaxBytes < 1 {
 		return tools.Tool{}, errors.New("tools.native.profile_message.result_max_bytes must be at least 1")
 	}
-	schema := modelChoiceSchema(profileMessageInputSchema, profileMessageModelProperty, settings.ModelChoice)
+	schema := optionalPropertiesSchema(profileMessageInputSchema, []optionalProperty{{profileMessageModelProperty, settings.ModelChoice}, {profileMessageSandboxProperty, settings.SandboxChoice != nil}})
 	validator, err := tools.CompileSchema(schema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native profile_message schema: %w", err)
@@ -315,7 +331,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: profileMessageDescription + profileMessageListText(targets, settings.Sessions, remoteNames),
+			Description: profileMessageDescription + profileMessageListText(targets, settings.Sessions, remoteNames) + sandboxChoiceText(settings.SandboxChoices),
 			InputSchema: schema,
 		},
 		Validator:          validator,
@@ -353,7 +369,7 @@ func normalizeProfileMessageArguments(arguments map[string]any) map[string]any {
 		copied["block_ms"] = json.Number(fmt.Sprint(max(block, 0)))
 		arguments = copied
 	}
-	for _, key := range []string{"profile", "message", "model"} {
+	for _, key := range []string{"profile", "message", "model", "sandbox"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue
@@ -372,11 +388,23 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	profile, _ := arguments["profile"].(string)
 	message, _ := arguments["message"].(string)
 	model, _ := arguments["model"].(string)
+	sandboxName, _ := arguments["sandbox"].(string)
 	if _, _, isRemote := remote.Split(profile); isRemote {
 		if model != "" {
 			return tools.ExecutionError(callID, tools.StatusInvalidInput, "model_unavailable", "A remote profile answers with its remote's own model; leave model out"), nil
 		}
+		if sandboxName != "" {
+			return tools.ExecutionError(callID, tools.StatusInvalidInput, sandboxUnavailableCode, "A remote profile answers in its remote's own environment; leave sandbox out"), nil
+		}
 		return p.executeRemote(ctx, arguments, execution, profile, message)
+	}
+	var choice *sessionfs.SandboxChoice
+	if sandboxName != "" {
+		chosen, problem := lookupSandboxChoice(sandboxName, p.settings.SandboxChoices, "profile messages")
+		if problem != nil {
+			return sandboxUnavailable(callID, problem, p.settings.SandboxChoices), nil
+		}
+		choice = &chosen
 	}
 	session, target, allowed := p.localTarget(profile)
 	if !allowed {
@@ -399,6 +427,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		MaxQueued:    p.settings.MaxQueued,
 		Environment:  callerEnvironment(execution),
 		CallerPlace:  sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
+		Sandbox:      choice,
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless
@@ -414,6 +443,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		return p.unknownProfile(callID, profile), nil
 	}
 	var sandboxErr *ProfileSandboxError
+	if errors.As(err, &sandboxErr) && sandboxErr.Choice != "" {
+		return sandboxUnavailable(callID, sandboxErr.sandboxProblem(), p.settings.SandboxChoices), nil
+	}
 	if errors.As(err, &sandboxErr) {
 		return tools.ExecutionError(callID, tools.StatusForbidden, "sandbox_widens",
 			fmt.Sprintf("Profile %s cannot be messaged from this run: its sandbox reaches more than this run's (%s)", profile, sandboxErr.Message)), nil

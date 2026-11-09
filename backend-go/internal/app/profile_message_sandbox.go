@@ -19,8 +19,57 @@ import (
 // Not covered: the target's stdio MCP servers are its session's (D10), and a remote target
 // runs on its own server, outside any sandbox of this one.
 
-// confineTarget is target narrowed by the caller's sandbox; caller nil leaves it as it is.
-func confineTarget(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
+// confineTarget is target narrowed by the caller's sandbox, then by the sandbox template the
+// call picked (chooseTargetSandbox); caller nil and choice nil leave it as it is.
+func confineTarget(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
+	target, err := confineByCaller(caller, callerPlace, target)
+	if err != nil || choice == nil {
+		return target, err
+	}
+	return chooseTargetSandbox(choice, target)
+}
+
+// choiceWidensError is a sandbox choice that would widen the target's run.
+type choiceWidensError struct {
+	choice string
+	err    error
+}
+
+func (e *choiceWidensError) Error() string { return e.err.Error() }
+
+// chooseTargetSandbox is target with the sandbox template choice narrowing its sandbox (the
+// target's own, already narrowed by the caller's): the template's placeholders stand for the
+// target's places, as the run fills them in. Its isolation.mode worktree makes the message's
+// run work in a worktree of its own; none cannot take a target out of its worktree.
+func chooseTargetSandbox(choice *sessionfs.SandboxChoice, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
+	switch choice.Isolation.Mode {
+	case sessionfs.SandboxIsolationNone:
+		if target.Isolation.Mode == sessionfs.SandboxIsolationWorktree {
+			return sessionfs.SessionConfig{}, &choiceWidensError{choice: choice.Name, err: errors.New(sessionfs.SandboxWidensPrefix + "isolation.mode none, and the profile runs a message in a git worktree of its own")}
+		}
+	case sessionfs.SandboxIsolationWorktree:
+		target.Isolation = choice.Isolation
+	}
+	if choice.Sandbox == nil {
+		return target, nil
+	}
+	place := sessionfs.SandboxPlace{Workspace: target.WorkingDir, CWD: target.WorkingDir, SessionDir: target.StateDir}
+	narrowed, err := sessionfs.NarrowSandbox(target.Sandbox, choice.Sandbox, place.Expander(), place.Expander())
+	if err != nil {
+		return sessionfs.SessionConfig{}, &choiceWidensError{choice: choice.Name, err: err}
+	}
+	// The template's read-only paths are the caller's session's; the target's own session
+	// file stays read-only too, as for a target that inherits the caller's sandbox.
+	if target.SettingPath != "" && !slices.Contains(narrowed.ReadOnlyPaths, target.SettingPath) {
+		copied := *narrowed
+		copied.ReadOnlyPaths = append(append([]string(nil), narrowed.ReadOnlyPaths...), target.SettingPath)
+		narrowed = &copied
+	}
+	return withRunSandbox(target, narrowed), nil
+}
+
+// confineByCaller is target narrowed by the caller's sandbox; caller nil leaves it as it is.
+func confineByCaller(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
 	if caller == nil {
 		return target, nil
 	}
@@ -73,18 +122,30 @@ func withRunSandbox(config sessionfs.SessionConfig, sandbox *sessionfs.SandboxSe
 }
 
 // targetConfiner is the Confine hook of a profile_message run: the target's runner with its
-// config narrowed by the caller's sandbox. A runner it cannot narrow fails the start.
-func targetConfiner(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace) func(httpapi.RunSession) (httpapi.RunSession, error) {
+// config narrowed by the caller's sandbox and the call's sandbox choice. A runner it cannot
+// narrow fails the start.
+func targetConfiner(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice) func(httpapi.RunSession) (httpapi.RunSession, error) {
 	return func(runner httpapi.RunSession) (httpapi.RunSession, error) {
 		bound, ok := runner.(boundRunner)
 		if !ok {
 			return nil, errors.New("the target's run cannot be confined to the caller's sandbox")
 		}
-		config, err := confineTarget(caller, callerPlace, bound.config)
+		config, err := confineTarget(caller, callerPlace, choice, bound.config)
 		if err != nil {
-			return nil, &native.ProfileSandboxError{Message: err.Error()}
+			return nil, profileSandboxError(err)
 		}
 		bound.config = config
 		return bound, nil
 	}
+}
+
+// profileSandboxError is the native error of a target that confineTarget refused: a sandbox
+// choice that would widen the run names the choice.
+func profileSandboxError(err error) *native.ProfileSandboxError {
+	refused := &native.ProfileSandboxError{Message: err.Error()}
+	var choice *choiceWidensError
+	if errors.As(err, &choice) {
+		refused.Choice = choice.choice
+	}
+	return refused
 }

@@ -23,6 +23,10 @@
             "type": "string",
             "description": "Model ID the profile answers this message with, optionally with @<effort>: one of the models that profile lists. Omit to use the profile's model default."
           },
+          "sandbox": {
+            "type": "string",
+            "description": "Sandbox template the profile answers this message in: one of the sandboxes listed below. Omit to use the profile's own sandbox. It can only narrow that sandbox; one that would widen it is refused."
+          },
           "block_ms": {
             "type": "integer",
             "minimum": 0,

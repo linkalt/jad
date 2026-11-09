@@ -38,14 +38,22 @@ const (
 )
 
 func TestModelChoiceOffKeepsTheToolSchemasTheyHadBefore(t *testing.T) {
-	if got := string(modelChoiceSchema(subagentInputSchema, subagentModelProperty, false)); got != subagentSchemaWithoutModel {
-		t.Fatalf("subagent schema with model_choice off:\n%s", got)
+	off := func(model, sandbox string) []optionalProperty {
+		return []optionalProperty{{model, false}, {sandbox, false}}
 	}
-	if got := string(modelChoiceSchema(profileMessageInputSchema, profileMessageModelProperty, false)); got != profileMessageSchemaWithoutModel {
-		t.Fatalf("profile_message schema with model_choice off:\n%s", got)
+	if got := string(optionalPropertiesSchema(subagentInputSchema, off(subagentModelProperty, subagentSandboxProperty))); got != subagentSchemaWithoutModel {
+		t.Fatalf("subagent schema with model_choice and sandbox_choice off:\n%s", got)
 	}
-	if got := modelChoiceSchema(subagentInputSchema, subagentModelProperty, true); string(got) != string(subagentInputSchema) {
-		t.Fatalf("subagent schema with model_choice on:\n%s", got)
+	if got := string(optionalPropertiesSchema(profileMessageInputSchema, off(profileMessageModelProperty, profileMessageSandboxProperty))); got != profileMessageSchemaWithoutModel {
+		t.Fatalf("profile_message schema with model_choice and sandbox_choice off:\n%s", got)
+	}
+	modelOnly := optionalPropertiesSchema(subagentInputSchema, []optionalProperty{{subagentModelProperty, true}, {subagentSandboxProperty, false}})
+	if want := strings.Replace(string(subagentInputSchema), subagentSandboxProperty, "", 1); string(modelOnly) != want || strings.Contains(string(modelOnly), `"sandbox"`) || !strings.Contains(string(modelOnly), `"model"`) {
+		t.Fatalf("subagent schema with model_choice on:\n%s", modelOnly)
+	}
+	both := optionalPropertiesSchema(subagentInputSchema, []optionalProperty{{subagentModelProperty, true}, {subagentSandboxProperty, true}})
+	if string(both) != string(subagentInputSchema) {
+		t.Fatalf("subagent schema with both on:\n%s", both)
 	}
 }
 

@@ -156,7 +156,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 	// added to the catalog after the subagent tool, where it always was.
 	var profileMessageTool *tools.Tool
 	if config.NativeProfileMessage != nil && messenger != nil {
-		definition, err := requireModelChoiceDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema, profileMessageModelProperty)
+		definition, err := requireOptionalPropertiesDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema, profileMessageModelProperty, profileMessageSandboxProperty)
 		if err != nil {
 			return nil, err
 		}
@@ -172,13 +172,13 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		if err != nil {
 			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
-		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames)
+		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
 		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}
 	// Last, because a child gets the tools that are already enabled here.
 	if config.NativeSubagent != nil {
-		definition, err := requireModelChoiceDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema, subagentModelProperty)
+		definition, err := requireOptionalPropertiesDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema, subagentModelProperty, subagentSandboxProperty)
 		if err != nil {
 			return nil, err
 		}
@@ -567,15 +567,18 @@ func requireTaskDefinition(config sessionfs.SessionConfig, definitions map[strin
 	return requireNativeDefinition(config, definitions, "task", taskToolID, taskInputSchema)
 }
 
-// requireModelChoiceDefinition is requireNativeDefinition for a tool with a model_choice
-// switch: the definition file may hold the schema with the model property or the one the
-// tool had before the property existed, so a file copied from an older version still loads.
-// The tool builds the schema the model sees itself (modelChoiceSchema), so the file's copy
-// is only checked.
-func requireModelChoiceDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage, property string) (tools.Definition, error) {
+// requireOptionalPropertiesDefinition is requireNativeDefinition for a tool with optional
+// properties (model, then sandbox; optionalPropertiesSchema): the definition file may hold the
+// full schema, the schema without sandbox, or the schema without sandbox and model (the one
+// the tool had before either existed), so a file copied from an older version still loads.
+// The tool builds the schema the model sees itself, so the file's copy is only checked.
+func requireOptionalPropertiesDefinition(config sessionfs.SessionConfig, definitions map[string]tools.Definition, name, id string, schema json.RawMessage, model, sandbox string) (tools.Definition, error) {
 	if definition, exists := definitions[id]; exists && definition.Name == name && definition.Source == "native" {
-		if matches, err := sameJSON(definition.InputSchema, modelChoiceSchema(schema, property, false)); err == nil && matches {
-			return definition, nil
+		older := [][]optionalProperty{{{model, true}, {sandbox, false}}, {{model, false}, {sandbox, false}}}
+		for _, properties := range older {
+			if matches, err := sameJSON(definition.InputSchema, optionalPropertiesSchema(schema, properties)); err == nil && matches {
+				return definition, nil
+			}
 		}
 	}
 	return requireNativeDefinition(config, definitions, name, id, schema)

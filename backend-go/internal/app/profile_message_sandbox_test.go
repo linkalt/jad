@@ -20,11 +20,11 @@ func TestProfileMessageTargetIsConfinedByTheCaller(t *testing.T) {
 	target := sessionfs.SessionConfig{WorkingDir: "/work/a/sub", StateDir: "/state/b", SettingPath: "/sessions/b.json", NativeExec: exec}
 
 	// No caller sandbox: the target as it is.
-	if got, err := confineTarget(nil, callerPlace, target); err != nil || got.Sandbox != nil {
+	if got, err := confineTarget(nil, callerPlace, nil, target); err != nil || got.Sandbox != nil {
 		t.Fatalf("no caller sandbox: %+v %v", got.Sandbox, err)
 	}
 	// A target without a sandbox takes the caller's, with the caller's paths.
-	got, err := confineTarget(caller, callerPlace, target)
+	got, err := confineTarget(caller, callerPlace, nil, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestProfileMessageTargetIsConfinedByTheCaller(t *testing.T) {
 	// hidden paths too.
 	own := &sessionfs.SandboxSettings{Backend: "bwrap", Tools: []string{"exec"}, ReadPaths: []string{"/"}, WritablePaths: []string{"{workspace}", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}}
 	target.Sandbox = own
-	if got, err = confineTarget(caller, callerPlace, target); err != nil {
+	if got, err = confineTarget(caller, callerPlace, nil, target); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got.Sandbox.WritablePaths, own.WritablePaths) || len(got.Sandbox.HidePaths) != 1 {
@@ -49,12 +49,12 @@ func TestProfileMessageTargetIsConfinedByTheCaller(t *testing.T) {
 	}
 	// A target in another folder writes outside the caller's workspace: refused.
 	target.WorkingDir = "/work/b"
-	if _, err := confineTarget(caller, callerPlace, target); err == nil || !strings.HasPrefix(err.Error(), sessionfs.SandboxWidensPrefix) {
+	if _, err := confineTarget(caller, callerPlace, nil, target); err == nil || !strings.HasPrefix(err.Error(), sessionfs.SandboxWidensPrefix) {
 		t.Fatalf("a wider target: %v", err)
 	}
 	// So is a target with network when the caller has none.
 	target.WorkingDir, own.Network = "/work/a", true
-	if _, err := confineTarget(caller, callerPlace, target); err == nil || !strings.Contains(err.Error(), "network") {
+	if _, err := confineTarget(caller, callerPlace, nil, target); err == nil || !strings.Contains(err.Error(), "network") {
 		t.Fatalf("a target with network: %v", err)
 	}
 }

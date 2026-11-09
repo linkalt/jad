@@ -35,7 +35,7 @@ const (
 )
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -82,6 +82,11 @@ type NativeProfileMessageSettings struct {
 	// the target answers with. Off, the tool's definition is the one it had before the model
 	// argument existed, and a call cannot name a model.
 	ModelChoice bool
+	// SandboxChoice (sandbox_choice, off by default) are the sandbox templates a call's sandbox
+	// argument may pick for the target's run; SandboxChoices are them resolved by the
+	// catalog-layout loader in the caller's session.
+	SandboxChoice  []string
+	SandboxChoices []SandboxChoice `json:"-"`
 }
 
 func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
@@ -170,7 +175,11 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{ModelChoice: modelChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
+	sandboxChoice, err := normalizeSandboxChoiceNames(fields["sandbox_choice"], settingPath, section)
+	if err != nil {
+		return nil, err
+	}
+	return &NativeProfileMessageSettings{ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

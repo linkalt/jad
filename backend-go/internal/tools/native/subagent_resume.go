@@ -96,16 +96,22 @@ func (s *subagentTool) startResume(ctx context.Context, callID, id, task string,
 	if record := source.view.worktree; record != nil && record.Changed {
 		branch = record.Branch
 	}
-	return s.startRunFrom(ctx, callID, task, arguments, execution, resumeStart{from: id, seed: seed, agent: source.agent, config: source.run.config, branch: branch})
+	return s.startRunFrom(ctx, callID, task, arguments, execution, resumeStart{from: id, seed: seed, agent: source.agent, config: source.run.config, branch: branch, sandbox: source.view.sandbox, isolated: source.view.isolated})
 }
 
 // resumeStart is what a run that continues another carries: the source run's id, its transcript
 // path, and the agent it must use. branch is the source run's worktree branch, when it
 // left one: a resume of an agent with isolation worktree starts its worktree there.
+//
+// sandbox is the sandbox choice the source run was started in, and isolated whether it worked in
+// a worktree of its own: a resume that names no sandbox runs in the same choice, and one that
+// names a choice may not change isolated (D22).
 type resumeStart struct {
 	from, seed, agent string
 	config            string
 	branch            string
+	sandbox           string
+	isolated          bool
 }
 
 // withAgent returns the call's arguments with agent set to name, so a resume that omits agent

@@ -217,6 +217,9 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 		// starts in the profile: its own runs always work in its cwd (D7).
 		config.Sandbox.ReadOnlyPaths = readOnly
 	}
+	if err := c.finishSandboxChoices(config, readOnly); err != nil {
+		return err
+	}
 	return c.resolveAgentSandboxes(config, readOnly)
 }
 

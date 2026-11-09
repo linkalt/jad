@@ -371,6 +371,9 @@ type subagentRun struct {
 	config string
 	// resumedFrom is the run this one continues from; empty for a run that does not.
 	resumedFrom string
+	// sandbox is the sandbox choice (the call's sandbox argument) the run was started in;
+	// empty for a run in its agent's own environment.
+	sandbox string
 	// caller is the remote caller the run was started for ("remote:<token id>"); "" for a
 	// local run. A remote resume may use only a run whose caller is its own.
 	caller string
@@ -407,6 +410,7 @@ type subagentRunView struct {
 	tracked                        bool
 	isolated                       bool
 	worktree                       *subagentWorktree
+	sandbox                        string
 	note                           string
 	configNote                     string
 	resumedFrom                    string
@@ -424,7 +428,7 @@ func (r *subagentRun) view() subagentRunView {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, isolated: r.isolated, worktree: r.worktreeCopy(), note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
+	return subagentRunView{id: r.id, agent: r.agent, task: r.task, state: r.state, reason: r.reason, result: r.result, resultMax: r.resultMax, cut: r.cut, changes: r.changes, files: append([]subagentFileChange(nil), r.files...), filesOmitted: r.filesOmitted, tracked: r.tracked, isolated: r.isolated, worktree: r.worktreeCopy(), sandbox: r.sandbox, note: r.note, configNote: r.configNote, resumedFrom: r.resumedFrom, processesStopped: r.processesStopped, dir: r.dir, timeoutMS: r.timeoutMS, elapsed: end.Sub(r.startedAt), startedAt: r.startedAt, endedAt: r.endedAt}
 }
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
@@ -478,7 +482,7 @@ func (r *subagentRun) manifest() subagentManifest {
 	return subagentManifest{
 		Version: subagentManifestVersion, ID: r.id, Owner: r.owner, Session: r.session, Root: r.root, Agent: r.agent, Task: r.task,
 		TimeoutMS: r.timeoutMS, State: r.state, Reason: r.reason, StartedAt: r.startedAt, EndedAt: r.endedAt,
-		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Worktree: r.worktreeCopy(), Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig, Caller: r.caller,
+		Rounds: r.result.Rounds, Tokens: r.result.Tokens, Dir: r.dir, Cut: r.cut, Changes: r.changes, Files: append([]subagentFileChange(nil), r.files...), FilesOmitted: r.filesOmitted, Tracked: r.tracked, Worktree: r.worktreeCopy(), Sandbox: r.sandbox, Config: r.config, ResumedFrom: r.resumedFrom, ResumedConfig: r.resumedConfig, Caller: r.caller,
 	}
 }
 
@@ -496,7 +500,7 @@ func restoredSubagentRun(manifest subagentManifest, store *subagentStore) *subag
 		cancel: cancel, ctx: ctx, done: done, state: manifest.State, reason: manifest.Reason, cut: manifest.Cut, changes: manifest.Changes, files: manifest.Files, filesOmitted: manifest.FilesOmitted, tracked: manifest.Tracked,
 		isolated: manifest.Worktree != nil, worktree: manifest.Worktree,
 		dir: manifest.Dir, result: SubagentResult{Rounds: manifest.Rounds, Tokens: manifest.Tokens},
-		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, resumedConfig: manifest.ResumedConfig, caller: manifest.Caller,
+		store: store, restored: true, config: manifest.Config, resumedFrom: manifest.ResumedFrom, sandbox: manifest.Sandbox, resumedConfig: manifest.ResumedConfig, caller: manifest.Caller,
 		configNote: configNoteFor(resumeStart{from: manifest.ResumedFrom, config: manifest.ResumedConfig}, manifest.Config),
 	}
 }
@@ -581,6 +585,8 @@ type subagentStart struct {
 	config string
 	// resumedFrom is the run this one continues from; see subagentRun.resumedFrom.
 	resumedFrom string
+	// sandbox is the run's sandbox choice; see subagentRun.sandbox.
+	sandbox string
 	// caller is the remote caller of the run; see subagentRun.caller.
 	caller string
 	// resumedConfig is the source's fingerprint; see subagentRun.resumedConfig.
@@ -797,6 +803,7 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		configNote:    spec.configNote,
 		config:        spec.config,
 		resumedFrom:   spec.resumedFrom,
+		sandbox:       spec.sandbox,
 		caller:        spec.caller,
 		resumedConfig: spec.resumedConfig,
 		startedAt:     m.now(),

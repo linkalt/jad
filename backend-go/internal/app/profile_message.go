@@ -150,18 +150,22 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	if bound, ok := resolved.Runner.(boundRunner); ok {
 		plan.targetMessages = bound.config.MessagesPath
 	}
-	if request.Environment != nil && request.Environment.Sandbox != nil {
+	var callerSandbox *sessionfs.SandboxSettings
+	if request.Environment != nil {
+		callerSandbox = request.Environment.Sandbox
+	}
+	if callerSandbox != nil || request.Sandbox != nil {
 		// Refused here, before a handle or a queue place is taken, when the target's own
-		// sandbox would reach more than the caller's; the run applies it again to the config
-		// it starts with.
+		// sandbox would reach more than the caller's, or the call's sandbox choice more than
+		// the target's; the run applies both again to the config it starts with.
 		bound, ok := resolved.Runner.(boundRunner)
 		if !ok {
 			return nil, errors.New("profile message needs the target's settings to confine it to the caller's sandbox")
 		}
-		if _, err := confineTarget(request.Environment.Sandbox, request.CallerPlace, bound.config); err != nil {
-			return nil, &native.ProfileSandboxError{Message: err.Error()}
+		if _, err := confineTarget(callerSandbox, request.CallerPlace, request.Sandbox, bound.config); err != nil {
+			return nil, profileSandboxError(err)
 		}
-		plan.confine = targetConfiner(request.Environment.Sandbox, request.CallerPlace)
+		plan.confine = targetConfiner(callerSandbox, request.CallerPlace, request.Sandbox)
 	}
 	if request.Compact {
 		plan.beforeRun = func(ctx context.Context) {

@@ -52,6 +52,9 @@ type subagentManifest struct {
 	// Worktree is the git worktree of a run with isolation worktree: the branch that holds
 	// its changes. Absent for any other run.
 	Worktree *subagentWorktree `json:"worktree,omitempty"`
+	// Sandbox is the sandbox template the call picked with its sandbox argument; a resume that
+	// names none runs in it again. Absent for a run in its agent's own environment.
+	Sandbox string `json:"sandbox,omitempty"`
 	// Config is the fingerprint of the agent definition the run started with; see
 	// subagentFingerprint. Absent in a manifest written before it existed, and then no
 	// config note is made.

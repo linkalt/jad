@@ -48,7 +48,7 @@ const (
 )
 
 var (
-	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree", "model_choice"}
+	nativeSubagentKeys = []string{"agents", "agents_dir", "agents_dir_missing_ok", "agents_dir_override", "result_max_bytes", "max_concurrent", "list_max_bytes", "keep_finished", "max_queued", "persist_runs", "delete_transcripts", "deny_agents", "changed_files_max", "background_writers", "max_background_writers", "max_depth", "max_runs_per_root", "max_runs_per_session", "storage_dir", "statecontext", "remotes", "remote_timeout_ms", "default_block_ms", "worktree", "model_choice", "sandbox_choice"}
 	// defaultNativeSubagentStateNames are the runs a model may still be waiting for.
 	defaultNativeSubagentStateNames = []string{"queued", "running"}
 	allowedNativeSubagentStates     = map[string]struct{}{
@@ -68,6 +68,11 @@ type NativeSubagentSettings struct {
 	// call's model argument may pick. The catalog-layout loader fills it when ModelChoice is
 	// on; nil offers none.
 	ProfileModels map[string]string
+	// SandboxChoice (sandbox_choice, off by default) are the sandbox templates a call's sandbox
+	// argument may pick; SandboxChoices are them resolved by the catalog-layout loader. Nil
+	// offers none, and the tool's definition is the one it had before the argument existed.
+	SandboxChoice  []string
+	SandboxChoices []SandboxChoice `json:"-"`
 	// ResultMaxBytes is the most child text one call returns; a longer answer is cut
 	// and the result says so.
 	ResultMaxBytes int64
@@ -334,6 +339,9 @@ func normalizeNativeSubagentSettings(setting map[string]json.RawMessage, setting
 		return nil, err
 	}
 	if settings.ModelChoice, err = bashBool(fields, "model_choice", false, settingPath+": "+section); err != nil {
+		return nil, err
+	}
+	if settings.SandboxChoice, err = normalizeSandboxChoiceNames(fields["sandbox_choice"], settingPath, section); err != nil {
 		return nil, err
 	}
 	if settings.MaxBackgroundWriters, err = configuredInteger(fields, "max_background_writers", defaultNativeSubagentMaxBackgroundWriters, 1, maxNativeSubagentConcurrent, settingPath, section); err != nil {

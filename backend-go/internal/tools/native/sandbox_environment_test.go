@@ -87,7 +87,7 @@ func TestChildEnvironmentIsNarrowedByTheCaller(t *testing.T) {
 // A sandboxed agent that writes only scratch, and cannot message a profile, is scheduled as
 // a reader; any wider write path, or profile_message, makes it a writer again.
 func TestSandboxReaderAgent(t *testing.T) {
-	reader := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, WritablePaths: []string{"{tmp}"}, PlanWritablePaths: []string{"{tmp}/x"}}
+	reader := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, Tools: []string{"exec", "tool_smith"}, WritablePaths: []string{"{tmp}"}, PlanWritablePaths: []string{"{tmp}/x"}}
 	agent := sessionfs.NativeSubagentAgent{Sandbox: reader, NoProfileMessage: true}
 	if !agent.SandboxReader() || agent.ChangesWorkspace() {
 		t.Fatal("a scratch-only sandboxed agent is not a reader")
@@ -105,12 +105,32 @@ func TestSandboxReaderAgent(t *testing.T) {
 			a.Sandbox = &s
 		},
 		"no sandbox": func(a *sessionfs.NativeSubagentAgent) { a.Sandbox = nil },
+		// exec outside the sandbox writes wherever it likes.
+		"exec not covered": func(a *sessionfs.NativeSubagentAgent) {
+			s := *reader
+			s.Tools = []string{"tool_smith"}
+			a.Sandbox = &s
+		},
+		"listed exec not covered": func(a *sessionfs.NativeSubagentAgent) {
+			s := *reader
+			s.Tools = []string{"tool_smith"}
+			a.Sandbox = &s
+			a.Tools, a.HasTools = []string{"read", "exec"}, true
+		},
 	} {
 		changed := agent
 		change(&changed)
 		if changed.SandboxReader() || !changed.ChangesWorkspace() {
 			t.Errorf("%s: still a reader", name)
 		}
+	} // An agent that lists exec but not tool_smith needs only exec covered.
+	listed := agent
+	listed.Tools, listed.HasTools = []string{"read", "exec"}, true
+	onlyExec := *reader
+	onlyExec.Tools = []string{"exec"}
+	listed.Sandbox = &onlyExec
+	if !listed.SandboxReader() {
+		t.Error("an exec-only agent in a sandbox covering exec is not a reader")
 	}
 }
 

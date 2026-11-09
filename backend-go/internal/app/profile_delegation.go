@@ -20,9 +20,8 @@ import (
 // sandbox.isolation.mode is worktree works in a git worktree of its own; a user's run of the
 // same profile never does (D7).
 type profileDelegation struct {
-	// isolation is the target profile's own sandbox.isolation, from its settings: narrowing
-	// by the caller's sandbox (D20) changes where the run may write, not whether it is
-	// isolated.
+	// isolation is the target profile's own sandbox.isolation, from its settings, or the
+	// call's sandbox choice's when that sets isolation.mode worktree.
 	isolation sessionfs.SandboxIsolation
 	// commitMessage is the message of the commit that holds what the run left.
 	commitMessage string
@@ -43,11 +42,6 @@ func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), 
 			}
 			return runner, nil
 		}
-		delegation := &profileDelegation{
-			isolation:     bound.config.Isolation,
-			commitMessage: fmt.Sprintf("jad profile run %s (message from %s)\n\n%s", bound.config.Profile, caller, message),
-			report:        report,
-		}
 		if confine != nil {
 			confined, err := confine(bound)
 			if err != nil {
@@ -57,7 +51,14 @@ func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), 
 				return confined, nil
 			}
 		}
-		bound.delegation = delegation
+		// Narrowing by the caller's sandbox (D20) changes where the run may write, not
+		// whether it is isolated; a sandbox choice whose template sets isolation.mode worktree
+		// does (chooseTargetSandbox).
+		bound.delegation = &profileDelegation{
+			isolation:     bound.config.Isolation,
+			commitMessage: fmt.Sprintf("jad profile run %s (message from %s)\n\n%s", bound.config.Profile, caller, message),
+			report:        report,
+		}
 		return bound, nil
 	}
 }

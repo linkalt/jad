@@ -22,11 +22,16 @@ const subagentToolID = "native.subagent"
 const subagentModelProperty = `
     "model":{"type":"string","description":"Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."},`
 
+// subagentSandboxProperty is the schema line of the sandbox argument; the tool has it only with
+// tools.native.subagent.sandbox_choice set.
+const subagentSandboxProperty = `
+    "sandbox":{"type":"string","description":"Sandbox template for this run: one of the sandboxes listed below. Omit to use the agent's own sandbox, or the session's when the agent names none. A template can only narrow what the run may read, write and reach; one that would widen it is refused."},`
+
 var subagentInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "task":{"type":"string","minLength":1,"description":"Self-contained instructions. The agent sees nothing of this conversation. Omit to list the agents."},
-    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},` + subagentModelProperty + `
+    "agent":{"type":"string","description":"Agent name. Optional when only one is configured."},` + subagentModelProperty + subagentSandboxProperty + `
     "resume":{"type":"string","description":"Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time this call blocks for the answer; 0 returns a run id at once. Clamped to the async policy. An agent marked [can change files; runs to its end] ignores it and runs to its end."}
   },
@@ -110,6 +115,9 @@ type subagentAgent struct {
 	// background is set when a call to this agent may run as an async handle although
 	// the agent can change files; see backgroundSafe.
 	background bool
+	// descriptions are the base descriptions of the sandbox-described tools of its pool
+	// (sandboxBaseDescriptions), for the catalog of a sandbox choice (choiceAgent).
+	descriptions map[string]string
 }
 
 // changesWorkspace reports whether a run of the agent can change the session's own files
@@ -236,6 +244,10 @@ type subagentTool struct {
 	// nil when the owner has no tools.lazy or no load_tool.
 	lazy     *tools.LazySet
 	loadTool *tools.Tool
+	// choiceCatalogs are the agents' catalogs for the sandbox choices calls made, by agent and
+	// choice name (choiceAgent); choiceMu guards them.
+	choiceMu       sync.Mutex
+	choiceCatalogs map[string]choiceCatalogs
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -307,7 +319,7 @@ func newSubagentToolRemotes(settings sessionfs.NativeSubagentSettings, parentToo
 // in its exec and tool_smith descriptions (describeAgentSandbox). Without them the agent sees
 // the session's descriptions.
 func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentTools []tools.Tool, descriptions map[string]string, toolsets map[string]subagentToolset, launcher SubagentLauncher, mcp *SubagentMCP, manager *SubagentManager, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
-	schema := modelChoiceSchema(subagentInputSchema, subagentModelProperty, settings.ModelChoice)
+	schema := optionalPropertiesSchema(subagentInputSchema, []optionalProperty{{subagentModelProperty, settings.ModelChoice}, {subagentSandboxProperty, settings.SandboxChoice != nil}})
 	validator, err := tools.CompileSchema(schema)
 	if err != nil {
 		return tools.Tool{}, fmt.Errorf("compile native subagent schema: %w", err)
@@ -363,6 +375,7 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 			return tools.Tool{}, err
 		}
 		entry.background = backgroundSafe(settings, entry, host)
+		entry.descriptions = agentDescriptions
 		runtime.agents = append(runtime.agents, entry)
 	}
 	if mcp != nil {
@@ -373,7 +386,7 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(runtime.resolvedSettings(), runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings),
+			Description: subagentDescription + subagentListText(runtime.resolvedSettings(), runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings) + sandboxChoiceText(settings.SandboxChoices),
 			InputSchema: schema,
 		},
 		Validator:        validator,
@@ -471,7 +484,16 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 		return false
 	}
 	agent, problem := s.selectAgent(arguments)
-	return problem == "" && agent.changesWorkspace()
+	if problem != "" {
+		return false
+	}
+	// Scheduling follows the sandbox the call runs in: a writer agent called in a sandbox that
+	// writes only scratch is a reader call. A refused choice changes nothing here; the call
+	// fails before it starts anything.
+	if chosen, refused := s.chooseSandbox(agent, s.callSandboxName(arguments)); refused == nil {
+		agent = chosen
+	}
+	return agent.changesWorkspace()
 }
 
 // subagentListText is the text appended to the manifest description: the agent list, or,
@@ -812,7 +834,7 @@ func expandMCPWildcard(agent, entry, serverPrefix string, byID map[string]tools.
 // that sends an empty string for "the default" is not rejected, and a blank task as a
 // request for the agent list. A negative block is no block.
 func normalizeSubagentArguments(arguments map[string]any) map[string]any {
-	for _, key := range []string{"task", "agent", "resume", "model"} {
+	for _, key := range []string{"task", "agent", "resume", "model", "sandbox"} {
 		value, ok := arguments[key].(string)
 		if !ok {
 			continue

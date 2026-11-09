@@ -22,6 +22,10 @@
             "type": "string",
             "description": "Model ID for this run, optionally with @<effort>: one of the models listed below. Omit to use the agent's model, or the session's model default when the agent names none."
           },
+          "sandbox": {
+            "type": "string",
+            "description": "Sandbox template for this run: one of the sandboxes listed below. Omit to use the agent's own sandbox, or the session's when the agent names none. A template can only narrow what the run may read, write and reach; one that would widen it is refused."
+          },
           "resume": {
             "type": "string",
             "description": "Run id (sub_...) of a finished run of this session to continue from its transcript. The new run is a copy: the old run is not changed, and the result names it as resumed_from."

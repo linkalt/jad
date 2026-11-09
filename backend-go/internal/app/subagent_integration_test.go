@@ -480,6 +480,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 
 	spec := layouttest.Spec{SessionID: "demo", CWD: workspace, ToolDefinitionPaths: definitions, ProfileModels: []string{"openai/parent"}, ToolsetExtra: sessionToolset}
+	// __sandbox_templates writes sandbox template files (name -> file content).
+	if templates, ok := agentSetting["__sandbox_templates"].(map[string]map[string]any); ok {
+		spec.SandboxTemplates = templates
+		delete(agentSetting, "__sandbox_templates")
+	}
 	// __profile_models replaces the models the profile lists, which a call's model may pick.
 	if models, ok := agentSetting["__profile_models"].([]string); ok {
 		spec.ProfileModels = models

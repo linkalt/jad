@@ -352,3 +352,67 @@ W′ check, P4. (Delegated profile runs: see the next section.)
    field for the worktree lines yet); no record of a delegated run's worktree is kept, so a server stop during such a
    run leaves its worktree (listed by `git worktree list`) unfinished; hooks run in the session's
    folder; an LSP or MCP server of the target sees the session's folder (D10); W′; P4.
+
+## P2b implementation, per-call sandbox choice (2026-11-09)
+
+P4 came next in §12, but its overlay materialiser needs bwrap ≥ 0.10 and this container has 0.9.0
+(P0), so P2b was done first.
+
+1. **Settings** (`sessionfs/sandbox_choice.go`): `tools.native.subagent.sandbox_choice` and
+   `tools.native.profile_message.sandbox_choice`, arrays of template names (D21). Absent or null
+   is off; an empty list, a duplicate, a bad name or a name without a template file is refused
+   at load, naming the tool. The layout loader (`finishSandbox`) resolves each name in the
+   session's template folder into `SandboxChoices` (`[]SandboxChoice{Name, Description,
+   Sandbox, Isolation}`), with the session's configuration paths read-only, like an agent's
+   sandbox. A template with `enabled: false` adds no confinement; its `isolation` still
+   applies. Toolset values compose into the session's settings before this, so they are
+   checked at session load.
+2. **Definitions**: `sandbox` is a schema line after `model`, offered only with the list set;
+   `optionalPropertiesSchema` replaces `modelChoiceSchema`, and
+   `requireOptionalPropertiesDefinition` accepts a definition file with the full schema, without
+   `sandbox`, or without `sandbox` and `model`. With both switches off the schema the model sees
+   equals the old one byte for byte (test). The description lists `Sandboxes for sandbox: name
+   (description); …`. The sample definition files have the full schema.
+3. **subagent** (`tools/native/sandbox_choice.go`): a remote agent with `sandbox` is refused. An
+   unknown name is `sandbox_unavailable` with `available:`. `withCallSandbox` narrows the agent's
+   sandbox by the template; an agent without one takes the template, which `childEnvironment`
+   then narrows by the calling run's environment. A widening choice is `sandbox_unavailable`
+   with `widens:`, before any run starts. The template's `isolation.mode worktree` puts a writer
+   in a worktree of its own, with the template's base. `none` cannot take an isolated agent out
+   of its worktree (`widens: isolation.mode none`). `callMayChangeFiles` applies the same
+   choice, so a writer called with a reader template is scheduled as a reader (§14.3).
+4. **Child tools (D23, partly):** the catalogs for an (agent, choice) are built on the first call
+   that picks it and cached until the agent's own catalogs are rebuilt (`choiceAgent`). They
+   differ from the agent's only in the exec and tool_smith descriptions, which tell the chosen
+   environment, and in the isolation sentence. As in P2 (item 6), confinement comes from
+   `ExecutionContext.Environment`, not from derived tools. **Departure:** no MCP servers per
+   (agent, template): an agent's MCP tools are those of its session or toolset, started where
+   P2 starts them. An agent with MCP tools stays a writer (D10). The `sandbox_choice` schema
+   text says the choice does not confine MCP servers.
+5. **Resume (D22):** the run record keeps the choice (`subagentRun.sandbox`, manifest
+   `sandbox`). A resume without `sandbox` re-resolves that name among the current choices and
+   narrows it again. A name no longer offered, or one that now widens, refuses the resume
+   (`sandbox_unavailable`, "Run … ran in sandbox …"), never falling back to the default. A resume
+   naming a choice that changes whether the run is isolated is refused (`widens: isolation.mode`).
+6. **Output:** the result's information gains `sandbox: <name>`, and the async summary a
+   `sandbox: <name>` line after the worktree line, only for a run with a choice.
+7. **profile_message:** a remote profile with `sandbox` is refused, and an unknown name is refused
+   before `Prepare`. The resolved choice travels in `ProfileMessageRequest.Sandbox` (the caller's
+   template, as D24 wants). **D24 departure, as in P2 item 8:** no `RunChoice` through
+   `Resolve`/`LoadSessionSettings` and no `lockedConfigKey` change. `confineTarget` narrows the
+   target by the caller's sandbox, then by the choice (`chooseTargetSandbox`; the template's
+   placeholders stand for the target's places). This runs in `Prepare`, so a widening choice is
+   refused before a handle or queue place (`ProfileSandboxError.Choice` → `sandbox_unavailable`
+   with `widens:`), and again in the run's `Confine` hook. A cached config is never a chosen one,
+   so the target's next run without a choice is not confined by it (test, real bwrap). A
+   template's `isolation.mode worktree` runs that message in a worktree (§9.7, `targetRunner`
+   now reads the isolation after narrowing). `none` cannot take an isolated target out of its
+   worktree.
+8. **Fix found while tracing (P2 gap):** `SandboxReader` made an agent a reader when its sandbox
+   wrote only scratch, even if the sandbox's `tools` did not cover `exec` or `tool_smith`.
+   Those tools then run outside it and can write anywhere. An agent's own sandbox could already
+   do this; a choice makes it easy to hit. Now each of `exec` and `tool_smith` that the agent
+   may have must be covered (test fails without it).
+9. **Not done:** the target's exec description still tells its own sandbox, not the chosen one
+   (as for a target confined by its caller, P2 item 6). The choice does not confine MCP servers
+   (D10, P6). Remote targets and remote sub-agents cannot take a choice.

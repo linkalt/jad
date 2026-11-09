@@ -1,6 +1,8 @@
 package native
 
 import (
+	"strings"
+
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
@@ -54,12 +56,12 @@ func describeAgentSandbox(pool []tools.Tool, sandbox *sessionfs.SandboxSettings,
 // git works in its worktree (docs/isolation-decisions.md D13).
 const isolationDescription = " Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
 
-// describeAgentIsolation is pool with isolationDescription added to exec's description; pool
-// itself is not changed.
+// describeAgentIsolation is pool with isolationDescription added to exec's description, once;
+// pool itself is not changed.
 func describeAgentIsolation(pool []tools.Tool) []tools.Tool {
 	described := append([]tools.Tool(nil), pool...)
 	for index, tool := range described {
-		if tool.Definition.ID == execToolID {
+		if tool.Definition.ID == execToolID && !strings.HasSuffix(tool.Definition.Description, isolationDescription) {
 			described[index].Definition.Description += isolationDescription
 		}
 	}

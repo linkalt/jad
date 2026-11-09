@@ -41,6 +41,9 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		if _, named := arguments["model"].(string); named {
 			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "model_unavailable", "A remote agent runs on its remote's own model; leave model out"), nil
 		}
+		if _, named := arguments["sandbox"].(string); named {
+			return tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, sandboxUnavailableCode, "A remote agent runs in its remote's own environment; leave sandbox out"), nil
+		}
 		return s.startRemote(ctx, execution.CallID, agent, task, arguments, execution)
 	}
 	if resume != "" {
@@ -100,6 +103,21 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	if agent.config, problem = withCallModel(agent.config, arguments, s.settings.ProfileModels); problem != "" {
 		return modelUnavailable(callID, problem, s.settings.ProfileModels), nil
 	}
+	sandboxName, _ := arguments["sandbox"].(string)
+	if sandboxName == "" {
+		// A resume that names no sandbox runs in the one its source ran in (D22).
+		sandboxName = from.sandbox
+	}
+	agent, sandboxRefused := s.chooseSandbox(agent, sandboxName)
+	if sandboxRefused == nil && from.from != "" && sandboxName != "" && agent.config.Isolated() != from.isolated {
+		sandboxRefused = &sandboxProblem{message: fmt.Sprintf("Sandbox %s changes whether the run works in a git worktree of its own, unlike run %s it resumes", sandboxName, from.from), widens: "isolation.mode"}
+	}
+	if sandboxRefused != nil {
+		if from.from != "" && sandboxName == from.sandbox {
+			sandboxRefused.message = fmt.Sprintf("Run %s ran in sandbox %s, which cannot be used now: %s", from.from, sandboxName, sandboxRefused.message)
+		}
+		return sandboxUnavailable(callID, sandboxRefused, s.settings.SandboxChoices), nil
+	}
 	if s.launcher == nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session"), nil
 	}
@@ -123,6 +141,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	}
 	childExecution := childExecutionContext(execution, agent.config)
 	environment, err := childEnvironment(execution, agent.config)
+	if err != nil && sandboxName != "" {
+		return sandboxUnavailable(callID, widensProblem(sandboxName, err), s.settings.SandboxChoices), nil
+	}
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusForbidden, "sandbox_widens", "The agent's sandbox reaches more than this run's, so it cannot start here: "+err.Error(),
 			tools.Information{Key: "agent", Value: agent.config.Name}), nil
@@ -160,6 +181,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	run, err := s.manager.start(subagentStart{
 		config:         config,
 		resumedFrom:    from.from,
+		sandbox:        sandboxName,
 		caller:         remoteCallerOf(ctx),
 		resumedConfig:  from.config,
 		seed:           from.seed,
@@ -360,6 +382,9 @@ func withTranscript(information []tools.Information, run subagentRunView, after 
 	}
 	if run.resumedFrom != "" {
 		information = append(information, tools.Information{Key: "resumed_from", Value: run.resumedFrom})
+	}
+	if run.sandbox != "" {
+		information = append(information, tools.Information{Key: "sandbox", Value: run.sandbox})
 	}
 	return append(information, after...)
 }

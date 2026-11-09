@@ -66,25 +66,36 @@ type sandboxTemplates struct {
 // read returns the sandbox fields of template name, without the file header, with
 // "template" set to the name for messages and the tool description.
 func (t sandboxTemplates) read(name, where string) (map[string]json.RawMessage, error) {
+	fields, _, err := t.readDescribed(name, where)
+	return fields, err
+}
+
+// readDescribed is read plus the template's description ("" when it has none).
+func (t sandboxTemplates) readDescribed(name, where string) (map[string]json.RawMessage, string, error) {
 	if t.dir == "" {
-		return nil, configError("%s: sandbox template %q: the session has no sandbox template folder (catalogs.sandbox)", where, name)
+		return nil, "", configError("%s: sandbox template %q: the session has no sandbox template folder (catalogs.sandbox)", where, name)
 	}
 	if strings.ContainsAny(name, `/\`) {
-		return nil, configError("%s: sandbox template %q: templates are flat files <folder>/<name>.json; a sub-folder is not allowed", where, name)
+		return nil, "", configError("%s: sandbox template %q: templates are flat files <folder>/<name>.json; a sub-folder is not allowed", where, name)
 	}
 	if err := catalog.ValidateIdentifier(name); err != nil {
-		return nil, configError("%s: sandbox template name %v", where, err)
+		return nil, "", configError("%s: sandbox template name %v", where, err)
 	}
 	path := filepath.Join(t.dir, name+SandboxTemplateFileSuffix)
 	t.scans.noteFile(path)
 	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, configError("%s: sandbox template %q is not in %s%s", where, name, t.dir, templateSuggestion(name, ListSandboxTemplates(t.dir)))
+		return nil, "", configError("%s: sandbox template %q is not in %s%s", where, name, t.dir, templateSuggestion(name, ListSandboxTemplates(t.dir)))
 	}
 	if err != nil {
-		return nil, configError("%s: could not be read: %v", path, err)
+		return nil, "", configError("%s: could not be read: %v", path, err)
 	}
-	return parseSandboxTemplate(path, contents)
+	var header struct {
+		Description string `json:"description"`
+	}
+	_ = json.Unmarshal(contents, &header)
+	fields, err := parseSandboxTemplate(path, contents)
+	return fields, header.Description, err
 }
 
 // parseSandboxTemplate checks one template file: an object with enabled set (D19), no

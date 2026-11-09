@@ -29,17 +29,27 @@ func subagentModelText(settings sessionfs.NativeSubagentSettings) string {
 	return " Models for model: " + strings.Join(modelChoices(settings.ProfileModels), ", ") + "."
 }
 
-// modelChoiceSchema is schema as the tool offers it: with its model property when model choice
-// is on, and without it otherwise, which is the schema the tool had before the property
-// existed. property must occur in schema exactly once.
-func modelChoiceSchema(schema json.RawMessage, property string, choice bool) json.RawMessage {
-	if choice {
-		return append(json.RawMessage(nil), schema...)
+// optionalProperty is one schema line a tool offers only when a setting turns it on (the model
+// argument with model_choice, the sandbox argument with sandbox_choice).
+type optionalProperty struct {
+	line string
+	on   bool
+}
+
+// optionalPropertiesSchema is schema as the tool offers it: without each optional property that
+// is off, which with all of them off is the schema the tool had before they existed. Each line
+// must occur in schema exactly once.
+func optionalPropertiesSchema(schema json.RawMessage, properties []optionalProperty) json.RawMessage {
+	text := string(schema)
+	for _, property := range properties {
+		if strings.Count(text, property.line) != 1 {
+			panic("optional property is not in the tool schema exactly once")
+		}
+		if !property.on {
+			text = strings.Replace(text, property.line, "", 1)
+		}
 	}
-	if strings.Count(string(schema), property) != 1 {
-		panic("model property is not in the tool schema exactly once")
-	}
-	return json.RawMessage(strings.Replace(string(schema), property, "", 1))
+	return json.RawMessage(text)
 }
 
 // withCallModel is the agent with the model a call named in place of its own. An absent model

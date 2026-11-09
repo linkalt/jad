@@ -67,13 +67,20 @@ func (a NativeSubagentAgent) ChangesWorkspace() bool {
 
 // SandboxReader reports whether the agent's own sandbox makes it a reader whatever its tools:
 // an enforcing backend (bwrap or seatbelt, as for exec's read_only) whose write paths, in both
-// forms, are all inside {tmp}, and no profile_message in its catalog, which would start a run
-// in another session (docs/isolation-sandbox-design.md §14.3). Such a child is scheduled,
-// handed off and checkpointed like a reader: by its environment, not by a promise.
+// forms, are all inside {tmp}, that covers each tool of the agent that starts processes (exec,
+// tool_smith; one it does not cover runs outside it), and no profile_message in its catalog,
+// which would start a run in another session (docs/isolation-sandbox-design.md §14.3). Such a
+// child is scheduled, handed off and checkpointed like a reader: by its environment, not by a
+// promise.
 func (a NativeSubagentAgent) SandboxReader() bool {
 	sandbox := a.Sandbox
 	if sandbox == nil || !a.NoProfileMessage || (sandbox.Backend != SandboxBackendBwrap && sandbox.Backend != SandboxBackendSeatbelt) {
 		return false
+	}
+	for _, tool := range sandboxedChangeTools {
+		if (a.ToolsUnrestricted() || containsString(a.Tools, tool)) && !sandbox.Covers(tool) {
+			return false
+		}
 	}
 	for _, path := range append(append([]string(nil), sandbox.WritablePaths...), sandbox.PlanWritablePaths...) {
 		if path != "{tmp}" && !strings.HasPrefix(path, "{tmp}/") {
@@ -153,3 +160,7 @@ func normalizeNativeSubagentWorktree(raw json.RawMessage, cwd, settingPath strin
 	}
 	return settings, nil
 }
+
+// sandboxedChangeTools are the change tools whose processes a sandbox confines when its tools
+// list names them (subagent and profile_message start runs, not processes).
+var sandboxedChangeTools = []string{"exec", "tool_smith"}
