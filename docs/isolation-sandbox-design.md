@@ -827,7 +827,25 @@ toolset `.jad/tools/<category>/<name>.json` is named by many profiles.
 - Folder: root setting `catalogs.sandbox`, default `.jad/sandbox` — one more entry in
   `layoutCatalogDefaults` (`sessionfs/layout_root.go:13-20`), one more `Layout` field
   (`sessionfs/layout_files.go:17-26`), and `sandbox` added to the list in the `catalogs.<key>` error
-  (`layout_root.go:36`).
+  (`layout_root.go:36`). The value takes one of three forms (D28):
+
+  | Value | Resolved against | When |
+  |---|---|---|
+  | absolute path (or `~/…`, through `expandHome`) | itself | at layout load |
+  | relative path (the default `.jad/sandbox`) | the root setting file's directory, like every other catalog (`resolveFrom`, `sessionfs/roots.go:928-933`) | at layout load |
+  | `{cwd}/…` | the session's `cwd` (`sessionCWD`, `sessionfs/session.go:1249-1266`), so each project can keep its own templates | per session, in `LoadSessionSettings`, since `cwd` is a session setting |
+
+  `{cwd}` is the only placeholder accepted here and only as the first element; any other `{…}` is
+  refused with the list of the three forms. A `{cwd}` folder always uses the **session's** `cwd`,
+  never a sub-agent's worktree: an isolated child's copy of the folder is the child's own writable
+  files and must not decide the child's environment. The catalog API (§14.6) lists the folder that
+  the session resolved; with `{cwd}` the editor needs a session to list it.
+- **The template folder is never writable from a sandbox.** When the resolved folder lies inside a
+  sandbox's `write.paths` (always the case for `{cwd}/.jad/sandbox` under a `{workspace}` writer), it
+  is bound read-only in that sandbox, like the protected git paths of P1 (§7.2 S1/S2). Otherwise a
+  run could edit `workspace-writer.json` and, because an edited template reloads the sessions that use
+  it (`noteFile`), widen its own next environment. Test: a sandboxed exec under `{workspace}` write
+  cannot change a `{cwd}` template (fails without the read-only bind).
 - **Flat, one file per template:** `.jad/sandbox/<name>.json`, referenced as `<name>` (the user's
   example; the same flat naming as agent folders, `sessionfs/native_subagent_dir.go:14-15`). The name
   is checked with `catalog.ValidateIdentifier` (`catalog/scan.go:17`); entries starting with `.` and
@@ -932,7 +950,8 @@ off and checkpointed like a reader — the environment-enforced replacement of t
    object; `{"template": n, …}` becomes `mergeSettingValue(template, rest)` (objects per key, arrays
    replace, `layout_merge.go:19-31`); an inline object is unchanged. Expansion first is required:
    `mergeSettingValue` replaces a string with an object instead of merging it, so expanding after the
-   merge would lose a template named on one layer and overridden on another.
+   merge would lose a template named on one layer and overridden on another. `add_*` keys are
+   concatenated across the layers, not replaced (§14.9, D26).
 2. **Merge the layers** as today (defaults → session → profile).
 3. **Normalise** the result with `normalizeSandbox` (`session.go:410-412`): every refusal, the program
    check and `jad check`'s probe (`app/check.go:24`) work unchanged, per distinct resolved sandbox.
@@ -1007,6 +1026,71 @@ exec description and standby key; a profile and two agents sharing one template 
 `sandbox.schema.json` and the template loader; a template whose `tools` lists `exec`, `tool_smith`,
 `hooks`, `mcp` and `lsp` loads for a profile whose `tools.allow` is `["read", "search"]` and for an
 agent whose catalog has none of them (D25); a name that wraps nothing (`read`, `search`) loads too.
+
+### 14.9 Per-session and per-profile paths
+
+A template is shared, but some paths belong to one session or one profile (a profile that also needs
+`{home}/.m2`, a session that keeps data in its own folder). Two mechanisms cover them without copying
+the template's lists (D26, D27).
+
+**Placeholders (D27).** Every path is filled in per call (`sandboxExpander`,
+`tools/native/sandbox.go:138-160`). Today: `{workspace}`, `{cwd}`, `{git_common_dir}`, `{tmp}`,
+`{home}`; proposed: `{system}` (§9.1) and **`{session_dir}`**, the session's state folder
+(`ExecutionContext.SessionDir`, set from `config.StateDir` at `app/bound_runner.go:161`). A sub-agent
+uses its session's `{session_dir}`; per-run scratch is `{tmp}` (P1). When `{session_dir}` lies under a
+writable path, the session's records (`messages*.jsonl`) and settings files stay read-only in the
+sandbox, for the same reason as the template folder (§14.1). Narrowing (§14.5) compares
+`{session_dir}` symbolically like `{workspace}`.
+
+**Additive keys (D26).** `paths` keeps replacing (D16), and four keys add instead:
+
+| Key | Adds to |
+|---|---|
+| `read.add_paths` | `read.paths` |
+| `write.add_paths` | `write.paths` |
+| `write.add_plan_paths` | `write.plan_paths` |
+| `add_hide_paths` | `hide_paths` (whose default is the D5 credential list) |
+
+```json
+// .jad/profiles/java/main.json: the shared template plus one cache
+{ "settings": { "sandbox": { "template": "workspace-writer",
+    "read":  { "add_paths": ["{home}/.m2"] },
+    "write": { "add_paths": ["{home}/.m2/repository"] } } } }
+
+// a session that hides one more secret, keeping the template's hidden paths
+{ "sandbox": { "template": "workspace-writer", "add_hide_paths": ["{workspace}/secrets"] } }
+```
+
+Rules:
+
+1. **Merging.** Across the template and every layer (template → defaults → session → profile, and a
+   `{template, …}` reference's own overrides), `add_*` lists are **concatenated**, not replaced, except
+   that a layer setting a key (`read.paths`, `write.paths`, `write.plan_paths`, `hide_paths`) first
+   clears the `add_*` list accumulated for that key below it (rule 3). This
+   needs a sandbox-aware merge in `layoutCompose.compose` (`layout_load.go:318-324`) instead of the
+   generic `mergeSettingValue`, which replaces arrays (`layout_merge.go:19-31`).
+2. **Folding.** After the merge, `normalizeSandbox` folds each `add_*` list into its key
+   (`paths ∪ add_paths`, a repeated entry counts once) and then applies "write implies read"
+   (D16 correction). The resolved `SandboxSettings` has no `add_*` fields, so narrowing (§14.5), the
+   exec description and the standby key see only the final lists.
+3. **Replace still works.** A layer that sets `paths` replaces everything below it, including the
+   lower layers' `add_paths`; its own `add_paths` and those of higher layers are added afterwards.
+   `hide_paths` keeps replacing too, so a profile that needs `~/.ssh` can drop it (D5); `add_hide_paths`
+   is how a layer adds a secret without removing the defaults.
+4. **Agents.** An agent's `add_*` paths are checked against the parent like any other path (§14.5): an
+   `add_paths` entry outside the parent's environment is refused with `widens:`.
+5. **Where accepted.** Everywhere a sandbox object is (inline, template file, `{template, …}`); in a
+   template file they just add to the file's own lists. Each is an array of non-blank strings; the
+   same placeholders as `paths`.
+6. **Schema.** `setting.schema.json`'s `sandbox` definition gains the four keys; the
+   loader-agreement test (`sessionfs/sandbox_test.go`) covers them.
+
+Tests: an `add_paths` on the profile adds to a template's `read.paths`; `add_*` from defaults, session
+and profile all appear; a session `paths` drops the defaults' `add_paths` but keeps the profile's;
+`add_hide_paths` keeps the D5 list; a write `add_paths` is readable; an agent `add_paths` outside the
+parent is refused; `{session_dir}` expands per session and the session's records stay read-only;
+`catalogs.sandbox` in each of its three forms, and `{cwd}` of an isolated child resolving to the
+session's `cwd`.
 
 ---
 
@@ -1312,6 +1396,9 @@ Decided: see `docs/isolation-decisions.md` (D1–D24, with corrections).
 | D22 | A resume without `sandbox` keeps the source run's recorded template | resume in the agent's default | low |
 | D23 | Child tools for a chosen template are built lazily on first use and cached per (agent, template) | build all choices at catalog time (MCP servers started for choices never made) | low |
 | D24 | `Resolve`/`LoadSessionSettings` take `sessionfs.RunChoice{ModelPath, Sandbox}` instead of a second trailing string | add a positional `sandbox string` (smaller diff, easy to swap with `modelPath`) | low |
+| D26 | Additive `read.add_paths`, `write.add_paths`, `write.add_plan_paths`, `add_hide_paths`, concatenated across layers and folded after the merge (§14.9) | arrays only replace: a layer repeats the template's whole list | low: additive |
+| D27 | `{session_dir}` placeholder (session state folder), its records read-only in a sandbox (§14.9) | none; per-run scratch through `{tmp}` only | low: additive |
+| D28 | `catalogs.sandbox` is absolute, relative to the root setting's directory, or `{cwd}/…` resolved per session; the folder is read-only in every sandbox (§14.1) | root-relative only, like the other catalogs | low |
 | D25 | `sandbox.tools` is a filter independent of the run's tool set: any tool name is accepted, a listed tool the profile or agent does not have (or that starts no child) has no effect (decided by the user; implemented) | refuse or warn when `tools` names a tool the run cannot use | low |
 
 ---

@@ -23,7 +23,7 @@ which phase, and what still needs the user.
 | D13 | accept | Agents' git works on a detached HEAD; branches and tags fail by environment, and the tool description says so. | Refused by a read-only directory, not by a tool. | P3 |
 | D14 | accept | Depend on `nsenter` to join the holder; `jad check` reports it missing and `auto` falls back to checkout. | Go cannot join a user namespace itself; a C helper is more to maintain. | P0 check, P4 |
 
-## D15–D25
+## D15–D28
 
 | # | Verdict | Decision | Reason | Phase | [USER] |
 |---|---|---|---|---|---|
@@ -38,6 +38,9 @@ which phase, and what still needs the user.
 | D23 | accept with correction | Child tools and MCP servers for a chosen template are built lazily and cached per (agent, template); `NarrowSandbox` for every (agent, choice) pair is computed at load. | Choices nobody makes start no MCP servers, while a broken environment is still caught at load. | P2b | |
 | D24 | accept with correction | `Resolve`/`LoadSessionSettings` take `sessionfs.RunChoice{ModelPath, Sandbox, Ceiling}` where `Ceiling` is the caller's resolved sandbox; `lockedConfigKey` hashes both. | The sandbox travels as a resolved object, not a string, and two adjacent strings could be swapped silently. | P2 struct + Ceiling, P2b Sandbox | |
 | D25 | accept (user) | `sandbox.tools` is independent of the run's tool set: a listed tool the profile (`tools.allow`/`deny`), toolset or agent catalog does not have is accepted and has no effect; any tool name is accepted (one that starts no child does nothing), a duplicate counts once; only a non-array, empty array or blank name is refused. | One template must serve profiles and sub-agents with different tool sets; the user ruled the list is a filter, not a check. | implemented 2026-11-09 (loader + schema) | user |
+| D26 | accept (user) | Additive `read.add_paths`, `write.add_paths`, `write.add_plan_paths` and `add_hide_paths`: concatenated across template and layers, folded into their keys by `normalizeSandbox` after the merge, before "write implies read". `paths` and `hide_paths` still replace (D16, D5). | A profile or session adds one path without copying the template's list; `add_hide_paths` adds a secret without dropping the D5 defaults. | P2 | user |
+| D27 | accept (user) | `{session_dir}` placeholder = the session's state folder (`ExecutionContext.SessionDir`); the session's records and settings stay read-only in a sandbox even under a writable path. | Per-session paths without per-session lists; a run must not rewrite its own transcript or settings. | P2 | user |
+| D28 | accept (user) | `catalogs.sandbox` is an absolute path, a path relative to the root setting's directory, or `{cwd}/…` resolved per session against the session's `cwd` (never a sub-agent's worktree); the resolved folder is bound read-only in every sandbox. | Project-local templates; a sandboxed run must not widen its own next environment by editing a template. | P2 | user |
 
 ## Corrections to the design
 
@@ -92,7 +95,7 @@ which phase, and what still needs the user.
 ## Implementable now without user input
 
 D1, D2 (normal calls stay off), D4, D5, D6, D7 (delegated scope), D8, D9, D10 (with the scheduling
-rule), D11 (with the sunset), D12, D13, D14, D15, D16, D17, D18, D19, D21, D22, D23, D24 (`RunChoice`
+rule), D11 (with the sunset), D12, D13, D14, D15, D16, D17, D18, D19, D21, D22, D23, D26, D27, D28, D24 (`RunChoice`
 and `Sandbox`; `Ceiling` waits on D20).
 
 P0, P1, P3 and P4 can start now in the order of §12, and so can P2 except two parts that wait for the
