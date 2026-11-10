@@ -104,18 +104,18 @@ type loadedConfig struct {
 }
 
 func normalizeConfig(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string) (loadedConfig, error) {
-	return normalizeConfigFor(raw, reference, cwd, environment, true)
+	return normalizeConfigFor(raw, reference, cwd, environment, true, nil)
 }
 
 // ValidateServerFile applies the loader's rules for the contents of an MCP server file. It
 // does not check what depends on the run rather than the file: that the variables named by
 // env_from and headers_from are set, and that a stdio cwd exists under the session's cwd.
 func ValidateServerFile(path string, raw []byte) error {
-	_, err := normalizeConfigFor(raw, sessionfs.MCPServerReference{ConfigPath: path}, "", nil, false)
+	_, err := normalizeConfigFor(raw, sessionfs.MCPServerReference{ConfigPath: path}, "", nil, false, nil)
 	return err
 }
 
-func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string, atRun bool) (loadedConfig, error) {
+func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerReference, cwd string, environment map[string]string, atRun bool, place *RunPlacement) (loadedConfig, error) {
 	path := reference.ConfigPath
 	fields, err := objectFields(raw, path, "expected a JSON object")
 	if err != nil {
@@ -144,7 +144,7 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 	var transport transportConfig
 	switch transportType {
 	case "stdio":
-		config, fingerprint, err := normalizeStdio(transportFields, cwd, path, environment, atRun)
+		config, fingerprint, err := normalizeStdio(transportFields, cwd, path, environment, atRun, place)
 		if err != nil {
 			return loadedConfig{}, err
 		}
@@ -214,7 +214,7 @@ func normalizeConfigFor(raw json.RawMessage, reference sessionfs.MCPServerRefere
 	}, nil
 }
 
-func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, environment map[string]string, atRun bool) (*stdioConfig, any, error) {
+func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, environment map[string]string, atRun bool, place *RunPlacement) (*stdioConfig, any, error) {
 	command, err := requiredString(fields["command"], path+": transport.command")
 	if err != nil {
 		return nil, nil, err
@@ -231,7 +231,12 @@ func normalizeStdio(fields map[string]json.RawMessage, sessionCWD, path string, 
 		}
 		serverCWD = resolvePath(sessionCWD, configuredCWD)
 	}
-	if atRun {
+	if place != nil {
+		serverCWD = place.move(serverCWD)
+	}
+	// A run's workspace may exist only inside its sandbox (an overlay mount), where the
+	// wrapper starts the server; the host cannot check it.
+	if atRun && place == nil {
 		cwdInfo, err := os.Stat(serverCWD)
 		if err != nil {
 			return nil, nil, configError(path, "stdio cwd does not exist: %s", serverCWD)

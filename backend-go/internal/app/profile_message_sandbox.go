@@ -16,8 +16,9 @@ import (
 // reach more is refused. The narrowing is applied to the runner of the target run, after the
 // target's settings are loaded, so a cached config of the target is never the narrowed one.
 //
-// Not covered: the target's stdio MCP servers are its session's (D10), and a remote target
-// runs on its own server, outside any sandbox of this one.
+// Not covered: the target's stdio MCP servers are started by its own session, in the sandbox its
+// own settings give them (D10; an isolated target's start in its worktree instead, run_mcp.go), and
+// a remote target runs on its own server, outside any sandbox of this one.
 
 // confineTarget is target narrowed by the caller's sandbox, then by the sandbox template the
 // call picked (chooseTargetSandbox); caller nil and choice nil leave it as it is.

@@ -51,7 +51,7 @@ func Login(ctx context.Context, configPath, tokenPath string, options LoginOptio
 		return fmt.Errorf("read %s: %w", configPath, fserr.UnwrapPathError(err))
 	}
 	reference := sessionfs.MCPServerReference{ConfigPath: configPath}
-	checked, err := normalizeConfigFor(raw, reference, "", nil, false)
+	checked, err := normalizeConfigFor(raw, reference, "", nil, false, nil)
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func Login(ctx context.Context, configPath, tokenPath string, options LoginOptio
 	if checked.transport.http.oauth.grant != oauthGrantAuthorizationCode {
 		return fmt.Errorf("%s: grant %s needs no sign-in", configPath, checked.transport.http.oauth.grant)
 	}
-	config, err := normalizeConfigFor(raw, reference, "", options.Environment, true)
+	config, err := normalizeConfigFor(raw, reference, "", options.Environment, true, nil)
 	if err != nil {
 		return err
 	}

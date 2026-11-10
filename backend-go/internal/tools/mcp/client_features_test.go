@@ -304,10 +304,10 @@ func TestMCPStdioServersStartThroughTheCommandWrapper(t *testing.T) {
 	manager := NewManager(currentEnvironment())
 	defer manager.Close()
 	var wrapped []string
-	wrap := func(program string, args []string, cwd string) (string, string, []string, error) {
+	wrap := func(program string, args []string, cwd string) (CommandLaunch, error) {
 		wrapped = append(wrapped, program+" in "+cwd)
 		// env stands in for a sandbox program that runs the server after it.
-		return envProgram, "sandbox", append([]string{program}, args...), nil
+		return CommandLaunch{File: envProgram, Argv0: "sandbox", Args: append([]string{program}, args...)}, nil
 	}
 	servers := []sessionfs.MCPServerReference{{ID: "probe", ConfigPath: configPath, Enabled: true}}
 	manager.SetCommandWrapper("sandbox-a", wrap)

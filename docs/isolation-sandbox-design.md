@@ -125,7 +125,7 @@ longer counts (§R1, decisions D2/D3).
 | LSP servers | never (`exec.Command`, cwd = root) | `tools/native/lsp_client.go:136-148`; pool keyed by server + root `lsp_client.go:58-85` |
 | Checkpoint shadow git (snapshot, restore) | never; own `GIT_DIR`/`GIT_WORK_TREE`, fixed config | `checkpoint/git.go:85-99`, `:159-170`; restore `checkpoint/service.go:782` |
 | Worktree git (`Create`, `Finish`) | never | `worktree/worktree.go:233-256` |
-| stdio MCP | only when `sandbox.tools` lists `mcp`; cwd is the session folder, not a worktree | `app/mcp_sampling.go:43-56`, `tools/mcp/manager.go:494` |
+| stdio MCP | only when `sandbox.tools` lists `mcp`; cwd is the session folder (an isolated run's own servers start in its worktree since P6) | `app/mcp_sampling.go:43-56`, `tools/mcp/manager.go:494` |
 | HTTP MCP | not a local process | `tools/mcp/manager.go:479` (only stdio branches into a child) |
 | tool_smith bridge calls | run in jad's process as ordinary tools | `tools/native/tool_smith_bridge.go:46-80` |
 
@@ -773,7 +773,7 @@ deleted. Base checkouts are deleted only at refcount 0 and when not the current 
 | P3 | Isolated runs sandboxed with private git (checkout materialiser): detached HEAD, private objects, `Collect` in the environment, pack `Import`, `Validate`, `base: "working"`, delegated profile runs | P2 | `worktree/*`, `subagent_worktree.go`, `subagent_call.go`, `app/bound_runner.go`, `agent.schema.json` text |
 | P4 | Overlay materialiser, holder, base cache, `/proc/<holder>/root` view, `share_paths` | P3, P0 | `worktree/{overlay,base}.go`, `tools/native/sandbox_holder.go`, `path.go`, `shell_changes.go` |
 | P5 | Remove `read_only_calls`; decide the sandbox default (implemented 2026-11-09, docs/isolation-decisions.md "P5 implementation") | P1, decisions D2/D3 | `sessionfs/native_exec_settings.go`, `removed_keys.go`, `tools/native/exec.go` text, schema |
-| P6 | Optional: APFS/reflink clone materialiser; per-run stdio MCP (D10) | P3 | `worktree`, `app/mcp_sampling.go` |
+| P6 | Optional: APFS/reflink clone materialiser; per-run stdio MCP (D10; per-run stdio MCP implemented 2026-11-10, the clone is not) | P3 | `worktree`, `app/mcp_sampling.go` |
 
 Each phase ends with its tests, `verify-go.sh` and a DECISIONS entry.
 

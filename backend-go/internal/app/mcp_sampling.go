@@ -49,8 +49,18 @@ func mcpSandboxWrapper(config sessionfs.SessionConfig) (string, mcpclient.Comman
 	if err != nil {
 		return "", nil
 	}
-	workspace := config.WorkingDir
-	return string(key) + "\x00" + workspace, func(program string, args []string, cwd string) (string, string, []string, error) {
-		return native.SandboxCommand(sandbox, workspace, cwd, program, args)
+	return string(key) + "\x00" + config.WorkingDir, sandboxCommandWrapper(sandbox, config.WorkingDir)
+}
+
+// sandboxCommandWrapper starts a stdio server in sandbox (nil: none) for a run that works in
+// workspace. A workspace that is an overlay run's worktree joins the run's holder, with or
+// without a sandbox.
+func sandboxCommandWrapper(sandbox *sessionfs.SandboxSettings, workspace string) mcpclient.CommandWrapper {
+	return func(program string, args []string, cwd string) (mcpclient.CommandLaunch, error) {
+		file, argv0, arguments, dir, err := native.SandboxCommand(sandbox, workspace, cwd, program, args)
+		if err != nil {
+			return mcpclient.CommandLaunch{}, err
+		}
+		return mcpclient.CommandLaunch{File: file, Argv0: argv0, Args: arguments, Dir: dir}, nil
 	}
 }

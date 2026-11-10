@@ -44,26 +44,31 @@ func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *con
 		return nil, nil
 	}
 	capabilities := current.capabilities()
+	route := m.callRoute()
 	var loaded []tools.Tool
 	add := func(remoteName, schema, description string, execute func(context.Context, *connection, map[string]any) (json.RawMessage, error)) error {
 		validator, err := m.schemas.get(json.RawMessage(schema))
 		if err != nil {
 			return err
 		}
+		definition := tools.Definition{
+			ID:          "mcp:" + server.ID + ":" + remoteName,
+			Source:      "mcp",
+			Server:      server.ID,
+			Name:        exposedToolName(server.ID, remoteName),
+			Description: description,
+			InputSchema: json.RawMessage(schema),
+		}
 		loaded = append(loaded, tools.Tool{
-			Definition: tools.Definition{
-				ID:          "mcp:" + server.ID + ":" + remoteName,
-				Source:      "mcp",
-				Server:      server.ID,
-				Name:        exposedToolName(server.ID, remoteName),
-				Description: description,
-				InputSchema: json.RawMessage(schema),
-			},
-			Validator: validator,
+			Definition: definition,
+			Validator:  validator,
 			// Listing and reading resources and prompts change nothing, by the protocol: a
 			// plan-mode run keeps these tools, and their calls may run beside others.
 			ReadOnly: true,
-			ExecuteOutput: func(ctx context.Context, arguments map[string]any, _ tools.ExecutionContext) (json.RawMessage, error) {
+			ExecuteOutput: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
+				if output, routed, err := route.call(ctx, definition, remoteName, arguments, execution); routed {
+					return output, err
+				}
 				return execute(ctx, current, arguments)
 			},
 		})

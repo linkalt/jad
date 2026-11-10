@@ -31,16 +31,7 @@ func executeTool(ctx context.Context, current *connection, serverID, remoteName 
 	defer cancel()
 	result, structuredContent, err := current.callTool(callCtx, &mcpSDK.CallToolParams{Name: remoteName, Arguments: arguments})
 	if err != nil {
-		errorJSON, encodeErr := tools.MarshalJSON(struct {
-			Status string `json:"status"`
-			Server string `json:"server"`
-			Tool   string `json:"tool"`
-			Error  string `json:"error"`
-		}{Status: "error", Server: serverID, Tool: remoteName, Error: safeErrorType(err)})
-		if encodeErr != nil {
-			return nil, fmt.Errorf("encode MCP tool error result: %w", encodeErr)
-		}
-		return marshalParts([]outputPart{textPart(string(errorJSON))})
+		return toolErrorResult(serverID, remoteName, safeErrorType(err))
 	}
 	if len(structuredContent) > 0 && result != nil {
 		content, err := structuredContentForResult(structuredContent, current.maxResultBytes)
@@ -50,6 +41,20 @@ func executeTool(ctx context.Context, current *connection, serverID, remoteName 
 		result.StructuredContent = content
 	}
 	return marshalParts(boundedContent(result, current.maxResultBytes))
+}
+
+// toolErrorResult is the result of a call that failed: the server, the tool and what went wrong.
+func toolErrorResult(serverID, remoteName, message string) (json.RawMessage, error) {
+	errorJSON, err := tools.MarshalJSON(struct {
+		Status string `json:"status"`
+		Server string `json:"server"`
+		Tool   string `json:"tool"`
+		Error  string `json:"error"`
+	}{Status: "error", Server: serverID, Tool: remoteName, Error: message})
+	if err != nil {
+		return nil, fmt.Errorf("encode MCP tool error result: %w", err)
+	}
+	return marshalParts([]outputPart{textPart(string(errorJSON))})
 }
 
 // structuredContentForResult converts captured structured content into the value of the

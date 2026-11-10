@@ -321,16 +321,18 @@ func sandboxPathList(paths []string) string {
 
 // SandboxCommand returns how to start program (as found on the PATH) with args inside
 // sandbox from cwd, for a caller outside this package (an MCP stdio server): the file to
-// run, the name it runs as (argv[0]) and its arguments. Without a sandbox they are the
-// program's own.
-func SandboxCommand(sandbox *sessionfs.SandboxSettings, workspace, cwd, program string, args []string) (string, string, []string, error) {
+// run, the name it runs as (argv[0]), its arguments and the folder it starts in on the host.
+// Without a sandbox they are the program's own and cwd. When workspace is an overlay run's
+// worktree the process joins the run's holder, with or without a sandbox, and starts from
+// the host's root (the holder sets cwd inside).
+func SandboxCommand(sandbox *sessionfs.SandboxSettings, workspace, cwd, program string, args []string) (string, string, []string, string, error) {
 	resolved, err := exec.LookPath(program)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 	launch, err := sandboxed(sandbox, sandboxPlace{workspace: workspace, cwd: cwd}, program, resolved, args)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
-	return launch.resolved, launch.configured, launch.args, nil
+	return launch.resolved, launch.configured, launch.args, launch.dir, nil
 }

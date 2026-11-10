@@ -25,8 +25,8 @@ entries).
 - **Last full run (`a308767`):** `go test ./internal/... ./cmd/...` passed 5,487 tests and failed 0,
   with 29 skipped, across 45 packages. `go vet`, `gofmt -l` and `git diff --check` were clean.
   The suite also passes with bwrap hidden from `PATH`.
-- **Not done:** P6 (optional), D7 (still waits on your answer; see "Needs the user" in the
-  decisions file). P4 is implemented since (next section), with the gaps its decisions list.
+- **Not done:** the clone half of P6 (optional; per-run stdio MCP is done, see the P6 section of the
+  decisions file), D7 (still waits on your answer; see "Needs the user" in the decisions file). P4 is implemented since (next section), with the gaps its decisions list.
 
 ## Using it with the sandbox off
 
@@ -107,8 +107,9 @@ D1, D6 and D14, plus design §13 (risks).
   `hooks` (U1).
 - **`read_only` scheduling** outside plan mode is judged by the session's settings, not by a
   sub-agent's own `command` sandbox. This was accepted and documented in the P5 section.
-- **D10 / P6:** MCP servers of an isolated run still act on the session folder; per-run stdio MCP
-  is P6.
+- **D10 / P6:** an isolated run starts its stdio MCP servers in its worktree (P6 implementation in the
+  decisions file); streamable HTTP servers, and stdio servers when no sandbox lists `mcp`, still reach
+  the session folder, which is why such a run stays a writer. LSP servers and hooks are as before.
 - **Remote callers:** delegated runs are not narrowed by a remote caller's sandbox (P3 completion,
   item list).
 - **macOS:** seatbelt read-deny and `{system}` are untested; there is no macOS runner.

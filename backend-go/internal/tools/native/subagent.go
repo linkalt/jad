@@ -122,9 +122,11 @@ type subagentAgent struct {
 
 // changesWorkspace reports whether a run of the agent can change the session's own files
 // (NativeSubagentAgent.ChangesWorkspace). A worktree of its own or a sandbox that writes only
-// scratch does not make an agent with MCP tools a reader: its stdio MCP servers are the
-// session's (or its toolset's) and work in the session's folder (docs/isolation-decisions.md
-// D10), so such a run is scheduled and checkpointed like any writer.
+// scratch does not make an agent with MCP tools a reader, although an isolated run starts its
+// stdio MCP servers in its worktree (run_mcp.go, D10 and P6): a streamable HTTP server is a
+// remote endpoint the run cannot move, and a stdio server whose session has no sandbox that lists
+// mcp is only started in another folder, not kept out of the session's. Such a run is scheduled
+// and checkpointed like any writer.
 func (a subagentAgent) changesWorkspace() bool {
 	if a.config.ChangesWorkspace() {
 		return true
@@ -187,6 +189,19 @@ func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
 	return nil
 }
 
+// SetRunMCP gives the subagent tool the loader that starts the stdio MCP servers of an isolated
+// run: a run in a worktree of its own (and a child that works inside it) calls its MCP tools on
+// servers started in that worktree, and never on the session's. Without it every run uses the
+// session's servers (docs/isolation-decisions.md D10).
+func (m *SubagentMCP) SetRunMCP(load RunMCPLoader) {
+	if m == nil || m.tool == nil {
+		return
+	}
+	m.tool.mu.Lock()
+	defer m.tool.mu.Unlock()
+	m.tool.runMCP = load
+}
+
 // ToolsetMCP is the MCP tools loaded for one toolset: the raw tools, as the toolset's own manager
 // listed them, and the hooks of the toolset's profile. The subagent tool gates a tool with the
 // owner's lazy set and then hooks it with Hooks, so the hooks wrap the gate as they do for the owner.
@@ -244,6 +259,9 @@ type subagentTool struct {
 	// nil when the owner has no tools.lazy or no load_tool.
 	lazy     *tools.LazySet
 	loadTool *tools.Tool
+	// runMCP starts the stdio MCP servers of an isolated run's own (SubagentMCP.SetRunMCP); nil
+	// leaves every run on the session's servers. Guarded by mu.
+	runMCP RunMCPLoader
 	// choiceCatalogs are the agents' catalogs for the sandbox choices calls made, by agent and
 	// choice name (choiceAgent); choiceMu guards them.
 	choiceMu       sync.Mutex

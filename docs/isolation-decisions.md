@@ -17,7 +17,7 @@ which phase, and what still needs the user.
 | D7 | accept as first scope **[USER]** | Sandboxing confines every profile run including the interactive session; only the private worktree is delegated-only (subagents, `profile_message` targets). | The confinement half of the request is met for every profile run; a session-lifetime worktree needs an integrate step and is additive later. | P2 sandbox, P3 delegated isolation |
 | D8 | accept | No new tool argument for a run's base branch; dependencies via resume or merge. | Resume and merge already cover dependent runs. | P3 |
 | D9 | accept | exec/tool_smith `paths` stays the working-directory gate. | An existing key unsandboxed sessions still need; refusing it under a sandbox would add a tool-level limit. | — |
-| D10 | accept with correction | An isolated run uses the session's stdio MCP servers (documented), and such a run **counts as changing the workspace** so it is never scheduled or checkpointed as a reader. Per-run servers in P6. | Without the scheduling rule an isolated run can write the session folder through an MCP server. | doc P3, fix P6 |
+| D10 | accept with correction | An isolated run uses the session's stdio MCP servers (documented), and such a run **counts as changing the workspace** so it is never scheduled or checkpointed as a reader. Per-run stdio servers for isolated runs: P6 (done 2026-11-10, see "P6 implementation"); the scheduling rule stays. | Without the scheduling rule an isolated run can write the session folder through an MCP server. | doc P3, fix P6 (done) |
 | D11 | accept with sunset | Old spellings `writable_paths`/`plan_writable_paths` accepted now; both forms set is refused; refused by name in P5. | Existing configs keep loading and the old names disappear on a schedule. | P2, refusal P5 |
 | D12 | accept | `isolation.base` defaults to `head`; `working` is opt-in. | Keeps current behaviour for existing isolated agents. | P3 |
 | D13 | accept | Agents' git works on a detached HEAD; branches and tags fail by environment, and the tool description says so. | Refused by a read-only directory, not by a tool. | P3 |
@@ -249,7 +249,7 @@ bwrap 0.9.0; nothing was run on macOS.
    toolset + agent name; `toolsetMCPUses`). Keyed by agent, not by sandbox, so an edited sandbox
    restarts the servers (the manager compares the wrapper key) instead of leaving old ones;
    the toolset's other agents share its servers as before (U4: in the toolset's sandbox).
-   Still the session's: the MCP servers of an agent without a toolset (D10, P6); the text of an
+   Still the session's: the MCP servers of an agent without a toolset (D10; an isolated run's own start in its worktree, P6 implementation); the text of an
    agent without its own sandbox when its caller is narrower at run time (a nested agent, a
    confined `profile_message` target), as the catalogs are built at load.
 7. **`ExecutionContext.Environment`** (`tools/catalog.go`): `{Sandbox}` only (holder, tmp and the
@@ -387,7 +387,7 @@ W′ check, P4. (Delegated profile runs: see the next section.)
    not run `git merge` in its own repository. Remote sub-agent results (`renderRemoteOutcome`,
    async summary) carry the same lines.
 4. **Still not done:** hooks of a delegated run run in the session's folder, and its LSP and MCP
-   servers see the session's folder (D10; per-run servers in P6); a delegated run's worktree is
+   servers see the session's folder (D10; its MCP servers are per-run since P6 implementation); a delegated run's worktree is
    not narrowed by a remote caller's sandbox (it is not known here); P4.
 
 ## P2b implementation, per-call sandbox choice (2026-11-09)
@@ -452,7 +452,7 @@ P4 came next in §12, but its overlay materialiser needs bwrap ≥ 0.10 and this
    may have must be covered (test fails without it).
 9. **Not done:** the target's exec description still tells its own sandbox, not the chosen one
    (as for a target confined by its caller, P2 item 6). The choice does not confine MCP servers
-   (D10, P6). Remote targets and remote sub-agents cannot take a choice.
+   (D10; P6 implementation starts an isolated run's stdio servers in its worktree, but the choice does not confine them). Remote targets and remote sub-agents cannot take a choice.
 
 ## P5 implementation, enforced read_only and plan mode (2026-11-09)
 
@@ -658,3 +658,74 @@ materialiser and blocked by the other. Accepted as departures: rows 3 (unconfine
 registers nothing, lives in `<git dir>/jad-worktrees/.base` whatever `worktree.dir` says (never in
 the working directory), does not show in `git worktree list` or `git status` (test:
 `TestBaseCacheIsNotAWorktreeAndStaysInTheGitDirectory`), and is collected as F2 says.
+
+## P6 implementation, per-run stdio MCP servers (2026-11-10)
+
+Scope: the per-run stdio MCP half of design §12 P6 (D10). The clone materialiser half is not
+built and has no Linux use (reflink needs btrfs or XFS, and overlay is the Linux default). Not
+covered: LSP servers and hooks of an isolated run (they still see the session's folder), remote
+targets, and the cross-host protocol (a serving server runs the same local code).
+
+1. **What changed.** A run in a git worktree of its own (an isolated sub-agent, fresh or resumed,
+   and a delegated profile run whose profile has `sandbox.isolation.mode` worktree) calls its MCP
+   tools on stdio servers started in that worktree, not on the session's. A server starts with
+   the run's workspace (the session's folder inside the worktree) as its folder, in the sandbox
+   the session's servers start in (when `sandbox.tools` lists `mcp`), and joins an overlay run's
+   holder with or without a sandbox. Its own manager (`app/run_mcp.go`) holds the connections;
+   nothing is shared with another run, a resumed run included.
+2. **Mechanism.** `ExecutionContext.MCPRoute` is a run's route to its servers. An MCP tool listed
+   by a session's manager asks it before calling its own connection (`tools/mcp/run_servers.go`),
+   so every catalog the run uses (the profile's, a child's, plan mode, `load_tool run`, a nested
+   child's) goes through it without being rebuilt. The route answers by server set key (empty for
+   the session's servers, else `ToolsetMCPKey`) and by the call's own execution: covered with a tool,
+   covered with an error (a tool the run's server stopped offering, no set was started for this
+   caller's sandbox and workspace, or the run has ended: the call fails and never reaches the
+   session's server), or not covered. `native.runMCP` (`tools/native/run_mcp.go`) owns the sets
+   of one run: a set starts once when an agent of the run (or a child that works in its worktree)
+   needs it, and all stop together before the worktree is collected (`closeWorktree`,
+   `DelegatedWorktree.Close`, and `forgetIsolatedRun` as a backstop).
+2a. **A set is for one sandbox.** A set is identified by the server set key, the workspace and the
+   effective sandbox of the agent it starts for (its `Environment.Sandbox`, as narrowed for it:
+   `childEnvironment`; a delegated run's, moved into the worktree). A child with a narrower
+   sandbox than the run's first agent gets servers of its own, started under its sandbox when that
+   lists `mcp` (`native.MCPSandbox`, the rule native tools use: a run with an environment is bound
+   by its sandbox if it lists `mcp`, by none if it does not; the session's configured sandbox
+   applies only to a run without one), and never calls the wider agent's servers; an agent with the
+   same sandbox (by content) and workspace shares the set, as do siblings and a resume's child in
+   the same run. A caller no set was started for fails, and does not fall to another agent's set or
+   the session's. A toolset's servers keep the toolset's own sandbox as well when it lists `mcp`: an
+   agent sandbox that reaches more than it does not start them (`runServerSandbox`).
+   Plan mode does not change a server's sandbox: a server is long-lived, so it has no per-call
+   plan-mode form. No plan-mode run has run servers (a delegated run is never one, and a user's
+   plan-mode run uses the session's); a sub-agent that plan mode lets run has its servers in the
+   sandbox its `exec` has, and a `profile_message` target of a plan-mode caller has the caller's
+   plan-mode sandbox, so its servers start in that form (`callerEnvironment`).
+3. **Start failure fails the run.** A sub-agent whose servers do not start is `failed` with
+   "the run's MCP servers could not be started: …" before its child runs; a delegated run returns
+   the error. Both finish their worktree as for any failed run. A run never falls back to the
+   session's servers after the loader was asked.
+4. **Which servers.** Stdio servers only (`Manager.LoadStdioTools`). A streamable HTTP server is a
+   remote endpoint with no folder: a run keeps calling the session's connection to it, and the
+   route does not cover it. A configured stdio `cwd` below the session's folder moves into the
+   worktree; one elsewhere does not; a relative one is taken from the worktree. The host does not
+   check the folder (an overlay's files exist only inside the mount).
+5. **Scheduling is unchanged.** An isolated agent with MCP tools is still a writer (D10): a stdio
+   server of a session without a sandbox that lists `mcp` is only started in the worktree, not
+   kept out of the session's folder (`TestRunMCPLoaderServersAreConfinedByTheSessionsSandbox`
+   shows an absolute path still reaches it, checkout and overlay alike), and an HTTP server may
+   change anything its endpoint owns. The cwd alone is not a boundary; the sandbox is.
+6. **No setting.** Per-run servers apply to every isolated run with stdio MCP tools. The cost is
+   one set of server processes per run (and per toolset or agent sandbox key a nested child
+   needs); a server that keeps state (an index, a browser) starts empty each time. Recorded as
+   an open gap in `backend-go/DECISIONS.md`.
+7. **Process groups.** A run's servers stop when the run ends, a start is cancelled, or a start
+   times out: each stdio server is in its own process group, and the group is killed once the
+   SDK has closed the server (a server that exits when its stdin closes ends at once). A connect
+   that is cancelled or times out kills the group immediately (`tools/mcp/stdio_kill.go`), not
+   after the SDK's 5s terminate delay. A server that ignores stdin closing and SIGTERM keeps the run's end
+   waiting for the SDK's three delays (about 15s) before the group is killed (tested, checkout and
+   overlay, sandboxed). **Not done.** After a hard stop of the server, nothing records the pids of a run's servers. A
+   server in a bwrap sandbox (`--die-with-parent`) or an overlay holder (`--die-with-parent`, own
+   pid namespace) ends with its namespace by the way those are started, not by a test of a crash;
+   an unsandboxed checkout-run server ends only if it exits when its stdin closes (untested).
+   Hooks and LSP servers of a delegated or isolated run are as before: they see the session's folder.

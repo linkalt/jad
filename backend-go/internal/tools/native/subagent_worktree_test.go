@@ -289,8 +289,9 @@ func TestIsolatedRunIsAHandleAndItsWaitNamesTheBranch(t *testing.T) {
 	}
 }
 
-// D10: a worktree of its own does not make an agent with MCP tools a reader, since its MCP
-// servers work in the session's folder; without MCP tools it is one.
+// D10: a worktree of its own does not make an agent with MCP tools a reader, although its stdio
+// servers start in the worktree (P6): a streamable HTTP server and a stdio server outside a sandbox
+// that lists mcp are not kept out of the session's folder. Without MCP tools it is one.
 func TestIsolatedAgentWithMCPToolsIsAWriter(t *testing.T) {
 	plain := isolatedAgent("fixer")
 	withMCP := isolatedAgent("mcp-fixer")

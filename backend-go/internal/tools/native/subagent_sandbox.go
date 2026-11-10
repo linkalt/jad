@@ -73,7 +73,8 @@ func describeAgentIsolation(pool []tools.Tool) []tools.Tool {
 // covers mcp, the toolset's key and the agent's name, so the servers start in that agent's
 // sandbox. Keying by the agent and not by the sandbox keeps one set of servers per agent: an
 // edited sandbox restarts them (the manager compares the wrapper key) instead of leaving the
-// old ones running. Empty for an agent without a toolset (it uses the session's servers, D10).
+// old ones running. Empty for an agent without a toolset (it uses the session's servers, D10). An
+// isolated run asks its loader for the set under this key (RunMCPRequest.Key, run_mcp.go).
 func ToolsetMCPKey(agent sessionfs.NativeSubagentAgent) string {
 	key := agent.ToolsetKey()
 	if key == "" || !agent.Sandbox.Covers("mcp") {

@@ -64,6 +64,8 @@ type Resolver struct {
 	// profileQueues holds the profile_message calls waiting for a busy target profile.
 	profileQueues profileQueueSet
 	callerRunSeq  atomic.Uint64
+	// runMCPSeq numbers the managers of isolated runs' own MCP servers (runMCPLoader).
+	runMCPSeq atomic.Uint64
 	// compactProfile replaces compactTarget in tests.
 	compactProfile func(ctx context.Context, reference, profile string) error
 	// profileUsage replaces profileMessenger.ProfileInfo in tests.
@@ -673,6 +675,8 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	// A server whose file enables sampling is answered with this run's model.
 	mcpManager.SetSampler(r.mcpSampler(config))
 	mcpManager.SetCommandWrapper(mcpSandboxWrapper(config))
+	// A run in a worktree of its own calls these servers' tools on servers of its own.
+	mcpManager.SetRouteKey("")
 	mcpTools, err := mcpManager.LoadTools(ctx, config.MCPServers, config.WorkingDir)
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)
@@ -705,6 +709,8 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err := subagentMCP.SetLazy(lazy, childLoadTool); err != nil {
 		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
+	// A run of a sub-agent in a worktree of its own starts the stdio MCP servers there (run_mcp.go).
+	subagentMCP.SetRunMCP(r.runMCPLoader(config))
 	// The subagent tool was built with the native catalog, before the MCP tools existed.
 	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
 		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
@@ -940,6 +946,7 @@ func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.Ses
 			return nil, err
 		}
 		manager.SetCommandWrapper(mcpSandboxWrapper(use.config))
+		manager.SetRouteKey(use.key)
 		mcpTools, err := manager.LoadTools(ctx, use.config.MCPServers, use.config.WorkingDir)
 		if err != nil {
 			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, use.toolset, err)})

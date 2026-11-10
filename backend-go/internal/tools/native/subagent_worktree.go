@@ -159,6 +159,8 @@ func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, sp
 	if holder != nil {
 		attachHolder(tree, holder)
 	}
+	// The run's MCP servers start in the worktree when the run needs them (startRunMCP).
+	execution.MCPRoute, _ = openRunMCP(tree, execution.WorkspaceOrigin)
 	run.setWorktree(record)
 	return tree, nil
 }
@@ -171,6 +173,8 @@ func (m *SubagentManager) openWorktree(ctx context.Context, run *subagentRun, sp
 // sandbox (collectLauncher, with execution the child's context).
 func (m *SubagentManager) closeWorktree(run *subagentRun, tree *worktree.Tree, execution tools.ExecutionContext) {
 	defer forgetIsolatedRun(tree)
+	// The run's own MCP servers stop first: nothing of the run may write while it is collected.
+	endRunMCP(tree)
 	view := run.view()
 	message := fmt.Sprintf("jad sub-agent %s (run %s)\n\n%s", view.agent, view.id, view.task)
 	finishWorktree(context.WithoutCancel(run.ctx), run, tree, func(ctx context.Context) (worktree.Outcome, error) {

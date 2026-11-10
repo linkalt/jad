@@ -579,6 +579,9 @@ type subagentStart struct {
 	changes bool
 	// worktree, when set, runs the child in a git worktree of its own.
 	worktree *subagentWorktreeStart
+	// runMCP, when set, starts the child's stdio MCP servers in the worktree it works in
+	// (startRunMCP); nil for an agent without MCP tools, or a session without the loader.
+	runMCP *subagentRunMCP
 	// limit, maxQueued, keep and resultMax are the starting session's settings.
 	limit     int
 	maxQueued int
@@ -888,6 +891,25 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 		var err error
 		if tree, err = m.openWorktree(childContext, run, &spec); err != nil {
 			m.finish(run, subagentRunFailed, SubagentResult{}, boundedReason("the worktree could not be created: "+err.Error()), spec)
+			return
+		}
+	}
+	if spec.runMCP != nil {
+		// A run in a worktree (its own, or the one of the run it is nested in) calls its MCP
+		// tools on servers started there. A server that does not start ends the run: it never
+		// falls back to the session's, which work in the session's folder.
+		if err := startRunMCP(childContext, spec.request.Execution, spec.runMCP.key, spec.runMCP.load); err != nil {
+			state, reason := subagentRunFailed, boundedReason("the run's MCP servers could not be started: "+err.Error())
+			switch {
+			case ctx.Err() != nil:
+				state, reason = subagentRunStopped, run.takeStopReason()
+			case childContext.Err() != nil:
+				state, reason = subagentRunTimedOut, ""
+			}
+			if tree != nil {
+				m.closeWorktree(run, tree, spec.request.Execution)
+			}
+			m.finish(run, state, SubagentResult{}, reason, spec)
 			return
 		}
 	}

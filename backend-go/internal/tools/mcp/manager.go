@@ -210,11 +210,27 @@ type Manager struct {
 	// names the wrapper, so a changed one reconnects the servers. Guarded by mu.
 	wrapCommand CommandWrapper
 	wrapKey     string
+	// place, when set, makes this the manager of one isolated run's servers (SetRunPlacement).
+	// routed and routeKey make this a session's manager whose tools hand a run's calls to the
+	// run's own servers (SetRouteKey). Guarded by mu.
+	place    *RunPlacement
+	routed   bool
+	routeKey string
 }
 
-// CommandWrapper returns how to start a stdio server's program with args from cwd: the
-// file to run, its argv[0] and its arguments.
-type CommandWrapper func(program string, args []string, cwd string) (string, string, []string, error)
+// CommandLaunch is how a CommandWrapper starts a stdio server: the file to run, its argv[0]
+// and arguments, and the folder the process starts in on the host. An empty Dir keeps the
+// server's own cwd; a process that joins an overlay run's mount starts from the host's root
+// and has its cwd set inside.
+type CommandLaunch struct {
+	File  string
+	Argv0 string
+	Args  []string
+	Dir   string
+}
+
+// CommandWrapper returns how to start a stdio server's program with args from cwd.
+type CommandWrapper func(program string, args []string, cwd string) (CommandLaunch, error)
 
 // SetCommandWrapper starts the stdio servers through wrap (nil: directly). key names the
 // wrapper; a server connected under another key is connected again.
@@ -387,6 +403,7 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 	})
 	seen := make(map[string]struct{}, len(remoteTools))
 	loaded := make([]tools.Tool, 0, len(remoteTools))
+	route := m.callRoute()
 	for _, remote := range remoteTools {
 		if remote == nil || strings.TrimSpace(remote.Name) == "" {
 			return nil, configError(server.ConfigPath, "MCP server %s returned a tool with no name", server.ID)
@@ -419,17 +436,21 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 		}
 		remoteName := remote.Name
 		serverID := server.ID
+		definition := tools.Definition{
+			ID:          "mcp:" + server.ID + ":" + remote.Name,
+			Source:      "mcp",
+			Server:      server.ID,
+			Name:        name,
+			Description: description,
+			InputSchema: append(json.RawMessage(nil), schema...),
+		}
 		loaded = append(loaded, tools.Tool{
-			Definition: tools.Definition{
-				ID:          "mcp:" + server.ID + ":" + remote.Name,
-				Source:      "mcp",
-				Server:      server.ID,
-				Name:        name,
-				Description: description,
-				InputSchema: append(json.RawMessage(nil), schema...),
-			},
-			Validator: validator,
+			Definition: definition,
+			Validator:  validator,
 			ExecuteOutput: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
+				if output, routed, err := route.call(ctx, definition, remoteName, arguments, execution); routed {
+					return output, err
+				}
 				// A server's elicitation request during the call asks this call's user.
 				ctx = withActiveCall(ctx, &activeCall{request: execution.RequestInteraction, identity: tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}})
 				return executeTool(ctx, current, serverID, remoteName, arguments)
@@ -448,7 +469,10 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	if err != nil {
 		return nil, configError(server.ConfigPath, "could not read MCP server config: %v", err)
 	}
-	config, err := normalizeConfig(contents, server, cwd, m.environment)
+	m.mu.Lock()
+	place := m.place
+	m.mu.Unlock()
+	config, err := normalizeConfigFor(contents, server, cwd, m.environment, true, place)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +499,7 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 
 	var transport mcpSDK.Transport
 	var stdioCommand *exec.Cmd
+	var stdioKiller *stdioKill
 	var stored *storedOAuth
 	if config.transport.stdio != nil {
 		stdio := config.transport.stdio
@@ -483,19 +508,24 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 			return nil, configError(server.ConfigPath, "failed to start MCP server %s (%s)", server.ID, safeErrorType(err))
 		}
 		cmd := exec.Command(command, stdio.args...)
+		dir := stdio.cwd
 		if wrap != nil {
-			file, argv0, arguments, err := wrap(command, stdio.args, stdio.cwd)
+			launch, err := wrap(command, stdio.args, stdio.cwd)
 			if err != nil {
 				return nil, configError(server.ConfigPath, "failed to start MCP server %s in the sandbox (%s)", server.ID, safeErrorType(err))
 			}
-			cmd = exec.Command(file, arguments...)
-			cmd.Args[0] = argv0
+			cmd = exec.Command(launch.File, launch.Args...)
+			cmd.Args[0] = launch.Argv0
+			if launch.Dir != "" {
+				dir = launch.Dir
+			}
 		}
-		cmd.Dir = stdio.cwd
+		cmd.Dir = dir
 		cmd.Env = environmentSlice(stdio.env)
 		configureStdioProcessGroup(cmd)
 		stdioCommand = cmd
-		transport = &mcpSDK.CommandTransport{Command: cmd}
+		stdioKiller = &stdioKill{command: cmd}
+		transport = stdioKiller.transport(&mcpSDK.CommandTransport{Command: cmd})
 	} else {
 		httpConfig := config.transport.http
 		var handler auth.OAuthHandler
@@ -530,7 +560,16 @@ func (m *Manager) getConnection(ctx context.Context, server sessionfs.MCPServerR
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, config.timeout)
 	stopConnect := context.AfterFunc(m.connectCtx, cancel)
+	stopKill := func() bool { return true }
+	if stdioKiller != nil {
+		// A connect that is cancelled or times out kills the server's group at once.
+		stopKill = context.AfterFunc(connectCtx, stdioKiller.kill)
+	}
 	clientSession, err := client.Connect(connectCtx, transport, nil)
+	if !stopKill() && err == nil {
+		// The connect ended after it was cancelled: the server was killed with it.
+		err = connectCtx.Err()
+	}
 	stopConnect()
 	cancel()
 	if err != nil {

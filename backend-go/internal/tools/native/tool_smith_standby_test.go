@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,12 +13,27 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// toolSmithVariable hides what differs between any two runs: the scratch directory, durations and
-// the content token.
-var toolSmithVariable = regexp.MustCompile(`tool-smith-[0-9]+|\d+ ms|token=[A-Za-z0-9_-]+`)
+// toolSmithVariable hides what differs between any two runs: the scratch directory, durations (the
+// summary's "N ms" and the information block's "nested_duration_ms: N", the time the bridge took)
+// and the content token.
+var toolSmithVariable = regexp.MustCompile(`tool-smith-[0-9]+|\d+ ms|nested_duration_ms: \d+|token=[A-Za-z0-9_-]+`)
 
 func toolSmithComparable(rendered string) string {
 	return toolSmithVariable.ReplaceAllString(rendered, "*")
+}
+
+// A bridged run reports how long its nested calls took; that is timing, not behaviour, so two
+// renderings that differ only in it compare equal, and one that differs in a count does not.
+func TestToolSmithComparableIgnoresTheBridgeDuration(t *testing.T) {
+	render := func(summary int, nested string, duration int) string {
+		return fmt.Sprintf("Script completed in %d ms\nnested_calls: %s\nnested_duration_ms: %d\ntoken=r_abc", summary, nested, duration)
+	}
+	if toolSmithComparable(render(19, "1", 0)) != toolSmithComparable(render(6, "1", 17)) {
+		t.Error("durations make two equal runs differ")
+	}
+	if toolSmithComparable(render(6, "1", 0)) == toolSmithComparable(render(6, "2", 0)) {
+		t.Error("a different nested call count compares equal")
+	}
 }
 
 func runToolSmithWith(t *testing.T, root string, settings sessionfs.NativeToolSmithSettings, nested *ToolSmithNested, code string, input map[string]any) string {

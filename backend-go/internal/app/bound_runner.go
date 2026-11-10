@@ -175,6 +175,13 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 			return session.RunResult{}, err
 		}
 		defer opened.close(ctx)
+		if r.resolver != nil {
+			// The run's MCP tools call servers started in the worktree, not the session's. A
+			// server that does not start ends the run (the deferred close finishes the worktree).
+			if err := opened.worktree.StartMCP(ctx, options.ToolExecution, r.resolver.runMCPLoader(r.config)); err != nil {
+				return session.RunResult{}, mapSessionError(err)
+			}
+		}
 	}
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
 		Enabled:        r.config.Compaction.AutoEnabled,

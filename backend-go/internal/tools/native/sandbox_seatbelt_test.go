@@ -63,7 +63,7 @@ func TestSeatbeltSandboxStartsTheChildThroughSandboxExec(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	sandbox := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendSeatbelt, Executable: "sandbox-exec", WritablePaths: []string{"{workspace}"}}
-	file, argv0, args, err := SandboxCommand(sandbox, t.TempDir(), t.TempDir(), "sh", []string{"-c", "true"})
+	file, argv0, args, _, err := SandboxCommand(sandbox, t.TempDir(), t.TempDir(), "sh", []string{"-c", "true"})
 	if err != nil {
 		t.Fatal(err)
 	}

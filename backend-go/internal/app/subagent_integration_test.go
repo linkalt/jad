@@ -405,6 +405,9 @@ type mcpFixture struct {
 	image []byte
 	// extra names more tools the server offers, each answering like lookup.
 	extra []string
+	// stdio makes the server a stdio one, the test binary itself (appStdioMCPServerFile), whose
+	// lookup tool writes a file in the folder the server works in.
+	stdio bool
 }
 
 // subagentSampleTool returns the absolute path of one sample native tool definition.
@@ -497,7 +500,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		delete(agentSetting, "__profile_models")
 	}
 	var mcpServerFile map[string]any
-	if mcp != nil {
+	if mcp != nil && mcp.stdio {
+		use := map[string]any{"deny_tools": []string{}}
+		spec.MCP = map[string]map[string]any{"m/fixture": use}
+		spec.MCPConfig = map[string]map[string]any{"m/fixture": appStdioMCPServerFile(t, "")}
+	} else if mcp != nil {
 		mcpServer := mcpSDK.NewServer(&mcpSDK.Implementation{Name: "fixture", Version: "1.0.0"}, nil)
 		for _, name := range append([]string{"lookup"}, mcp.extra...) {
 			mcpServer.AddTool(&mcpSDK.Tool{

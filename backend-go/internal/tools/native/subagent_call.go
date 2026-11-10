@@ -100,6 +100,9 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_agent", problem,
 			tools.Information{Key: "available", Value: s.agentNames()}), nil
 	}
+	// Taken before a sandbox choice changes the agent: the key names the servers the agent's
+	// tools were listed from.
+	runMCP := s.runMCPFor(agent)
 	if agent.config, problem = withCallModel(agent.config, arguments, s.settings.ProfileModels); problem != "" {
 		return modelUnavailable(callID, problem, s.settings.ProfileModels), nil
 	}
@@ -133,7 +136,8 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	changes := agent.config.ChangesFiles()
 	// A run in a worktree of its own changes no file of the session, so it is scheduled
 	// like a read-only run: it may be a handle and needs no background writer place. With
-	// MCP tools it is a writer all the same (changesWorkspace, D10).
+	// MCP tools it is a writer all the same (changesWorkspace, D10), although its stdio
+	// servers start in the worktree.
 	touches := agent.changesWorkspace()
 	depth := execution.AgentDepth
 	if s.depthExceeded(depth) {
@@ -201,6 +205,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		maxPerSession:  int(s.settings.MaxRunsPerSession),
 		changes:        changes,
 		worktree:       s.worktreeStart(agent.config, from),
+		runMCP:         runMCP,
 		note:           note,
 		configNote:     configNoteFor(from, config),
 		writerReserved: background,

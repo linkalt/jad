@@ -28,6 +28,9 @@ type isolatedRun struct {
 	// holder is the running holder of an overlay run, whose namespaces every process of the
 	// run joins; nil for a checkout, and while an overlay run has none (sandbox_holder.go).
 	holder *sandboxHolder
+	// mcp is the MCP servers of the run's own, once openRunMCP made the route to them; nil
+	// for a run without (a test, or a recovery).
+	mcp *runMCP
 }
 
 // isolatedRuns are the runs in a worktree of their own that are going, by worktree folder.
@@ -49,8 +52,14 @@ func forgetIsolatedRun(tree *worktree.Tree) {
 	isolatedRuns.Lock()
 	path := filepath.Clean(tree.Path)
 	holder := isolatedRuns.byPath[path].holder
+	mcp := isolatedRuns.byPath[path].mcp
 	delete(isolatedRuns.byPath, path)
 	isolatedRuns.Unlock()
+	// The run's servers go before its holder: a server joined to an overlay run is stopped
+	// as a process first, not as a side effect of the mount going away.
+	if mcp != nil {
+		mcp.end()
+	}
 	holder.stop()
 }
 

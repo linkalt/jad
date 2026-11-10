@@ -92,7 +92,24 @@ type ExecutionContext struct {
 	// ForNested copies it, so a nested call stays inside its parent's. Nil: each tool's own
 	// configured sandbox, as before.
 	Environment *Environment
+	// MCPRoute, when set, is how the run's calls to MCP tools reach the stdio servers started
+	// for that run alone (an isolated run works on a worktree of its own, and so do its
+	// servers). An MCP tool asks it before it calls its own connection. ForNested copies it, so
+	// a nested call of the run keeps the run's servers. Nil: every MCP tool calls its own
+	// connection, the session's.
+	MCPRoute MCPRouter
 }
+
+// MCPRouter says whether a call to the MCP tool definition, of the server set key names
+// (empty: the session's; else the key of a toolset's servers), goes to a tool of the run
+// instead, and which. execution is the call's own: the servers a run starts are for one
+// workspace and one effective sandbox, so the agent that calls (a child may run in a narrower
+// sandbox than the run's first agent) is answered by the servers started for it. covered false
+// means the run has no server of its own behind this tool (a streamable HTTP server, or a set
+// the run did not start), so the tool uses its own connection. covered true with an error means
+// the run's server cannot take the call (its tool is gone, none was started for this caller's
+// sandbox, or the run has ended): the call fails and never reaches the session's server.
+type MCPRouter func(key string, definition Definition, execution ExecutionContext) (tool Tool, covered bool, err error)
 
 // Environment is what a run's calls start in (docs/isolation-sandbox-design.md §9.4).
 type Environment struct {

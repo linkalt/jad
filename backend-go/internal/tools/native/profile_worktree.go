@@ -25,6 +25,8 @@ type DelegatedWorktree struct {
 	tree *worktree.Tree
 	// record is the file the worktree is recorded in; empty without one.
 	record string
+	// mcp is the run's own MCP servers (StartMCP); stopped before the worktree is finished.
+	mcp *runMCP
 }
 
 // DelegatedWorktreeResult is what the end of a delegated run's worktree is reported as.
@@ -80,7 +82,9 @@ func OpenDelegatedWorktree(ctx context.Context, settings *sessionfs.NativeSubage
 	if holder != nil {
 		attachHolder(tree, holder)
 	}
-	return &DelegatedWorktree{tree: tree, record: record}, nil
+	opened := &DelegatedWorktree{tree: tree, record: record}
+	execution.MCPRoute, opened.mcp = openRunMCP(tree, execution.WorkspaceOrigin)
+	return opened, nil
 }
 
 // Sandbox is sandbox for the run's calls, with its absolute paths moved from origin (the
@@ -163,6 +167,8 @@ func appendNew(list []string, value string) []string {
 // changed something. Call it once nothing of the run works in the folder any more.
 func (d *DelegatedWorktree) Close(ctx context.Context, execution tools.ExecutionContext, message string) DelegatedWorktreeResult {
 	defer forgetIsolatedRun(d.tree)
+	// The run's MCP servers stop before what the run left is collected.
+	d.mcp.end()
 	outcome, err := finishIsolatedTree(context.WithoutCancel(ctx), d.tree, message, func() worktree.Launcher { return collectLauncher(execution, d.tree) }, holderExecutable(executionSandbox(execution)), d.tree.Timeout())
 	if d.record != "" {
 		if outcome.Kept {
