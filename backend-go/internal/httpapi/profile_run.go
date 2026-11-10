@@ -33,8 +33,10 @@ type ProfileRunRequest struct {
 	// OnCommitted sees every response the run commits, on the run's goroutine.
 	OnCommitted func(event json.RawMessage)
 	// BeforeRun, when set, runs once the transcript is held and the run is registered,
-	// before the target run begins, so nothing can take the transcript in between.
-	BeforeRun func(ctx context.Context)
+	// before the target run begins, so nothing can take the transcript in between. An error
+	// fails the start like any that ends before the run: the run is finished as failed, the
+	// transcript released, OnEnd called, and StartProfileRun returns the error.
+	BeforeRun func(ctx context.Context) error
 	// OnEnd runs once the run has ended and the transcript is released, also when the start fails.
 	OnEnd func(*ProfileRun)
 	// Confine, when set, turns the target's runner into the one the run uses: the target's
@@ -140,7 +142,9 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 		}
 	}
 	if request.BeforeRun != nil {
-		request.BeforeRun(ctx)
+		if err := request.BeforeRun(ctx); err != nil {
+			return nil, err
+		}
 	}
 	run.onCommitted = request.OnCommitted
 	run.onResult = func(event json.RawMessage) { handle.final = event }

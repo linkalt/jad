@@ -231,6 +231,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	r.applyNotificationHooks(ctx, &options)
 	finish := r.runEndHook(ctx, options.OnHookReport)
 	callerRun := r.resolver.callerRunSeq.Add(1)
+	r.resolver.callerRuns.begin(callerRun)
 	defer r.resolver.callerRuns.forget(callerRun)
 	runCtx, sweepChildren := native.WithChildGroups(context.WithValue(context.WithValue(ctx, callerMessagesPathKey{}, r.config.MessagesPath), callerRunKey{}, callerRun))
 	defer sweepChildren()

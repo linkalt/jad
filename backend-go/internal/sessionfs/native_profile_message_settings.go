@@ -27,15 +27,8 @@ const DefaultNativeAgentBlockMs int64 = 120_000
 // through when max_chain is not set: the caller and one profile it reaches.
 const DefaultProfileMessageMaxChain = 2
 
-const (
-	// ProfileMessageCompactOff leaves the target's transcript as it is; On compacts it
-	// before the first message to that target in the caller's run.
-	ProfileMessageCompactOff = "off"
-	ProfileMessageCompactOn  = "on"
-)
-
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -72,12 +65,10 @@ type NativeProfileMessageSettings struct {
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
 	Remotes []string
-	// Compact is "off" (default) or "on"; on compacts the target's transcript before the
-	// first message to it in each run of the caller.
-	Compact string
-	// CompactAfter is the input tokens above which a compaction runs: the target's last
-	// completed response must have more. Zero (default) compacts any target with usage.
-	CompactAfter int64
+	// ContextTrigger (context_trigger, or the legacy compact and compact_after) is what
+	// happens to the target's transcript before the first message to it in each run of the
+	// caller: nothing (default), a compaction, or a reset of its whole history.
+	ContextTrigger ProfileMessageContextTrigger
 	// ModelChoice (model_choice, off by default) gives the tool a model argument, the model
 	// the target answers with. Off, the tool's definition is the one it had before the model
 	// argument existed, and a call cannot name a model.
@@ -153,13 +144,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	compact := ProfileMessageCompactOff
-	if raw, exists := fields["compact"]; exists {
-		if strings.TrimSpace(string(raw)) == "null" || json.Unmarshal(raw, &compact) != nil || (compact != ProfileMessageCompactOff && compact != ProfileMessageCompactOn) {
-			return nil, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
-		}
-	}
-	compactAfter, err := configuredInteger(fields, "compact_after", 0, 0, maxSafeInteger, settingPath, section)
+	contextTrigger, err := normalizeProfileMessageContextTrigger(fields, settingPath, section)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +164,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), Compact: compact, CompactAfter: compactAfter}, nil
+	return &NativeProfileMessageSettings{ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

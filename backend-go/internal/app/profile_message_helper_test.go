@@ -11,7 +11,7 @@ import (
 // Message sends one message and waits for its end the way a call without an async host
 // does: the old synchronous entry point, kept as a test helper over Prepare and Start.
 func (m profileMessenger) Message(ctx context.Context, ownerKey, target, message string, queueWait time.Duration, compact bool) (string, error) {
-	request := native.ProfileMessageRequest{OwnerKey: ownerKey, Target: target, Message: message, Compact: compact, QueueWait: queueWait}
+	request := native.ProfileMessageRequest{OwnerKey: ownerKey, Target: target, Message: message, ContextTrigger: legacyTrigger(compact, 0), QueueWait: queueWait}
 	if queueWait > 0 {
 		request.MaxQueued = 1
 	}

@@ -68,7 +68,9 @@ type Resolver struct {
 	runMCPSeq atomic.Uint64
 	// compactProfile replaces compactTarget in tests.
 	compactProfile func(ctx context.Context, reference, profile string) error
-	// profileUsage replaces profileMessenger.ProfileInfo in tests.
+	// resetProfile replaces resetTarget in tests.
+	resetProfile func(ctx context.Context, reference, profile string) error
+	// profileUsage replaces profileMessenger.transcriptTokens in tests.
 	profileUsage func(ctx context.Context, session, profile string) (*int64, error)
 	logger       *slog.Logger
 	skipped      skippedSessions

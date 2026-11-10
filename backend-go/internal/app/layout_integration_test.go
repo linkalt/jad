@@ -127,7 +127,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
 	}
 	toolDefinitions := make([]string, 0, 2)
-	for _, name := range []string{"exec", "profile_message", "async", "skill"} {
+	for _, name := range []string{"exec", "profile_message", "async", "skill", "subagent"} {
 		definition, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
 		if err != nil {
 			t.Fatal(err)

@@ -840,6 +840,10 @@ func TestProfileMessageBusyNamesTheProfileThatHoldsTheTarget(t *testing.T) {
 
 // Run ids start high so they never equal the ids boundRunner.Run hands the target runs.
 func callerRunContext(t *testing.T, f *layoutFixture, run uint64) context.Context {
+	t.Helper()
+	// The run is active, as boundRunner.Run makes it, until the test ends.
+	f.service.resolver.callerRuns.begin(run + 1000)
+	t.Cleanup(func() { f.service.resolver.callerRuns.forget(run + 1000) })
 	return context.WithValue(callerContext(t, f, context.Background()), callerRunKey{}, run+1000)
 }
 
@@ -891,6 +895,7 @@ func TestProfileMessageCompactsEachTargetOnce(t *testing.T) {
 	messenger := profileMessenger{resolver: f.service.resolver}
 	reviewerCaller := context.WithValue(context.Background(), callerMessagesPathKey{}, boundRunnerOf(t, f, "review/reviewer").config.MessagesPath)
 	reviewerCaller = context.WithValue(reviewerCaller, callerRunKey{}, uint64(1001))
+	f.service.resolver.callerRuns.begin(1001)
 	// Seed a completed response in each target, so both have usage to compact on.
 	if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
 		t.Fatal(err)
@@ -922,12 +927,29 @@ func TestProfileMessageCompactionFailureStillSendsTheMessage(t *testing.T) {
 
 func TestCallerRunTargetsForgetDropsTheEntry(t *testing.T) {
 	var c callerRunTargets
-	if !c.claim(1, "a") || c.claim(1, "a") || !c.claim(1, "b") {
+	claim := func(run uint64, target string) (claimed, ended bool) { return c.claim(run, target) }
+	c.begin(1)
+	if got, ended := claim(1, "a"); !got || ended {
+		t.Fatal("first claim must succeed")
+	}
+	if got, ended := claim(1, "a"); got || ended {
+		t.Fatal("second claim of the same target must be refused as done, not as ended")
+	}
+	if got, _ := claim(1, "b"); !got {
 		t.Fatal("claim must be true once per target")
 	}
+	c.release(1, "a")
+	if got, _ := claim(1, "a"); !got {
+		t.Fatal("a released claim must be claimable again")
+	}
 	c.forget(1)
-	if len(c.runs) != 0 || !c.claim(1, "a") {
+	if len(c.runs) != 0 {
 		t.Fatalf("entry survived forget: %v", c.runs)
+	}
+	// A run that ended (a background sub-agent's call after it) is refused and leaves nothing
+	// behind: no entry that nothing would forget.
+	if got, ended := claim(1, "a"); got || !ended || len(c.runs) != 0 {
+		t.Fatalf("claim after forget = %v, ended %v, runs %v; want refused as ended with no entry", got, ended, c.runs)
 	}
 }
 

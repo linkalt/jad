@@ -20,6 +20,29 @@ import (
 // target has a last completed response to read tokens from.
 const compactUsageJSON = `"usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6},`
 
+// legacyTrigger is the context trigger the legacy compact (on or off) and compact_after map to.
+func legacyTrigger(compact bool, after int64) sessionfs.ProfileMessageContextTrigger {
+	action := sessionfs.ProfileMessageContextOff
+	if compact {
+		action = sessionfs.ProfileMessageContextCompact
+	}
+	return sessionfs.ProfileMessageContextTrigger{Action: action, After: after}
+}
+
+// writeTargetTranscript writes the messages.jsonl of the fixture's review/reviewer target and
+// returns its path.
+func writeTargetTranscript(t *testing.T, f *layoutFixture, body string) string {
+	t.Helper()
+	messages := filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "messages.jsonl")
+	if err := os.MkdirAll(filepath.Dir(messages), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(messages, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return messages
+}
+
 // compactAfterTarget writes the target's transcript with the given last response input tokens
 // (nil writes none, so the target has no completed response) and reports whether a message
 // with the given gate settings compacts it.
@@ -27,16 +50,10 @@ func compactAfterTarget(t *testing.T, tokens *int, compact bool, compactAfter in
 	t.Helper()
 	f := newLayoutFixture(t)
 	if tokens != nil {
-		messages := filepath.Join(f.cwd, ".jad", "state", "demo", "review", "reviewer", "messages.jsonl")
-		if err := os.MkdirAll(filepath.Dir(messages), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(messages, []byte(profileUsageTranscript(*tokens)), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeTargetTranscript(t, f, profileUsageTranscript(*tokens))
 	}
 	calls := countCompactions(f)
-	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: compact, CompactAfter: compactAfter}
+	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: legacyTrigger(compact, compactAfter)}
 	if _, err := (profileMessenger{resolver: f.service.resolver}).send(callerRunContext(t, f, 1), request); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +95,7 @@ func TestProfileMessageCompactAfterRaisedInTheSameCallerRunStillCompacts(t *test
 	}
 	send := func() {
 		t.Helper()
-		request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true, CompactAfter: 10}
+		request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: legacyTrigger(true, 10)}
 		if _, err := messenger.send(callerRunContext(t, f, 1), request); err != nil {
 			t.Fatal(err)
 		}
@@ -97,9 +114,9 @@ func TestProfileMessageCompactAfterRaisedInTheSameCallerRunStillCompacts(t *test
 
 func TestProfileMessageQueuedCompactAfterRaisedInTheSameCallerRunStillCompacts(t *testing.T) {
 	p := newPMFixture(t, func(settings *sessionfs.NativeProfileMessageSettings) {
-		settings.Compact = sessionfs.ProfileMessageCompactOn
-		settings.CompactAfter = 10
+		settings.ContextTrigger = legacyTrigger(true, 10)
 	})
+	writeTargetTranscript(t, p.f, profileUsageTranscript(5))
 	calls := countCompactions(p.f)
 	// servedAtCompaction records how many messages the target had served when each compaction ran.
 	var servedAtCompaction []int
@@ -160,7 +177,7 @@ func TestProfileMessageMissingTargetTranscriptDoesNotCompactOrFailTheMessage(t *
 	f := newLayoutFixture(t)
 	f.captureBodies = true
 	calls := countCompactions(f)
-	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true}
+	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: legacyTrigger(true, 0)}
 	answer, err := profileMessenger{resolver: f.service.resolver}.send(callerRunContext(t, f, 1), request)
 	if err != nil || !strings.Contains(answer, "ok") {
 		t.Fatalf("answer %q, error %v; want the message sent", answer, err)
@@ -177,11 +194,12 @@ func TestProfileMessageUsageReadErrorSkipsCompactionAndSendsTheMessage(t *testin
 	f.captureBodies = true
 	var logs lockedBuffer
 	f.service.resolver.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	writeTargetTranscript(t, f, profileUsageTranscript(5))
 	f.service.resolver.profileUsage = func(context.Context, string, string) (*int64, error) {
 		return nil, errors.New("usage unreadable")
 	}
 	calls := countCompactions(f)
-	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", Compact: true}
+	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: legacyTrigger(true, 3)}
 	answer, err := profileMessenger{resolver: f.service.resolver}.send(callerRunContext(t, f, 1), request)
 	if err != nil || !strings.Contains(answer, "ok") {
 		t.Fatalf("answer %q, error %v; want the message sent", answer, err)

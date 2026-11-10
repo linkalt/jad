@@ -76,7 +76,17 @@ func NewJournal(path string, durability DurabilityMode) (*Journal, error) {
 	return &Journal{path: filepath.Clean(path), durability: durability}, nil
 }
 
-// ReplaceRecords atomically replaces the transcript with compact JSONL records.
+// PublishedError is the error of a ReplaceRecords whose rename already replaced the transcript
+// and whose later durability step (the directory sync) failed: the new content is in place for
+// every reader of this process, but whether it survives a crash is unknown. Any other error from
+// ReplaceRecords means the transcript was not replaced. Its text is the cause's.
+type PublishedError struct{ Err error }
+
+func (e *PublishedError) Error() string { return e.Err.Error() }
+func (e *PublishedError) Unwrap() error { return e.Err }
+
+// ReplaceRecords atomically replaces the transcript with compact JSONL records. A *PublishedError
+// says the replacement happened although the call failed; every other error says it did not.
 func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	if j == nil {
 		return errors.New("transcript journal is not initialized")
@@ -125,7 +135,7 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	j.generation++
 	if j.durability != DurabilityProcess {
 		if err := j.syncDirectory(filepath.Dir(j.path)); err != nil {
-			return fmt.Errorf("sync transcript directory: %w", err)
+			return &PublishedError{Err: fmt.Errorf("sync transcript directory: %w", err)}
 		}
 	}
 	return nil

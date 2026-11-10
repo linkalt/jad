@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/remote"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 )
 
@@ -65,6 +66,18 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 		return tools.ExecutionError(callID, tools.StatusForbidden, "remote_not_allowed",
 			fmt.Sprintf("Profile %s is not among the profiles this session may reach on remote %s", target.Scope(), name)), nil
 	}
+	// context_trigger acts on this server's profiles only: a remote server's history is never
+	// changed on a caller's behalf. A reset therefore fails closed (the message is not sent, so
+	// it cannot be answered from a history the caller meant to drop); a compact is not applied
+	// and the result says so.
+	var notes []tools.Information
+	switch p.settings.ContextTrigger.Action {
+	case sessionfs.ProfileMessageContextReset:
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "context_trigger_unsupported",
+			fmt.Sprintf("Profile %s is on a remote server, and tools.native.profile_message.context_trigger action reset cannot reset a remote profile. Nothing was sent", reference)), nil
+	case sessionfs.ProfileMessageContextCompact:
+		notes = []tools.Information{{Key: "context_trigger", Value: "compact was not applied: a remote profile is never compacted by a caller's context_trigger"}}
+	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments, execution)
@@ -74,6 +87,7 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 		message:   message,
 		hops:      execution.RemoteHops + 1,
 		timeout:   time.Duration(p.settings.TimeoutMs) * time.Millisecond,
+		notes:     notes,
 	}
 	if !handled {
 		return p.runInline(ctx, callID, reference, plan)
@@ -97,7 +111,11 @@ type remotePlan struct {
 	message   string
 	hops      int
 	timeout   time.Duration
+	notes     []tools.Information
 }
+
+// Notes implements ProfileMessageNotes.
+func (p *remotePlan) Notes() []tools.Information { return p.notes }
 
 // Start sends the message. It returns an error only when the remote refused it or could not be
 // reached before an answer; a message sent and then lost is the run's outcome.

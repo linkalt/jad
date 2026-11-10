@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/sessiongate"
+	"jad/backend-go/internal/transcript"
 )
 
 // ErrRunActive is what ResetProfile returns while a run of the profile is going. It carries
@@ -66,13 +68,25 @@ func (r *Resolver) ResetProfile(ctx context.Context, reference, profile string) 
 	if err != nil {
 		return err
 	}
-	if err := resolved.Session.Reset(ctx); err != nil {
+	return r.resetResolved(ctx, resolved)
+}
+
+// resetResolved resets the transcript of a resolved profile and then its session's children.
+// The caller holds whatever keeps other writers out: ResetProfile its gate and locks, a
+// profile_message reset the target's run lock (resetTarget).
+func (r *Resolver) resetResolved(ctx context.Context, resolved httpapi.ResolvedMutation) error {
+	err := resolved.Session.Reset(ctx)
+	// A reset whose publish succeeded but could not be confirmed durable has cleared the history
+	// all the same: the children were started from it, so they are stopped as for a clean reset,
+	// and the error still goes to the caller.
+	var published *transcript.PublishedError
+	if err != nil && !errors.As(err, &published) {
 		return err
 	}
 	// The history the handles were started from is gone, so their results have no use and
 	// would only keep costing.
 	r.ResetSessionChildren(resolved.Reference, resolved.Profile)
-	return nil
+	return err
 }
 
 // maintenanceReady is the error for a resolved session that has no maintenance provider. It is

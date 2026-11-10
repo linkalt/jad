@@ -277,6 +277,56 @@ func TestRemoteProfileMessageAnswersWithinBlockMs(t *testing.T) {
 	}
 }
 
+// context_trigger acts on this server's profiles only: a remote server's history is never
+// changed on a caller's behalf. A reset therefore fails closed (nothing is sent, the peer is
+// asked for nothing, and the error says a reset was not done), and a compact is not applied
+// and the result says so; the message still goes. Off carries no note.
+func TestRemoteProfileMessageContextTriggerIsNeverSilentlyIgnored(t *testing.T) {
+	for _, after := range []int64{0, 5} {
+		f := newRemoteMessageFixture(t, peerGrant, func(s *sessionfs.NativeProfileMessageSettings) {
+			s.ContextTrigger = sessionfs.ProfileMessageContextTrigger{Action: sessionfs.ProfileMessageContextReset, After: after}
+		})
+		out := f.send(t, remoteTarget, 5000, remoteCaller)
+		if !strings.Contains(out, "context_trigger_unsupported") || !strings.Contains(out, "cannot reset a remote profile") || !strings.Contains(out, "Nothing was sent") {
+			t.Fatalf("reset after %d: result:\n%s", after, out)
+		}
+		if len(f.peer.backend.messages) != 0 || len(f.peer.backend.infos) != 0 {
+			t.Fatalf("reset after %d: the peer was contacted: messages %+v infos %+v", after, f.peer.backend.messages, f.peer.backend.infos)
+		}
+	}
+	for action, note := range map[string]bool{sessionfs.ProfileMessageContextCompact: true, sessionfs.ProfileMessageContextOff: false} {
+		f := newRemoteMessageFixture(t, peerGrant, func(s *sessionfs.NativeProfileMessageSettings) {
+			s.ContextTrigger = sessionfs.ProfileMessageContextTrigger{Action: action, After: 5}
+		})
+		go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "kept"}) }()
+		out := f.send(t, remoteTarget, 5000, remoteCaller)
+		if !strings.Contains(out, "kept") {
+			t.Fatalf("%s: result:\n%s", action, out)
+		}
+		if got := strings.Contains(out, "compact was not applied"); got != note {
+			t.Fatalf("%s: note present = %v, want %v:\n%s", action, got, note, out)
+		}
+		if got := f.peer.backend.messages; len(got) != 1 || got[0] != (remoteapi.MessageRequest{Session: "main", Profile: "review/reviewer", Message: "check it", Hops: 1, Caller: "remote:peer"}) {
+			t.Fatalf("%s: what the peer saw: %+v", action, got)
+		}
+		if len(f.peer.backend.infos) != 0 {
+			t.Fatalf("%s: the peer was asked for profile info: %+v", action, f.peer.backend.infos)
+		}
+	}
+}
+
+// The note reaches an async handle's start result too, not only an inline answer.
+func TestRemoteProfileMessageCompactNoteOnAnAsyncHandle(t *testing.T) {
+	f := newRemoteMessageFixture(t, peerGrant, func(s *sessionfs.NativeProfileMessageSettings) {
+		s.ContextTrigger = sessionfs.ProfileMessageContextTrigger{Action: sessionfs.ProfileMessageContextCompact}
+	})
+	out := f.send(t, remoteTarget, 1, remoteCaller)
+	if !strings.Contains(out, "compact was not applied") || !strings.Contains(out, "state: running") {
+		t.Fatalf("handle start result:\n%s", out)
+	}
+	f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "late"})
+}
+
 func TestRemoteProfileMessageDefaultSessionAndExplicitSession(t *testing.T) {
 	f := newRemoteMessageFixture(t, peerGrant, nil)
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "a"}) }()

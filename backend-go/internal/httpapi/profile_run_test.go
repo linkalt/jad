@@ -347,7 +347,7 @@ func TestStartProfileRunPanicBeforeLaunchFailsTheRunAndReleasesTheTranscript(t *
 		}()
 		_, _ = f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{
 			Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello",
-			BeforeRun: func(context.Context) { panic("before run failed") },
+			BeforeRun: func(context.Context) error { panic("before run failed") },
 		})
 	}()
 	if _, ok := f.handler.ProfileRuns().RunningProfileRunCaller("canonical", "dev"); ok {
@@ -456,8 +456,45 @@ func TestProfileRunOnEndFiresOnceWhenTheStartFails(t *testing.T) {
 		}()
 		_, _ = f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{
 			Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook,
-			BeforeRun: func(context.Context) { panic("before run failed") },
+			BeforeRun: func(context.Context) error { panic("before run failed") },
 		})
 	}()
 	recorder.awaitOnEnd(t, "failed")
+}
+
+// A BeforeRun that fails ends the start: the error comes back, the run is failed and gone from
+// the registry's running set, the transcript is released, OnEnd fires once, and the target run
+// itself never began.
+func TestStartProfileRunBeforeRunErrorFailsTheStartWithoutRunning(t *testing.T) {
+	f := newProfileRunFixture(t, 0)
+	recorder := newOnEndRecorder(t, f)
+	want := errors.New("before run refused")
+	run, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{
+		Reference: "canonical", Profile: "dev", Caller: "c", Message: "hello", OnEnd: recorder.hook,
+		BeforeRun: func(context.Context) error { return want },
+	})
+	if !errors.Is(err, want) || run != nil {
+		t.Fatalf("StartProfileRun = %v, %v; want the BeforeRun error and no run", run, err)
+	}
+	if _, ok := f.handler.ProfileRuns().RunningProfileRunCaller("canonical", "dev"); ok {
+		t.Fatal("the run is still running")
+	}
+	if status := f.handler.runs.SessionRuns("canonical", "").ByProfile["dev"].Status; status != "failed" {
+		t.Fatalf("run status = %q, want failed", status)
+	}
+	recorder.awaitOnEnd(t, "failed")
+	select {
+	case <-f.started:
+		t.Fatal("the target run began although BeforeRun failed")
+	default:
+	}
+	// A message right after finds the profile free.
+	next, err := f.handler.ProfileRuns().StartProfileRun(context.Background(), ProfileRunRequest{Reference: "canonical", Profile: "dev", Caller: "c", Message: "again"})
+	if err != nil {
+		t.Fatalf("a start after the failed one: %v", err)
+	}
+	if next != nil {
+		next.Stop()
+		awaitProfileRunDone(t, next)
+	}
 }

@@ -65,6 +65,27 @@ type ProfileFailedError struct{ Message string }
 
 func (e *ProfileFailedError) Error() string { return "profile run failed" }
 
+// ContextTriggerError is a configured context_trigger action that was due and could not be
+// carried out. The message is not sent: a reset that failed must not let the target answer
+// from the history it was asked to drop. Reason is client-safe wording (the details, which
+// may name files, go to the log); Err is the cause, for errors.Is and logs only.
+type ContextTriggerError struct {
+	// Action is sessionfs.ProfileMessageContextReset or ProfileMessageContextCompact.
+	Action string
+	Reason string
+	Err    error
+}
+
+func (e *ContextTriggerError) Error() string {
+	text := "context_trigger " + e.Action + " could not run: " + e.Reason
+	if e.Err != nil {
+		text += ": " + e.Err.Error()
+	}
+	return text
+}
+
+func (e *ContextTriggerError) Unwrap() error { return e.Err }
+
 // ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
 // by the user while the caller was still waiting.
 var ErrProfileStopped = errors.New("profile run was stopped")
@@ -152,12 +173,11 @@ type ProfileMessageRequest struct {
 	// Model is the model ID (optionally @<effort>) the target runs this message with; empty
 	// runs the target's model default.
 	Model string
-	// Compact asks for the target's transcript to be compacted before the run, once per
-	// caller run and target.
-	Compact bool
-	// CompactAfter is the input tokens above which Compact compacts: only when the target's
-	// last completed response had more than this many. Zero compacts any target with usage.
-	CompactAfter int64
+	// ContextTrigger asks for the target's transcript to be compacted or reset before the
+	// run, once per caller run and target. Its After, when above zero, is the input tokens
+	// of the target's context (read from its messages.jsonl) that must be passed; zero acts
+	// on any target whose messages.jsonl has content. The zero value does nothing.
+	ContextTrigger sessionfs.ProfileMessageContextTrigger
 	// QueueWait is the longest the message may wait for a busy target; zero sets no limit
 	// beyond Timeout. Timeout bounds the whole life of the message, queue time included.
 	QueueWait time.Duration
@@ -278,15 +298,24 @@ type ProfileMessageTranscripts interface {
 	Transcripts() (target, caller string)
 }
 
+// ProfileMessageNotes is optionally implemented by a plan: extra information keys its result
+// carries, for what the plan did not do as configured.
+type ProfileMessageNotes interface {
+	Notes() []tools.Information
+}
+
 // transcriptInformation is the transcript key (the target's file) and caller_transcript key
-// of a plan that knows its files.
+// of a plan that knows its files, then the plan's notes.
 func transcriptInformation(plan ProfileMessagePlan) []tools.Information {
+	var information []tools.Information
+	if noted, ok := plan.(ProfileMessageNotes); ok {
+		information = append(information, noted.Notes()...)
+	}
 	known, ok := plan.(ProfileMessageTranscripts)
 	if !ok {
-		return nil
+		return information
 	}
 	target, caller := known.Transcripts()
-	var information []tools.Information
 	if target != "" {
 		information = append(information, tools.Information{Key: "transcript", Value: target})
 	}
@@ -428,20 +457,19 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments, execution)
 	request := ProfileMessageRequest{
-		Blocking:     !handled || block > 0,
-		OwnerKey:     execution.SessionKey,
-		Session:      session,
-		Target:       target,
-		Message:      message,
-		Model:        model,
-		Compact:      p.settings.Compact == sessionfs.ProfileMessageCompactOn,
-		CompactAfter: p.settings.CompactAfter,
-		QueueWait:    time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
-		Timeout:      time.Duration(p.settings.TimeoutMs) * time.Millisecond,
-		MaxQueued:    p.settings.MaxQueued,
-		Environment:  callerEnvironment(execution),
-		CallerPlace:  sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
-		Sandbox:      choice,
+		Blocking:       !handled || block > 0,
+		OwnerKey:       execution.SessionKey,
+		Session:        session,
+		Target:         target,
+		Message:        message,
+		Model:          model,
+		ContextTrigger: p.settings.ContextTrigger,
+		QueueWait:      time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
+		Timeout:        time.Duration(p.settings.TimeoutMs) * time.Millisecond,
+		MaxQueued:      p.settings.MaxQueued,
+		Environment:    callerEnvironment(execution),
+		CallerPlace:    sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
+		Sandbox:        choice,
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless
@@ -583,6 +611,10 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 	var remoteFailed *RemoteFailedError
 	if errors.As(err, &remoteFailed) {
 		return remoteFailed.Code, remoteFailed.Message
+	}
+	var trigger *ContextTriggerError
+	if errors.As(err, &trigger) {
+		return "context_trigger_failed", fmt.Sprintf("Profile %s was not sent the message: the context_trigger %s of its history could not run (%s). The message was not sent, and the reset may need attention: check the profile before relying on its history", profile, trigger.Action, trigger.Reason)
 	}
 	message = fmt.Sprintf("Profile %s failed", profile)
 	var failed *ProfileFailedError

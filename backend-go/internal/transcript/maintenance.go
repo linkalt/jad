@@ -700,6 +700,21 @@ func backupTranscript(source, destination, mode string, minTurns int, durability
 	return nil
 }
 
+// Reset deletes the history and everything derived from it. A *PublishedError (use errors.As)
+// from it means the history is in fact gone: only the durability of the publish is unconfirmed.
+// Publishing the empty transcript
+// is the commit point and comes last: every file the reset removes goes first, and each removal
+// ignores a file that is already gone, so a failure, or a crash, before the commit leaves the
+// history in place with only caches missing, and running Reset again finishes the job. The
+// other order (empty transcript first) left a failure between the two with an empty history and
+// leftover caches that nothing retried: a caller that treats an empty transcript as nothing to
+// reset never came back to them.
+//
+// What a failed Reset can have removed before the commit is data the reset was asked to delete
+// anyway (the caches, the transcript backup, the deleted-history archive); the history itself
+// is untouched until the one atomic publish. The compaction cache goes first: it can hold the
+// retained turns of a compacted history, and once the transcript is published empty a cache that
+// survived would still be served as history.
 func (s *TurnStore) Reset() error {
 	if s == nil || s.journal == nil {
 		return errors.New("turn store is not initialized")
@@ -712,12 +727,7 @@ func (s *TurnStore) Reset() error {
 	if len(s.activeTurns) != 0 {
 		return errors.New("cannot reset while response turns are active")
 	}
-	// The cache goes first: once the transcript is published empty, a cache that
-	// survived would still be served as history.
 	if err := s.removeCompactionCaches(); err != nil {
-		return err
-	}
-	if err := s.journal.ReplaceRecords(); err != nil {
 		return err
 	}
 	if err := s.removeDerivedFiles(true, false); err != nil {
@@ -725,6 +735,24 @@ func (s *TurnStore) Reset() error {
 	}
 	if err := os.RemoveAll(s.journal.path + ".deleted-history"); err != nil {
 		return fmt.Errorf("remove deleted-history archive: %w", err)
+	}
+	publishErr := s.journal.ReplaceRecords()
+	var published *PublishedError
+	if publishErr != nil && !errors.As(publishErr, &published) {
+		return publishErr
+	}
+	// A reader outside the store lock (a usage scan for profile info) may have written a cache
+	// for the old transcript between the removals and the publish. Such a cache no longer
+	// matches the transcript and is never used; this only drops the file, so its failure is
+	// not the reset's.
+	s.invalidateCursorCache()
+	_ = s.removeDerivedFiles(true, false)
+	if published != nil {
+		// The transcript is replaced and everything derived from it is gone, but the directory
+		// sync failed, so a crash could bring the old file back. The error says so (it still
+		// is a *PublishedError for errors.As): the caller must treat the history as reset, and
+		// a retry, which finds it empty, is how a crash that undid it is noticed later.
+		return fmt.Errorf("reset applied but not confirmed durable: %w", publishErr)
 	}
 	return nil
 }

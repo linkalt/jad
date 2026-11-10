@@ -167,33 +167,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		}
 		plan.confine = targetConfiner(callerSandbox, request.CallerPlace, request.Sandbox)
 	}
-	if request.Compact {
-		plan.beforeRun = func(ctx context.Context) {
-			// The same usage ProfileInfo reports: the target's last completed response.
-			profileUsage := m.resolver.profileUsage
-			if profileUsage == nil {
-				profileUsage = m.ProfileInfo
-			}
-			tokens, err := profileUsage(ctx, plan.reference, plan.target)
-			if err != nil {
-				m.resolver.logger.Warn("profile_message usage read failed; not compacting", "session", plan.reference, "profile", plan.target, "error", err)
-				return
-			}
-			if tokens == nil || *tokens <= request.CompactAfter {
-				return
-			}
-			if callerRun != 0 && !m.resolver.callerRuns.claim(callerRun, plan.key) {
-				return
-			}
-			compactTarget := m.resolver.compactProfile
-			if compactTarget == nil {
-				compactTarget = m.resolver.compactTarget
-			}
-			if err := compactTarget(ctx, plan.reference, plan.target); err != nil {
-				m.resolver.logger.Warn("profile_message compaction failed; sending the message anyway", "session", plan.reference, "profile", plan.target, "error", err)
-			}
-		}
-	}
+	plan.beforeRun = m.contextStep(plan, request.ContextTrigger, callerRun)
 	return plan, nil
 }
 
@@ -233,28 +207,49 @@ func (r *Resolver) compactTarget(ctx context.Context, reference, profile string)
 // messenger knows which targets that run already compacted.
 type callerRunKey struct{}
 
-// callerRunTargets remembers, per caller run, the targets profile_message already
-// compacted. A run's entry is dropped when the run ends.
+// callerRunTargets remembers, per running caller run, the targets profile_message already
+// compacted or reset. A run is active from begin until forget (the end of its
+// boundRunner.Run); a sub-agent's call carries its caller's id (subagentLauncher.Run), so a
+// background child can outlive the run, and a claim for a run that is no longer active is
+// refused instead of recreating its entry (which nothing would ever forget).
 type callerRunTargets struct {
 	mu   sync.Mutex
 	runs map[uint64]map[string]struct{}
 }
 
-// claim reports whether target is not yet compacted in run, and marks it.
-func (c *callerRunTargets) claim(run uint64, target string) bool {
+// begin marks run active, before any call of it can claim.
+func (c *callerRunTargets) begin(run uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, done := c.runs[run][target]; done {
-		return false
-	}
 	if c.runs == nil {
 		c.runs = map[uint64]map[string]struct{}{}
 	}
 	if c.runs[run] == nil {
 		c.runs[run] = map[string]struct{}{}
 	}
-	c.runs[run][target] = struct{}{}
-	return true
+}
+
+// claim reports whether target is not yet done in run, and marks it. ended is true, and
+// nothing is marked, when run is not active.
+func (c *callerRunTargets) claim(run uint64, target string) (claimed, ended bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	done, active := c.runs[run]
+	if !active {
+		return false, true
+	}
+	if _, already := done[target]; already {
+		return false, false
+	}
+	done[target] = struct{}{}
+	return true, false
+}
+
+// release gives back a claim whose action did not happen, so the run's next message retries it.
+func (c *callerRunTargets) release(run uint64, target string) {
+	c.mu.Lock()
+	delete(c.runs[run], target)
+	c.mu.Unlock()
 }
 
 func (c *callerRunTargets) forget(run uint64) {

@@ -187,7 +187,7 @@ type profileMessagePlan struct {
 	maxQueued int
 	blocking  bool
 	hops      int
-	beforeRun func(context.Context)
+	beforeRun func(context.Context) error
 	// confine narrows the target's run by the caller's sandbox (D20); nil for a caller
 	// without one.
 	confine func(httpapi.RunSession) (httpapi.RunSession, error)

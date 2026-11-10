@@ -11,8 +11,13 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
+// callerRunSentinel stands for a value the calling run's context carries (the app's caller-run
+// id is one): a sub-agent runs on a context its manager owns, so it must not reach the child.
+type callerRunSentinel struct{}
+
 type childMessenger struct {
 	child    atomic.Bool
+	sawValue atomic.Bool
 	maxChain atomic.Int64
 	started  chan struct{}
 	ended    atomic.Int64
@@ -20,6 +25,7 @@ type childMessenger struct {
 
 func (m *childMessenger) Prepare(ctx context.Context, _ ProfileMessageRequest) (ProfileMessagePlan, error) {
 	m.child.Store(IsChildCall(ctx))
+	m.sawValue.Store(ctx.Value(callerRunSentinel{}) != nil)
 	m.maxChain.Store(int64(ProfileChainMax(ctx)))
 	return &fakePlan{reply: m.reply, request: ProfileMessageRequest{}}, nil
 }
@@ -137,4 +143,27 @@ func TestStoppingAChildCancelsItsProfileMessageAndLeavesNoGoroutines(t *testing.
 		t.Fatalf("the messenger saw its context end %d times, want 1", messenger.ended.Load())
 	}
 	requireNoGrowth(t, baseline, "a child that was waiting on profile_message")
+}
+
+// A profile_message made from a sub-agent runs on the sub-agent's own context, which carries
+// none of the calling run's values: the caller-run id reaches it only because the app's
+// launcher copies it from SubagentRequest.CallerValues (app.withCallerRun, pinned end to end by
+// TestContextTriggerResetRunsOncePerCallerRunAcrossSubagentsAndNestedSubagents). This pins the
+// native layer's half: the child's context does not inherit the caller's, so cancellation and
+// ownership stay the sub-agent manager's, and the launcher's copy is what carries the id.
+func TestAChildsProfileMessageCarriesNoCallerRunValues(t *testing.T) {
+	messenger := &childMessenger{}
+	catalog := profileMessageChild(t, subagentSettings(nestingAgent("asker", "read", "profile_message")), messenger,
+		func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+			childCall(t, ctx, request, "profile_message", `{"profile":"reviewer","message":"hi"}`)
+			return SubagentResult{Text: "done"}, nil
+		})
+	ctx := context.WithValue(context.Background(), callerRunSentinel{}, uint64(7))
+	subagentCallWith(t, ctx, catalog, `{"task":"x","agent":"asker"}`)
+	if !messenger.child.Load() {
+		t.Fatal("the messenger did not see a child call")
+	}
+	if messenger.sawValue.Load() {
+		t.Fatal("the child's profile_message context carries the calling run's values: the child would then share the caller's cancellation and ownership, and the launcher's explicit copy of the id is redundant")
+	}
 }

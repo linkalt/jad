@@ -19,13 +19,13 @@ type fakeMessenger struct {
 	owner, target, message string
 	reply                  func(ctx context.Context) (string, error)
 	onCall                 func(request ProfileMessageRequest)
-	compact                bool
+	contextTrigger         sessionfs.ProfileMessageContextTrigger
 	request                ProfileMessageRequest
 	prepareErr             error
 }
 
 func (f *fakeMessenger) Prepare(ctx context.Context, request ProfileMessageRequest) (ProfileMessagePlan, error) {
-	f.compact = request.Compact
+	f.contextTrigger = request.ContextTrigger
 	f.request = request
 	if f.onCall != nil {
 		f.onCall(request)
@@ -233,17 +233,18 @@ func TestProfileMessageToolIsNotReadOnlyAndListsProfiles(t *testing.T) {
 	}
 }
 
-// compact_after is config only: the model never sees it, so neither schema may carry it.
+// compact_after and context_trigger are config only: the model never sees them, so neither
+// schema may carry them (a model must not be able to reset a profile).
 func TestProfileMessageModelSchemaHasNoCompactAfter(t *testing.T) {
-	if strings.Contains(string(profileMessageInputSchema), "compact_after") {
-		t.Fatal("the in-code profile_message schema exposes compact_after to the model")
+	if strings.Contains(string(profileMessageInputSchema), "compact_after") || strings.Contains(string(profileMessageInputSchema), "context_trigger") {
+		t.Fatal("the in-code profile_message schema exposes compact_after or context_trigger to the model")
 	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "compact_after") {
-		t.Fatal("sample/tools/native/profile_message.json exposes compact_after to the model")
+	if strings.Contains(string(data), "compact_after") || strings.Contains(string(data), "context_trigger") {
+		t.Fatal("sample/tools/native/profile_message.json exposes compact_after or context_trigger to the model")
 	}
 }
 
@@ -365,14 +366,21 @@ func TestProfileMessagePassesTheQueueSettingsAndNamesWhatHoldsTheTarget(t *testi
 	}
 }
 
-func TestProfileMessagePassesTheCompactSettingToTheMessenger(t *testing.T) {
-	for compact, want := range map[string]bool{"": false, sessionfs.ProfileMessageCompactOff: false, sessionfs.ProfileMessageCompactOn: true} {
+func TestProfileMessagePassesTheContextTriggerToTheMessenger(t *testing.T) {
+	for _, want := range []sessionfs.ProfileMessageContextTrigger{
+		{},
+		{Action: sessionfs.ProfileMessageContextOff, After: 4},
+		{Action: sessionfs.ProfileMessageContextCompact},
+		{Action: sessionfs.ProfileMessageContextCompact, After: 5000},
+		{Action: sessionfs.ProfileMessageContextReset},
+		{Action: sessionfs.ProfileMessageContextReset, After: 9},
+	} {
 		settings := profileMessageSettings()
-		settings.Compact = compact
+		settings.ContextTrigger = want
 		messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
 		callProfileMessage(t, settings, messenger, `{"profile":"reviewer","message":"hi"}`)
-		if messenger.compact != want {
-			t.Fatalf("compact %q: messenger got %v, want %v", compact, messenger.compact, want)
+		if messenger.contextTrigger != want {
+			t.Fatalf("messenger got %+v, want %+v", messenger.contextTrigger, want)
 		}
 	}
 }
@@ -394,5 +402,26 @@ func TestProfileMessageModelReachesTheMessengerAndARefusalIsInvalidInput(t *test
 	output = callProfileMessage(t, settings, messenger, `{"profile":"remote:far/s/dev/coder","message":"x","model":"openai/large"}`)
 	if !strings.Contains(output, "model_unavailable") || messenger.request.Message != "" {
 		t.Fatalf("remote with a model: %s", output)
+	}
+}
+
+// A context_trigger that was due and could not run ends the message as its own failure: the
+// code names it, the text says nothing was sent and carries only the client-safe reason (the
+// cause, which may name files, stays out), for a call that waits and for one that starts late.
+func TestProfileMessageContextTriggerFailureIsItsOwnClientSafeFailure(t *testing.T) {
+	cause := errors.New("remove session cache \"/secret/path/usage-cache.json\": permission denied")
+	failing := &ContextTriggerError{Action: "reset", Reason: "the reset failed", Err: cause}
+	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "", failing }}
+	output := callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"reviewer","message":"check it"}`)
+	for _, want := range []string{"context_trigger_failed", "was not sent the message", "context_trigger reset", "the reset failed", "The message was not sent", "may need attention"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output lacks %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "/secret/path") || strings.Contains(output, "permission denied") {
+		t.Fatalf("the cause leaked into the tool result:\n%s", output)
+	}
+	if !errors.Is(failing, cause) {
+		t.Fatal("ContextTriggerError does not unwrap to its cause")
 	}
 }
