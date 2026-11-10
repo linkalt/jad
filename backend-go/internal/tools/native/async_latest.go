@@ -17,6 +17,9 @@ import (
 type latestInfo struct {
 	state   asyncmgr.State
 	started time.Time
+	// inline is set when the news goes into the result of the call that started the handle,
+	// which names the transcript itself.
+	inline bool
 }
 
 // asyncLatester is implemented by the driver of a kind that can say what a live handle did
@@ -39,6 +42,11 @@ type latestBlock struct {
 // its cursor does not move. A block that fits only in part keeps its newest bytes, says how
 // many bytes it left out, and moves its cursor past all of them.
 func (h *AsyncHost) latestBlocks(owner string, ids []string) []latestBlock {
+	return h.latestBlocksIn(owner, ids, false)
+}
+
+// latestBlocksIn is latestBlocks with inline, see latestInfo.
+func (h *AsyncHost) latestBlocksIn(owner string, ids []string, inline bool) []latestBlock {
 	cfg := h.Config()
 	budget := int(cfg.LatestTotalBytes)
 	now := time.Now()
@@ -55,7 +63,7 @@ func (h *AsyncHost) latestBlocks(owner string, ids []string) []latestBlock {
 		if !ok {
 			continue
 		}
-		text, next := driver.latest(id, latestInfo{state: state, started: started}, h.manager.Progress(id), cfg, now)
+		text, next := driver.latest(id, latestInfo{state: state, started: started, inline: inline}, h.manager.Progress(id), cfg, now)
 		if text == "" {
 			continue
 		}
@@ -101,7 +109,7 @@ func cutBlockTail(text string, budget int) string {
 
 // latestText is the block of one handle, "" when it is not live or has nothing to say.
 func (h *AsyncHost) latestText(owner, id string) string {
-	if blocks := h.latestBlocks(owner, []string{id}); len(blocks) > 0 {
+	if blocks := h.latestBlocksIn(owner, []string{id}, true); len(blocks) > 0 {
 		return blocks[0].Text
 	}
 	return ""
@@ -264,9 +272,10 @@ func (h *AsyncHost) seedActivity(id, path string) {
 }
 
 // activityLatest is the news of a running agent: its newest tool calls and replies since the
-// last block (never its reasoning), how long ago the last event was, and where the
-// transcript is so the transcript tool can open it.
-func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time) (string, any) {
+// last block (never its reasoning), how long ago the last event was, and the id of the last
+// transcript step so the transcript tool can open it there. namePath also says where the
+// transcript is; a caller whose result already names it leaves it out rather than repeat it.
+func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time, namePath bool) (string, any) {
 	if shown, ok := prev.(*activityProgress); ok && transcript == "" {
 		transcript = shown.path
 	}
@@ -288,7 +297,11 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 	}
 	size := stat.Size()
 	if size > cfg.LatestScanMaxBytes {
-		return head + "\ntranscript too large to summarize (latest_scan_max_bytes); transcript: " + transcript, prev
+		text := head + "\ntranscript too large to summarize (latest_scan_max_bytes)"
+		if namePath {
+			text += "; transcript: " + transcript
+		}
+		return text, prev
 	}
 	var cursor activityProgress
 	if shown, ok := prev.(*activityProgress); ok {
@@ -300,7 +313,11 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 	start, turn := resumeTranscriptTurns(file, cursor, size)
 	turns, complete, err := indexTranscriptTurnsFrom(ctx, file, start, size, cfg.LatestScanMaxBytes, turn)
 	if err != nil || len(turns) == 0 {
-		return head + "; no steps yet\ntranscript: " + transcript, prev
+		text := head + "; no steps yet"
+		if namePath {
+			text += "\ntranscript: " + transcript
+		}
+		return text, prev
 	}
 	first := max(sort.Search(len(turns), func(i int) bool { return turns[i].off > cursor.off })-1, 0)
 	walk := newTranscriptWalk(turns, first, "", int(cfg.LatestBytes), int(cfg.LatestValueBytes))
@@ -316,22 +333,29 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 			news = append(news, step)
 		}
 	}
-	reference := "transcript: " + transcript
+	var reference []string
 	if len(walk.steps) > 0 {
-		reference += " (last step " + walk.steps[len(walk.steps)-1].id.String() + ")"
+		last := walk.steps[len(walk.steps)-1].id.String()
+		reference = []string{"last transcript step " + last}
+		if namePath {
+			reference = []string{"transcript: " + transcript + " (last step " + last + ")"}
+		}
+	} else if namePath {
+		reference = []string{"transcript: " + transcript}
 	}
 	next := &activityProgress{path: cursor.path, off: complete, shownAt: now}
 	next.turnOff, next.turn = turnAt(turns, complete)
 	lastEvent := "last event " + latestAge(now.Sub(stat.ModTime())) + " ago"
 	if len(news) == 0 {
-		return head + ", " + lastEvent + "\nno new activity since " + cursor.shownAt.UTC().Format(time.RFC3339) + "\n" + reference, next
+		lines := []string{head + ", " + lastEvent, "no new activity since " + cursor.shownAt.UTC().Format(time.RFC3339)}
+		return strings.Join(append(lines, reference...), "\n"), next
 	}
 	lines := []string{fmt.Sprintf("%s, %s; %d new step(s)", head, lastEvent, len(news))}
 	for _, step := range news[max(len(news)-int(cfg.LatestLines), 0):] {
 		line, _ := cutUTF8(sanitizeBashOutput(stepLine(step), true), cfg.LatestBytes)
 		lines = append(lines, line)
 	}
-	return strings.Join(append(lines, reference), "\n"), next
+	return strings.Join(append(lines, reference...), "\n"), next
 }
 
 // transcriptOf is the messages.jsonl inside a run's transcript folder, "" before it exists.

@@ -145,7 +145,8 @@ func (d *subagentDriver) latest(id string, info latestInfo, prev any, cfg asyncm
 	run.mu.Lock()
 	dir := run.dir
 	run.mu.Unlock()
-	return activityLatest(transcriptOf(dir), info, prev, cfg, now)
+	// A start result names the transcript itself (renderRun's transcript item), so only a poll does.
+	return activityLatest(transcriptOf(dir), info, prev, cfg, now, !info.inline)
 }
 
 func (d *subagentDriver) Detail(id string, maxBytes int) string {

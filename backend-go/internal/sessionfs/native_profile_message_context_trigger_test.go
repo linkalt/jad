@@ -51,3 +51,27 @@ func TestProfileMessageContextTriggerSchemaMatchesTheLoader(t *testing.T) {
 		}
 	}
 }
+
+// compact and compact_after were removed outright: neither the loader's keys nor the schema
+// lists them (the refusal that names them is tested with the settings), and context_trigger stays.
+func TestProfileMessageLegacyCompactKeysAreGoneFromLoaderAndSchema(t *testing.T) {
+	for _, key := range []string{"compact", "compact_after"} {
+		if containsString(nativeProfileMessageKeys, key) {
+			t.Errorf("nativeProfileMessageKeys still lists %q", key)
+		}
+	}
+	if !containsString(nativeProfileMessageKeys, "context_trigger") {
+		t.Error("nativeProfileMessageKeys lost context_trigger")
+	}
+	setting := readSchemaJSON(t, "setting.schema.json")
+	native := setting["properties"].(map[string]any)["tools"].(map[string]any)["properties"].(map[string]any)["native"].(map[string]any)["properties"].(map[string]any)
+	properties := native["profile_message"].(map[string]any)["properties"].(map[string]any)
+	for _, key := range []string{"compact", "compact_after"} {
+		if _, ok := properties[key]; ok {
+			t.Errorf("setting.schema.json still describes profile_message.%s", key)
+		}
+	}
+	if _, ok := properties["context_trigger"]; !ok {
+		t.Error("setting.schema.json lost profile_message.context_trigger")
+	}
+}

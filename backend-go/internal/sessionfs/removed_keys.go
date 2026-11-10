@@ -36,3 +36,7 @@ const removedAgentReadOnlyHint = "protection now comes only from isolation; remo
 // or seatbelt works, even with the sandbox setting off; ignoring the key would hide that a
 // host without either no longer honors read_only (docs/isolation-decisions.md D3).
 const removedReadOnlyCallsHint = "read_only now counts only where a bwrap or seatbelt sandbox keeps the call from writing the project, which exec uses by itself wherever one works on the host; delete the key"
+
+// removedProfileMessageCompactHint: compact and compact_after were aliases of context_trigger
+// and are no longer read; ignoring them would leave a configured compaction silently off.
+const removedProfileMessageCompactHint = "use context_trigger {action, after} instead: compact \"on\" is action \"compact\" and compact_after is after; delete the key"

@@ -30,57 +30,33 @@ type ProfileMessageContextTrigger struct {
 	After int64
 }
 
-// normalizeProfileMessageContextTrigger reads context_trigger {action, after}, or the legacy
-// compact and compact_after keys it replaces, which map onto it (compact on is action
-// compact, compact_after is after). Writing both shapes is refused rather than one
-// silently winning. An explicit null is read as absent, like the other numeric settings.
+// normalizeProfileMessageContextTrigger reads context_trigger {action, after}. The legacy
+// compact and compact_after keys were removed and are refused by name, never read. An
+// explicit null is read as absent, like the other numeric settings.
 func normalizeProfileMessageContextTrigger(fields map[string]json.RawMessage, settingPath, section string) (ProfileMessageContextTrigger, error) {
-	legacy := ProfileMessageContextTrigger{Action: ProfileMessageContextOff}
-	legacyCompact, hasCompact := fields["compact"]
-	if hasCompact {
-		compact := ProfileMessageContextOff
-		if strings.TrimSpace(string(legacyCompact)) == "null" || json.Unmarshal(legacyCompact, &compact) != nil || (compact != "off" && compact != "on") {
-			return legacy, configError("%s: %s.compact must be \"off\" or \"on\"", settingPath, section)
-		}
-		if compact == "on" {
-			legacy.Action = ProfileMessageContextCompact
-		}
-	}
-	var err error
-	if legacy.After, err = configuredInteger(fields, "compact_after", 0, 0, maxSafeInteger, settingPath, section); err != nil {
-		return legacy, err
-	}
-	hasLegacy := hasCompact || nonNullField(fields, "compact_after")
+	off := ProfileMessageContextTrigger{Action: ProfileMessageContextOff}
 	raw, exists := fields["context_trigger"]
 	if !exists || strings.TrimSpace(string(raw)) == "null" {
-		return legacy, nil
-	}
-	if hasLegacy {
-		return legacy, configError("%s: %s.context_trigger cannot be combined with the legacy compact or compact_after; use only context_trigger {action, after}", settingPath, section)
+		return off, nil
 	}
 	triggerSection := section + ".context_trigger"
 	object, err := decodeConfigObject(raw, settingPath+": "+triggerSection)
 	if err != nil {
-		return legacy, err
+		return off, err
 	}
 	if err := rejectUnknownKeys(object, settingPath+": "+triggerSection, profileMessageContextTriggerKeys); err != nil {
-		return legacy, err
+		return off, err
 	}
-	trigger := ProfileMessageContextTrigger{Action: ProfileMessageContextOff}
+	trigger := off
 	if action, ok := object["action"]; ok && strings.TrimSpace(string(action)) != "null" {
 		var text string
 		if json.Unmarshal(action, &text) != nil || (text != ProfileMessageContextOff && text != ProfileMessageContextCompact && text != ProfileMessageContextReset) {
-			return legacy, configError("%s: %s.action must be \"off\", \"compact\" or \"reset\"", settingPath, triggerSection)
+			return off, configError("%s: %s.action must be \"off\", \"compact\" or \"reset\"", settingPath, triggerSection)
 		}
 		trigger.Action = text
 	}
 	if trigger.After, err = configuredInteger(object, "after", 0, 0, maxSafeInteger, settingPath, triggerSection); err != nil {
-		return legacy, err
+		return off, err
 	}
 	return trigger, nil
-}
-
-func nonNullField(fields map[string]json.RawMessage, name string) bool {
-	raw, exists := fields[name]
-	return exists && strings.TrimSpace(string(raw)) != "null"
 }

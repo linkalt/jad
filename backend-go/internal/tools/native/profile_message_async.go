@@ -305,7 +305,7 @@ func (d *profileMessageDriver) latest(id string, info latestInfo, prev any, cfg 
 	if run == nil {
 		return "", prev
 	}
-	return activityLatest("", info, prev, cfg, now)
+	return activityLatest("", info, prev, cfg, now, !info.inline)
 }
 
 func (d *profileMessageDriver) Detail(id string, maxBytes int) string {

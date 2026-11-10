@@ -370,12 +370,15 @@ func (s *subagentTool) await(ctx context.Context, callID string, run *subagentRu
 		return cancelled()
 	}
 	view := run.view()
-	if run.async != nil && view.state != subagentRunQueued && view.state != subagentRunRunning {
-		run.async.markRead(run.id)
-	}
 	var latest []tools.Information
 	if run.async != nil && (view.state == subagentRunQueued || view.state == subagentRunRunning) {
 		latest = s.async.latestInformation(run.handleOwner, run.id)
+		// The latest block leaves the transcript path to the transcript item. The folder is set
+		// once and never cleared, so a view taken after the block names it whenever the block saw it.
+		view = run.view()
+	}
+	if run.async != nil && view.state != subagentRunQueued && view.state != subagentRunRunning {
+		run.async.markRead(run.id)
 	}
 	return s.renderRun(callID, view, latest...)
 }

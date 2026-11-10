@@ -275,7 +275,7 @@ func TestLatestActivityShowsCallsAndRepliesNeverReasoningAndOnlyNewSteps(t *test
 	cfg := asyncmgr.DefaultConfig()
 	now := time.Now()
 	info := latestInfo{state: asyncmgr.StateRunning, started: now.Add(-3 * time.Second)}
-	text, next := activityLatest(path, info, nil, cfg, now)
+	text, next := activityLatest(path, info, nil, cfg, now, true)
 	if !strings.Contains(text, "call read") || !strings.Contains(text, "transcript: "+path) || !strings.Contains(text, "last step 1.") || !strings.Contains(text, "last event") {
 		t.Fatalf("first block:\n%s", text)
 	}
@@ -286,11 +286,11 @@ func TestLatestActivityShowsCallsAndRepliesNeverReasoningAndOnlyNewSteps(t *test
 		t.Fatalf("argument values must be shortened:\n%s", text)
 	}
 	appendActivity(t, path, answerLine(1, 2, textItem("the preview of my answer")))
-	text, next = activityLatest(path, info, next, cfg, now)
+	text, next = activityLatest(path, info, next, cfg, now, true)
 	if !strings.Contains(text, "the preview of my answer") || strings.Contains(text, "call read") || !strings.Contains(text, "1 new step") {
 		t.Fatalf("second block must show only the new reply:\n%s", text)
 	}
-	text, _ = activityLatest(path, info, next, cfg, now)
+	text, _ = activityLatest(path, info, next, cfg, now, true)
 	if !strings.Contains(text, "no new activity since") || strings.Contains(text, "the preview of my answer") || !strings.Contains(text, "transcript: "+path) {
 		t.Fatalf("third block:\n%s", text)
 	}
@@ -304,7 +304,7 @@ func TestLatestActivityHonoursTheLineCap(t *testing.T) {
 	}
 	writeActivity(t, path, lines...)
 	cfg := asyncmgr.DefaultConfig()
-	text, _ := activityLatest(path, latestInfo{state: asyncmgr.StateRunning, started: time.Now()}, nil, cfg, time.Now())
+	text, _ := activityLatest(path, latestInfo{state: asyncmgr.StateRunning, started: time.Now()}, nil, cfg, time.Now(), true)
 	if strings.Count(text, "call read") != int(cfg.LatestLines) || !strings.Contains(text, "f6.go") || strings.Contains(text, "f3.go") {
 		t.Fatalf("want the last %d calls only:\n%s", cfg.LatestLines, text)
 	}
@@ -333,11 +333,68 @@ func TestSubagentHandleReportsItsActivityThroughAsyncStatus(t *testing.T) {
 	out := f.start(t, "s1", map[string]any{"task": "look", "block_ms": int64(400)})
 	<-started
 	id := runIDOf(t, out)
-	if latest := execField(out, "latest"); !strings.Contains(latest, "call read") || !strings.Contains(latest, "transcript: "+transcript) {
-		t.Fatalf("activity in the start result:\n%s", out)
+	// The result names the transcript once, as its transcript item; the latest block keeps the
+	// news and the last step but not the path.
+	latest := execField(out, "latest")
+	if !strings.Contains(latest, "call read") || !strings.Contains(latest, "last transcript step 1.1") || strings.Contains(latest, transcript) || strings.Contains(latest, "(last step") {
+		t.Fatalf("a sub-agent's start result must keep the last step without repeating the path:\n%s", out)
 	}
-	if again := latestTextOf(t, callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id}), id); !strings.Contains(again, "no new activity") {
-		t.Fatalf("second return must hold only the delta:\n%s", again)
+	if execField(out, "transcript") != transcript || strings.Count(out, transcript) != 1 {
+		t.Fatalf("the transcript path appears %d times in the running result, want once (as transcript):\n%s", strings.Count(out, transcript), out)
+	}
+	appendActivity(t, transcript, answerLine(1, 2, textItem("now halfway through")))
+	status := callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id})
+	if text := latestTextOf(t, status, id); !strings.Contains(text, "now halfway through") || strings.Contains(text, "call read") || strings.Count(text, transcript) != 1 || !strings.Contains(text, "(last step 1.2)") {
+		t.Fatalf("a poll shows only the delta and still names the transcript once:\n%s", text)
+	}
+	if again := latestTextOf(t, callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id}), id); !strings.Contains(again, "no new activity") || strings.Count(again, transcript) != 1 {
+		t.Fatalf("a quiet poll holds only the delta and the transcript:\n%s", again)
+	}
+	close(release)
+}
+
+// Before the child has a transcript folder the result has no transcript item, so nothing may be
+// left out of the latest block either: it says there is no transcript yet, and the path shows
+// up in a later poll once the folder exists.
+func TestSubagentStartResultWithoutFolderThenPollNamesTranscript(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "child")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(dir, "messages.jsonl")
+	writeActivity(t, transcript, userLine("task"), answerLine(1, 1, callItem("c1", "read", `{"path":"one.go"}`)), resultLine("c1", "x"))
+	release, folder := make(chan struct{}), make(chan struct{})
+	launcher := &fakeLauncher{run: func(ctx context.Context, request SubagentRequest) (SubagentResult, error) {
+		select {
+		case <-folder:
+			request.OnTranscript(dir)
+		case <-ctx.Done():
+			return SubagentResult{}, ctx.Err()
+		}
+		select {
+		case <-release:
+			return SubagentResult{Text: "done"}, nil
+		case <-ctx.Done():
+			return SubagentResult{}, ctx.Err()
+		}
+	}}
+	f := newSubagentAsyncFixture(t, asyncmgr.DefaultConfig(), subagentSettings(agentNamed("explore")), launcher)
+	out := f.start(t, "s1", map[string]any{"task": "look", "block_ms": int64(100)})
+	id := runIDOf(t, out)
+	if execField(out, "transcript") != "" || strings.Contains(out, "messages.jsonl") || !strings.Contains(execField(out, "latest"), "no transcript yet") {
+		t.Fatalf("a run without a folder names no transcript:\n%s", out)
+	}
+	close(folder)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		text := latestTextOf(t, callAsync(t, f.async, "s1", map[string]any{"action": "status", "id": id}), id)
+		if strings.Count(text, transcript) == 1 && strings.Contains(text, "call read") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a poll after the folder exists must name the transcript once with the news:\n%s", text)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	close(release)
 }
@@ -354,13 +411,20 @@ func TestProfileMessageHandleReportsTheTargetsActivity(t *testing.T) {
 	f.message = message
 	out := f.send(t, tools.ExecutionContext{SessionKey: "s1:main"}, 50)
 	id := handleIDPattern.FindString(out)
-	if id == "" || !strings.Contains(execField(out, "latest"), "transcript: "+transcript) {
+	if id == "" || !strings.Contains(execField(out, "latest"), "last transcript step 1.") {
 		t.Fatalf("still-running result lacks the activity block:\n%s", out)
+	}
+	// The result already names the transcript, so the latest block must not repeat it.
+	if latest := execField(out, "latest"); strings.Contains(latest, transcript) || strings.Contains(latest, "(last step") {
+		t.Fatalf("latest repeats the transcript path:\n%s", out)
+	}
+	if got := strings.Count(out, transcript); got != 1 {
+		t.Fatalf("the transcript path appears %d times in the running result, want once (as transcript):\n%s", got, out)
 	}
 	appendActivity(t, transcript, answerLine(1, 2, textItem("now halfway through")))
 	status := callAsync(t, f.async, "s1:main", map[string]any{"action": "status", "id": id})
-	if text := latestTextOf(t, status, id); !strings.Contains(text, "now halfway through") || strings.Contains(text, "working on the review") || !strings.Contains(text, "transcript: "+transcript) {
-		t.Fatalf("what ran before the handle started or was shown must not come back:\n%s", text)
+	if text := latestTextOf(t, status, id); !strings.Contains(text, "now halfway through") || strings.Contains(text, "working on the review") || strings.Count(text, transcript) != 1 {
+		t.Fatalf("what ran before the handle started or was shown must not come back, and the poll names the transcript once:\n%s", text)
 	}
 	f.messenger.run(t, 0).finish(ProfileMessageOutcome{Text: "ok"})
 }
@@ -520,7 +584,7 @@ func TestLatestActivityIndexesOnlyTheTailAppendedSinceItsCursor(t *testing.T) {
 	cfg := asyncmgr.DefaultConfig()
 	now := time.Now()
 	info := latestInfo{state: asyncmgr.StateRunning, started: now.Add(-time.Minute)}
-	text, next := activityLatest(path, info, nil, cfg, now)
+	text, next := activityLatest(path, info, nil, cfg, now, true)
 	if !strings.Contains(text, "FIRST-NEWS") {
 		t.Fatalf("first block:\n%s", text)
 	}
@@ -547,7 +611,7 @@ func TestLatestActivityIndexesOnlyTheTailAppendedSinceItsCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendActivity(t, path, messageLine("SECOND-NEWS"))
-	text, next = activityLatest(path, info, cursor, cfg, now)
+	text, next = activityLatest(path, info, cursor, cfg, now, true)
 	if !strings.Contains(text, "SECOND-NEWS") || strings.Contains(text, "FIRST-NEWS") {
 		t.Fatalf("second block:\n%s", text)
 	}
@@ -570,4 +634,58 @@ func TestLatestActivityIndexesOnlyTheTailAppendedSinceItsCursor(t *testing.T) {
 func messageLine(text string) string {
 	raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text}}})
 	return string(raw)
+}
+
+// A caller whose result already names the transcript asks activityLatest not to repeat the
+// path: every branch keeps its news and the last step, as "last transcript step", and none
+// names the file. The same branches with namePath keep "transcript: <path>" as before.
+func TestLatestActivityWithoutPathNamesOnlyTheLastTranscriptStep(t *testing.T) {
+	cfg := asyncmgr.DefaultConfig()
+	now := time.Now()
+	info := latestInfo{state: asyncmgr.StateRunning, started: now.Add(-3 * time.Second)}
+
+	t.Run("steps", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "messages.jsonl")
+		writeActivity(t, path, userLine("do the task"), answerLine(1, 1, callItem("c1", "read", `{"path":"a.go"}`)), resultLine("c1", "package a"))
+		text, next := activityLatest(path, info, nil, cfg, now, false)
+		if !strings.Contains(text, "call read") || !strings.HasSuffix(text, "\nlast transcript step 1.1") || strings.Contains(text, path) || strings.Contains(text, "(last step") {
+			t.Fatalf("news block:\n%s", text)
+		}
+		text, _ = activityLatest(path, info, next, cfg, now, false)
+		if !strings.Contains(text, "no new activity since") || !strings.HasSuffix(text, "\nlast transcript step 1.1") || strings.Contains(text, path) {
+			t.Fatalf("no-news block:\n%s", text)
+		}
+		text, _ = activityLatest(path, info, nil, cfg, now, true)
+		if !strings.Contains(text, "transcript: "+path+" (last step 1.1)") || strings.Contains(text, "last transcript step") {
+			t.Fatalf("with the path:\n%s", text)
+		}
+	})
+	t.Run("no steps yet", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "messages.jsonl")
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		text, _ := activityLatest(path, info, nil, cfg, now, false)
+		if !strings.HasSuffix(text, "; no steps yet") || strings.Contains(text, path) {
+			t.Fatalf("no steps, no path:\n%s", text)
+		}
+		text, _ = activityLatest(path, info, nil, cfg, now, true)
+		if !strings.HasSuffix(text, "; no steps yet\ntranscript: "+path) {
+			t.Fatalf("no steps, with the path:\n%s", text)
+		}
+	})
+	t.Run("too large", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "messages.jsonl")
+		writeActivity(t, path, userLine("do the task"), answerLine(1, 1, textItem("working")))
+		small := cfg
+		small.LatestScanMaxBytes = 10
+		text, _ := activityLatest(path, info, nil, small, now, false)
+		if !strings.HasSuffix(text, "\ntranscript too large to summarize (latest_scan_max_bytes)") || strings.Contains(text, path) {
+			t.Fatalf("too large, no path:\n%s", text)
+		}
+		text, _ = activityLatest(path, info, nil, small, now, true)
+		if !strings.HasSuffix(text, "(latest_scan_max_bytes); transcript: "+path) {
+			t.Fatalf("too large, with the path:\n%s", text)
+		}
+	})
 }

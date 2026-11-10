@@ -28,7 +28,7 @@ const DefaultNativeAgentBlockMs int64 = 120_000
 const DefaultProfileMessageMaxChain = 2
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "compact", "compact_after", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -65,9 +65,9 @@ type NativeProfileMessageSettings struct {
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
 	Remotes []string
-	// ContextTrigger (context_trigger, or the legacy compact and compact_after) is what
-	// happens to the target's transcript before the first message to it in each run of the
-	// caller: nothing (default), a compaction, or a reset of its whole history.
+	// ContextTrigger (context_trigger) is what happens to the target's transcript before the
+	// first message to it in each run of the caller: nothing (default), a compaction, or a
+	// reset of its whole history.
 	ContextTrigger ProfileMessageContextTrigger
 	// ModelChoice (model_choice, off by default) gives the tool a model argument, the model
 	// the target answers with. Off, the tool's definition is the one it had before the model
@@ -107,6 +107,11 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	}
 	if err := rejectRemovedApproval(fields, section, settingPath); err != nil {
 		return nil, err
+	}
+	for _, key := range []string{"compact", "compact_after"} {
+		if _, removed := fields[key]; removed {
+			return nil, configError("%s: %s.%s was removed; %s", settingPath, section, key, removedProfileMessageCompactHint)
+		}
 	}
 	for _, key := range keys {
 		if !containsString(nativeProfileMessageKeys, key) {
