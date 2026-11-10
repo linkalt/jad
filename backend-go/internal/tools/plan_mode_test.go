@@ -146,3 +146,41 @@ func TestPlanModeMarksTheCallsOfKeptTools(t *testing.T) {
 		t.Fatalf("PlanMode seen = %v", seen)
 	}
 }
+
+// A call of a tool plan mode guards carries ExecutionContext.PlanGuarded into nested runs
+// (ForNested), so a tool that starts runs of its own can apply the same refusal below; a tool
+// an allow entry keeps whole carries PlanMode only.
+func TestPlanModeMarksGuardedCallsForNestedRuns(t *testing.T) {
+	var seen ExecutionContext
+	tool := namedTool(t, testTool(t), "native.subagent", "subagent")
+	tool.ReadOnly = true
+	tool.MayChangeFiles = func(map[string]any) bool { return false }
+	tool.Execute = func(_ context.Context, _ map[string]any, execution ExecutionContext) (string, error) {
+		seen = execution
+		return "ok", nil
+	}
+	catalog := newTestCatalog(t, tool)
+	for name, tc := range map[string]struct {
+		allow         []string
+		wantGuarded   bool
+		wantNestedToo bool
+	}{"guarded": {nil, true, true}, "allowed whole": {[]string{"subagent"}, false, false}} {
+		planned, err := catalog.PlanMode(tc.allow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := planned.ExecuteFunctionCall(context.Background(), callJSON(t, "c", "subagent", `{"command":"x"}`), ExecutionContext{}); err != nil {
+			t.Fatal(err)
+		}
+		if !seen.PlanMode || seen.PlanGuarded != tc.wantGuarded || seen.ForNested().PlanGuarded != tc.wantNestedToo {
+			t.Errorf("%s: PlanMode %v PlanGuarded %v nested %v", name, seen.PlanMode, seen.PlanGuarded, seen.ForNested().PlanGuarded)
+		}
+	}
+	seen = ExecutionContext{}
+	if _, err := catalog.ExecuteFunctionCall(context.Background(), callJSON(t, "c", "subagent", `{"command":"x"}`), ExecutionContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if seen.PlanMode || seen.PlanGuarded {
+		t.Error("a call outside plan mode must carry neither flag")
+	}
+}

@@ -281,7 +281,7 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 				return configError("%s: isolation and sandbox.isolation.mode are both set; keep one", where)
 			}
 			if mode == SandboxIsolationWorktree && !agent.ChangesFiles() {
-				return configError("%s: sandbox.isolation.mode worktree needs a tool that changes files (%s) in tools, or no tools list", where, strings.Join(agentChangeTools, ", "))
+				return configError("%s: sandbox.isolation.mode worktree needs a tool that changes files (%s) in tools, or no tools list (an mcp: tool does not count: its server cannot be moved into a worktree)", where, strings.Join(agentChangeTools, ", "))
 			}
 			agent.Isolation = ""
 			if mode == SandboxIsolationWorktree {

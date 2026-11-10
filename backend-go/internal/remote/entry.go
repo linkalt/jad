@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -252,6 +253,38 @@ func resolveFrom(base, value string) string {
 
 // tokenFileChecked runs between the checks on a token file and its read; tests replace the path here.
 var tokenFileChecked = func() {}
+
+// Address is where the entry reaches its server: the socket path or the host and port. Two entries with
+// the same address reach the same server whatever else they differ in (token, timeouts, limits).
+func (e Entry) Address() string {
+	if e.Unix != "" {
+		return "unix:" + e.Unix
+	}
+	return "http:" + e.Host
+}
+
+// SameHost reports whether the remote's server runs on this machine: it is reached over a unix
+// socket or at a loopback (or unspecified) address. Such a server may work in a folder this machine
+// also works in. It is a heuristic about the address, not a statement about file systems and not
+// confinement: it reads no DNS and no network, so a name that resolves to this machine, this machine's
+// own LAN or public address, a tunnel or port forward, or a network file system that shares the
+// folder with a server at another address all read as another machine. An address of another machine
+// says nothing about its file systems, so it is not.
+func (e Entry) SameHost() bool {
+	if e.Unix != "" {
+		return true
+	}
+	host := e.Host
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+}
 
 // Token reads the token from its source. Errors name the source, never a value.
 func (e Entry) Token(environment func(string) string) (string, error) {

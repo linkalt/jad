@@ -27,7 +27,15 @@ func (s *subagentTool) execute(ctx context.Context, arguments map[string]any, ex
 		// where children cannot run.
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return renderSubagentList(execution.CallID, s.agents, s.settings.ResultMaxBytes, s.settings)
+		return renderSubagentList(execution.CallID, s.agents, s.settings.ResultMaxBytes, s.settings, s.agentMarker)
+	}
+	// A call made below a plan-mode call that planModeGuard let through is judged as the top call is
+	// (ExecutionContext.PlanGuarded): a child that may only read cannot start one that writes,
+	// and no depth widens what plan mode allows. A call an allow entry kept whole is not guarded.
+	if execution.PlanGuarded {
+		if refusal := s.planModeRefusal(arguments, &execution); refusal != "" {
+			return tools.ExecutionError(execution.CallID, tools.StatusForbidden, tools.PlanModeErrorCode, refusal), nil
+		}
 	}
 	// A child may not resume, a remote run included: a run it could continue is the session's
 	// own, and the session's owner is the only one that may name it. This is checked before the
@@ -133,12 +141,16 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	if s.depthExceeded(execution.AgentDepth+1) && agent.leaf != nil {
 		childCatalog = agent.leaf
 	}
-	changes := agent.config.ChangesFiles()
+	// An agent that may nest is a writer when it can start one (nestsWriter): the checkpoint and the
+	// ordered slot of this call are the only ones its grandchild's writes have, and a handle would
+	// outlive them (background stays false for it, so it runs to its end inside this call).
+	nestsWriter := s.nestsWriter(agent)
+	changes := agent.changesFiles() || nestsWriter
 	// A run in a worktree of its own changes no file of the session, so it is scheduled
 	// like a read-only run: it may be a handle and needs no background writer place. With
 	// MCP tools it is a writer all the same (changesWorkspace, D10), although its stdio
 	// servers start in the worktree.
-	touches := agent.changesWorkspace()
+	touches := agent.changesWorkspace() || nestsWriter
 	depth := execution.AgentDepth
 	if s.depthExceeded(depth) {
 		return depthExceededError(callID), nil

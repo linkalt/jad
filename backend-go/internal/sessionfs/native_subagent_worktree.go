@@ -110,7 +110,7 @@ func subagentIsolation(fields map[string]json.RawMessage, agent NativeSubagentAg
 		return "", nil
 	case SubagentIsolationWorktree:
 		if !agent.ChangesFiles() {
-			return "", configError("%s: %s.isolation worktree needs a tool that changes files (%s) in tools, or no tools list", settingPath, section, strings.Join(agentChangeTools, ", "))
+			return "", configError("%s: %s.isolation worktree needs a tool that changes files (%s) in tools, or no tools list (an mcp: tool does not count: its server cannot be moved into a worktree)", settingPath, section, strings.Join(agentChangeTools, ", "))
 		}
 		return value, nil
 	}

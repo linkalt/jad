@@ -74,7 +74,7 @@ func planModeGuard(tool Tool) Tool {
 	mayChange := tool.MayChangeFiles
 	reason := func(arguments map[string]any, _ *ExecutionContext) string {
 		if mayChange(arguments) {
-			return planModeChangeRefusal
+			return PlanModeChangeRefusal
 		}
 		return ""
 	}
@@ -96,6 +96,7 @@ func planModeGuard(tool Tool) Tool {
 			if refused := refusal(arguments, execution); refused != "" {
 				return refused, nil
 			}
+			execution.PlanGuarded = true
 			return execute(ctx, arguments, execution)
 		}
 	}
@@ -104,11 +105,12 @@ func planModeGuard(tool Tool) Tool {
 			if refused := refusal(arguments, execution); refused != "" {
 				return MarshalJSON(refused)
 			}
+			execution.PlanGuarded = true
 			return execute(ctx, arguments, execution)
 		}
 	}
 	return tool
 }
 
-// planModeChangeRefusal is why a plan-mode run refuses a call that could change files.
-const planModeChangeRefusal = "Plan mode: this call could change files, so it is not run in this turn. Use a read-only call, or put the change in the plan."
+// PlanModeChangeRefusal is why a plan-mode run refuses a call that could change files.
+const PlanModeChangeRefusal = "Plan mode: this call could change files, so it is not run in this turn. Use a read-only call, or put the change in the plan."

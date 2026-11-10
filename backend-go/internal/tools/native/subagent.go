@@ -112,6 +112,10 @@ type subagentAgent struct {
 	// mcpBound is true once it ran.
 	needsMCP bool
 	mcpBound bool
+	// nests is true when a child of this agent may be offered the subagent tool (max_depth is 2 or
+	// more and the agent's tools show it). Its calls can then reach any agent, local or remote, so
+	// the tool classifies it by what it may start (nestsWriter), not by its own tools alone.
+	nests bool
 	// background is set when a call to this agent may run as an async handle although
 	// the agent can change files; see backgroundSafe.
 	background bool
@@ -126,12 +130,34 @@ type subagentAgent struct {
 // stdio MCP servers in its worktree (run_mcp.go, D10 and P6): a streamable HTTP server is a
 // remote endpoint the run cannot move, and a stdio server whose session has no sandbox that lists
 // mcp is only started in another folder, not kept out of the session's. Such a run is scheduled
-// and checkpointed like any writer.
+// and checkpointed like any writer. An agent that has an MCP tool not marked ReadOnly is a writer
+// whatever its native tools are (mcpWrites).
 func (a subagentAgent) changesWorkspace() bool {
-	if a.config.ChangesWorkspace() {
+	if a.config.ChangesWorkspace() || a.mcpWrites() {
 		return true
 	}
 	return a.config.ChangesFiles() && len(a.mcpTools) > 0
+}
+
+// changesFiles reports whether the agent can change files: it has a native tool that can
+// (NativeSubagentAgent.ChangesFiles) or an MCP tool that may (mcpWrites).
+func (a subagentAgent) changesFiles() bool {
+	return a.config.ChangesFiles() || a.mcpWrites()
+}
+
+// mcpWrites reports whether the agent shows an MCP tool that is not marked ReadOnly. A server's
+// own claim (readOnlyHint) is not trusted and an unknown tool is not assumed to read, so only the
+// resources and prompts tools, which the protocol makes read-only, leave an agent a reader. The
+// tools are the agent's own copies, so an agent whose list names only MCP tools and one with no
+// list at all are judged the same way, and so is a tool it loads through load_tool (a lazy tool is
+// still one of its mcpTools).
+func (a subagentAgent) mcpWrites() bool {
+	for _, tool := range a.mcpTools {
+		if !tool.ReadOnly {
+			return true
+		}
+	}
+	return false
 }
 
 // backgroundSafe reports whether a writer agent may run as a handle: the session turned
@@ -354,7 +380,7 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 	pool := childNativePool(parentTools)
 	runtime := &subagentTool{settings: settings, launcher: launcher, manager: manager, async: host, mcp: mcp}
 	if remotes != nil && len(settings.Remotes) > 0 {
-		runtime.remotes = remoteAgentSettings{names: settings.Remotes, directory: remotes, timeout: time.Duration(settings.RemoteTimeoutMs) * time.Millisecond}
+		runtime.remotes = remoteAgentSettings{names: settings.Remotes, directory: remotes, timeout: time.Duration(settings.RemoteTimeoutMs) * time.Millisecond, snapshot: takeRemoteSnapshot(remotes, settings.Remotes)}
 	}
 	if host != nil {
 		host.attachSubagent(manager)
@@ -404,7 +430,6 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 			ID:          subagentToolID,
 			Source:      "native",
 			Name:        "subagent",
-			Description: subagentDescription + subagentListText(runtime.resolvedSettings(), runtime.backgroundNames()) + remoteListText(runtime.remotes.names) + subagentModelText(settings) + sandboxChoiceText(settings.SandboxChoices),
 			InputSchema: schema,
 		},
 		Validator:        validator,
@@ -415,16 +440,70 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 		// takes the checkpoint and runs in order like a write.
 		ReadOnly:           true,
 		MayChangeFiles:     runtime.callMayChangeFiles,
+		PlanModeRefusal:    runtime.planModeRefusal,
 		NormalizeArguments: normalizeSubagentArguments,
 		Execute: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 			return runtime.execute(ctx, arguments, execution)
 		},
 	}
 	runtime.self = self
+	// The description marks what each agent may change, which needs whether it nests; the MCP tools an
+	// agent may have are not bound yet, and bindMCP describes the tool again once they are.
+	for index := range runtime.agents {
+		runtime.agents[index].nests = runtime.nestsFor(runtime.agents[index])
+	}
+	self.Definition.Description = runtime.description()
+	runtime.self = self
 	if err := runtime.buildAllCatalogs(); err != nil {
 		return tools.Tool{}, err
 	}
 	return self, nil
+}
+
+// description is the tool's model-facing description: what it does, the agents with what each may
+// change (agentMarker), the remotes and the model and sandbox choices. The caller holds s.mu, or no
+// other goroutine has the tool yet.
+func (s *subagentTool) description() string {
+	lines := make([]agentLine, len(s.agents))
+	for index, agent := range s.agents {
+		lines[index] = agentLine{name: agent.config.Name, marker: s.agentMarker(agent), description: agent.config.Description}
+	}
+	list := subagentListText(s.settings, lines)
+	return subagentDescription + list + remoteListText(s.remotes.names, s.sameHostRemotes()) + subagentModelText(s.settings) + sandboxChoiceText(s.settings.SandboxChoices)
+}
+
+// Redescribe is catalog with the subagent tool's description as it is now. The tool is built with the
+// native catalog, before the MCP tools exist, and whether an agent changes files depends on them
+// (mcpWrites), so the owner calls this once after Bind. A catalog without the tool is returned as it is.
+func (m *SubagentMCP) Redescribe(catalog *tools.Catalog) (*tools.Catalog, error) {
+	if m == nil || m.tool == nil {
+		return catalog, nil
+	}
+	m.tool.mu.RLock()
+	text := m.tool.description()
+	m.tool.mu.RUnlock()
+	return catalog.WithDescription(subagentToolID, text)
+}
+
+// nestsFor reports whether a child of agent may be offered the subagent tool: max_depth is 2 or more
+// and the agent's tools show it.
+func (s *subagentTool) nestsFor(agent subagentAgent) bool {
+	return s.settings.MaxDepth >= 2 && tools.ProfileShows(agent.filter, s.self.Definition)
+}
+
+// agentMarker is the marker the agent list shows for an agent, from the way the tool classifies its
+// calls (callWrites): an agent that changes the session's files through a native tool or an MCP tool
+// that is not read-only, or that may start one that does (nestsWriterLocked), is marked as a writer
+// whatever its own config says, and runs to its end unless it may be handed off. Any other agent is
+// marked as its config says (changeMarker). The caller holds s.mu.
+func (s *subagentTool) agentMarker(agent subagentAgent) string {
+	if agent.changesWorkspace() || s.nestsWriterLocked(agent) {
+		if agent.background {
+			return " [can change files; may run in the background]"
+		}
+		return " [can change files; runs to its end]"
+	}
+	return changeMarker(agent.config, agent.background)
 }
 
 // nestedSelf is the subagent tool as a nesting child gets it: the owner's tool, hooked with the owner's
@@ -440,6 +519,7 @@ func (s *subagentTool) nestedSelf() tools.Tool {
 // where a call would only be refused (startRunFrom picks one by depth; the depth check stays the
 // gate). An agent that lists MCP tools has no catalog until bindMCP has seen them.
 func (s *subagentTool) buildCatalogs(agent *subagentAgent) error {
+	agent.nests = s.nestsFor(*agent)
 	if agent.needsMCP && !agent.mcpBound {
 		agent.catalog, agent.leaf = nil, nil
 		return nil
@@ -451,7 +531,7 @@ func (s *subagentTool) buildCatalogs(agent *subagentAgent) error {
 	}
 	leaf = append(append(leaf, loadTool...), agent.mcpTools...)
 	full := leaf
-	if s.settings.MaxDepth >= 2 && tools.ProfileShows(agent.filter, s.self.Definition) {
+	if agent.nests {
 		full = append(append(append(append([]tools.Tool(nil), agent.nativeTools...), s.nestedSelf()), loadTool...), agent.mcpTools...)
 	}
 	var err error
@@ -488,20 +568,35 @@ func containsName(names []string, name string) bool {
 	return false
 }
 
-// callMayChangeFiles is the tool's per-call answer to "can this call change files": it
-// can when the agent the call picks lists a tool that changes files and works in the
-// session's own folder (an agent with isolation worktree changes only its worktree). A
-// call that picks no agent, or only checks a run, cannot.
+// callMayChangeFiles is the tool's per-call answer to "can this call change files", the one the
+// checkpoint and ordered scheduling read (Catalog.ChangesState): see callWrites, here with what the
+// agent may start below it counted.
 func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
+	return s.callWrites(arguments, true)
+}
+
+// callWrites says whether the call can change the files of the session's host. A call can when the
+// agent it picks lists a tool that changes files and works in the session's own folder (an agent with
+// isolation worktree changes only its worktree), or has an MCP tool that is not marked ReadOnly
+// (changesWorkspace). A call that picks no agent, or only checks a run, cannot. A resume that names no
+// agent picks the agent of the run it continues.
+//
+// below says whether to count what the agent may start: no run of a child has a checkpoint of its own
+// and a child's write is covered only by the checkpoint of the call at the top, so an agent that may
+// nest is judged by the agents it can reach (nestsWriter) and a remote agent that shares this host by
+// its being there (remoteSharesHost). Plan mode asks without it: it refuses each call at its own depth
+// (planModeRefusal, ExecutionContext.PlanGuarded), so a child that only nests stays a reader there.
+func (s *subagentTool) callWrites(arguments map[string]any, below bool) bool {
 	task, _ := arguments["task"].(string)
 	if strings.TrimSpace(task) == "" {
 		return false
 	}
-	if agent, _ := arguments["agent"].(string); strings.HasPrefix(agent, remote.Prefix) {
-		// Whatever a remote agent changes, it changes on the remote machine.
-		return false
+	if reference, _ := arguments["agent"].(string); strings.HasPrefix(reference, remote.Prefix) {
+		// A remote agent changes the files of its own server, which is another machine unless the entry
+		// is a socket or a loopback address (remoteSharesHost).
+		return below && s.remoteSharesHost(reference)
 	}
-	agent, problem := s.selectAgent(arguments)
+	agent, problem := s.selectAgent(s.withResumeAgent(arguments))
 	if problem != "" {
 		return false
 	}
@@ -511,38 +606,110 @@ func (s *subagentTool) callMayChangeFiles(arguments map[string]any) bool {
 	if chosen, refused := s.chooseSandbox(agent, s.callSandboxName(arguments)); refused == nil {
 		agent = chosen
 	}
-	return agent.changesWorkspace()
+	return agent.changesWorkspace() || (below && s.nestsWriter(agent))
+}
+
+// nestsWriter reports whether a run of agent may start a run that changes the session's files: it can
+// nest and some agent of the tool is a writer, or a remote that shares this host is allowed. Which
+// agent a nested call picks is up to the child's model, so every agent counts, at every depth: a
+// grandchild that nests again is judged by the same rule, so the answer does not depend on the depth.
+// The agents are read under the tool's lock and the caller holds no lock, so nothing nests.
+func (s *subagentTool) nestsWriter(agent subagentAgent) bool {
+	if !agent.nests {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nestsWriterLocked(agent)
+}
+
+// nestsWriterLocked is nestsWriter for a caller that holds s.mu (read or write), which takes no lock.
+func (s *subagentTool) nestsWriterLocked(agent subagentAgent) bool {
+	if !agent.nests {
+		return false
+	}
+	for _, other := range s.agents {
+		if other.changesWorkspace() {
+			return true
+		}
+	}
+	return len(s.sameHostRemotes()) > 0
+}
+
+// sameHostRemotes are the allowed remotes whose server may change this host's files (remoteSharesHost).
+func (s *subagentTool) sameHostRemotes() []string {
+	var names []string
+	for _, name := range s.remotes.names {
+		if s.remoteSharesHost(remote.Prefix + name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// remoteSharesHost reports whether a remote agent may change this host's files, by the snapshot of its
+// entry the tool took when it was built (remoteSnapshot), so a call is judged the same way when it is
+// scheduled, checkpointed and started, whatever happens to the entry file in between. The remote runs in
+// the working folder of its own profile, which this host cannot see, so it is a path on this machine
+// when the entry is a unix socket or a loopback address, whose server can be given the session's folder.
+// An entry that could not be read then, or a remote the tool does not know, counts as sharing: the call
+// fails to start, and serializing it costs nothing.
+//
+// This is a heuristic about the address and not confinement (remote.Entry.SameHost): a name that resolves
+// to this machine, this machine's own LAN or public address, a tunnel, or a network file system shared
+// with a server at another address is not detected and reads as another machine, whose calls are not
+// checkpointed here; a remote's own session on its side is never under this host's checkpoint.
+func (s *subagentTool) remoteSharesHost(reference string) bool {
+	name, _, _ := remote.Split(reference)
+	snapshot, known := s.remotes.snapshot[name]
+	return !known || snapshot.sameHost
+}
+
+// withResumeAgent is the call's arguments with agent set to the agent of the run a resume
+// continues, when the call names none: the run is started with that agent (startRunFrom), so
+// it is judged by it. A run that is not known leaves the arguments as they are; the resume
+// refuses it before anything starts.
+func (s *subagentTool) withResumeAgent(arguments map[string]any) map[string]any {
+	if name, _ := arguments["agent"].(string); name != "" {
+		return arguments
+	}
+	resume, _ := arguments["resume"].(string)
+	if resume == "" || s.manager == nil {
+		return arguments
+	}
+	if run := s.manager.byID(resume); run != nil {
+		return withAgent(arguments, run.view().agent)
+	}
+	return arguments
+}
+
+// planModeRefusal is the tool's Tool.PlanModeRefusal: why plan mode does not run a call, or "". A
+// call that may change files is refused (callWrites). So is a call to a remote agent, which
+// runs on another JAD server that is not told this run is in plan mode, so nothing there keeps it
+// from changing files: this refuses the start here and does not confine the remote host. The same
+// check runs for the calls of a nested child (ExecutionContext.PlanGuarded, execute), so no depth
+// widens what plan mode allows.
+func (s *subagentTool) planModeRefusal(arguments map[string]any, _ *tools.ExecutionContext) string {
+	task, _ := arguments["task"].(string)
+	if strings.TrimSpace(task) == "" {
+		return ""
+	}
+	if agent, _ := arguments["agent"].(string); strings.HasPrefix(agent, remote.Prefix) {
+		return "Plan mode: a remote agent runs on another server that is not told this turn is plan mode, so it is not started in this turn. Use a local read-only agent, or put the remote work in the plan."
+	}
+	if s.callWrites(arguments, false) {
+		return tools.PlanModeChangeRefusal
+	}
+	return ""
 }
 
 // subagentListText is the text appended to the manifest description: the agent list, or,
 // when there is no agent yet, how to create one.
-func subagentListText(settings sessionfs.NativeSubagentSettings, background map[string]bool) string {
+func subagentListText(settings sessionfs.NativeSubagentSettings, lines []agentLine) string {
 	if len(settings.Agents) == 0 {
 		return "\n" + noAgentsText(settings)
 	}
-	return subagentAgentList(settings.Agents, settings.ListMaxBytes, background)
-}
-
-// resolvedSettings is the tool's settings with each agent as it was built (NoChangeTools set), which is
-// what the agent list shows the model.
-func (s *subagentTool) resolvedSettings() sessionfs.NativeSubagentSettings {
-	resolved := s.settings
-	resolved.Agents = make([]sessionfs.NativeSubagentAgent, len(s.agents))
-	for index, agent := range s.agents {
-		resolved.Agents[index] = agent.config
-	}
-	return resolved
-}
-
-// backgroundNames are the agents whose calls may be handed off although they can change files.
-func (s *subagentTool) backgroundNames() map[string]bool {
-	names := make(map[string]bool)
-	for _, agent := range s.agents {
-		if agent.background {
-			names[agent.config.Name] = true
-		}
-	}
-	return names
+	return renderAgentLines(lines, settings.ListMaxBytes)
 }
 
 // noAgentsText tells the model there is no agent and what to create. The folders are
@@ -559,24 +726,40 @@ func noAgentsText(settings sessionfs.NativeSubagentSettings) string {
 	return "No agents are configured. To add one, " + where + ", holding agent.json (optional keys: description, model, tools, instructions) and/or prompt.md; the name is 1 to 64 letters, digits, underscores or hyphens. It is available from the next message."
 }
 
-// subagentAgentList returns the text appended to the manifest description. The agent
-// list is paid for on every request, so it shrinks with its size: names and
-// descriptions while they fit in maxBytes, else names alone, else a count; the last
-// two say how to get the rest. The count line is always sent, whatever the budget, so
-// the model always knows the tool lists agents when asked.
+// subagentAgentList returns the text appended to the manifest description for agents marked by
+// their config alone (changeMarker; background names the agents that may be handed off). The tool
+// itself marks agents by how it classifies them (agentMarker).
 func subagentAgentList(agents []sessionfs.NativeSubagentAgent, maxBytes int64, background map[string]bool) string {
+	lines := make([]agentLine, len(agents))
+	for index, agent := range agents {
+		lines[index] = agentLine{name: agent.Name, marker: changeMarker(agent, background[agent.Name]), description: agent.Description}
+	}
+	return renderAgentLines(lines, maxBytes)
+}
+
+// agentLine is one agent of the list: its name, the marker that says what it may change, and its
+// description.
+type agentLine struct {
+	name, marker, description string
+}
+
+// renderAgentLines is the agent list. The list is paid for on every request, so it shrinks with its
+// size: names and descriptions while they fit in maxBytes, else names alone, else a count; the last
+// two say how to get the rest. The count line is always sent, whatever the budget, so the model
+// always knows the tool lists agents when asked.
+func renderAgentLines(agents []agentLine, maxBytes int64) string {
 	var full strings.Builder
 	full.WriteString("\nAgents:")
 	names := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		full.WriteString("\n- ")
-		full.WriteString(agent.Name)
-		full.WriteString(changeMarker(agent, background[agent.Name]))
-		if agent.Description != "" {
+		full.WriteString(agent.name)
+		full.WriteString(agent.marker)
+		if agent.description != "" {
 			full.WriteString(": ")
-			full.WriteString(agent.Description)
+			full.WriteString(agent.description)
 		}
-		names = append(names, agent.Name)
+		names = append(names, agent.name)
 	}
 	if int64(full.Len()) <= maxBytes {
 		return full.String()
@@ -608,13 +791,13 @@ func changeMarker(agent sessionfs.NativeSubagentAgent, background bool) string {
 
 // renderSubagentList is the result of a call with no task: one line per agent. The runs
 // are listed by the async tool.
-func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, settings sessionfs.NativeSubagentSettings) (string, error) {
+func renderSubagentList(callID string, agents []subagentAgent, maxBytes int64, settings sessionfs.NativeSubagentSettings, mark func(subagentAgent) string) (string, error) {
 	lines := make([]string, 0, len(agents)+1)
 	if len(agents) == 0 {
 		lines = append(lines, noAgentsText(settings))
 	}
 	for _, agent := range agents {
-		line := agent.config.Name + changeMarker(agent.config, agent.background)
+		line := agent.config.Name + mark(agent)
 		if agent.config.Description != "" {
 			line += ": " + oneLine(agent.config.Description)
 		}
@@ -682,8 +865,9 @@ func newSubagentAgent(agent sessionfs.NativeSubagentAgent, sessionDeny []string,
 		}
 	}
 	// A child with no tool that can change files is a reader: it is scheduled as one and may run as a handle.
-	// Nesting alone does not make it a writer: a child it starts that changes files is a call of its own run,
-	// which that run's checkpoint and change list cover.
+	// Nesting does not make it a writer here, which is about its own tools; whether a child it may start
+	// makes it one for scheduling and the checkpoint is the tool's to say once every agent is known
+	// (nestsWriter), because no run of a child has a checkpoint of its own.
 	selfShown := nesting && tools.ProfileShows(filter, tools.Definition{ID: subagentToolID, Source: "native", Name: "subagent"})
 	changes, messages := false, false
 	for _, tool := range shown {
@@ -749,6 +933,12 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 		agent.mcpBound = true
 		// Bound MCP tools can make an isolated agent a writer (changesWorkspace).
 		agent.background = backgroundSafe(s.settings, *agent, s.async)
+	}
+	// The tool is described again now that its agents' MCP tools are known (nestedSelf, which the
+	// catalogs below hold, carries it); the owner's catalog is told through Redescribe.
+	s.self.Definition.Description = s.description()
+	for index := range s.agents {
+		agent := &s.agents[index]
 		if err := s.checkAgentHasTools(agent); err != nil {
 			return err
 		}

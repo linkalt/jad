@@ -131,6 +131,13 @@ func (s *subagentTool) chooseSandbox(agent subagentAgent, name string) (subagent
 	if problem != nil {
 		return agent, problem
 	}
+	// A worktree is asked for, and withCallSandbox keeps an agent out of it when it has no native tool
+	// that changes files. That is right for a reader, but not for an agent that changes files through
+	// MCP tools alone: its servers cannot be moved into a worktree here, so it would run in the
+	// session's own folder. Say so instead of dropping what was asked for.
+	if choice.Isolation.Mode == sessionfs.SandboxIsolationWorktree && !config.Isolated() && agent.mcpWrites() {
+		return agent, &sandboxProblem{message: fmt.Sprintf("Sandbox %s sets isolation.mode worktree, but agent %s changes files only through MCP tools, which cannot be moved into a worktree, so it cannot run in one", choice.Name, agent.config.Name)}
+	}
 	return s.choiceAgent(agent, config, name), nil
 }
 

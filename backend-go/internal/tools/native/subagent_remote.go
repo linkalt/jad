@@ -58,17 +58,54 @@ type remoteAgentSettings struct {
 	names     []string
 	directory *remote.Directory
 	timeout   time.Duration
+	// snapshot is what the tool took from each allowed remote's entry when it was built, and never
+	// changes: scheduling, the checkpoint, the handle decision and the start all judge a remote by it,
+	// so an edit of the entry file between scheduling and start cannot give one call two answers.
+	snapshot map[string]remoteSnapshot
+}
+
+// remoteSnapshot is one remote as the tool saw it when it was built. sameHost is true for a server on
+// this machine (remoteOnThisHost), and for an entry that could not be read, which is not trusted to be
+// anywhere else. address is the entry's address (remote.Entry.Address); it is only compared when sameHost
+// is false.
+type remoteSnapshot struct {
+	sameHost bool
+	address  string
+}
+
+// takeRemoteSnapshot reads each allowed remote's entry once.
+func takeRemoteSnapshot(directory *remote.Directory, names []string) map[string]remoteSnapshot {
+	snapshot := make(map[string]remoteSnapshot, len(names))
+	for _, name := range names {
+		entry, err := directory.Entry(name)
+		if err != nil {
+			snapshot[name] = remoteSnapshot{sameHost: true}
+			continue
+		}
+		snapshot[name] = remoteSnapshot{sameHost: remoteOnThisHost(entry), address: entry.Address()}
+	}
+	return snapshot
 }
 
 func (r remoteAgentSettings) allowed(name string) bool { return slices.Contains(r.names, name) }
 
-// remoteListText is appended to the tool description when the session enables remotes.
-func remoteListText(names []string) string {
+// remoteListText is appended to the tool description when the session enables remotes. onThisHost are
+// the remotes whose server runs on this machine (remoteSharesHost): a call to one can change this
+// machine's files, so the model is told it runs to its end.
+func remoteListText(names, onThisHost []string) string {
 	if len(names) == 0 {
 		return ""
 	}
-	return "\nRemote agents on other JAD servers are written agent: remote:<name>/<session>/<category>/<profile>/<agent> (remotes: " + strings.Join(names, ", ") + "); the session names the profile whose agent list applies, and the remote decides what you may reach."
+	text := "\nRemote agents on other JAD servers are written agent: remote:<name>/<session>/<category>/<profile>/<agent> (remotes: " + strings.Join(names, ", ") + "); the session names the profile whose agent list applies, and the remote decides what you may reach."
+	if len(onThisHost) > 0 {
+		text += " A remote whose server runs on this machine (" + strings.Join(onThisHost, ", ") + ") is [can change files; runs to its end]: it is never handed off, whatever block_ms says."
+	}
+	return text
 }
+
+// remoteOnThisHost reports whether the remote's server runs on this machine (remote.Entry.SameHost). It
+// is a variable so a test can place a loopback test server on another machine; production never sets it.
+var remoteOnThisHost = func(entry remote.Entry) bool { return entry.SameHost() }
 
 // startRemote starts a sub-agent on a remote server and follows it as a handle of the async
 // tool, or inline when the call cannot collect a handle later.
@@ -102,12 +139,25 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "remote_unavailable", remoteProblem(name, err)), nil
 	}
+	// The call was scheduled and checkpointed by the snapshot (remoteSharesHost). A remote the snapshot
+	// put on another machine is started only at the address it had then: an edit that moved it, to this
+	// machine or anywhere, is refused rather than run as a reader that may now write here. A remote the
+	// snapshot put on this machine is already treated as a writer, whatever the file says now.
+	snapshot := s.remotes.snapshot[name]
+	if !snapshot.sameHost && entry.Address() != snapshot.address {
+		return tools.ExecutionError(callID, tools.StatusError, "remote_changed",
+			fmt.Sprintf("The entry of remote %s now reaches another address than the one this run was prepared with, so the call was not started. Start a new run to use the edited entry", name)), nil
+	}
 	if !entry.Allows(target.Scope()) {
 		return tools.ExecutionError(callID, tools.StatusForbidden, "remote_not_allowed",
 			fmt.Sprintf("Agent %s is not among the agents this session may reach on remote %s", target.Scope(), name)), nil
 	}
 	owner, canHandle := handleOwner(execution)
-	handled := s.async != nil && canHandle
+	// A server on this machine may change the files this call's checkpoint and ordered slot cover
+	// (remoteSharesHost), so the call waits for its end as a local writer does and is never handed
+	// off: a handle would outlive both. The wait ends with the remote run, which the remote timeout
+	// bounds, or with the call's cancel, which stops it.
+	handled := s.async != nil && canHandle && !snapshot.sameHost
 	var id string
 	if handled {
 		random := make([]byte, 4)
@@ -146,7 +196,14 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			s.manager.releaseRemote(reservation)
 		}
 	}()
-	run, err := startRemoteRun(ctx, s.remotes.directory, target, "subagents", body, execution.RemoteHops+1, s.remotes.timeout, "agent")
+	// The client is made for the entry checked above, not for the file as it is by now.
+	client, err := s.remotes.directory.ClientFor(entry)
+	var run *remoteRun
+	if err != nil {
+		err = &RemoteFailedError{Code: "remote_unavailable", Message: remoteProblem(name, err)}
+	} else {
+		run, err = startRemoteRunOn(ctx, s.remotes.directory, client, target, "subagents", body, execution.RemoteHops+1, s.remotes.timeout, "agent")
+	}
 	if err != nil {
 		if handled {
 			s.async.abandonProfileMessage(id)

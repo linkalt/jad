@@ -31,7 +31,12 @@ type ExecutionContext struct {
 	CallID string
 	// PlanMode is set for the calls of a plan-mode run. A tool that starts child processes
 	// in a sandbox starts them in the sandbox's plan-mode form (read-only project).
-	PlanMode      bool
+	PlanMode bool
+	// PlanGuarded is set for the calls of a tool that plan mode guards (planModeGuard) and it
+	// carries into nested runs (ForNested): a tool that starts runs of its own (the sub-agent
+	// tool) applies the same refusal to the calls those runs make, at every depth. A tool an
+	// allow entry keeps whole is not guarded, and nor are the calls below it.
+	PlanGuarded   bool
 	ToolName      string
 	WorkspaceRoot string
 	// WorkspaceOrigin, when set, is the session's own working directory and WorkspaceRoot
@@ -271,6 +276,28 @@ func MergeCatalogs(catalogs ...*Catalog) (*Catalog, error) {
 		}
 	}
 	return NewCatalog(combined)
+}
+
+// WithDescription is a catalog like c in which the tool with the given ID has the given description.
+// The receiver is unchanged. It is for a tool whose description depends on what is loaded after the
+// tool is built (the subagent tool's agent list). A catalog without the tool is returned as it is.
+func (c *Catalog) WithDescription(id, description string) (*Catalog, error) {
+	if c == nil {
+		return c, nil
+	}
+	changed := false
+	described := make([]Tool, len(c.tools))
+	for index, tool := range c.tools {
+		if tool.Definition.ID == id {
+			tool.Definition.Description = description
+			changed = true
+		}
+		described[index] = tool
+	}
+	if !changed {
+		return c, nil
+	}
+	return NewCatalog(described)
 }
 
 // Filter splits the catalog by keep. The first result holds the tools keep accepts, in

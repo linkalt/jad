@@ -118,6 +118,11 @@ func startRemoteRun(ctx context.Context, directory *remote.Directory, target rem
 	if err != nil {
 		return nil, &RemoteFailedError{Code: "remote_unavailable", Message: remoteProblem(target.Remote, err)}
 	}
+	return startRemoteRunOn(ctx, directory, client, target, kind, body, hops, timeout, what)
+}
+
+// startRemoteRunOn is startRemoteRun with the client already chosen.
+func startRemoteRunOn(ctx context.Context, directory *remote.Directory, client *remote.Client, target remote.Target, kind string, body map[string]any, hops int, timeout time.Duration, what string) (*remoteRun, error) {
 	view, err := client.StartRun(ctx, kind, body, hops)
 	if err != nil {
 		return nil, startError(target.Remote, err)

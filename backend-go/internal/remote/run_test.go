@@ -389,3 +389,40 @@ func TestViewRequestsAskForTextThatFitsTheResponseLimit(t *testing.T) {
 		t.Fatalf("text_max_bytes of the three requests: %v, want %s", queries, want)
 	}
 }
+
+// ClientFor connects to the entry it is given, not to the file as it is now, so a caller that decided
+// from an entry connects to what it decided on.
+func TestDirectoryClientForUsesTheGivenEntry(t *testing.T) {
+	dir := t.TempDir()
+	write := func(url string) {
+		if err := writeFile(dir+"/a.json", `{"kind":"remote","remote":{"url":"`+url+`","token_env":"JAD_REMOTE_X"}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("http://one.example:1")
+	hub := NewHub(func(string) string { return secretToken })
+	defer hub.Close()
+	directory := hub.Directory(dir)
+	checked, err := directory.Entry("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("http://two.example:2") // edited after the entry was read
+	client, err := directory.ClientFor(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Entry().Host != "one.example:1" || checked.Address() != "http:one.example:1" {
+		t.Fatalf("ClientFor reached %q, want the entry it was given", client.Entry().Host)
+	}
+	if now, _ := directory.Entry("a"); now.Address() == checked.Address() {
+		t.Fatalf("Address must tell the two entries apart: %q", now.Address())
+	}
+	unix := Entry{}
+	if err := unix.setURL("p.json", "unix:///run/jad/p.sock"); err != nil {
+		t.Fatal(err)
+	}
+	if unix.Address() != "unix:/run/jad/p.sock" {
+		t.Fatalf("unix address = %q", unix.Address())
+	}
+}

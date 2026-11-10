@@ -533,7 +533,8 @@ func TestRunMCPSetsOfOneSandboxAreSeparateByKey(t *testing.T) {
 // tools stays one of those whenever it can change files: its servers start in its worktree, but a
 // streamable HTTP server is remote and a stdio server of a sandbox without mcp is not confined, so
 // plan mode is not given a writer to run on the strength of a worktree. Without MCP tools, or with a
-// tools list that has no tool that changes files, the worktree makes it a reader as before.
+// tools list that has no tool that changes files and no MCP tool that may write, the worktree makes it a
+// reader as before.
 func TestIsolatedAgentWithMCPToolsStaysAWriterForPlanMode(t *testing.T) {
 	mcpTool := []tools.Tool{{Definition: tools.Definition{ID: "mcp:s:t", Source: "mcp"}}}
 	isolated := sessionfs.NativeSubagentAgent{Name: "a", Isolation: sessionfs.SubagentIsolationWorktree}
@@ -546,7 +547,9 @@ func TestIsolatedAgentWithMCPToolsStaysAWriterForPlanMode(t *testing.T) {
 	}{
 		{"isolated, no MCP tools", subagentAgent{config: isolated}, false},
 		{"isolated, MCP tools, can change files", subagentAgent{config: isolated, mcpTools: mcpTool}, true},
-		{"isolated, MCP tools, list without a change tool", subagentAgent{config: listed, mcpTools: mcpTool}, false},
+		// An MCP tool not marked ReadOnly may write whatever the native tools are (mcpWrites).
+		{"isolated, MCP tools, list without a change tool", subagentAgent{config: listed, mcpTools: mcpTool}, true},
+		{"isolated, only ReadOnly MCP tools, list without a change tool", subagentAgent{config: listed, mcpTools: []tools.Tool{mcpReadOnlyTool("t")}}, false},
 	} {
 		if got := test.agent.changesWorkspace(); got != test.want {
 			t.Errorf("%s: changesWorkspace = %v, want %v", test.name, got, test.want)

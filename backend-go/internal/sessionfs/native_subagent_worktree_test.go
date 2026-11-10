@@ -40,6 +40,7 @@ func TestNativeSubagentWorktreeRefusals(t *testing.T) {
 		"unknown isolation":    {`{"agents":{"a":{"tools":["exec"],"isolation":"container"}}}`, `isolation must be "none" or "worktree"`},
 		"isolation not text":   {`{"agents":{"a":{"tools":["exec"],"isolation":true}}}`, "isolation must be a non-empty string"},
 		"read tools isolated":  {`{"agents":{"a":{"tools":["read_image"],"isolation":"worktree"}}}`, "isolation worktree needs a tool that changes files"},
+		"mcp tools isolated":   {`{"agents":{"a":{"tools":["mcp:zvec:search"],"isolation":"worktree"}}}`, "an mcp: tool does not count"},
 		"worktree not object":  {`{"worktree":[],"agents":{}}`, "worktree must be an object"},
 		"unknown worktree key": {`{"worktree":{"keep":true},"agents":{}}`, "keep"},
 		"bad prefix":           {`{"worktree":{"branch_prefix":"a b/"},"agents":{}}`, "cannot start a git branch name"},

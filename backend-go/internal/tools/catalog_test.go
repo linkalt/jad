@@ -385,3 +385,42 @@ func TestCatalogContainsAPanickingNormalizer(t *testing.T) {
 		t.Fatalf("the server log does not record the panic:\n%s", line)
 	}
 }
+
+func TestCatalogWithDescriptionReplacesOnlyThatToolsDescription(t *testing.T) {
+	first := lazyTool(t, "native.first", "native", "first")
+	second := lazyTool(t, "native.second", "native", "second")
+	catalog, err := NewCatalog([]Tool{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	described, err := catalog.WithDescription("native.second", "new text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if described == catalog {
+		t.Fatal("a changed catalog must be a new one")
+	}
+	got := map[string]string{}
+	for _, definition := range described.Definitions() {
+		got[definition.Name] = definition.Description
+	}
+	if got["second"] != "new text" || got["first"] != first.Definition.Description {
+		t.Fatalf("descriptions = %v", got)
+	}
+	// The receiver keeps its own, and the order is the same.
+	for _, definition := range catalog.Definitions() {
+		if definition.Name == "second" && definition.Description != second.Definition.Description {
+			t.Fatal("WithDescription changed the receiver")
+		}
+	}
+	if defs := described.Definitions(); defs[0].Name != "first" || defs[1].Name != "second" {
+		t.Fatalf("order changed: %v", defs)
+	}
+	if same, err := catalog.WithDescription("native.absent", "x"); err != nil || same != catalog {
+		t.Fatalf("a catalog without the tool is returned as it is: %v", err)
+	}
+	var none *Catalog
+	if same, err := none.WithDescription("x", "y"); err != nil || same != nil {
+		t.Fatalf("a nil catalog stays nil: %v", err)
+	}
+}

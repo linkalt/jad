@@ -57,6 +57,12 @@ func newRemoteSubagentFixtureOn(t *testing.T, p *peer, mutate func(*sessionfs.Na
 		return ""
 	})
 	t.Cleanup(hub.Close)
+	// The peer is a loopback test server, which the tool would treat as this machine's (remoteOnThisHost)
+	// and so never hand off. These tests exercise remotes of other machines, so the peer is placed on
+	// one; a test of this machine's remotes reaches the same server through another entry (newRemoteSubagentFixtureWith).
+	previous := remoteOnThisHost
+	remoteOnThisHost = func(entry remote.Entry) bool { return entry.Name != "peer" && previous(entry) }
+	t.Cleanup(func() { remoteOnThisHost = previous })
 	host, err := NewAsyncHost(filepath.Join(t.TempDir(), ".async"), asyncmgr.DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -226,9 +232,10 @@ func TestRemoteSubagentDescriptionNamesTheRemotes(t *testing.T) {
 }
 
 func TestRemoteSubagentNeverChangesLocalCheckpointOrLimits(t *testing.T) {
-	f := newRemoteSubagentFixture(t, peerGrant, nil)
-	if f.tool.MayChangeFiles(map[string]any{"task": "x", "agent": remoteAgent}) {
-		t.Fatal("a remote agent changes files on the remote machine, not under this session's checkpoint")
+	f := newRemoteSubagentFixtureWith(t, func(string) map[string]string { return map[string]string{"far": "http://192.0.2.7:8080"} },
+		func(s *sessionfs.NativeSubagentSettings) { s.Remotes = []string{"peer", "far"} })
+	if f.tool.MayChangeFiles(map[string]any{"task": "x", "agent": "remote:far/main/review/reviewer/explore"}) {
+		t.Fatal("a remote agent on another machine changes files there, not under this session's checkpoint")
 	}
 	if !f.tool.ReadOnly {
 		t.Fatal("the tool stays read-only for local scheduling")

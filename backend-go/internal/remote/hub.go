@@ -55,6 +55,13 @@ func (d *Directory) Client(name string) (*Client, error) {
 	return d.hub.client(d.dir+"\x00"+name, entry)
 }
 
+// ClientFor is Client for an entry the caller has already read and checked: the client is made for that
+// entry, not for what the file holds now, so a caller that decided something from the entry (where it
+// reaches) connects to what it decided on.
+func (d *Directory) ClientFor(entry Entry) (*Client, error) {
+	return d.hub.client(d.dir+"\x00"+entry.Name, entry)
+}
+
 func (h *Hub) client(key string, entry Entry) (*Client, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

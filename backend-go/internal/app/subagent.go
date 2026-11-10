@@ -44,8 +44,9 @@ func (r *Resolver) subagentLauncherFor(config sessionfs.SessionConfig) native.Su
 // child is an ordinary session.Runner run: its own store, its own model client and
 // the catalog the tool chose, with the question channel and the change listener of the call
 // that started it (request.Execution). It takes no checkpoint of its own: the calling run's
-// checkpoint is taken before a call that may change files and covers what the child writes. It compacts its own
-// transcript when the agent's trigger is reached, and sees the session's newest
+// checkpoint is taken before a call that may change files and covers what the child writes, and
+// at every depth: the tool judges a child that may nest by the agents it can reach, so the call at
+// the top takes it for a grandchild's writes too. It compacts its own transcript when the agent's trigger is reached, and sees the session's newest
 // state-context block when the agent asks for it.
 func (l subagentLauncher) Run(ctx context.Context, request native.SubagentRequest) (native.SubagentResult, error) {
 	config, err := l.childConfig(request)

@@ -10,7 +10,7 @@
     "remote": {
       "type": "object",
       "properties": {
-        "url": { "type": "string", "pattern": "^(http://[^/?#@]+/?|unix:///.+)$", "description": "http://host[:port] or unix:///absolute/path.sock. https is refused. No path, query, fragment or credentials. The token of an http url travels in clear text." },
+        "url": { "type": "string", "pattern": "^(http://[^/?#@]+/?|unix:///.+)$", "description": "http://host[:port] or unix:///absolute/path.sock. https is refused. No path, query, fragment or credentials. The token of an http url travels in clear text. A unix socket or a loopback address is treated as a server on this machine (its sub-agent calls take the local checkpoint and run to their end); this is a heuristic about the address, not confinement: a name or LAN address of this machine, a tunnel, or a shared file system is not detected." },
         "token_env": { "type": "string", "pattern": "^JAD_REMOTE_[A-Za-z0-9_]+$", "description": "Name of the environment variable, which must start with JAD_REMOTE_ (a remote file cannot read provider keys or other variables), that holds the bearer token (at least 32 printable characters). Set exactly one of token_env and token_file." },
         "token_file": { "type": "string", "minLength": 1, "description": "File that holds the token, relative to this file or absolute. On unix it must not be readable by group or others." },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Per HTTP request. Default 30000." },

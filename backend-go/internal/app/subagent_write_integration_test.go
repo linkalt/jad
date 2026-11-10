@@ -250,3 +250,26 @@ func TestSubagentWriterThatFailedToWriteListsNone(t *testing.T) {
 		t.Fatalf("a refused write must not be listed as a change:\n%s", last)
 	}
 }
+
+// A child whose tools list names only an MCP tool that writes is a writer: the parent's checkpoint
+// is taken before its call (it was taken for no MCP-only child before), and what the server wrote
+// is there to restore.
+func TestMCPOnlySubagentTakesTheParentsCheckpoint(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	f := buildSubagentFixtureWithMCP(t, map[string]any{
+		"model": "child.json", "tools": []string{"mcp:fixture:lookup"}, "__checkpoint": `{"enabled":true}`,
+	}, false, nil, &mcpFixture{stdio: true})
+	f.provider.childFirstCall = [2]string{mcpToolNameFor("fixture", "lookup"), `{"word":"by the server"}`}
+	if body := f.run(t); !strings.Contains(body, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", body)
+	}
+	written, err := os.ReadFile(filepath.Join(f.workspace, "from-mcp.txt"))
+	if err != nil || string(written) != "by the server" {
+		t.Fatalf("the MCP server did not write in the session's folder: %v %q", err, written)
+	}
+	if records := f.checkpointRecords(t); len(records) != 1 || records[0]["state"] != "complete" {
+		t.Fatalf("checkpoints = %v; a child with an MCP write tool must take exactly one", records)
+	}
+}

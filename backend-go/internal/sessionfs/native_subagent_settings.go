@@ -775,6 +775,8 @@ func (a NativeSubagentAgent) ToolSettings(sessionDeny []string) ProfileToolSetti
 // with a list, when the list names a tool that can. Once the subagent tool has built the
 // agent's catalog, NoChangeTools says there is no such tool in it. There is no read-only mode:
 // whether the files a run changes are the session's own is isolation's to say (ChangesWorkspace).
+// MCP tools are not counted here, because the loaded tools are not known to the settings: the
+// sub-agent tool adds an MCP tool that may write when it classifies a call (subagentAgent.changesFiles).
 func (a NativeSubagentAgent) ChangesFiles() bool {
 	if a.NoChangeTools {
 		return false

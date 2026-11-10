@@ -210,3 +210,30 @@ func TestParseEntryRefusesCharacterClassGlobs(t *testing.T) {
 		}
 	}
 }
+
+// SameHost is true for the entries that reach a server on this machine: a unix socket and a loopback
+// or unspecified address. An address of another machine is not.
+func TestEntrySameHost(t *testing.T) {
+	for url, want := range map[string]bool{
+		"unix:///run/jad/peer.sock": true,
+		"http://localhost:8080":     true,
+		"http://LOCALHOST":          true,
+		"http://peer.localhost:80":  true,
+		"http://127.0.0.1:8080":     true,
+		"http://127.1.2.3:8080":     true,
+		"http://[::1]:8080":         true,
+		"http://0.0.0.0:8080":       true,
+		"http://192.0.2.7:8080":     false,
+		"http://example.com":        false,
+		"http://localhost.example":  false,
+		"http://[2001:db8::1]:80":   false,
+	} {
+		entry := Entry{}
+		if err := entry.setURL("peer.json", url); err != nil {
+			t.Fatalf("%s: %v", url, err)
+		}
+		if got := entry.SameHost(); got != want {
+			t.Errorf("%s: SameHost = %v, want %v", url, got, want)
+		}
+	}
+}

@@ -715,6 +715,11 @@ func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.
 	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
 		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
 	}
+	// The agent list names which agents change files, which depends on the MCP tools just bound.
+	nativeCatalog, err = subagentMCP.Redescribe(nativeCatalog)
+	if err != nil {
+		return nil, nil, nil, mapSessionError(err)
+	}
 	registered, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
 	if err != nil {
 		return nil, nil, nil, mapSessionError(err)

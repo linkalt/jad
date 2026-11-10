@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,9 +44,18 @@ type subagentProvider struct {
 	// childFirstCall, when set, is the (tool name, arguments) the child makes in its
 	// first round instead of reading notes.txt.
 	childFirstCall [2]string
+	// leafFirstCall, when set, is the first call of a child that has no subagent tool (one at the
+	// deepest level), where childFirstCall is the call of the others.
+	leafFirstCall [2]string
 	// parentFirstCall, when set, is the (tool name, arguments) the parent makes in its
 	// first round instead of starting a subagent.
 	parentFirstCall [2]string
+	// parentSiblings, when set, are the arguments of the subagent calls the parent makes together in
+	// its first response instead of one call.
+	parentSiblings []string
+	// childDelay holds every child request this long before it is answered, so runs that are not
+	// scheduled in order overlap.
+	childDelay time.Duration
 	// childAnswer, when set, is the child's final answer instead of "the answer is 42".
 	childAnswer string
 	// parentSteps, when set, scripts the parent's calls in order: round N makes the Nth step
@@ -194,6 +204,14 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			}
 		}
 
+		if body.Model == "child-model" && p.childDelay > 0 {
+			select {
+			case <-time.After(p.childDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+
 		if body.Model == "child-model" && p.childHold != nil {
 			select {
 			case <-p.childHold:
@@ -230,6 +248,8 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 			} else {
 				events = messageEvents("parent done", 9)
 			}
+		case body.Model == "parent-model" && len(p.parentSiblings) > 0 && !strings.Contains(record.Text, "function_call_output"):
+			events = siblingCallEvents(p.parentSiblings)
 		case body.Model == "parent-model" && p.parentFirstCall[0] != "" && !strings.Contains(record.Text, "function_call_output"):
 			events = functionCallEvents("call-parent-first", p.parentFirstCall[0], p.parentFirstCall[1])
 		case body.Model == "parent-model" && !strings.Contains(record.Text, "function_call_output") && p.parentCalls > 1:
@@ -253,6 +273,8 @@ func (p *subagentProvider) handler(t *testing.T) http.Handler {
 					index = number[1]
 				}
 				events = functionCallEvents("call-first", "exec", execWrite("w"+index+".txt", "child "+index))
+			} else if p.leafFirstCall[0] != "" && !slices.Contains(record.Tools, "subagent") {
+				events = functionCallEvents("call-first", p.leafFirstCall[0], p.leafFirstCall[1])
 			} else if p.childFirstCall[0] != "" {
 				events = functionCallEvents("call-first", p.childFirstCall[0], p.childFirstCall[1])
 			} else {
@@ -313,6 +335,17 @@ func textThenCallEvents(text, callID, name, arguments string) []string {
 		`{"type":"response.output_item.done","output_index":1,"item":` + call + `}`,
 		`{"type":"response.completed","response":{"id":"resp-call","status":"completed","output":[` + message + `,` + call + `],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
 	}
+}
+
+// siblingCallEvents is one response holding a subagent call for each of the given arguments.
+func siblingCallEvents(arguments []string) []string {
+	var events []string
+	for index, raw := range arguments {
+		encoded, _ := json.Marshal(raw)
+		item := fmt.Sprintf(`{"type":"function_call","call_id":"call-sib-%d","name":"subagent","arguments":%s}`, index, encoded)
+		events = append(events, fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":%s}`, index, item))
+	}
+	return append(events, `{"type":"response.completed","response":{"id":"resp-sib","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`)
 }
 
 // manyCallEvents is one response holding several subagent calls, each with its own task.
