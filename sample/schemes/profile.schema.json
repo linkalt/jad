@@ -43,19 +43,19 @@
         "pattern": "^(\\*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
       },
       "uniqueItems": true,
-      "description": "Narrows the models. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every model; [] offers none. An item that matches no model is a load error. A listed model whose file fails the model rules is left out of the models the profile offers, with a warning, unless it is the model_default; when every listed model fails none is left out."
+      "description": "Narrows the models. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every model; [] offers none. An item that matches no model is a load error. A listed model whose file fails the model rules is left out of every list the profile offers (the picker included), with a warning, whether or not it is the model_default; a request that names it, or a run that would use it, stops with the file's error."
     },
     "model_default": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9_.-]+)?$",
-      "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) that passes is used. A model_default whose file fails is never replaced by another model: it stays offered, and a run with it stops with that file's error."
+      "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) that passes is used. A model_default whose file fails is left out like any model that fails, and never replaced by another: the session then has no default model, stays listed and readable, and a run that names no model stops with that file's error."
     },
     "toolset": {
       "anyOf": [
         {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"},
         {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"}}
       ],
-      "description": "The toolset this profile uses, or a list of them, each written <category>/<name> under tools/, for example \"coding/full\". Any toolset may be used. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Without it the profile has no native tool and no MCP tool."
+      "description": "The toolset this profile uses, or a list of them, each written <category>/<name> under tools/, for example \"coding/full\". Any toolset may be used. Given a list, the toolsets merge in order: when two name the same native tool or MCP server the first listed wins, with a warning, and only the first toolset with hooks supplies hooks (a later one's hooks are ignored with a warning). Without it the profile has no native tool and no MCP tool. A profile whose toolset file is missing, does not parse, or cannot be applied to the session (hooks given both in the settings and a toolset, an MCP server that does not exist, a malformed mcp object) is left out of the session with a warning."
     },
     "tools": {
       "type": "object",

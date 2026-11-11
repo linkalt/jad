@@ -33,5 +33,10 @@ func loadLayoutSpec(t *testing.T, spec layouttest.Spec) (SessionConfig, error) {
 func loadLayoutConfig(t *testing.T, spec layouttest.Spec) (SessionConfig, error) {
 	t.Helper()
 	location, _ := layoutLocation(t, spec)
-	return LoadSessionConfig(location, "", "")
+	// The model is read too, and one that fails the model rules is an error here, as for a run.
+	config, err := LoadSessionSettings(location, "", "")
+	if err != nil {
+		return SessionConfig{}, err
+	}
+	return config.WithModel()
 }

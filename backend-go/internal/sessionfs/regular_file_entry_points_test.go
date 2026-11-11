@@ -73,7 +73,12 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 		{"toolset file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Tools, "coding", "full.json") }, named},
 		{"model file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Models, "openai", "gpt-deep.json") },
 			func(_ Layout, l Location, _ string) error {
-				_, err := LoadSessionConfig(l, "dev/coder", "")
+				// The session loads without a model it cannot read; a run reports the file.
+				config, err := LoadSessionSettings(l, "dev/coder", "")
+				if err != nil {
+					return err
+				}
+				_, err = config.WithModel()
 				return err
 			}},
 		{"prompt document", maxPromptDocumentBytes, func(_ Layout, _ Location, _ string) string { return "" }, settings},

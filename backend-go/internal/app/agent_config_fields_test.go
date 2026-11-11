@@ -43,7 +43,7 @@ var agentConfigFields = map[string]agentConfigField{
 	"Profile": fieldCallerOnly, "DefaultProfile": fieldCallerOnly, "Profiles": fieldCallerOnly,
 	"ProfileNames": fieldCallerOnly, "ProfilePath": fieldCallerOnly, "Category": fieldCallerOnly,
 	"RemotesDir": fieldCallerOnly, "Warnings": fieldCallerOnly,
-	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
+	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
 
 	// Tool surface.
 	"NativeExec": fieldToolSurface, "NativeReadImage": fieldToolSurface, "NativeLSP": fieldToolSurface,

@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"fmt"
+	"strings"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -15,10 +16,12 @@ import (
 // load: a profile left out is never run, so leaving it out cannot loosen anything, but
 // skipping to another profile on a failed security setting would.
 //
-// Nothing is run in place of what was chosen. A profile the caller names must pass itself,
-// and a model the profile names as its model_default, or the caller requests, stays offered
-// even when its file fails: the session is listed and the run stops with that file's error,
-// after its input is stored, instead of using another model.
+// Nothing is run in place of what was chosen. A profile the caller names must pass itself.
+// A model that fails the model rules is never offered, whatever chose it: it is not in
+// Models, ModelPaths or the picker, the profile's explicit model_default and the model a
+// caller requests included. The session still loads (it stays listed and readable), with
+// SessionConfig.ModelFault set when the model it would run is one of those, and a run stops
+// with that file's error after its input is stored, instead of using another model.
 
 // badModel is a model file a profile lists that fails the model rules.
 type badModel struct {
@@ -36,6 +39,10 @@ type profileVerdict struct {
 	badModels []badModel
 	// err is why the profile is left out; nil when it is usable.
 	err error
+	// composition is set when err is what applying its toolsets to this session's settings
+	// found. That depends on the session, so jad check reports it with the session; the
+	// other reasons are about the profile's own files, which check reports on their own.
+	composition bool
 }
 
 // scopeJudgement is the verdict on every profile of a session's scope.
@@ -97,6 +104,10 @@ func judgeScope(layout Layout, session layoutSessionFile, sessionPath string, sc
 		}
 		verdict.err = checkProfileToolsets(scans, entry.Path, file, toolsets, toolsetsErr)
 		if verdict.err == nil {
+			verdict.err = checkToolsetComposition(layout, session, sessionPath, entry.Path, file, scans)
+			verdict.composition = verdict.err != nil
+		}
+		if verdict.err == nil {
 			verdict.badModels = badModelsOf(scans, narrowed)
 		}
 		if verdict.err != nil {
@@ -143,43 +154,87 @@ func badModelsOf(scans *CatalogScans, listed *catalog.Catalog) []badModel {
 	return bad
 }
 
-// offer returns the models the profile offers and a warning for each that fails. A model that
-// fails is left out unless it is the profile's model_default or the model the caller
-// requests (keep), or every listed model fails: the run then says what is wrong with it.
-func (v *profileVerdict) offer(sessionPath, profileID, keep string) (*catalog.Catalog, []string) {
+// checkToolsetComposition applies the profile's toolsets to the settings the profile would run
+// with, as compose does, and returns what that finds: hooks given both in the settings and a
+// toolset, an MCP server that does not exist or is given twice, a malformed mcp object, a
+// removed key. Only what the toolsets add is judged here, so a profile left out for it is one
+// whose toolset files are what is wrong. A profile's own settings (sandbox, hooks, tool
+// settings) are not, and a native tool setting of a toolset is checked with every other
+// setting when the profile is loaded: those fail the load of the profile that runs, and no
+// other profile takes its place.
+func checkToolsetComposition(layout Layout, session layoutSessionFile, sessionPath, profilePath string, file layoutProfileFile, scans *CatalogScans) error {
+	if len(file.Toolset) == 0 {
+		return nil
+	}
+	setting := mergeSettings(mergeSettings(layout.Defaults, mergeSettings(nil, session.Settings)), file.Settings)
+	scratch := &layoutCompose{layout: layout, sessionPath: sessionPath, scans: scans}
+	return scratch.addToolsets(setting, file.Toolset, profilePath, setting["env_file"])
+}
+
+// bad returns the error of a listed model whose file fails the model rules.
+func (v *profileVerdict) bad(id string) error {
+	for _, item := range v.badModels {
+		if item.id == id {
+			return item.err
+		}
+	}
+	return nil
+}
+
+// offer returns the models the profile offers, which are those of its list whose files pass,
+// and a warning for each that does not and for what that means for the model a run uses.
+func (v *profileVerdict) offer(sessionPath, profileID string) (*catalog.Catalog, []string) {
 	if len(v.badModels) == 0 {
 		return v.listed, nil
 	}
-	chosen := map[string]string{}
+	defaultID := ""
 	if v.file.ModelDefault != "" {
-		id, _, _ := SplitModelEffort(v.file.ModelDefault)
-		chosen[id] = "its model_default"
-	}
-	if keep != "" {
-		chosen[keep] = "the requested model"
+		defaultID, _, _ = SplitModelEffort(v.file.ModelDefault)
 	}
 	offered := v.listed
-	var dropped []badModel
 	var notes []string
 	for _, item := range v.badModels {
-		if why, kept := chosen[item.id]; kept {
-			notes = append(notes, fmt.Sprintf("%s: model %s of profile %s cannot be used and is still offered as %s, so a run with it fails: %v", sessionPath, item.id, profileID, why, item.err))
-			continue
-		}
-		dropped = append(dropped, item)
 		offered = offered.Without(item.id)
+		note := fmt.Sprintf("%s: model %s left out of profile %s: %v", sessionPath, item.id, profileID, item.err)
+		if item.id == defaultID {
+			note += "; it is the profile's model_default, so a run that names no model stops with this error and no other model is used"
+		}
+		notes = append(notes, note)
 	}
 	if offered.Len() == 0 {
-		// Nothing usable is listed: keep them all, so that a run reports the file's error.
-		for _, item := range dropped {
-			notes = append(notes, fmt.Sprintf("%s: model %s of profile %s cannot be used and no model of the profile can: %v", sessionPath, item.id, profileID, item.err))
-		}
-		return v.listed, notes
-	}
-	for _, item := range dropped {
-		notes = append(notes, fmt.Sprintf("%s: model %s left out of profile %s: %v", sessionPath, item.id, profileID, item.err))
+		notes = append(notes, fmt.Sprintf("%s: no model of profile %s can be used, so a run with it stops with the errors above", sessionPath, profileID))
 	}
 	return offered, notes
+}
+
+// selectionFault is the error a run gets instead of a model when the model it would use is
+// one that is left out: the model the caller requests, else the profile's explicit
+// model_default, else (no default named) the first of the list when none of the list passes.
+// It is nil when that model is usable, so a model that is left out never changes which one
+// is used.
+func (v *profileVerdict) selectionFault(requested string) error {
+	if len(v.badModels) == 0 {
+		return nil
+	}
+	if requested != "" {
+		id, _, err := SplitModelEffort(requested)
+		if err != nil {
+			return nil
+		}
+		return v.bad(id)
+	}
+	if v.file.ModelDefault != "" {
+		id, _, _ := SplitModelEffort(v.file.ModelDefault)
+		return v.bad(id)
+	}
+	if len(v.badModels) < v.listed.Len() {
+		return nil
+	}
+	reasons := make([]string, 0, len(v.badModels))
+	for _, item := range v.badModels {
+		reasons = append(reasons, item.err.Error())
+	}
+	return configError("%s: no model it lists can be used: %s", v.entry.Path, strings.Join(reasons, "; "))
 }
 
 // modelFileProblem is nil when the file at path passes the model rules.

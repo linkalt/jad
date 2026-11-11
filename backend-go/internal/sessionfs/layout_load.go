@@ -84,14 +84,18 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 
 	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans, judged: judged}
 	built.warnings = judged.skippedNotes(sessionPath, session.defaultProfile(judged.all), defaultProfile)
-	if requestedModel != "" {
-		built.keepModel, _, _ = SplitModelEffort(requestedModel)
-	}
 	setting, modelPaths, err := built.compose(entry, nil)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[entry.ID()], requestedModel)
+	// A model that fails the model rules is not offered, so it cannot be loaded as the
+	// requested one; the session loads without a model and a run reports the file's error.
+	fault := judged.verdicts[entry.ID()].selectionFault(requestedModel)
+	loadModelName := requestedModel
+	if fault != nil && requestedModel != "" {
+		loadModelName = ""
+	}
+	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[entry.ID()], loadModelName)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -118,6 +122,14 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	config.ModelPath = modelPaths[name]
 	config.ModelPaths = modelPaths
+	if fault != nil {
+		config.ModelFault, config.ModelPath, config.ReasoningEffort = fault, "", ""
+		if requestedModel == "" {
+			// The profile's own default is the one that fails: the session has none, and none
+			// of the others stands in for it.
+			config.ModelDefault = ""
+		}
+	}
 	if config.NativeSubagent != nil && config.NativeSubagent.ModelChoice {
 		config.NativeSubagent.ProfileModels = modelPaths
 	}
@@ -381,13 +393,14 @@ func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionP
 	return nil
 }
 
-// LoadLayoutSessionConfig loads the settings and the selected model file.
+// LoadLayoutSessionConfig loads the settings and the selected model file; a model that cannot be
+// used is an error here (LoadSessionConfig is the one that lets such a session load).
 func LoadLayoutSessionConfig(location Location, layout Layout, requestedProfile, requestedModel string) (SessionConfig, error) {
 	config, err := LoadLayoutSessionSettings(location, layout, requestedProfile, requestedModel)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	if config.ModelPath == "" {
+	if config.ModelPath == "" && config.ModelFault == nil {
 		return SessionConfig{}, configError("%s: profile %s has no model; list one in its models", config.SettingPath, config.Profile)
 	}
 	return config.WithModel()
@@ -421,9 +434,7 @@ type layoutCompose struct {
 	// profile of the scope, left-out ones included.
 	profiles *catalog.Catalog
 	judged   scopeJudgement
-	// keepModel is the model the request names; it stays offered even when its file fails.
-	keepModel string
-	keys      map[string]string
+	keys     map[string]string
 	// profileNames maps a profile ID to the name its file sets; a profile without one is absent.
 	profileNames map[string]string
 	// scans is the catalog scans one list call shares between its sessions; nil scans
@@ -451,7 +462,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 	c.scans.noteFile(selected.Path)
 	verdict := c.judged.verdicts[selected.ID()]
 	profile := verdict.file
-	models, notes := verdict.offer(c.sessionPath, selected.ID(), c.keepModel)
+	models, notes := verdict.offer(c.sessionPath, selected.ID())
 	for _, note := range notes {
 		c.warn("%s", note)
 	}
@@ -621,9 +632,14 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 	if ids := models.IDs(); len(ids) > 0 {
 		entry["models"] = ids
 		entry["model_default"] = ids[0]
+	} else if listed := c.judged.verdicts[profileID].listed; listed != nil && listed.Len() > 0 {
+		// Every model it lists fails: it offers none, which is not the same as listing none.
+		entry["models"] = []string{}
 	}
-	if profile.ModelDefault != "" {
-		entry["model_default"] = profile.ModelDefault
+	if id, _, _ := SplitModelEffort(profile.ModelDefault); profile.ModelDefault != "" {
+		if _, offered := models.Get(id); offered {
+			entry["model_default"] = profile.ModelDefault
+		}
 	}
 	if profile.Instructions != nil {
 		entry["instructions"] = profile.Instructions

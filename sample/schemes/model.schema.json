@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "model.schema.json",
   "title": "Jad model.json",
-  "description": "Session model and provider configuration. Secrets are referenced through an environment variable name, never stored here. A file that fails these rules is left out of the models a session offers, with a warning in the server log, and the other models still load; a model the profile names as its model_default is not replaced by another one, and a run with it stops with the file's error.",
+  "description": "Session model and provider configuration. Secrets are referenced through an environment variable name, never stored here. A file that fails these rules is left out of the models a session offers, with a warning in the server log, and the other models still load; this holds for a profile's model_default too, which is never replaced by another model: a run that would use a model that is left out stops with the file's error.",
   "type": "object",
   "required": ["model"],
   "properties": {

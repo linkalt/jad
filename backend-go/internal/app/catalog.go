@@ -57,8 +57,8 @@ type modelOption = httpapi.SessionModelOption
 // listingModelOptions describes every model the profile offers, in order, reading
 // each file raw like listingModelSummary: a file that cannot be read gives provider
 // "unknown" and no efforts, and never fails or hides a session. The loader has already
-// left out the models whose files fail the model rules, except one the profile names as
-// its model_default, which stays so that a run reports what is wrong with it.
+// left out every model whose file fails the model rules, the profile's model_default
+// included, so the raw read only meets a file that changed after the load.
 func listingModelOptions(config sessionfs.SessionConfig) []modelOption {
 	if config.Models == nil {
 		return nil

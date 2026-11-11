@@ -151,8 +151,16 @@ type SessionConfig struct {
 	// ProfileNames maps a profile ID to the display name its file sets; a profile without a name is absent.
 	ProfileNames map[string]string
 	ModelPath    string
-	// ModelPaths maps each model ID the profile may use to its file.
+	// ModelPaths maps each model ID the profile may use to its file. A model whose file fails
+	// the model rules is not in it, nor in Models.
 	ModelPaths map[string]string
+	// ModelFault is why the model this load would run cannot be used, and then ModelPath is
+	// empty (a copy that is given another ModelPath, a sub-agent's or a fallback's, is not
+	// affected): the profile's explicit model_default, or the model the caller requested, fails
+	// the model rules (the error names its file), or no model of the profile passes. The
+	// session still loads, so it can be listed and read; a run (WithModel) stops with this
+	// error, and no other model is run in its place.
+	ModelFault error
 	// ProfilePath is the selected profile's own file in a catalog-layout session; empty otherwise.
 	ProfilePath string
 	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
@@ -698,10 +706,17 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 
 // LoadSessionConfig loads the session settings and the selected model file. Use
 // LoadSessionSettings when the model is not needed yet.
+//
+// A session whose own default model cannot be used (ModelFault, with no model requested) still
+// loads, with no model read, so that its history and files stay readable; a caller that
+// runs the model gets the error from WithModel. A model the caller requests must load.
 func LoadSessionConfig(location Location, requestedProfile, requestedModel string) (SessionConfig, error) {
 	config, err := LoadSessionSettings(location, requestedProfile, requestedModel)
 	if err != nil {
 		return SessionConfig{}, err
+	}
+	if config.ModelFault != nil && requestedModel == "" {
+		return config, nil
 	}
 	return config.WithModel()
 }
@@ -709,6 +724,9 @@ func LoadSessionConfig(location Location, requestedProfile, requestedModel strin
 // WithModel returns the configuration with the model file read and validated.
 // The file is the one LoadSessionSettings selected (ModelPath).
 func (c SessionConfig) WithModel() (SessionConfig, error) {
+	if c.ModelPath == "" && c.ModelFault != nil {
+		return SessionConfig{}, c.ModelFault
+	}
 	model, err := loadModel(c.ModelPath, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
 		return SessionConfig{}, err

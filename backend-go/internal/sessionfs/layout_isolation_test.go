@@ -73,9 +73,10 @@ func TestABrokenModelIsLeftOutOfTheProfileAndTheNextOneIsTheDefault(t *testing.T
 	}
 }
 
-// A model the profile names as its model_default is never replaced by another one: it stays
-// offered, the session loads, and a run with it stops with the file's error.
-func TestAModelDefaultThatFailsIsNotReplaced(t *testing.T) {
+// A model the profile names as its model_default is hidden like any other that fails, and it
+// is never replaced by another: the session has no default model, loads (so it can be listed and
+// read), and a run that names no model stops with the file's error.
+func TestAModelDefaultThatFailsIsHiddenAndNotReplaced(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{
 		Models:   isolationModels(),
 		Profiles: map[string]map[string]any{"dev/coder": {"models": []string{"m/a", "m/b", "m/c"}, "model_default": "m/a"}},
@@ -87,19 +88,43 @@ func TestAModelDefaultThatFailsIsNotReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings: %v", err)
 	}
-	if want := []string{"m/a", "m/b"}; !reflect.DeepEqual(config.Models, want) || config.ModelDefault != "m/a" {
-		t.Errorf("Models = %v default %q, want %v with m/a the default", config.Models, config.ModelDefault, want)
+	if want := []string{"m/b"}; !reflect.DeepEqual(config.Models, want) || config.ModelDefault != "" || config.ModelPath != "" {
+		t.Errorf("Models = %v default %q path %q, want only m/b, no default and no model file", config.Models, config.ModelDefault, config.ModelPath)
 	}
-	if !hasWarning(config, "model m/a", "still offered", "its model_default") || !hasWarning(config, "model m/c left out") {
+	if _, listed := config.ModelPaths["m/a"]; listed {
+		t.Errorf("ModelPaths = %v lists the hidden default", config.ModelPaths)
+	}
+	if config.ModelFault == nil || !strings.Contains(config.ModelFault.Error(), modelFileOf(fixture, "m/a")) {
+		t.Fatalf("ModelFault = %v, want the error of m/a's file", config.ModelFault)
+	}
+	if !hasWarning(config, "model m/a left out", "the profile's model_default") || !hasWarning(config, "model m/c left out") {
 		t.Errorf("Warnings = %q", config.Warnings)
 	}
-	_, err = config.WithModel()
-	if err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/a")) {
-		t.Fatalf("a run with the default model: error = %v, want the file's error", err)
+	if _, err := config.WithModel(); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/a")) {
+		t.Fatalf("a run with no model named: error = %v, want the default's file error", err)
+	}
+	// Reading the session does not need the model: it loads, and nothing is read in its place.
+	read, err := LoadSessionConfig(location, "", "")
+	if err != nil {
+		t.Fatalf("LoadSessionConfig: %v", err)
+	}
+	if read.Model.Name != "" || read.ModelFault == nil {
+		t.Errorf("LoadSessionConfig used a model: %+v fault %v", read.Model, read.ModelFault)
+	}
+	// A model of the list that passes can still be asked for by name.
+	chosen, err := LoadSessionConfig(location, "", "m/b")
+	if err != nil || chosen.Model.Name != "beta-model" || chosen.ModelFault != nil || chosen.ModelPath != modelFileOf(fixture, "m/b") {
+		t.Fatalf("requesting m/b: %v %+v", err, chosen.ModelFault)
+	}
+	// Repaired, it is offered and the default again.
+	writeFileT(t, modelFileOf(fixture, "m/a"), `{"provider":"alpha","model":"alpha-model","api_key_env":"FIXTURE_KEY"}`)
+	config, err = LoadSessionSettings(location, "", "")
+	if err != nil || config.ModelDefault != "m/a" || config.ModelFault != nil || !reflect.DeepEqual(config.Models, []string{"m/a", "m/b"}) {
+		t.Fatalf("after the repair: %v default %q fault %v Models %v", err, config.ModelDefault, config.ModelFault, config.Models)
 	}
 }
 
-// A model_default with an effort on a model whose file fails does not fail the profile.
+// A model_default with an effort on a model whose file fails does not hide the profile.
 func TestAModelDefaultEffortOnABrokenModelDoesNotHideTheProfile(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{
 		Models:   isolationModels(),
@@ -110,11 +135,13 @@ func TestAModelDefaultEffortOnABrokenModelDoesNotHideTheProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings: %v", err)
 	}
-	if config.Profile != "dev/coder" || config.ModelDefault != "m/a@high" {
-		t.Errorf("Profile %q default %q", config.Profile, config.ModelDefault)
+	if config.Profile != "dev/coder" || config.ModelDefault != "" || config.ReasoningEffort != "" || config.ModelFault == nil {
+		t.Errorf("Profile %q default %q effort %q fault %v", config.Profile, config.ModelDefault, config.ReasoningEffort, config.ModelFault)
 	}
 }
 
+// A model the caller requests that fails is not offered, so it is not loaded in its place or
+// replaced: the load succeeds with no model, the explicit load of it and a run say which file.
 func TestARequestedModelThatFailsIsNotReplaced(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{
 		Models:   isolationModels(),
@@ -125,37 +152,70 @@ func TestARequestedModelThatFailsIsNotReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings: %v", err)
 	}
-	if config.ModelPath != modelFileOf(fixture, "m/c") {
-		t.Fatalf("ModelPath = %s, want the requested model's file", config.ModelPath)
+	if config.ModelPath != "" || config.ReasoningEffort != "" || config.ModelDefault != "m/a" {
+		t.Fatalf("ModelPath = %q effort %q default %q, want no model file and the profile's own default kept", config.ModelPath, config.ReasoningEffort, config.ModelDefault)
+	}
+	if _, listed := config.ModelPaths["m/c"]; listed || !reflect.DeepEqual(config.Models, []string{"m/a", "m/b"}) {
+		t.Errorf("m/c is still offered: Models %v ModelPaths %v", config.Models, config.ModelPaths)
 	}
 	if _, err := config.WithModel(); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/c")) {
 		t.Fatalf("WithModel error = %v, want the requested file's error", err)
 	}
-	if !hasWarning(config, "model m/c", "the requested model") {
-		t.Errorf("Warnings = %q", config.Warnings)
+	if _, err := LoadSessionConfig(location, "", "m/c@high"); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/c")) {
+		t.Fatalf("an explicit load of m/c@high: error = %v, want its file's error", err)
+	}
+	// Without a request the session uses its own default as always.
+	if plain, err := LoadSessionConfig(location, "", ""); err != nil || plain.Model.Name != "alpha-model" {
+		t.Fatalf("the default: %v %+v", err, plain.Model)
+	}
+	// A model the profile does not list is still "not available", whatever its file.
+	if _, err := LoadSessionSettings(location, "", "m/zzz"); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("an unlisted model: error = %v", err)
 	}
 }
 
-// When no model of the profile passes, none is hidden: a run reports the default's own error.
-func TestEveryModelFailingLeavesThemOfferedWithWarnings(t *testing.T) {
-	location, fixture := layoutLocation(t, layouttest.Spec{
-		Models:   isolationModels(),
-		Profiles: map[string]map[string]any{"dev/coder": {"models": []string{"m/a", "m/b"}}},
-	})
-	corrupt(t, modelFileOf(fixture, "m/a"))
-	corrupt(t, modelFileOf(fixture, "m/b"))
-	config, err := LoadSessionSettings(location, "", "")
-	if err != nil {
-		t.Fatalf("settings: %v", err)
-	}
-	if want := []string{"m/a", "m/b"}; !reflect.DeepEqual(config.Models, want) || config.ModelDefault != "m/a" {
-		t.Errorf("Models = %v default %q", config.Models, config.ModelDefault)
-	}
-	if !hasWarning(config, "model m/a", "no model of the profile can") || !hasWarning(config, "model m/b", "no model of the profile can") {
-		t.Errorf("Warnings = %q", config.Warnings)
-	}
-	if _, err := LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/a")) {
-		t.Fatalf("LoadSessionConfig error = %v", err)
+// When no model of the profile passes, none is offered. The session still loads, and a run
+// reports each file; nothing is run in their place.
+func TestEveryModelFailingOffersNoneAndTheSessionStillLoads(t *testing.T) {
+	for name, extra := range map[string]map[string]any{
+		"no default named":      {},
+		"an explicit default":   {"model_default": "m/b"},
+		"a default with effort": {"model_default": "m/b@high"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := map[string]any{"models": []string{"m/a", "m/b"}}
+			for key, value := range extra {
+				profile[key] = value
+			}
+			location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Profiles: map[string]map[string]any{"dev/coder": profile}})
+			corrupt(t, modelFileOf(fixture, "m/a"))
+			corrupt(t, modelFileOf(fixture, "m/b"))
+			config, err := LoadSessionSettings(location, "", "")
+			if err != nil {
+				t.Fatalf("settings: %v", err)
+			}
+			if config.Models == nil || len(config.Models) != 0 || len(config.ModelPaths) != 0 || config.ModelDefault != "" || config.ModelPath != "" {
+				t.Errorf("Models = %#v ModelPaths %v default %q path %q, want an empty offer", config.Models, config.ModelPaths, config.ModelDefault, config.ModelPath)
+			}
+			if !hasWarning(config, "model m/a left out") || !hasWarning(config, "model m/b left out") || !hasWarning(config, "no model of profile dev/coder can be used") {
+				t.Errorf("Warnings = %q", config.Warnings)
+			}
+			if _, err := config.WithModel(); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/b")) {
+				t.Fatalf("WithModel error = %v, want the file's error", err)
+			}
+			if name == "no default named" {
+				if _, err := config.WithModel(); !strings.Contains(err.Error(), modelFileOf(fixture, "m/a")) {
+					t.Errorf("the error names only some of the files: %v", err)
+				}
+			}
+			if read, err := LoadSessionConfig(location, "", ""); err != nil || read.ModelFault == nil {
+				t.Fatalf("LoadSessionConfig: %v fault %v", err, read.ModelFault)
+			}
+			// A requested one is the explicit load that fails.
+			if _, err := LoadSessionConfig(location, "", "m/a"); err == nil || !strings.Contains(err.Error(), modelFileOf(fixture, "m/a")) {
+				t.Fatalf("requesting m/a: error = %v", err)
+			}
+		})
 	}
 }
 
@@ -298,6 +358,104 @@ func TestAProfileWithABrokenToolsetIsLeftOut(t *testing.T) {
 	}
 	if config.Profile != "dev/bbb" || !hasWarning(config, "profile dev/aaa left out", "bogus") {
 		t.Errorf("Profile %q Warnings %q", config.Profile, config.Warnings)
+	}
+}
+
+// A toolset that parses but fails when it is applied to the profile (an MCP server that does
+// not exist, a malformed mcp object, hooks given both in the profile's settings and the
+// toolset) hides the profile as a whole, as an unparsable toolset does: the profile list, the
+// default and the profile info agree, the named profile is an error with the toolset's file,
+// and a repair brings it back.
+func TestAProfileWhoseToolsetFailsWhenAppliedIsLeftOut(t *testing.T) {
+	cases := map[string]struct {
+		toolset string
+		profile map[string]any
+		want    string
+	}{
+		"an mcp server that does not exist": {`{"mcp":{"nope/missing":{}}}`, map[string]any{}, "nope/missing"},
+		"an mcp that is not an object":      {`{"mcp":[1]}`, map[string]any{}, "mcp must be an object"},
+		"hooks in the settings and toolset": {`{"hooks":{"pre_tool":[]}}`, map[string]any{"settings": map[string]any{"hooks": map[string]any{"pre_tool": []any{}}}}, "hooks is set here and in the settings"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			profile := map[string]any{"models": []string{"m/a"}, "toolset": "coding/default"}
+			for key, value := range test.profile {
+				profile[key] = value
+			}
+			location, fixture := layoutLocation(t, layouttest.Spec{
+				Models:   isolationModels(),
+				Native:   map[string]any{},
+				Profiles: map[string]map[string]any{"dev/aaa": profile, "dev/bbb": {"models": []string{"m/b"}}},
+			})
+			toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+			writeFileT(t, toolsetFile, test.toolset)
+
+			config, err := LoadSessionSettings(location, "", "")
+			if err != nil {
+				t.Fatalf("a toolset that fails to apply failed the session: %v", err)
+			}
+			if config.Profile != "dev/bbb" || !reflect.DeepEqual(config.Profiles, []string{"dev/bbb"}) || config.DefaultProfile != "dev/bbb" {
+				t.Errorf("Profile %q Profiles %v default %q", config.Profile, config.Profiles, config.DefaultProfile)
+			}
+			if !hasWarning(config, "profile dev/aaa left out", toolsetFile, test.want, "the default profile is dev/bbb instead") {
+				t.Errorf("Warnings = %q", config.Warnings)
+			}
+			info, err := ReadLayoutProfileInfo(location)
+			if err != nil || info.ActiveProfile != "dev/bbb" || !reflect.DeepEqual(info.Profiles, []string{"dev/bbb"}) {
+				t.Errorf("ProfileInfo = %+v, %v", info, err)
+			}
+			if _, err := SetLayoutModelDefault(location, "dev/aaa", "m/a", "none"); err == nil || !strings.Contains(err.Error(), toolsetFile) {
+				t.Errorf("setting the model of the left-out profile: error = %v", err)
+			}
+			// Named, it is an error with the toolset's file and nothing else takes its place.
+			if _, err := LoadSessionSettings(location, "dev/aaa", ""); err == nil || !strings.Contains(err.Error(), toolsetFile) {
+				t.Fatalf("selecting dev/aaa: error = %v", err)
+			}
+
+			writeFileT(t, toolsetFile, `{}`)
+			config, err = LoadSessionSettings(location, "", "")
+			if err != nil || config.Profile != "dev/aaa" || !reflect.DeepEqual(config.Profiles, []string{"dev/aaa", "dev/bbb"}) {
+				t.Fatalf("after the repair: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
+			}
+		})
+	}
+}
+
+// Only what the toolsets add is judged for the profile list. A setting the selected profile
+// cannot be loaded with (a native tool of its toolset that fails its own rules, like the
+// sandbox in the test above) fails the load, and no other profile takes its place.
+func TestAToolsetNativeSettingErrorStillFailsTheProfileThatRuns(t *testing.T) {
+	location, fixture := layoutLocation(t, layouttest.Spec{
+		Models:   isolationModels(),
+		Native:   map[string]any{},
+		Profiles: map[string]map[string]any{"dev/aaa": {"models": []string{"m/a"}, "toolset": "coding/default"}, "dev/bbb": {"models": []string{"m/b"}}},
+	})
+	toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+	writeFileT(t, toolsetFile, `{"native":{"exec":{"no_such_setting":1}}}`)
+	config, err := LoadSessionSettings(location, "", "")
+	if err == nil {
+		t.Fatalf("the profile loaded: Profile %q Warnings %q", config.Profile, config.Warnings)
+	}
+	if !strings.Contains(err.Error(), "no_such_setting") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := LoadSessionSettings(location, "dev/bbb", ""); err != nil {
+		t.Fatalf("dev/bbb named: %v", err)
+	}
+}
+
+// When every profile of the scope fails to apply its toolset, the session fails with the first
+// profile's error.
+func TestEveryProfileToolsetFailingToApplyFailsTheLoad(t *testing.T) {
+	location, fixture := layoutLocation(t, layouttest.Spec{
+		Models:   isolationModels(),
+		Native:   map[string]any{},
+		Profiles: map[string]map[string]any{"dev/aaa": {"models": []string{"m/a"}, "toolset": "coding/default"}, "dev/bbb": {"models": []string{"m/b"}, "toolset": "coding/default"}},
+	})
+	toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+	writeFileT(t, toolsetFile, `{"mcp":{"nope/missing":{}}}`)
+	if _, err := LoadSessionSettings(location, "", ""); err == nil || !strings.Contains(err.Error(), toolsetFile) {
+		t.Fatalf("error = %v, want the toolset's file", err)
 	}
 }
 

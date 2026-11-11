@@ -42,12 +42,15 @@ func (r *Resolver) UpdateModelDefault(ctx context.Context, reference, requestedP
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
 	}
-	if !containsSessionPath(settings.Models, modelID) {
-		return httpapi.SessionModelDefaultUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "model config path is not available in the active session path profile"}
-	}
+	// A model the profile lists whose file fails the model rules is not in settings.Models;
+	// asking for it gets the file's error here, not "not available" (a model the profile does
+	// not list gets that from this load too).
 	selected, err := sessionfs.LoadSessionConfig(location, profile, modelDefault)
 	if err != nil {
 		return httpapi.SessionModelDefaultUpdate{}, mapProfileSettingsError(err)
+	}
+	if !containsSessionPath(settings.Models, modelID) {
+		return httpapi.SessionModelDefaultUpdate{}, &httpapi.StatusError{Code: http.StatusBadRequest, Message: "model config path is not available in the active session path profile"}
 	}
 	update, err := sessionfs.SetLayoutModelDefaultIfMatch(location, profile, modelDefault, settings.Persistence.Durability, ifMatch)
 	if err != nil {

@@ -88,6 +88,136 @@ func TestBrokenProfileAndModelFilesDoNotFailTheSession(t *testing.T) {
 	}
 }
 
+// A model that fails the model rules is hidden from every view, including the profile's own
+// model_default. The session stays listed and its history readable. A run that would use the
+// hidden model, because it names none or names that one, stops with that file's error and never
+// reaches a provider; a run that names another model of the profile works, and the picker's
+// model-default update names the file for the hidden model and repairs by choosing another.
+func TestAHiddenModelDefaultKeepsTheSessionReadableAndIsNeverSubstituted(t *testing.T) {
+	logs := &lockedBuffer{}
+	f := newLayoutFixtureWithBudget(t, nil, nil, func(c *Config) { c.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"first message","model":"openai/large"}`); status != http.StatusOK || strings.Contains(body, "event: error") {
+		t.Fatalf("setup run: %d %s", status, body)
+	}
+	f.overwrite(t, "models/openai/small.json", "{")
+	small := filepath.Join(f.root, "models", "openai", "small.json")
+	calls := len(f.models)
+
+	// Listed, with the model nowhere in it.
+	status, body := f.do(t, http.MethodGet, "/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("list: %d %s", status, body)
+	}
+	var listed struct {
+		Sessions []struct {
+			ID           string `json:"id"`
+			ModelDefault string `json:"model_default"`
+			Models       []string
+			ModelOptions []struct {
+				ID string `json:"id"`
+			} `json:"model_options"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &listed); err != nil || len(listed.Sessions) != 1 {
+		t.Fatalf("decode: %v %s", err, body)
+	}
+	session := listed.Sessions[0]
+	if strings.Join(session.Models, ",") != "openai/large" || session.ModelDefault != "" || len(session.ModelOptions) != 1 || session.ModelOptions[0].ID != "openai/large" {
+		t.Errorf("the list offers the hidden model: models %v default %q options %+v", session.Models, session.ModelDefault, session.ModelOptions)
+	}
+	if strings.Contains(body, "openai/small") {
+		t.Errorf("the list names the hidden model:\n%s", body)
+	}
+	if !strings.Contains(logs.String(), "model openai/small left out") || !strings.Contains(logs.String(), small) {
+		t.Errorf("the log lacks the warning naming the file:\n%s", logs.String())
+	}
+
+	// The session and its history stay readable.
+	for _, path := range []string{"/api/sessions/local:demo", "/api/sessions/local:demo/history", "/api/sessions/local:demo/tools"} {
+		if status, body := f.do(t, http.MethodGet, path, ""); status != http.StatusOK {
+			t.Errorf("GET %s = %d %s, want it readable", path, status, body)
+		}
+	}
+	if _, body := f.do(t, http.MethodGet, "/api/sessions/local:demo", ""); !strings.Contains(body, "first message") {
+		t.Errorf("the snapshot lost the first message:\n%s", body)
+	}
+
+	// A run that names no model, or the hidden one, stores its input and fails; no provider call.
+	for name, request := range map[string]string{
+		"no model named":     `{"input":"second message"}`,
+		"the hidden model":   `{"input":"third message","model":"openai/small"}`,
+		"hidden with effort": `{"input":"fourth message","model":"openai/small@high"}`,
+	} {
+		status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", request)
+		if status != http.StatusOK || !strings.Contains(body, "event: error") {
+			t.Errorf("%s: %d %s, want an error event", name, status, body)
+		}
+	}
+	if len(f.models) != calls {
+		t.Fatalf("a provider was called %d times for a run whose model is hidden", len(f.models)-calls)
+	}
+	if _, body := f.do(t, http.MethodGet, "/api/sessions/local:demo", ""); !strings.Contains(body, "second message") || !strings.Contains(body, "fourth message") {
+		t.Errorf("a run that failed on the model did not keep its input:\n%s", body)
+	}
+	if !strings.Contains(logs.String(), small) {
+		t.Errorf("the log does not name the file that failed the run:\n%s", logs.String())
+	}
+
+	// Another model of the profile runs.
+	if status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"fifth","model":"openai/large"}`); status != http.StatusOK || strings.Contains(body, "event: error") || f.lastModel() != "model-large" {
+		t.Fatalf("run with the other model: %d %s (provider model %q)", status, body, f.lastModel())
+	}
+
+	// Choosing the hidden model as the default names its file; choosing another repairs.
+	status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/small"}`)
+	if status != http.StatusBadRequest || !strings.Contains(body, "small.json") {
+		t.Errorf("model-default on the hidden model: %d %s, want 400 naming the file", status, body)
+	}
+	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`); status != http.StatusOK {
+		t.Fatalf("model-default on the other model: %d %s", status, body)
+	}
+	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"sixth"}`); status != http.StatusOK || strings.Contains(body, "event: error") || f.lastModel() != "model-large" {
+		t.Fatalf("run after the repair: %d %s (provider model %q)", status, body, f.lastModel())
+	}
+}
+
+// A profile whose toolset parses but cannot be applied to the session is left out as a whole:
+// the session lists with the others, and jad check names it with the session.
+func TestAProfileWhoseToolsetCannotBeAppliedIsLeftOutOfTheSession(t *testing.T) {
+	logs := &lockedBuffer{}
+	f := newLayoutFixtureWithBudget(t, nil, nil, func(c *Config) { c.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
+	f.overwrite(t, "tools/coding/none.json", `{"native":{},"mcp":{"nope/missing":{}}}`)
+	// dev/coder (the default by name) and review/reviewer both use it; give the reviewer a good one.
+	f.overwrite(t, "tools/coding/fine.json", `{"native":{},"mcp":{}}`)
+	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"coding/fine"}`)
+
+	status, body := f.do(t, http.MethodGet, "/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("list: %d %s", status, body)
+	}
+	listed := listedFor(t, []byte(body))
+	if listed.ID != "demo" || strings.Join(listed.Profiles, ",") != "review/reviewer" || listed.Active != "review/reviewer" {
+		t.Fatalf("listed = %+v, want demo with review/reviewer only", listed)
+	}
+	if !strings.Contains(logs.String(), "profile dev/coder left out") || !strings.Contains(logs.String(), "none.json") {
+		t.Errorf("the log lacks the warning naming the toolset:\n%s", logs.String())
+	}
+	// jad check names the toolset once, on its own kind; a toolset that is fine alone but does
+	// not apply to a session is named with the session (TestCheckFilesLoadsEveryProfileOfASession).
+	if valid, out := f.checkFiles(t); valid || !strings.Contains(out, "nope/missing") {
+		t.Errorf("jad check: valid=%v\n%s", valid, out)
+	}
+	// Named, the profile is an error and the reviewer does not run in its place.
+	before := len(f.models)
+	status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run?profile="+url.QueryEscape("dev/coder"), `{"input":"x"}`)
+	if status == http.StatusOK && !strings.Contains(body, "event: error") {
+		t.Fatalf("run on the profile: %d %s", status, body)
+	}
+	if len(f.models) != before {
+		t.Fatalf("the provider was called for the left-out profile")
+	}
+}
+
 // The session list reloads a session when a profile or model file it left out is repaired or
 // broken in place, logs each warning once however often the list is polled, and its ETag
 // changes with what it offers.

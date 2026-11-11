@@ -179,6 +179,25 @@ func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
 	}
 }
 
+// addLeftOutByComposition reports each profile of the session's scope that a load leaves out
+// because its toolsets do not apply to this session's settings. The load only warns, and the
+// profile never shows in the session's profile list, so nothing else would name it.
+func (r *CheckReport) addLeftOutByComposition(id string, location Location) {
+	session, err := readLayoutSession(location)
+	if err != nil {
+		return
+	}
+	judged, err := judgeScope(*location.Root.Layout, session, location.SettingFile(), nil)
+	if err != nil {
+		return
+	}
+	for _, profile := range judged.leftOut() {
+		if verdict := judged.verdicts[profile]; verdict.composition {
+			r.add("session", fmt.Sprintf("%s (profile %s)", id, profile), verdict.err)
+		}
+	}
+}
+
 func (r *CheckReport) checkSessions(roots []Root) {
 	files, _, err := listSessionFiles(roots, 0, func(location Location, err error) {
 		r.Checked++
@@ -203,6 +222,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 		r.checkProfileMessage(file.ID, config)
 		r.addSandbox(file.ID, config)
 		r.addShares(file.ID, config)
+		r.addLeftOutByComposition(file.ID, location)
 		for _, profile := range config.Profiles {
 			if profile == config.Profile {
 				continue

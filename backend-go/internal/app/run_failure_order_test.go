@@ -86,13 +86,29 @@ func TestRunStoresInputBeforeModelToolsAndCredentialAreResolved(t *testing.T) {
 		})
 	}
 
-	// The list reads only the settings, so a session whose model file fails
-	// validation is still listed, with the placeholder model summary.
+	// The list reads only the settings, so a session whose model file fails validation is still
+	// listed. Its model is not offered: no model_default, no models and no option for it.
 	list := getAPI(t, api.URL, "/api/sessions", integrationAPIToken, "")
 	listBody, _ := io.ReadAll(list.Body)
 	list.Body.Close()
-	if !strings.Contains(string(listBody), `"id":"invalid-model-file"`) || !strings.Contains(string(listBody), `"model":{"provider":"openai","model":"invalid-model-file"}`) {
-		t.Fatalf("session with an invalid model file is missing from the list or mis-summarised:\n%s", listBody)
+	var listed struct {
+		Sessions []map[string]json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(listBody, &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, session := range listed.Sessions {
+		if string(session["id"]) != `"invalid-model-file"` {
+			continue
+		}
+		found = true
+		if string(session["models"]) != `[]` || session["model_options"] != nil || session["model_default"] != nil || string(session["model"]) != `{"provider":"unknown","model":"invalid-model-file"}` {
+			t.Errorf("a session whose model file fails offers it: models %s options %s default %s model %s", session["models"], session["model_options"], session["model_default"], session["model"])
+		}
+	}
+	if !found {
+		t.Fatalf("session with an invalid model file is missing from the list:\n%s", listBody)
 	}
 }
 
