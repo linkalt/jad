@@ -23,6 +23,15 @@ type CatalogScans struct {
 type scanMemo struct {
 	mu      sync.Mutex
 	results map[scanKey]scanResult
+	// checks are the verdicts of single-file checks (see check), by kind and path.
+	checks map[scanKey]fileCheck
+}
+
+// fileCheck is the verdict of one file check with the stamp taken just before the file was
+// read, so every load that reuses the verdict still stamps what the verdict was made from.
+type fileCheck struct {
+	stamp fileStamp
+	err   error
 }
 
 type scanKey struct{ kind, dir string }
@@ -36,7 +45,7 @@ type scanResult struct {
 
 // NewCatalogScans returns an empty memo.
 func NewCatalogScans() *CatalogScans {
-	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult)}}
+	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck)}}
 }
 
 // recorder is a view that shares the memo and records what its own load reads: a
@@ -67,6 +76,27 @@ func (s *CatalogScans) Scan(kind, dir string) (*catalog.Catalog, error) {
 		s.mu.Unlock()
 	}
 	return result.catalog, result.err
+}
+
+// check runs a check of the file at path, once per kind and path for the life of the memo,
+// and stamps the file for a recording view like noteFile. A nil scans runs it every time.
+func (s *CatalogScans) check(kind, path string, run func(path string) error) error {
+	if s == nil {
+		return run(path)
+	}
+	key := scanKey{kind: kind, dir: path}
+	s.memo.mu.Lock()
+	result, seen := s.memo.checks[key]
+	if !seen {
+		result = fileCheck{stamp: statStamp(path)}
+		result.err = run(path)
+		s.memo.checks[key] = result
+	}
+	s.memo.mu.Unlock()
+	if s.recording {
+		s.add([]fileStamp{result.stamp})
+	}
+	return result.err
 }
 
 // noteFile stamps path before the caller reads it. A nil or non-recording scans does

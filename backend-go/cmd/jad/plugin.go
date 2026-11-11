@@ -134,11 +134,15 @@ func runPluginCommand(args []string, streams commandStreams) error {
 		}
 		_, _ = fmt.Fprintf(streams.stdout, "Removed %s %s: %d parts\n", record.Name, versionText(record.Version), len(record.Entries))
 	case "list":
-		statuses, err := target.List()
+		statuses, problems, err := target.ListReport()
 		if err != nil {
 			return &exitError{code: exitFailed, err: err}
 		}
-		if len(statuses) == 0 {
+		// A record that cannot be read is reported and left out; the other plugins are listed.
+		for _, problem := range problems {
+			_, _ = fmt.Fprintf(streams.stderr, "warning: plugin left out of the list: %v\n", problem)
+		}
+		if len(statuses) == 0 && len(problems) == 0 {
 			_, _ = fmt.Fprintln(streams.stdout, "No plugins are installed.")
 		}
 		for _, status := range statuses {

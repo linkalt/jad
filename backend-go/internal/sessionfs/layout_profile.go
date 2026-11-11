@@ -10,14 +10,30 @@ import (
 // setting: schema_version, settings keys, the models it lists and its model_default. It
 // returns the profile and the model catalog narrowed to the profile's models.
 func readProfile(path string, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
+	return readProfileWith(path, allModels, checkModelEffort)
+}
+
+// readProfileOf is readProfile for judging a profile of a session's scope: a model_default
+// whose model file fails the model rules does not fail the profile (the model is reported
+// on its own, and a run with it stops with the file's error). An effort the model does not
+// offer still does.
+func readProfileOf(path string, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
+	return readProfileWith(path, allModels, checkModelEffortOnly)
+}
+
+func readProfileWith(path string, allModels *catalog.Catalog, effortCheck func(modelPath, effort string) error) (layoutProfileFile, *catalog.Catalog, error) {
 	var profile layoutProfileFile
 	if err := readLayoutFile(path, &profile); err != nil {
 		return layoutProfileFile{}, nil, err
 	}
-	return checkProfile(path, profile, allModels)
+	return checkProfileWith(path, profile, allModels, effortCheck)
 }
 
 func checkProfile(path string, profile layoutProfileFile, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
+	return checkProfileWith(path, profile, allModels, checkModelEffort)
+}
+
+func checkProfileWith(path string, profile layoutProfileFile, allModels *catalog.Catalog, effortCheck func(modelPath, effort string) error) (layoutProfileFile, *catalog.Catalog, error) {
 	if profile.SchemaVersion != 0 && profile.SchemaVersion != 1 {
 		return layoutProfileFile{}, nil, configError("%s: unsupported schema_version %d", path, profile.SchemaVersion)
 	}
@@ -37,7 +53,7 @@ func checkProfile(path string, profile layoutProfileFile, allModels *catalog.Cat
 		if err != nil {
 			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
 		}
-		if err := checkModelEffort(entry.Path, effort); err != nil {
+		if err := effortCheck(entry.Path, effort); err != nil {
 			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
 		}
 	}

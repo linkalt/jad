@@ -53,6 +53,17 @@ func TestPluginCommandInstallsListsAndRemoves(t *testing.T) {
 	if out, err := run("plugin", "list"); err != nil || !strings.HasPrefix(out, "acme 1.0.0: 3 parts (from ") {
 		t.Fatalf("list = %q, %v", out, err)
 	}
+	// A record that cannot be read is reported on its own and the other plugins are still listed.
+	brokenRecord := filepath.Join(fixture.StateDir, ".plugins", "broken.json")
+	if err := os.WriteFile(brokenRecord, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("plugin", "list"); err != nil || !strings.Contains(out, "acme 1.0.0: 3 parts (from ") || !strings.Contains(out, "warning: plugin left out of the list: ") || !strings.Contains(out, brokenRecord) {
+		t.Fatalf("list with a broken record = %q, %v", out, err)
+	}
+	if err := os.Remove(brokenRecord); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := run("plugin", "install", source); err != nil || !strings.HasPrefix(out, "Upgraded acme 1.0.0") {
 		t.Fatalf("reinstall = %q, %v", out, err)
 	}

@@ -47,31 +47,46 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		return SessionConfig{}, err
 	}
 
-	profiles, err := scans.Scan("profile", layout.Profiles)
+	if scans == nil {
+		scans = NewCatalogScans()
+	}
+	judged, err := judgeScope(layout, session, sessionPath, scans)
 	if err != nil {
-		return SessionConfig{}, configError("%s: %v", sessionPath, err)
+		return SessionConfig{}, err
 	}
-	if profiles, err = profiles.Narrow(session.Scope.Profiles); err != nil {
-		return SessionConfig{}, configError("%s: scope.profiles: %v", sessionPath, err)
-	}
-	defaultProfile := session.defaultProfile(profiles)
+	// The default is the first profile whose file passes: a profile left out is warned
+	// about, and a profile the caller names must pass itself.
+	defaultProfile := session.defaultProfile(judged.usable)
 	selected := requestedProfile
 	if selected == "" {
 		selected = defaultProfile
 	}
 	if selected == "" {
-		return SessionConfig{}, configError("%s: scope.profiles matches no profile, so there is no profile to run", sessionPath)
+		if judged.all.Len() == 0 {
+			return SessionConfig{}, configError("%s: scope.profiles matches no profile, so there is no profile to run", sessionPath)
+		}
+		// No profile passes: the error is the one the first profile gets, which is what a load
+		// that named no profile reported before profiles were left out.
+		return SessionConfig{}, judged.verdicts[session.defaultProfile(judged.all)].err
 	}
-	entry, err := profiles.Lookup(selected)
+	entry, err := judged.all.Lookup(selected)
 	if err != nil {
 		return SessionConfig{}, configError("%s: %v", sessionPath, err)
 	}
-	keys, err := profileKeys(profiles, sessionPath)
+	if verdict := judged.verdicts[entry.ID()]; verdict.err != nil {
+		return SessionConfig{}, verdict.err
+	}
+	keys, err := profileKeys(judged.all, sessionPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	profiles := judged.usable
 
-	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans}
+	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans, judged: judged}
+	built.warnings = judged.skippedNotes(sessionPath, session.defaultProfile(judged.all), defaultProfile)
+	if requestedModel != "" {
+		built.keepModel, _, _ = SplitModelEffort(requestedModel)
+	}
 	setting, modelPaths, err := built.compose(entry, nil)
 	if err != nil {
 		return SessionConfig{}, err
@@ -86,7 +101,6 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
-	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
 	config.RemotesDir = layout.Remotes
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
@@ -109,23 +123,26 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	if config.ReasoningEffort != "" {
 		// Refuse an effort the model does not offer now, before a run stores the user message.
-		if _, err := config.WithModel(); err != nil {
+		// Only the effort is checked: a model file that fails the model rules is reported by
+		// the run that uses it, not by every load of the session.
+		if err := checkModelEffortOnly(config.ModelPath, config.ReasoningEffort); err != nil {
 			return SessionConfig{}, err
 		}
 	}
 	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
-	if err := resolveFallbackModels(config.ModelFallback, layout.Models, sessionPath, scans); err != nil {
+	if err := resolveFallbackModels(config.ModelFallback, layout.Models, sessionPath, scans, built.warn); err != nil {
 		return SessionConfig{}, err
 	}
+	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
 	return config, nil
 }
 
 // resolveFallbackModels turns each model_fallback model ID into its model file and
 // effort. Like an agent's model, a fallback may be any model of the catalog, not only one
 // the profile lists. An unknown ID or an effort the model does not offer is a config error.
-func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPath string, scans *CatalogScans) error {
+func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPath string, scans *CatalogScans, warn func(format string, args ...any)) error {
 	if settings == nil {
 		return nil
 	}
@@ -133,8 +150,9 @@ func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPa
 	if err != nil {
 		return configError("%s: %v", sessionPath, err)
 	}
+	kept := settings.Models[:0]
 	for index := range settings.Models {
-		entry := &settings.Models[index]
+		entry := settings.Models[index]
 		id, effort, err := SplitModelEffort(entry.ID)
 		if err != nil {
 			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
@@ -143,11 +161,19 @@ func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPa
 		if err != nil {
 			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
 		}
+		// A fallback is optional: a model whose file fails is left out, as a run leaves out one
+		// it cannot load (planRunStreamer), and the others still serve.
+		if err := scans.check("model", found.Path, modelFileProblem); err != nil {
+			warn("%s: model_fallback.models[%d]: model %s left out: %v", sessionPath, index, entry.ID, err)
+			continue
+		}
 		if err := checkModelEffort(found.Path, effort); err != nil {
 			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
 		}
 		entry.ModelPath, entry.ReasoningEffort = found.Path, effort
+		kept = append(kept, entry)
 	}
+	settings.Models = kept
 	return nil
 }
 
@@ -391,8 +417,13 @@ type layoutCompose struct {
 	location    Location
 	sessionPath string
 	session     layoutSessionFile
-	profiles    *catalog.Catalog
-	keys        map[string]string
+	// profiles are the profiles of the scope that can be used; judged has the verdict on each
+	// profile of the scope, left-out ones included.
+	profiles *catalog.Catalog
+	judged   scopeJudgement
+	// keepModel is the model the request names; it stays offered even when its file fails.
+	keepModel string
+	keys      map[string]string
 	// profileNames maps a profile ID to the name its file sets; a profile without one is absent.
 	profileNames map[string]string
 	// scans is the catalog scans one list call shares between its sessions; nil scans
@@ -417,15 +448,14 @@ func (c *layoutCompose) warn(format string, args ...any) {
 // holds the file of each model ID the profile may use. Non-empty toolsets replace the
 // profile's own toolsets, which is how the toolsets an agent names are read.
 func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[string]json.RawMessage, map[string]string, error) {
-	allModels, err := c.scans.Scan("model", c.layout.Models)
-	if err != nil {
-		return nil, nil, configError("%s: %v", selected.Path, err)
-	}
 	c.scans.noteFile(selected.Path)
-	profile, models, err := readProfile(selected.Path, allModels)
-	if err != nil {
-		return nil, nil, err
+	verdict := c.judged.verdicts[selected.ID()]
+	profile := verdict.file
+	models, notes := verdict.offer(c.sessionPath, selected.ID(), c.keepModel)
+	for _, note := range notes {
+		c.warn("%s", note)
 	}
+	var err error
 	modelPaths := make(map[string]string, models.Len())
 	for _, item := range models.Entries() {
 		modelPaths[item.ID()] = item.Path
@@ -486,15 +516,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 			c.addProfileFields(entry, other.ID(), profile, models)
 			c.noteProfileName(other.ID(), profile)
 		} else {
-			c.scans.noteFile(other.Path)
-			unselected, _, err := readProfile(other.Path, allModels)
-			if err == nil {
-				err = checkUnselectedProfile(other.Path, unselected)
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			c.noteProfileName(other.ID(), unselected)
+			c.noteProfileName(other.ID(), c.judged.verdicts[other.ID()].file)
 		}
 		raw, err := json.Marshal(entry)
 		if err != nil {

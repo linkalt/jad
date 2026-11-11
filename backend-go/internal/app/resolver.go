@@ -81,6 +81,7 @@ type Resolver struct {
 	profileUsage func(ctx context.Context, session, profile string) (*int64, error)
 	logger       *slog.Logger
 	skipped      skippedSessions
+	warned       warnedConfigs
 	roots        []sessionfs.Root
 	environment  map[string]string
 	catalog      CatalogConfig

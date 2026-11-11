@@ -357,10 +357,10 @@ func TestSessionListAndSnapshotCarryModelOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// m/c is not JSON: it is left out of the options, with a warning, and the others stay.
 	want := []modelOption{
 		{ID: "m/a", Provider: "alpha", Efforts: []string{"low", "high"}, DefaultEffort: "high"},
 		{ID: "m/b", Provider: "beta"},
-		{ID: "m/c", Provider: "unknown"},
 	}
 
 	list, err := resolver.ListSessions(context.Background(), "", nil)
@@ -405,7 +405,7 @@ func TestSessionListAndSnapshotCarryModelOptions(t *testing.T) {
 	}
 }
 
-func TestListingModelOptionsReadsEachFieldIndependently(t *testing.T) {
+func TestListingModelOptionsLeaveOutModelFilesThatFailTheModelRules(t *testing.T) {
 	loaded, fixture := layoutConfig(t, layouttest.Spec{
 		SessionID: "lenient",
 		Models: map[string]map[string]any{
@@ -441,11 +441,10 @@ func TestListingModelOptionsReadsEachFieldIndependently(t *testing.T) {
 	if err := json.Unmarshal(list.Body, &listed); err != nil {
 		t.Fatalf("decode session list: %v", err)
 	}
+	// m/gone is not JSON, m/request has a request that is not an object and m/efforts efforts
+	// that are not a list: each fails the model rules and is left out; m/plain is offered.
 	want := []modelOption{
-		{ID: "m/efforts", Provider: "gamma", DefaultEffort: "low"},
-		{ID: "m/gone", Provider: "unknown"},
 		{ID: "m/plain", Provider: "delta"},
-		{ID: "m/request", Provider: "beta", Efforts: []string{"low"}},
 	}
 	if len(listed.Sessions) != 1 || !reflect.DeepEqual(listed.Sessions[0].ModelOptions, want) {
 		t.Fatalf("list model_options = %+v, want %+v", listed.Sessions, want)

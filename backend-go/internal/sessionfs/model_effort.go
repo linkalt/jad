@@ -115,3 +115,18 @@ func (m Model) withEffort(effort string) (Model, error) {
 	m.Effort = effort
 	return m, nil
 }
+
+// checkModelEffortOnly is checkModelEffort for a model file that may fail the model rules:
+// it reports only an effort the model does not offer, and none when the file cannot be
+// loaded, which is reported where the model itself is judged.
+func checkModelEffortOnly(modelPath, effort string) error {
+	if effort == "" {
+		return nil
+	}
+	model, err := loadModel(modelPath, "", "")
+	if err != nil {
+		return nil
+	}
+	_, err = model.withEffort(effort)
+	return err
+}

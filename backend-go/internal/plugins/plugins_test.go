@@ -467,3 +467,33 @@ func TestInstallNeedsACommandFolderForCommands(t *testing.T) {
 		t.Fatal("a refused install wrote a catalog file")
 	}
 }
+
+// A record that cannot be read hides itself, not the plugins installed beside it; List, which
+// has no way to say which one, still fails.
+func TestListReportKeepsTheOtherPluginsWhenARecordIsBroken(t *testing.T) {
+	target, _ := testTarget(t)
+	if _, err := target.Install(context.Background(), writePlugin(t, acmePlugin("1.0.0")), false); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(target.Layout.State, ".plugins", "broken.json")
+	if err := os.WriteFile(broken, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statuses, problems, err := target.ListReport()
+	if err != nil || len(statuses) != 1 || statuses[0].Record.Name != "acme" {
+		t.Fatalf("ListReport() = %+v, %v, %v, want acme listed", statuses, problems, err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0].Error(), broken) {
+		t.Fatalf("problems = %v, want one naming %s", problems, broken)
+	}
+	if _, err := target.List(); err == nil || !strings.Contains(err.Error(), broken) {
+		t.Fatalf("List() error = %v, want the broken record named", err)
+	}
+	// Once the record is removed the list is clean again.
+	if err := os.Remove(broken); err != nil {
+		t.Fatal(err)
+	}
+	if statuses, problems, err := target.ListReport(); err != nil || len(statuses) != 1 || len(problems) != 0 {
+		t.Fatalf("after the repair: %+v %v %v", statuses, problems, err)
+	}
+}

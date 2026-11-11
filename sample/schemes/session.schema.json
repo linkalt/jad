@@ -28,7 +28,7 @@
     },
     "scope": {
       "type": "object",
-      "description": "What this session may use. Only profiles are scoped: models, toolsets and MCP servers are always all available, and a profile narrows models itself.",
+      "description": "What this session may use. Only profiles are scoped: models, toolsets and MCP servers are always all available, and a profile narrows models itself. A profile of the scope whose file fails the profile rules is left out of the session with a warning; the session fails to load only when no profile of its scope passes, or when the profile it runs fails.",
       "properties": {
         "profiles": {
           "type": "array",

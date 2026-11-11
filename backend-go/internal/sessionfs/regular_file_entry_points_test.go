@@ -61,12 +61,21 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 		_, err := LoadSessionSettings(location, "", "")
 		return err
 	}
+	// A profile, toolset or model file that fails is left out of a load that only lists it, so
+	// these name the profile they exercise: a profile the caller names must pass itself.
+	named := func(layout Layout, location Location, root string) error {
+		_, err := LoadSessionSettings(location, "dev/coder", "")
+		return err
+	}
 	entries := []entry{
 		{"session file", maxInternalJSONFileBytes, func(_ Layout, l Location, _ string) string { return l.File }, settings},
-		{"profile file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Profiles, "dev", "coder.json") }, settings},
-		{"toolset file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Tools, "coding", "full.json") }, settings},
+		{"profile file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Profiles, "dev", "coder.json") }, named},
+		{"toolset file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Tools, "coding", "full.json") }, named},
 		{"model file", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Models, "openai", "gpt-deep.json") },
-			func(_ Layout, l Location, _ string) error { _, err := LoadSessionConfig(l, "", ""); return err }},
+			func(_ Layout, l Location, _ string) error {
+				_, err := LoadSessionConfig(l, "dev/coder", "")
+				return err
+			}},
 		{"prompt document", maxPromptDocumentBytes, func(_ Layout, _ Location, _ string) string { return "" }, settings},
 		{"root setting", maxInternalJSONFileBytes, func(_ Layout, _ Location, root string) string { return filepath.Join(root, "setting.json") },
 			func(_ Layout, _ Location, root string) error {
@@ -79,7 +88,15 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 				return err
 			}},
 		{"ListCatalogFiles", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Models, "openai", "gpt-fast.json") },
-			func(l Layout, _ Location, _ string) error { _, err := ListCatalogFiles(l, CatalogModels); return err }},
+			func(l Layout, _ Location, _ string) error {
+				files, err := ListCatalogFiles(l, CatalogModels)
+				for _, file := range files {
+					if file.Error != "" && err == nil {
+						err = errors.New(file.Error) // the row of the unreadable file; the others are listed
+					}
+				}
+				return err
+			}},
 		{"CheckLayout", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Models, "openai", "gpt-fast.json") },
 			func(l Layout, loc Location, _ string) error {
 				report, err := CheckLayout(layoutRoots(l, loc), func(string, []byte) error { return nil })

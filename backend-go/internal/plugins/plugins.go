@@ -464,17 +464,31 @@ type Status struct {
 	Modified []Entry
 }
 
-// List returns the installed plugins by name.
+// List returns the installed plugins by name. A record that cannot be read fails it; ListReport
+// keeps the others.
 func (t Target) List() ([]Status, error) {
+	statuses, problems, err := t.ListReport()
+	if err != nil {
+		return nil, err
+	}
+	if len(problems) > 0 {
+		return nil, problems[0]
+	}
+	return statuses, nil
+}
+
+// ListReport returns the installed plugins by name and, apart, one problem for each record that
+// cannot be read: a broken record hides itself, not the plugins installed beside it. The error
+// is for a record folder that cannot be listed.
+func (t Target) ListReport() (statuses []Status, problems []error, err error) {
 	folder := filepath.Join(t.Layout.State, recordFolder)
 	entries, err := os.ReadDir(folder)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", folder, fserr.UnwrapPathError(err))
+		return nil, nil, fmt.Errorf("read %s: %w", folder, fserr.UnwrapPathError(err))
 	}
-	var statuses []Status
 	for _, entry := range entries {
 		name, isRecord := strings.CutSuffix(entry.Name(), ".json")
 		if !isRecord || !entry.Type().IsRegular() || strings.HasPrefix(name, ".") {
@@ -482,18 +496,20 @@ func (t Target) List() ([]Status, error) {
 		}
 		record, err := t.ReadRecord(name)
 		if err != nil {
-			return nil, err
+			problems = append(problems, err)
+			continue
 		}
 		if record == nil {
 			continue
 		}
 		modified, err := modifiedEntries(record.Entries)
 		if err != nil {
-			return nil, err
+			problems = append(problems, fmt.Errorf("plugin %s: %w", name, err))
+			continue
 		}
 		statuses = append(statuses, Status{Record: *record, Modified: modified})
 	}
-	return statuses, nil
+	return statuses, problems, nil
 }
 
 func modifiedEntries(entries []Entry) ([]Entry, error) {

@@ -37,3 +37,38 @@ func (s *skippedSessions) resolved(reference string) {
 	delete(s.reasons, reference)
 	s.mu.Unlock()
 }
+
+// warnedConfigs remembers the configuration warnings the session list already logged for each
+// session: a profile or model file left out of a session is warned about once, not on every
+// poll of the list. A warning that goes away and comes back is logged again.
+type warnedConfigs struct {
+	mu   sync.Mutex
+	seen map[string]map[string]struct{}
+}
+
+// report logs the warnings of reference that its previous report did not carry.
+func (w *warnedConfigs) report(logger *slog.Logger, reference, profile string, warnings []string) {
+	if logger == nil {
+		return
+	}
+	current := make(map[string]struct{}, len(warnings))
+	for _, warning := range warnings {
+		current[warning] = struct{}{}
+	}
+	w.mu.Lock()
+	if w.seen == nil {
+		w.seen = make(map[string]map[string]struct{})
+	}
+	previous := w.seen[reference]
+	if len(current) == 0 {
+		delete(w.seen, reference)
+	} else {
+		w.seen[reference] = current
+	}
+	w.mu.Unlock()
+	for _, warning := range warnings {
+		if _, logged := previous[warning]; !logged {
+			logger.Warn(warning, "session", reference, "profile", profile)
+		}
+	}
+}

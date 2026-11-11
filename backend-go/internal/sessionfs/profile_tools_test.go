@@ -153,23 +153,42 @@ func TestProfileToolsShapeErrors(t *testing.T) {
 	}
 }
 
-// A bad tools block in a profile of the session's scope is reported when the session
-// loads, whichever profile is selected.
+// A bad tools block in a profile of the session's scope leaves that profile out, with a
+// warning that names its file; the session still loads with the profile that is fine. The
+// profile asked for by name is not replaced: asking for the broken one is an error.
 func TestProfileToolsOfAnUnselectedProfileAreReportedAtLoad(t *testing.T) {
 	bad := map[string]any{"tools": map[string]any{"allow": []any{"raed"}}}
-	for _, active := range []string{"full", "lean"} {
-		_, err := loadProfileTools(t, active, bad)
-		if err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) {
-			t.Fatalf("active %s: error = %v, want the typo reported", active, err)
-		}
-		if active == "full" && !strings.Contains(err.Error(), "lean.json") {
-			t.Fatalf("active full: error = %v, want it to name lean.json", err)
-		}
+	config, err := loadProfileTools(t, "full", bad)
+	if err != nil {
+		t.Fatalf("a broken profile that is not selected failed the load: %v", err)
+	}
+	assertProfileLeftOut(t, config, "dev/lean", `"raed" is not a native tool`)
+	_, err = loadProfileTools(t, "lean", bad)
+	if err == nil || !strings.Contains(err.Error(), `"raed" is not a native tool`) || !strings.Contains(err.Error(), "lean.json") {
+		t.Fatalf("selecting the broken profile: error = %v, want the typo reported with its file", err)
 	}
 }
 
-// Every profile in scope is checked the way the selected one is; a scope that leaves a
-// broken profile out loads.
+// assertProfileLeftOut checks that profile is not offered and that a warning names its file
+// and the reason.
+func assertProfileLeftOut(t *testing.T, config SessionConfig, profile, reason string) {
+	t.Helper()
+	for _, id := range config.Profiles {
+		if id == profile {
+			t.Fatalf("Profiles = %v still offers %s", config.Profiles, profile)
+		}
+	}
+	file := strings.TrimPrefix(profile, "dev/") + ".json"
+	for _, warning := range config.Warnings {
+		if strings.Contains(warning, "profile "+profile+" left out") && strings.Contains(warning, file) && strings.Contains(warning, reason) {
+			return
+		}
+	}
+	t.Fatalf("Warnings = %q, want one saying %s was left out with %q", config.Warnings, profile, reason)
+}
+
+// Every profile in scope is judged by what its file says, and a profile that fails is left out
+// with a warning; a scope that leaves a broken profile out loads without one.
 func TestUnselectedProfilesAreCheckedAtLoad(t *testing.T) {
 	for name, tc := range map[string]struct {
 		lean map[string]any
@@ -184,11 +203,17 @@ func TestUnselectedProfilesAreCheckedAtLoad(t *testing.T) {
 		"null instruct":    {map[string]any{"instructions": nil}, "instructions must be a non-empty string"},
 		"blank prompt doc": {map[string]any{"prompt_documents": []any{" "}}, "prompt_documents[0] must be a non-empty string"},
 		"tools not object": {map[string]any{"tools": []any{"read_image"}}, "tools must be an object"},
+		"missing toolset":  {map[string]any{"toolset": "coding/missing"}, "coding/missing"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := loadProfileTools(t, "full", tc.lean)
+			config, err := loadProfileTools(t, "full", tc.lean)
+			if err != nil {
+				t.Fatalf("a broken profile that is not selected failed the load: %v", err)
+			}
+			assertProfileLeftOut(t, config, "dev/lean", tc.want)
+			_, err = loadProfileTools(t, "lean", tc.lean)
 			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "lean.json") {
-				t.Fatalf("error = %v, want it to name lean.json and contain %q", err, tc.want)
+				t.Fatalf("selecting it: error = %v, want it to name lean.json and contain %q", err, tc.want)
 			}
 		})
 	}

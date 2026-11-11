@@ -19,11 +19,13 @@ func ReadLayoutProfileInfo(location Location) (ProfileInfo, error) {
 	if err != nil {
 		return ProfileInfo{}, err
 	}
-	profiles, err := scopedProfiles(layout, session, location.SettingFile())
+	// The same verdicts as the session load, so the profiles named here and the default are
+	// the ones a load offers.
+	judged, err := judgeScope(layout, session, location.SettingFile(), nil)
 	if err != nil {
 		return ProfileInfo{}, err
 	}
-	return ProfileInfo{ActiveProfile: session.defaultProfile(profiles), Profiles: profiles.IDs()}, nil
+	return ProfileInfo{ActiveProfile: session.defaultProfile(judged.usable), Profiles: judged.usable.IDs()}, nil
 }
 
 func readLayoutSession(location Location) (layoutSessionFile, error) {
@@ -35,17 +37,6 @@ func readLayoutSession(location Location) (layoutSessionFile, error) {
 		return layoutSessionFile{}, err
 	}
 	return session, nil
-}
-
-func scopedProfiles(layout Layout, session layoutSessionFile, sessionPath string) (*catalog.Catalog, error) {
-	profiles, err := catalog.Scan("profile", layout.Profiles)
-	if err != nil {
-		return nil, configError("%s: %v", sessionPath, err)
-	}
-	if profiles, err = profiles.Narrow(session.Scope.Profiles); err != nil {
-		return nil, configError("%s: scope.profiles: %v", sessionPath, err)
-	}
-	return profiles, nil
 }
 
 // ConflictError reports that a file changed between the read and the write of an update,
@@ -82,13 +73,17 @@ func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability,
 	if err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	profiles, err := scopedProfiles(layout, session, sessionPath)
+	judged, err := judgeScope(layout, session, sessionPath, nil)
 	if err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	entry, found := profiles.Get(profile)
+	profiles := judged.usable
+	entry, found := judged.all.Get(profile)
 	if !found {
 		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("profile '%s' is not available to this session", profile)}
+	}
+	if verdict := judged.verdicts[profile]; verdict.err != nil {
+		return ModelDefaultUpdate{}, configError("%s: profile %s cannot be used: %v", sessionPath, profile, verdict.err)
 	}
 	before, err := os.Stat(entry.Path)
 	if err != nil {

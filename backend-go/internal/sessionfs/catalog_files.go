@@ -61,6 +61,9 @@ type CatalogFileInfo struct {
 	Category string
 	// Efforts are the reasoning efforts a model file lists; nil for other kinds and when none.
 	Efforts []string
+	// Error is set when the file could not be read; the entry then has no ETag, so it can
+	// still be listed, opened and replaced while the other files of its kind are used.
+	Error string
 	// scope is the profile selection of a session file, read for ProfileSessions; zero for other kinds.
 	scope catalog.Selection
 }
@@ -165,7 +168,9 @@ func ListCatalogFiles(layout Layout, kind CatalogKind) ([]CatalogFileInfo, error
 	for _, entry := range entries.Entries() {
 		data, err := readRegularFile(entry.Path, maxInternalJSONFileBytes)
 		if err != nil {
-			return nil, configError("%s: could not be read: %v", entry.Path, err)
+			// One file that cannot be read must not hide the others, or no file could be fixed.
+			infos = append(infos, CatalogFileInfo{ID: entry.ID(), Error: configError("%s: could not be read: %v", entry.Path, err).Error()})
+			continue
 		}
 		info := CatalogFileInfo{ID: entry.ID(), ETag: CatalogETag(data), Name: fileDisplayName(data)}
 		if kind == CatalogModels {

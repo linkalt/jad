@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "profile.schema.json",
   "title": "Profile",
-  "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset or a list of toolsets and setting overrides.",
+  "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset or a list of toolsets and setting overrides. A session leaves out a profile whose file fails these rules (or that names a toolset that is missing or does not parse), with a warning in the server log, and loads with the others; the default profile is then the first one left. A profile asked for by name must be valid itself.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -43,12 +43,12 @@
         "pattern": "^(\\*|[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?)$"
       },
       "uniqueItems": true,
-      "description": "Narrows the models. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every model; [] offers none. An item that matches no model is a load error."
+      "description": "Narrows the models. Items: \"<category>\" for a whole folder, \"<category>/<name>\" for one file, or \"*\". A missing key offers every model; [] offers none. An item that matches no model is a load error. A listed model whose file fails the model rules is left out of the models the profile offers, with a warning, unless it is the model_default; when every listed model fails none is left out."
     },
     "model_default": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9_.-]+)?$",
-      "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) is used."
+      "description": "Model used when a request names none, written <category>/<name> with an optional @<effort>, for example \"openai/gpt-deep\" or \"openai/gpt-deep@high\". The model must be one of the profile's models (which list plain IDs); the effort must be listed in the model file's efforts. The effort applies only while the run uses this model and no @effort of its own; it overrides the model file's default_effort. Without model_default, the first model (by ID) that passes is used. A model_default whose file fails is never replaced by another model: it stays offered, and a run with it stops with that file's error."
     },
     "toolset": {
       "anyOf": [
