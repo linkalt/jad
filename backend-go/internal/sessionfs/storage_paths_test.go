@@ -56,3 +56,12 @@ func TestProfileMessagesPathMatchesTheLoadedTranscript(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageBaselinePathFollowsTheUsageCache(t *testing.T) {
+	if got := UsageBaselinePath("/state/staging/usage-cache.json"); got != "/state/staging/usage-cache.json.baseline" {
+		t.Fatalf("baseline path = %q", got)
+	}
+	if got := UsageBaselinePath(""); got != "" {
+		t.Fatalf("baseline path of no usage cache = %q, want none", got)
+	}
+}

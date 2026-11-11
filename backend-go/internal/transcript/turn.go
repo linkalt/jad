@@ -57,9 +57,12 @@ type TurnStoreOptions struct {
 	MessagesBackupPath         string
 	CompactionCachePath        string
 	UsageCachePath             string
-	CursorCachePath            string
-	RunErrorCachePath          string
-	StateContextPath           string
+	// UsageBaselinePath holds the usage totals of history that a compaction removed from the
+	// transcript. Unlike the caches it cannot be rebuilt, so only Reset deletes it.
+	UsageBaselinePath string
+	CursorCachePath   string
+	RunErrorCachePath string
+	StateContextPath  string
 }
 
 // TurnManifest is the durable per-turn state record.

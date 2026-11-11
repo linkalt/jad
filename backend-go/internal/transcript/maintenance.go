@@ -54,6 +54,13 @@ type CompactionOptions struct {
 	// strip. The overflow compaction of a run sets it, so the run's own tool work is not
 	// dropped while it is still going.
 	KeepLatestTurn bool
+	// BeforePublish, when set, is called under the store lock with the transcript the
+	// compaction is about to publish: once before anything is written, and again after the
+	// new transcript is fully written and right before it replaces the active one. An error
+	// from either abandons the compaction (the first leaves everything as it was). The app
+	// stores the usage baseline there (see Replacement) and must accept the same replacement
+	// twice.
+	BeforePublish func(Replacement) error
 }
 
 type CompactionResult struct {
@@ -134,6 +141,22 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if compactedInputBytes(retainedWithActiveTail) >= compactedInputBytes(history) {
 		return result, nil
 	}
+	if options.BeforePublish != nil {
+		// Ask before anything is written: the backup, the compaction cache and the transcript
+		// are all left alone when the hook refuses. It is asked again, with the same answer
+		// unless the transcript changed, right before the rename.
+		records := make([][]byte, len(compactedActiveTail))
+		for index, record := range compactedActiveTail {
+			records[index] = record
+		}
+		replacement, err := describeRecords(s.journal.path, records)
+		if err != nil {
+			return result, err
+		}
+		if err := options.BeforePublish(replacement); err != nil {
+			return result, err
+		}
+	}
 	sourceHash, sourceBytes, err := hashTranscriptFile(s.journal.path)
 	if err != nil {
 		return result, err
@@ -180,7 +203,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	for index, record := range compactedActiveTail {
 		activeTailRecords[index] = append([]byte(nil), record...)
 	}
-	if err := s.journal.ReplaceRecords(activeTailRecords...); err != nil {
+	if err := s.journal.ReplaceRecordsWith(options.BeforePublish, activeTailRecords...); err != nil {
 		// The cache describes the transcript that was not replaced; drop it so the
 		// next read serves the old transcript as it is.
 		if removeErr := s.removeCompactionCaches(); removeErr != nil {
@@ -870,6 +893,11 @@ func (s *TurnStore) removeDerivedFiles(reset, keepStateContext bool) error {
 	// The run-error cache goes with the rest: its entries are anchored to session
 	// turn numbers and message ids that a rewrite of the transcript re-bases.
 	paths := []string{s.options.UsageCachePath, s.options.CursorCachePath, s.options.RunErrorCachePath}
+	if reset {
+		// The usage baseline is the only copy of the totals of history a compaction removed.
+		// A rewrite that keeps that history must leave it alone; only a reset ends it.
+		paths = append(paths, s.options.UsageBaselinePath)
+	}
 	if !keepStateContext {
 		paths = append(paths, s.options.StateContextPath)
 	}

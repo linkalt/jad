@@ -140,6 +140,10 @@ type transcriptIndex struct {
 	// lastResponseKey identifies the newest response already counted in usage,
 	// so a rewritten usage checkpoint keeps deduplicating it.
 	lastResponseKey string
+	// through is the end of the last record the usage accounts for: every byte before it is in
+	// usage, directly or through the cache or baseline the scan started from. A rewrite of the
+	// transcript that starts from this usage must see a file of exactly this size.
+	through int64
 	// wroteUsageCache is set when the scan replaced the usage cache file, which
 	// changes the session version.
 	wroteUsageCache bool
@@ -505,23 +509,63 @@ func cursorForOffset(starts []int64, offset int64) int64 {
 // retry on ErrTranscriptChanged; production always uses the snapshot read.
 var scanSnapshotRead = (*transcript.TurnStore).ReadRecordsSnapshot
 
+// scanTranscriptIndex builds the usage and turn index of the session transcript. A scan that
+// raced a rewrite of the transcript is discarded and repeated from a fresh read of the usage
+// cache and baseline, which describe the transcript that was rewritten away; a second change is
+// reported to the caller.
 func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) (transcriptIndex, error) {
+	index, err := scanTranscriptIndexOnce(shared, config)
+	if errors.Is(err, transcript.ErrTranscriptChanged) {
+		index, err = scanTranscriptIndexOnce(shared, config)
+	}
+	return index, err
+}
+
+func scanTranscriptIndexOnce(shared *sharedSession, config sessionfs.SessionConfig) (transcriptIndex, error) {
 	if shared == nil || shared.store == nil {
 		return transcriptIndex{}, errors.New("shared transcript store is not initialized")
 	}
 	store := shared.store
+	// Everything this scan trusts (the cache or baseline it starts from, the file it reads and
+	// the file it stamps a new cache on) is tied to this one stat of the transcript.
 	generation := "0:0:0"
+	var stat0 fileStat
+	existed := false
 	if stat, err := statFile(config.MessagesPath); err == nil {
-		generation = stat.generation()
+		stat0, generation, existed = stat, stat.generation(), true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return transcriptIndex{}, fmt.Errorf("stat transcript: %w", err)
 	}
+	// replaced says whether the transcript is no longer the file stat0 describes. A read that
+	// failed because it used that file's offsets on another one is a race with a rewrite, not a
+	// corrupt transcript, and is repeated.
+	replaced := func(cause error) error {
+		now, statErr := statFile(config.MessagesPath)
+		if (statErr == nil && now.generation() != generation) || (statErr != nil && existed) {
+			return fmt.Errorf("transcript replaced during the usage scan (%v): %w", cause, transcript.ErrTranscriptChanged)
+		}
+		return nil
+	}
 	starts, err := shared.readTurnStarts(generation)
 	if err != nil {
+		if raced := replaced(err); raced != nil {
+			return transcriptIndex{}, raced
+		}
 		return transcriptIndex{}, fmt.Errorf("build transcript turn index: %w", err)
 	}
 	index := transcriptIndex{starts: starts}
-	usageCache, cacheValid := readUsageCacheState(config)
+	usageCache, cacheValid := readUsageCacheStateAt(config, stat0)
+	fromBaseline := false
+	if !cacheValid && existed {
+		if entry, ok := shared.matchUsageBaseline(config, stat0); ok {
+			usageCache = usageCacheFile{
+				Transcript:      usageCheckpoint{Offset: entry.Offset},
+				Summary:         entry.Summary,
+				LastResponseKey: entry.LastResponseKey,
+			}
+			cacheValid, fromBaseline = true, true
+		}
+	}
 	usageOffset := int64(0)
 	if cacheValid {
 		usageOffset = usageCache.Transcript.Offset
@@ -607,13 +651,10 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 			return nil
 		})
 	}
-	// One retry: a snapshot read that raced a rewrite is discarded and rebuilt from the
-	// cached summary. A second change is reported to the caller.
-	err = scanAttempt()
-	if errors.Is(err, transcript.ErrTranscriptChanged) {
-		err = scanAttempt()
-	}
-	if err != nil {
+	if err = scanAttempt(); err != nil {
+		if raced := replaced(err); raced != nil && !errors.Is(err, transcript.ErrTranscriptChanged) {
+			return transcriptIndex{}, raced
+		}
 		return transcriptIndex{}, err
 	}
 	if maxTurn > turnCount {
@@ -625,21 +666,34 @@ func scanTranscriptIndex(shared *sharedSession, config sessionfs.SessionConfig) 
 		index.usage.TurnCount = turnCount
 	}
 	if !cacheValid {
+		// Not a baseline either, so the totals of history a compaction removed are unknown.
 		if backupInfo, backupErr := os.Stat(config.MessagesBackupPath); backupErr == nil && backupInfo.Size() > 0 {
 			index.usage.HistoryPartial = true
 		}
 	}
+	if scanThrough < usageOffset {
+		scanThrough = usageOffset
+	}
+	index.through = scanThrough
 	stat, err := statFile(config.MessagesPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) && !existed {
 			return index, nil
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return transcriptIndex{}, fmt.Errorf("transcript removed during the usage scan: %w", transcript.ErrTranscriptChanged)
 		}
 		return transcriptIndex{}, fmt.Errorf("stat transcript: %w", err)
 	}
+	if stat.generation() != generation {
+		// The file the cache or baseline was checked against is not the file that is there now,
+		// so the scan may have read a mix of the two.
+		return transcriptIndex{}, fmt.Errorf("transcript replaced during the usage scan: %w", transcript.ErrTranscriptChanged)
+	}
 	index.size = stat.Size
 	index.generation = stat.generation()
-	if (!cacheValid || scanThrough > usageOffset) && scanThrough <= index.size {
-		index.wroteUsageCache = shared.writeUsageCache(config, index.usage, scanThrough, lastResponseKey)
+	if (!cacheValid || fromBaseline || scanThrough > usageOffset) && scanThrough <= index.size {
+		index.wroteUsageCache = shared.writeUsageCache(config, index.usage, scanThrough, lastResponseKey, generation)
 	}
 	return index, nil
 }

@@ -101,7 +101,7 @@ func writeUsageCacheFor(t *testing.T, f *layoutFixture, inputTokens int64) {
 	}
 	summary := resetLatestResponseUsage(index.usage)
 	summary.Current.InputTokens = &inputTokens
-	if !shared.writeUsageCache(config, summary, index.size, index.lastResponseKey) {
+	if !shared.writeUsageCache(config, summary, index.size, index.lastResponseKey, index.generation) {
 		t.Fatal("usage cache was not written")
 	}
 	cache, valid := readUsageCacheState(config)

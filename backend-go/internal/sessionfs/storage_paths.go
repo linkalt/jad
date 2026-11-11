@@ -24,6 +24,16 @@ func (p SessionStoragePaths) pathEntries() []storagePathEntry {
 	}
 }
 
+// UsageBaselinePath is the usage baseline file that goes with the usage cache at cachePath: the
+// same name with ".baseline" added, so it follows a configured usage_cache path. An empty
+// cachePath, which turns the usage cache off, has no baseline either.
+func UsageBaselinePath(cachePath string) string {
+	if cachePath == "" {
+		return ""
+	}
+	return cachePath + ".baseline"
+}
+
 func selectProfileStorageDir(directory string, profileSettings map[string]json.RawMessage, profile, activeProfile string) string {
 	_, hasMessages := profileSettings["messages"]
 	_, hasStaging := profileSettings["staging"]

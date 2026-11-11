@@ -185,6 +185,8 @@ type sharedSession struct {
 
 	logger           *slog.Logger
 	usageCacheFailed atomic.Bool
+	// usageBaselineFailed latches the log line for an unreadable usage baseline.
+	usageBaselineFailed atomic.Bool
 }
 
 // sessionKey names one session and profile, like the HTTP run registry's key. It is the
@@ -1058,6 +1060,7 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		MessagesBackupPath:         config.StoragePaths.MessagesBackup,
 		CompactionCachePath:        config.StoragePaths.CompactionCache,
 		UsageCachePath:             config.StoragePaths.UsageCache,
+		UsageBaselinePath:          sessionfs.UsageBaselinePath(config.StoragePaths.UsageCache),
 		CursorCachePath:            config.StoragePaths.CursorCache,
 		RunErrorCachePath:          config.StoragePaths.RunErrorCache,
 		CursorCacheCheckpointBytes: config.Persistence.CursorCacheCheckpointBytes,

@@ -275,7 +275,7 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 		config.StagingDir, config.MessagesPath, config.MessagesBackupPath, config.SettingPath, config.ModelPath,
 		storage.Messages, storage.MessagesBackup, storage.CompactionCache, storage.UsageCache,
 		storage.CursorCache, storage.RunErrorCache, storage.StateContext, storage.Staging, storage.HTTPDebug, storage.ToolStorage,
-		config.UsageCachePath,
+		config.UsageCachePath, sessionfs.UsageBaselinePath(config.UsageCachePath),
 	}
 	if config.NativeTask != nil {
 		candidates = append(candidates, config.NativeTask.StorageDir)

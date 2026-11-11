@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,13 @@ func (e *FrontCompactionConflict) Error() string { return e.Message }
 // user message. Recoverable deletion archives the exact removed bytes beside
 // the transcript; permanent deletion does not create an archive.
 func (s *TurnStore) FrontCompactFromMessage(messageID, deleteMode string) (FrontCompactionResult, error) {
+	return s.FrontCompactFromMessageWith(messageID, deleteMode, nil)
+}
+
+// FrontCompactFromMessageWith is FrontCompactFromMessage with a hook that sees the transcript
+// that will replace the active one before anything is archived or published (see
+// Journal.ReplaceWithPrefixWith). An error from before leaves the transcript as it was.
+func (s *TurnStore) FrontCompactFromMessageWith(messageID, deleteMode string, before func(Replacement) error) (FrontCompactionResult, error) {
 	result := FrontCompactionResult{DeleteMode: deleteMode}
 	if s == nil || s.journal == nil {
 		return result, errors.New("turn store is not initialized")
@@ -140,7 +148,7 @@ func (s *TurnStore) FrontCompactFromMessage(messageID, deleteMode string) (Front
 		archivePath = filepath.Join(deletedHistoryDir, archiveName)
 		result.ArchiveName = archiveName
 	}
-	if err := s.journal.ReplaceWithPrefix(boundary, size, archivePath); err != nil {
+	if err := s.journal.ReplaceWithPrefixWith(before, boundary, size, archivePath); err != nil {
 		return FrontCompactionResult{}, fmt.Errorf("front compact transcript: %w", err)
 	}
 	if err := s.removeDerivedFiles(false, true); err != nil {
@@ -184,6 +192,13 @@ func newDeletedHistoryArchiveName() (string, error) {
 // ReplaceWithPrefix keeps the transcript bytes before boundary and optionally
 // archives the removed suffix before publishing the replacement file.
 func (j *Journal) ReplaceWithPrefix(boundary, expectedSize int64, archivePath string) error {
+	return j.ReplaceWithPrefixWith(nil, boundary, expectedSize, archivePath)
+}
+
+// ReplaceWithPrefixWith is ReplaceWithPrefix with a hook: before is called with the prefix that
+// will be published, while the journal is locked and before the archive is written, so an error
+// from it leaves both the transcript and the archive directory untouched.
+func (j *Journal) ReplaceWithPrefixWith(before func(Replacement) error, boundary, expectedSize int64, archivePath string) error {
 	if j == nil {
 		return errors.New("transcript journal is not initialized")
 	}
@@ -209,6 +224,16 @@ func (j *Journal) ReplaceWithPrefix(boundary, expectedSize int64, archivePath st
 		var previous [1]byte
 		if n, readErr := source.ReadAt(previous[:], boundary-1); readErr != nil || n != 1 || previous[0] != '\n' {
 			return errors.New("front-compaction offset is not a record boundary")
+		}
+	}
+
+	if before != nil {
+		digest := sha256.New()
+		if _, err := io.Copy(digest, io.NewSectionReader(source, 0, boundary)); err != nil {
+			return fmt.Errorf("hash front-compaction transcript: %w", err)
+		}
+		if err := before(Replacement{PreviousSize: expectedSize, Size: boundary, SHA256: hex.EncodeToString(digest.Sum(nil))}); err != nil {
+			return err
 		}
 	}
 

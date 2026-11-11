@@ -85,9 +85,46 @@ type PublishedError struct{ Err error }
 func (e *PublishedError) Error() string { return e.Err.Error() }
 func (e *PublishedError) Unwrap() error { return e.Err }
 
+// Replacement describes a transcript rewrite just before it is published: the size of the file
+// being replaced and the size and SHA-256 (hex) of the bytes that replace it.
+type Replacement struct {
+	PreviousSize int64
+	Size         int64
+	SHA256       string
+}
+
+// describeRecords returns the Replacement that publishing records over the file at path would
+// be, without touching the file. It must agree with what ReplaceRecordsWith reports.
+func describeRecords(path string, records [][]byte) (Replacement, error) {
+	digest := sha256.New()
+	var size int64
+	for index, record := range records {
+		line, err := compactObject(record)
+		if err != nil {
+			return Replacement{}, fmt.Errorf("transcript record %d: %w", index, err)
+		}
+		digest.Write(line)
+		digest.Write([]byte{'\n'})
+		size += int64(len(line)) + 1
+	}
+	var previous int64
+	if info, err := os.Stat(path); err == nil {
+		previous = info.Size()
+	}
+	return Replacement{PreviousSize: previous, Size: size, SHA256: hex.EncodeToString(digest.Sum(nil))}, nil
+}
+
 // ReplaceRecords atomically replaces the transcript with compact JSONL records. A *PublishedError
 // says the replacement happened although the call failed; every other error says it did not.
 func (j *Journal) ReplaceRecords(records ...[]byte) error {
+	return j.ReplaceRecordsWith(nil, records...)
+}
+
+// ReplaceRecordsWith is ReplaceRecords with a hook: before is called with the finished
+// replacement after its temporary file is written and synced, and before it is renamed over the
+// transcript, with the journal locked. An error from before abandons the replacement, which then
+// did not happen.
+func (j *Journal) ReplaceRecordsWith(before func(Replacement) error, records ...[]byte) error {
 	if j == nil {
 		return errors.New("transcript journal is not initialized")
 	}
@@ -110,6 +147,8 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	}
 	tempPath := temporary.Name()
 	defer os.Remove(tempPath)
+	digest := sha256.New()
+	var written int64
 	for _, line := range lines {
 		if err := writeAll(temporary, line); err != nil {
 			_ = temporary.Close()
@@ -119,6 +158,9 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 			_ = temporary.Close()
 			return err
 		}
+		digest.Write(line)
+		digest.Write([]byte{'\n'})
+		written += int64(len(line)) + 1
 	}
 	if j.durability != DurabilityProcess {
 		if err := temporary.Sync(); err != nil {
@@ -128,6 +170,15 @@ func (j *Journal) ReplaceRecords(records ...[]byte) error {
 	}
 	if err := temporary.Close(); err != nil {
 		return err
+	}
+	if before != nil {
+		var previous int64
+		if info, err := os.Stat(j.path); err == nil {
+			previous = info.Size()
+		}
+		if err := before(Replacement{PreviousSize: previous, Size: written, SHA256: hex.EncodeToString(digest.Sum(nil))}); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(tempPath, j.path); err != nil {
 		return err

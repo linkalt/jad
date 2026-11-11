@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,17 @@ type usageCacheFile struct {
 }
 
 func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) {
+	stat, err := statFile(config.MessagesPath)
+	if err != nil {
+		return usageCacheFile{}, false
+	}
+	return readUsageCacheStateAt(config, stat)
+}
+
+// readUsageCacheStateAt validates the cache against stat, one earlier stat of the transcript, so
+// a caller can tie the cache it accepts to the file it later scans. The checkpoint window is
+// still read from the path, and a different file there fails the digest.
+func readUsageCacheStateAt(config sessionfs.SessionConfig, stat fileStat) (usageCacheFile, bool) {
 	encoded, err := os.ReadFile(config.UsageCachePath)
 	if err != nil {
 		return usageCacheFile{}, false
@@ -50,8 +62,7 @@ func readUsageCacheState(config sessionfs.SessionConfig) (usageCacheFile, bool) 
 	if err != nil || len(digest) != sha256.Size {
 		return usageCacheFile{}, false
 	}
-	stat, err := statFile(config.MessagesPath)
-	if err != nil || stat.Size < checkpoint.Offset {
+	if stat.Size < checkpoint.Offset {
 		return usageCacheFile{}, false
 	}
 	if !stat.HasIdentity || stat.Dev != checkpoint.Device || stat.Ino != checkpoint.Inode {
@@ -111,7 +122,15 @@ func usageCacheResponseKey(raw json.RawMessage, response map[string]json.RawMess
 	return hex.EncodeToString(digest[:])
 }
 
-func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey string) error {
+// errUsageCacheSuperseded reports a cache that was not written because the transcript is no
+// longer the file its summary was computed from. It is not a failure: the next read rebuilds.
+var errUsageCacheSuperseded = errors.New("transcript was replaced since the usage was computed")
+
+// writeUsageCacheCheckpoint writes the cache for summary, which accounts for the transcript up
+// to offset. The identity it stamps is read from the file at the path now, so expectGeneration
+// names the file summary came from (see fileStat.generation); when the path holds another file,
+// stamping it would make a cache for the old file's totals pass for the new file.
+func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey, expectGeneration string) error {
 	path := config.UsageCachePath
 	if path == "" {
 		return nil
@@ -119,6 +138,9 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 	stat, err := statFile(config.MessagesPath)
 	if err != nil {
 		return fmt.Errorf("stat transcript for usage cache: %w", err)
+	}
+	if expectGeneration != "" && stat.generation() != expectGeneration {
+		return errUsageCacheSuperseded
 	}
 	if offset < 0 || offset > stat.Size {
 		return nil
@@ -154,44 +176,51 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 	if err != nil {
 		return fmt.Errorf("encode usage cache: %w", err)
 	}
+	return replaceFileAtomically(path, encoded, config.Persistence.Durability != "process", config.Persistence.Durability == "strict", "usage cache")
+}
+
+// replaceFileAtomically replaces path with data through a temporary file in the same directory, so a
+// reader sees the old file or the new one. syncFile fsyncs the data before the rename and
+// syncDirectory fsyncs the directory after it. what names the file in errors.
+func replaceFileAtomically(path string, data []byte, syncFile, syncDirectory bool, what string) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create usage-cache directory: %w", err)
+		return fmt.Errorf("create %s directory: %w", what, err)
 	}
 	file, err := os.CreateTemp(directory, filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create usage-cache temporary file: %w", err)
+		return fmt.Errorf("create %s temporary file: %w", what, err)
 	}
 	temporaryPath := file.Name()
 	defer os.Remove(temporaryPath)
-	if _, err := file.Write(encoded); err != nil {
+	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("write usage cache: %w", err)
+		return fmt.Errorf("write %s: %w", what, err)
 	}
-	if config.Persistence.Durability != "process" {
+	if syncFile {
 		if err := file.Sync(); err != nil {
 			_ = file.Close()
-			return fmt.Errorf("sync usage cache: %w", err)
+			return fmt.Errorf("sync %s: %w", what, err)
 		}
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close usage cache: %w", err)
+		return fmt.Errorf("close %s: %w", what, err)
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace usage cache: %w", err)
+		return fmt.Errorf("replace %s: %w", what, err)
 	}
-	if config.Persistence.Durability == "strict" {
+	if syncDirectory {
 		directoryFile, err := os.Open(directory)
 		if err != nil {
-			return fmt.Errorf("open usage-cache directory for sync: %w", err)
+			return fmt.Errorf("open %s directory for sync: %w", what, err)
 		}
 		syncErr := directoryFile.Sync()
 		closeErr := directoryFile.Close()
 		if syncErr != nil {
-			return fmt.Errorf("sync usage-cache directory: %w", syncErr)
+			return fmt.Errorf("sync %s directory: %w", what, syncErr)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("close usage-cache directory: %w", closeErr)
+			return fmt.Errorf("close %s directory: %w", what, closeErr)
 		}
 	}
 	return nil
@@ -200,11 +229,14 @@ func writeUsageCacheCheckpoint(config sessionfs.SessionConfig, summary webui.Usa
 // writeUsageCache stores the cache best-effort: a failed write is logged on the
 // first failure of a run of failures and never fails the caller. It reports
 // whether the cache was written.
-func (s *sharedSession) writeUsageCache(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey string) bool {
-	err := writeUsageCacheCheckpoint(config, summary, offset, lastResponseKey)
+func (s *sharedSession) writeUsageCache(config sessionfs.SessionConfig, summary webui.UsageSummary, offset int64, lastResponseKey, expectGeneration string) bool {
+	err := writeUsageCacheCheckpoint(config, summary, offset, lastResponseKey, expectGeneration)
 	if err == nil {
 		s.usageCacheFailed.Store(false)
 		return true
+	}
+	if errors.Is(err, errUsageCacheSuperseded) {
+		return false
 	}
 	if !s.usageCacheFailed.Swap(true) {
 		logging.Or(s.logger).Warn("usage cache write failed; continuing without it", "path", config.UsageCachePath, "error", err)

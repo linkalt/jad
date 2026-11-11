@@ -130,3 +130,18 @@ func TestHarnessPathsSkipEmptyStoreDirectories(t *testing.T) {
 		t.Fatalf("HarnessPaths = %v, holds the workspace for an empty store directory", paths)
 	}
 }
+
+// The usage baseline holds totals that exist nowhere else, so a checkpoint restore inside the
+// workspace must not revert or delete it, like the usage cache it sits beside.
+func TestHarnessPathsExcludeTheUsageBaseline(t *testing.T) {
+	workspace := t.TempDir()
+	cache := filepath.Join(workspace, ".state", "usage-cache.json")
+	config := sessionfs.SessionConfig{
+		WorkingDir:     workspace,
+		SettingPath:    filepath.Join(workspace, "sessions", "demo", "setting.json"),
+		UsageCachePath: cache,
+	}
+	if paths := HarnessPaths(config); !containsPath(paths, cache+".baseline") {
+		t.Fatalf("HarnessPaths = %v, want the usage baseline", paths)
+	}
+}
