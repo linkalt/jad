@@ -215,16 +215,14 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 		}
 	}
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
-		Enabled:        r.config.Compaction.AutoEnabled,
-		TriggerTokens:  r.config.Compaction.TriggerTokens,
-		TurnType:       r.config.Compaction.TurnType,
-		KeepTurns:      r.config.Compaction.KeepTurns,
-		KeepToolPairs:  r.config.Compaction.KeepToolPairs,
-		BackupMode:     r.config.Compaction.BackupMode,
-		BackupMinTurns: r.config.Compaction.BackupMinTurns,
-		Summary:        compactionSummarySettings(r.config),
-		OnSummaryError: compactionSummaryLogger(r.resolver.logger, r.reference, r.config.Profile, native.CompactTriggerAutomatic),
-		Overflow:       overflowSettings(r.config, r.resolver.logger, r.reference),
+		Enabled:       r.config.Compaction.AutoEnabled,
+		TriggerTokens: r.config.Compaction.TriggerTokens,
+		TurnType:      r.config.Compaction.TurnType,
+		KeepTurns:     r.config.Compaction.KeepTurns,
+		KeepToolPairs: r.config.Compaction.KeepToolPairs,
+		BackupMode:    r.config.Compaction.BackupMode,
+		AppendLimit:   r.config.Compaction.AppendLimit,
+		Overflow:      overflowSettings(r.config, r.resolver.logger, r.reference),
 	}
 	options.NextSessionTurn = nextSessionTurn
 	options.CompactHistory = func(compaction transcript.CompactionOptions) (transcript.CompactionResult, error) {

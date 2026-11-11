@@ -28,8 +28,8 @@ import (
 //
 // A target whose messages.jsonl is missing, empty or blank is left alone, with the Warn
 // "messages.jsonl is empty - nothing to compact|reset" for either action (a compaction can leave
-// only the active tail, so a reset does not clear a compaction's summary until the target has
-// answered again). With After zero a target with content is acted on without counting tokens.
+// only the active tail, so a reset does not clear the compacted history in the compaction cache
+// until the target has answered again). With After zero a target with content is acted on without counting tokens.
 // Above zero the tokens are those of the last completed response in messages.jsonl itself, never
 // usage-cache.json, which a compaction leaves with zeroed counts; the action runs once they pass
 // After.

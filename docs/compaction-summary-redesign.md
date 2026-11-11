@@ -1,5 +1,7 @@
 # Compaction summary redesign
 
+> **Superseded (2026-11-11, T-013).** `compaction.summary` was removed from the Go backend together with its code (the summary request, `NewCompactionSummarizer`, `transcript.CompactionOptions.Summarize`, the digest guard and `ErrCompactionSkipped`). Nothing in this document is built or planned; it is kept as a record of a design that was not pursued. See `backend-go/DECISIONS.md`, "`compaction.summary` removed; `keepbackup.min_turns` replaced by `keepbackup.append_limit` (T-013)".
+
 Status: proposal. Code is unchanged. Paths are relative to `backend-go/internal/`. Line numbers were read on the current tree.
 Labels: **[verified]** means read in the code. **[observed]** means a scratch test showed it; those tests ran in a `/tmp` copy of `backend-go` and were deleted. **[inferred]** means reasoned from code without running it. **[unverified]** means not checked.
 

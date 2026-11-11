@@ -108,8 +108,7 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 	}
 	// TypeScript compact() loads the full configuration, so an unusable
 	// model.json fails the request with a 422 before the transcript is touched.
-	withModel, err := m.config.WithModel()
-	if err != nil {
+	if _, err := m.config.WithModel(); err != nil {
 		return result, mapSessionError(err)
 	}
 	m.shared.invalidateTurnStarts()
@@ -119,12 +118,11 @@ func (m boundMutation) Compact(ctx context.Context) (httpapi.CompactionResponse,
 		return result, &httpapi.StatusError{Code: http.StatusConflict, Message: blocked.ClientMessage()}
 	}
 	compacted, err := m.shared.compactPreservingUsage(m.config, transcript.CompactionOptions{
-		TurnType:       m.config.Compaction.TurnType,
-		KeepTurns:      m.config.Compaction.KeepTurns,
-		KeepToolPairs:  m.config.Compaction.KeepToolPairs,
-		BackupMode:     m.config.Compaction.BackupMode,
-		BackupMinTurns: m.config.Compaction.BackupMinTurns,
-		Summarize:      m.resolver.manualCompactionSummarizer(ctx, withModel, m.reference),
+		TurnType:      m.config.Compaction.TurnType,
+		KeepTurns:     m.config.Compaction.KeepTurns,
+		KeepToolPairs: m.config.Compaction.KeepToolPairs,
+		BackupMode:    m.config.Compaction.BackupMode,
+		AppendLimit:   m.config.Compaction.AppendLimit,
 	})
 	if err != nil {
 		return result, fmt.Errorf("compact session transcript: %w", err)

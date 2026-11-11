@@ -691,7 +691,7 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Go backend only. Caps on what all the runs of the session use, in total and per calendar day, on top of the per-run max_run_tokens and max_run_cost_usd. Every cap is absent by default, which turns the budget off: nothing is counted or stored. With a cap set, each response's reported tokens and priced cost (the max_run_cost_usd count, which includes a compaction summary written for the run) are added to the ledger <state dir>/budget.json. A run is refused before its input is stored when a cap is already reached, and checked between rounds like max_run_tokens: the asked-for tool calls get a budget_limit result and the run fails with a message naming the count and the limit. A cost cap needs the model file's pricing, like max_run_cost_usd. Sub-agent runs are not counted. Delete budget.json to reset the counts.",
+      "description": "Go backend only. Caps on what all the runs of the session use, in total and per calendar day, on top of the per-run max_run_tokens and max_run_cost_usd. Every cap is absent by default, which turns the budget off: nothing is counted or stored. With a cap set, each response's reported tokens and priced cost (the max_run_cost_usd count) are added to the ledger <state dir>/budget.json. A run is refused before its input is stored when a cap is already reached, and checked between rounds like max_run_tokens: the asked-for tool calls get a budget_limit result and the run fails with a message naming the count and the limit. A cost cap needs the model file's pricing, like max_run_cost_usd. Sub-agent runs are not counted. Delete budget.json to reset the counts.",
       "properties": {
         "max_session_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000000000, "description": "Most tokens all the session's runs may use in total."},
         "max_session_cost_usd": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000000, "description": "Most US dollars all the session's runs may cost in total."},
@@ -1073,7 +1073,7 @@
       "properties": {
         "auto_enabled": {"type": "boolean", "default": true},
         "trigger_tokens": {"type": "integer", "minimum": 1, "maximum": 10000000, "default": 200000},
-        "backup_mode": {"type": "string", "enum": ["replace", "append"], "default": "append", "description": "Append preserves provider-run history across compactions but grows the backup; replace keeps only the latest compaction backup."},
+        "backup_mode": {"type": "string", "enum": ["replace", "append"], "default": "append", "description": "Append preserves provider-run history across compactions but grows the backup unless keepbackup.append_limit bounds it; replace keeps only the latest compaction backup."},
         "keepbatch": {
           "type": "object",
           "properties": {
@@ -1096,81 +1096,14 @@
           "description": "Turns of the pre-compaction backup kept visible in the web UI. The backup holds the raw records, so reasoning and tool calls survive; 0 hides it.",
           "properties": {
             "turns": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 20},
-            "min_turns": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 0, "description": "With backup_mode replace: keep the existing backup instead of overwriting it when it holds at least this many user turns and the transcript being backed up holds fewer. Counts messages with role user in messages.jsonl; 0 always overwrites."}
+            "append_limit": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 0, "description": "With backup_mode append: keep only the newest this many user turns in the backup; after each compaction appends to it, the older turns are dropped, whole turns only (a steering message stays with the turn before it). Turns are the records with role user in the backup file that are not steering messages, so every message of an input batch counts. 0 keeps every turn. A backup file with a line that is not a JSON object makes the compaction fail, leaving the backup and the transcript as they were. backup_mode replace always overwrites the backup and ignores this; so does a sub-agent, which keeps no backup."}
           },
           "additionalProperties": true,
           "default": {}
         },
-        "summary": {
-          "type": "object",
-          "description": "Off by default. Before a compaction (automatic, overflow or manual) drops turns, the session's model writes a summary of them, stored in the compaction cache as one message in front of the retained turns; messages.jsonl is not changed. The dropped turns are sent as plain text (reasoning left out), each item cut to max_item_bytes and the whole to max_input_bytes, newest kept; an earlier summary is passed on first. The request goes through the run's model client (fallback, retry, pricing and max_run_cost_usd count it). Sub-agent compaction does not summarize.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false
-            },
-            "prompt": {
-              "type": "string",
-              "pattern": "\\S",
-              "default": "You are compacting a long conversation between a user and a coding agent so the agent can continue the work with less context. Write a summary of the transcript you are given that lets the agent carry on without it. Keep: the user's goals and requests (quote exact instructions and constraints), decisions made and why, files read or changed with what matters about them, commands run and their outcomes, errors and how they were resolved, open problems, and the work that remains. Keep an earlier summary's facts unless the transcript supersedes them. Be specific (paths, names, values), leave out pleasantries, and write only the summary.",
-              "description": "Instruction sent in place of the session's prompt."
-            },
-            "header": {
-              "type": "string",
-              "pattern": "\\S",
-              "default": "Summary of the earlier conversation, written by the model when it was compacted:",
-              "description": "First line of the stored summary; the next summary recognises an earlier one by it."
-            },
-            "role": {
-              "type": "string",
-              "enum": [
-                "developer",
-                "user"
-              ],
-              "default": "developer",
-              "description": "Role of the stored summary message."
-            },
-            "max_input_bytes": {
-              "type": "integer",
-              "minimum": 1000,
-              "maximum": 10000000,
-              "default": 200000
-            },
-            "max_item_bytes": {
-              "type": "integer",
-              "minimum": 100,
-              "maximum": 1000000,
-              "default": 4000
-            },
-            "max_output_tokens": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1000000,
-              "default": 4096,
-              "description": "Replaces the model's max_output_tokens for the summary request; 0 keeps the model's."
-            },
-            "timeout_ms": {
-              "type": "integer",
-              "minimum": 1000,
-              "maximum": 1800000,
-              "default": 120000
-            },
-            "on_failure": {
-              "type": "string",
-              "enum": [
-                "compact",
-                "skip"
-              ],
-              "default": "compact",
-              "description": "compact: drop the turns without a summary (logged); skip: leave the transcript as it is."
-            }
-          },
-          "additionalProperties": false,
-          "default": {}
-        },
         "overflow": {
           "type": "object",
-          "description": "Off by default. When the provider refuses a round because the history is over the model's context window (its error contains one of patterns, case-insensitive: the code and message of a failed stream, or the text of an HTTP error), the run compacts with the compaction settings (and summary) and sends the round again, up to max_attempts times per run. The run's own turn is kept whole, so only earlier turns are dropped. Needs auto_enabled. When only the run's own turn is left (nothing to drop), the round is sent again with each tool output cut to about tool_output_max_bytes; with it 0, or when no output is longer, the provider's error stands.",
+          "description": "Off by default. When the provider refuses a round because the history is over the model's context window (its error contains one of patterns, case-insensitive: the code and message of a failed stream, or the text of an HTTP error), the run compacts with the compaction settings and sends the round again, up to max_attempts times per run. The run's own turn is kept whole, so only earlier turns are dropped. Needs auto_enabled. When only the run's own turn is left (nothing to drop), the round is sent again with each tool output cut to about tool_output_max_bytes; with it 0, or when no output is longer, the provider's error stands.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -2073,7 +2006,7 @@
                 "max_chain": {"type": "integer", "minimum": 2, "maximum": 8, "default": 2, "description": "Longest chain of profiles one message may travel through, the first caller included. 2 lets a profile (or a sub-agent that lists profile_message) message another profile, and that profile's run message no further. A message to a profile already in the chain is refused as a cycle. A cap of its own beside tools.native.subagent.max_depth (default 2 when that section is absent): every message must pass both, so a longer max_chain never lets a chain run deeper than max_depth. Config only: the model never sees it."},
                 "sessions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$"}, "description": "Go backend only. Globs (* and ? only, matched against the whole session id, no root prefix) of the other sessions whose profiles the model may message as profile: \"<session>/<category>/<profile>\". Only sessions that already exist are reached, and a session or profile the globs do not allow answers exactly like one that does not exist. deny_profiles applies in every session. Absent or empty: only the calling session's profiles, as \"<category>/<profile>\". Config only: the model never sees the globs, only the list of them in the tool description."},
                 "remotes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}, "description": "Go backend only. Names of remote entries (files in the remotes folder, see remote.schema.json) this profile may message with profile: \"remote:<name>/<session>/<category>/<profile>\" (session may be left out when the entry has a default_session). Each name must have a valid file, checked when the session loads. Default none: a session reaches no other JAD server unless it lists it. The remote's own token table decides what is allowed there; the call is a handle of the async tool like a local message, and a remote that stays unreachable for the entry's lost_after_ms ends it as lost (the remote run may still be going). A remote answer carries no file paths in the tool's information."},
-                "context_trigger": {"type": "object", "description": "Config only. What happens to the target profile's transcript (its messages.jsonl) before a profile_message call. compact is evaluated on EVERY call that starts a run of the target (a queued message when it starts, a sub-agent's call too): it keeps no per-run state, so a target that was empty, below after, or whose compaction failed at one call is looked at again at the next, and one that grows past after again is compacted again. Note that with the default compaction (keep 1 turn, no summary) a compact before every call leaves the target only its previous exchange plus the new message; raise after, or the target's compaction keep_turns, or turn its compaction summary on, for a target that should remember more. reset is evaluated the same way, on EVERY call that starts a run of the target (a queued message when it starts, a sub-agent's call too), with no per-run state: it is destructive at every qualifying call, so each message resets the target and drops what the calls before it, including earlier calls of the same run, wrote and answered. A target that was empty at one call (nothing to reset) is reset at the next call once it has content, and a positive after is rechecked at every call. Nothing depends on the calling run: a call with no calling run, or from a run that has ended, is evaluated like any other. Use reset only for a target that should answer every call from a clean history. action: off (default) does nothing; compact compacts the transcript with the target's own compaction settings; reset DELETES the target's whole history and the data derived from it (messages.jsonl, the compaction cache and its backup, the transcript backup, the usage, cursor, run-error and state-context caches and the deleted-history archive) and stops the target's running async handles and sub-agents and drops their unread completion signals, exactly as resetting the profile by hand does. reset is destructive, cannot be undone, and is never on unless you set it here. after: input tokens, default 0. With 0 the target is compacted or reset whenever its messages.jsonl has content, with no token count; with a positive value the action runs only when the last completed response in messages.jsonl itself (never usage-cache.json) had strictly more input tokens, and a transcript with no completed response is left alone. after is accepted, and does nothing, while action is off. A target whose messages.jsonl is missing, empty or blank is left alone (both actions log the warning 'messages.jsonl is empty - nothing to compact' or '... nothing to reset', and the message is still sent; note a compaction leaves the transcript empty until the target answers again, so a reset does NOT clear a compaction summary until then). A failed compaction is logged and the message is sent anyway (the next call tries again). A reset that is due and fails (or cannot read the transcript or count tokens) fails closed: the message is NOT sent, the tool call returns context_trigger_failed, the reset is tried again by the next call, and the reset may need attention: it removes the caches, the transcript backup and the archive first and empties messages.jsonl last, so a failure usually leaves the history in place (those files may already be gone) and the next call tries the reset again; if the history was emptied but the directory sync failed, the target's running handles and sub-agents are stopped as for a clean reset, the message is still not sent, and a retry finds the empty transcript and does nothing. Another JAD server's profile (remote:<name>/...) is never compacted or reset: a remote server's profiles are not changed on a caller's behalf, so this setting does not apply to remote targets: with reset the call is refused (context_trigger_unsupported, nothing is sent), with compact the message is sent and the result says the compact was not applied. The legacy compact and compact_after keys were removed and are refused as a config error that names them (compact on is action compact, compact_after is after).", "properties": {"action": {"type": ["string", "null"], "enum": ["off", "compact", "reset", null], "default": "off", "description": "off, compact or reset, as the description of context_trigger says. reset deletes the target's history."}, "after": {"type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991, "default": 0, "description": "Input tokens the target's last completed response in messages.jsonl must have exceeded (strictly more) for the action to run. 0 (default) acts on any target with a non-empty messages.jsonl without counting tokens."}}, "additionalProperties": false}
+                "context_trigger": {"type": "object", "description": "Config only. What happens to the target profile's transcript (its messages.jsonl) before a profile_message call. compact is evaluated on EVERY call that starts a run of the target (a queued message when it starts, a sub-agent's call too): it keeps no per-run state, so a target that was empty, below after, or whose compaction failed at one call is looked at again at the next, and one that grows past after again is compacted again. Note that with the default compaction (keep 1 turn, no summary) a compact before every call leaves the target only its previous exchange plus the new message; raise after or the target's compaction keep_turns for a target that should remember more. reset is evaluated the same way, on EVERY call that starts a run of the target (a queued message when it starts, a sub-agent's call too), with no per-run state: it is destructive at every qualifying call, so each message resets the target and drops what the calls before it, including earlier calls of the same run, wrote and answered. A target that was empty at one call (nothing to reset) is reset at the next call once it has content, and a positive after is rechecked at every call. Nothing depends on the calling run: a call with no calling run, or from a run that has ended, is evaluated like any other. Use reset only for a target that should answer every call from a clean history. action: off (default) does nothing; compact compacts the transcript with the target's own compaction settings; reset DELETES the target's whole history and the data derived from it (messages.jsonl, the compaction cache and its backup, the transcript backup, the usage, cursor, run-error and state-context caches and the deleted-history archive) and stops the target's running async handles and sub-agents and drops their unread completion signals, exactly as resetting the profile by hand does. reset is destructive, cannot be undone, and is never on unless you set it here. after: input tokens, default 0. With 0 the target is compacted or reset whenever its messages.jsonl has content, with no token count; with a positive value the action runs only when the last completed response in messages.jsonl itself (never usage-cache.json) had strictly more input tokens, and a transcript with no completed response is left alone. after is accepted, and does nothing, while action is off. A target whose messages.jsonl is missing, empty or blank is left alone (both actions log the warning 'messages.jsonl is empty - nothing to compact' or '... nothing to reset', and the message is still sent; note a compaction leaves the transcript empty until the target answers again, so a reset does NOT clear the compacted history kept in the compaction cache until then). A failed compaction is logged and the message is sent anyway (the next call tries again). A reset that is due and fails (or cannot read the transcript or count tokens) fails closed: the message is NOT sent, the tool call returns context_trigger_failed, the reset is tried again by the next call, and the reset may need attention: it removes the caches, the transcript backup and the archive first and empties messages.jsonl last, so a failure usually leaves the history in place (those files may already be gone) and the next call tries the reset again; if the history was emptied but the directory sync failed, the target's running handles and sub-agents are stopped as for a clean reset, the message is still not sent, and a retry finds the empty transcript and does nothing. Another JAD server's profile (remote:<name>/...) is never compacted or reset: a remote server's profiles are not changed on a caller's behalf, so this setting does not apply to remote targets: with reset the call is refused (context_trigger_unsupported, nothing is sent), with compact the message is sent and the result says the compact was not applied. The legacy compact and compact_after keys were removed and are refused as a config error that names them (compact on is action compact, compact_after is after).", "properties": {"action": {"type": ["string", "null"], "enum": ["off", "compact", "reset", null], "default": "off", "description": "off, compact or reset, as the description of context_trigger says. reset deletes the target's history."}, "after": {"type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991, "default": 0, "description": "Input tokens the target's last completed response in messages.jsonl must have exceeded (strictly more) for the action to run. 0 (default) acts on any target with a non-empty messages.jsonl without counting tokens."}}, "additionalProperties": false}
               },
               "additionalProperties": false
             },

@@ -68,10 +68,8 @@ type Compaction struct {
 	KeepToolPairs   int
 	BackupMode      string
 	KeepBackupTurns int
-	// BackupMinTurns keeps a replace backup that holds at least this many user turns from being overwritten by a snapshot with fewer; 0 turns it off.
-	BackupMinTurns int
-	// Summary is compaction.summary (off by default).
-	Summary CompactionSummary
+	// AppendLimit is compaction.keepbackup.append_limit: with backup_mode append, the backup keeps only the newest this many user turns after each compaction; 0 keeps every turn.
+	AppendLimit int
 	// Overflow is compaction.overflow (off by default; needs auto_enabled).
 	Overflow CompactionOverflow
 }
@@ -844,7 +842,6 @@ func normalizeCompaction(raw json.RawMessage, path string) (Compaction, error) {
 		KeepTurns:       1,
 		BackupMode:      "append",
 		KeepBackupTurns: defaultKeepBackupTurns,
-		Summary:         DefaultCompactionSummary(),
 		Overflow:        DefaultCompactionOverflow(),
 	}
 	if len(raw) == 0 {
@@ -912,16 +909,13 @@ func normalizeCompaction(raw json.RawMessage, path string) (Compaction, error) {
 			}
 			settings.KeepBackupTurns = int(configured)
 		}
-		if value, ok := keepbackup["min_turns"]; ok && string(value) != "null" {
+		if value, ok := keepbackup["append_limit"]; ok && string(value) != "null" {
 			configured, valid := configSafeInteger(value)
 			if !valid || configured < 0 || configured > int64(maxKeepBackupTurns) {
-				return Compaction{}, configError("%s: compaction.keepbackup.min_turns must be an integer between 0 and %d", path, maxKeepBackupTurns)
+				return Compaction{}, configError("%s: compaction.keepbackup.append_limit must be an integer between 0 and %d", path, maxKeepBackupTurns)
 			}
-			settings.BackupMinTurns = int(configured)
+			settings.AppendLimit = int(configured)
 		}
-	}
-	if settings.Summary, err = normalizeCompactionSummary(fields["summary"], path); err != nil {
-		return Compaction{}, err
 	}
 	if settings.Overflow, err = normalizeCompactionOverflow(fields["overflow"], path); err != nil {
 		return Compaction{}, err

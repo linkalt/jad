@@ -101,3 +101,42 @@ func CompleteText(ctx context.Context, streamer responses.Streamer, model ModelS
 	}
 	return strings.TrimSpace(text), nil
 }
+
+// promptMessageItem is a message input item with text content.
+type promptMessageItem struct {
+	Type    string             `json:"type"`
+	Role    string             `json:"role"`
+	Content []inputTextContent `json:"content"`
+}
+
+// responseOutputText joins the output_text parts of the assistant messages of a terminal
+// response event.
+func responseOutputText(raw json.RawMessage) string {
+	var event struct {
+		Response struct {
+			Output []struct {
+				Type    string `json:"type"`
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, item := range event.Response.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "output_text" {
+				text.WriteString(part.Text)
+			}
+		}
+	}
+	return text.String()
+}

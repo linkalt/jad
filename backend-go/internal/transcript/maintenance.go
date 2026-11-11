@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -40,25 +41,19 @@ func (c *compactionCache) continuedFlags() []bool {
 }
 
 type CompactionOptions struct {
-	TurnType           string
-	KeepTurns          int
-	KeepToolPairs      int
-	BackupMode         string
-	BackupMinTurns     int
+	TurnType      string
+	KeepTurns     int
+	KeepToolPairs int
+	BackupMode    string
+	// AppendLimit, with BackupMode append, keeps only the newest this many user turns in
+	// the backup after each append (see backupTranscript); 0 keeps every turn.
+	AppendLimit        int
 	PreserveResponseID string
 	// KeepLatestTurn keeps the newest turn (the latest user message and everything after
 	// it) whole, even when KeepTurns is 0 and with every tool pair assistant_final would
 	// strip. The overflow compaction of a run sets it, so the run's own tool work is not
 	// dropped while it is still going.
 	KeepLatestTurn bool
-	// Summarize, when set, is handed the items of the turns this compaction drops and
-	// returns one history item that is kept in front of the retained turns (see
-	// compaction_summary.go). It runs without the store lock held. Nil drops the turns
-	// as before.
-	Summarize func(dropped [][]byte) (json.RawMessage, error)
-	// summaryItem and summaryDigest carry what Summarize returned into the locked part.
-	summaryItem   json.RawMessage
-	summaryDigest string
 }
 
 type CompactionResult struct {
@@ -85,12 +80,6 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 	if options.BackupMode != "replace" && options.BackupMode != "append" {
 		return result, errors.New("backup mode must be replace or append")
 	}
-	if options.Summarize != nil {
-		skipped, err := s.summarizeDroppedTurns(&options)
-		if err != nil || skipped {
-			return result, err
-		}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	plan, err := s.planCompaction(options)
@@ -98,14 +87,8 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		return result, err
 	}
 	history, activeTail, finalAssistant, selected := plan.history, plan.activeTail, plan.finalAssistant, plan.selected
-	if len(options.summaryItem) > 0 && droppedDigest(plan.dropped()) != options.summaryDigest {
-		return result, errors.New("the transcript changed while the compaction summary was written")
-	}
 
-	retained := make([][]byte, 0, len(history)+1)
-	if len(options.summaryItem) > 0 {
-		retained = append(retained, append([]byte(nil), options.summaryItem...))
-	}
+	retained := make([][]byte, 0, len(history))
 	pairTurns := selected
 	if options.KeepLatestTurn && len(selected) > 0 {
 		// The latest turn keeps all its pairs; keep_tool_pairs counts in the turns before it.
@@ -156,7 +139,7 @@ func (s *TurnStore) CompactHistory(options CompactionOptions) (CompactionResult,
 		return result, err
 	}
 	if s.options.MessagesBackupPath != "" {
-		if err := backupTranscript(s.journal.path, s.options.MessagesBackupPath, options.BackupMode, options.BackupMinTurns, s.journal.durability); err != nil {
+		if err := backupTranscript(s.journal.path, s.options.MessagesBackupPath, options.BackupMode, options.AppendLimit, s.journal.durability); err != nil {
 			return result, fmt.Errorf("backup transcript before compaction: %w", err)
 		}
 	}
@@ -579,65 +562,207 @@ func compactedInputBytes(items [][]byte) int {
 	return total
 }
 
-// countUserTurns counts the records of a transcript file that are user messages
-// (role == "user") and start a turn. It reads the file as it is on disk: no
-// compaction overlay, and each record of an input batch counts, where the web UI's
-// backup reader merges a batch into one turn. A record marked as steering
-// (SessionInputSteerField: a steering message or a stop hook's message) continues the
-// run's turn and is not counted, as CompactHistory does not start a turn at it. The
-// session's turn numbers and the web UI still count it as a turn of its own.
-func countUserTurns(path string) (int, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, err
+// backupTurnStart is where a user turn starts in a backup: the file (0 is the existing
+// backup, 1 the live transcript) and the byte offset of its record.
+type backupTurnStart struct {
+	file   int
+	offset int64
+}
+
+// backupTurnWindow remembers the starts of the newest limit user turns of the files it
+// scans, in a ring of limit entries, so the memory does not grow with the backup.
+type backupTurnWindow struct {
+	starts []backupTurnStart
+	turns  int
+}
+
+func newBackupTurnWindow(limit int) *backupTurnWindow {
+	return &backupTurnWindow{starts: make([]backupTurnStart, limit)}
+}
+
+// cut returns the start of the oldest turn to keep when the files hold more turns than
+// the window; ok is false when they hold no more, and nothing is cut.
+func (w *backupTurnWindow) cut() (start backupTurnStart, ok bool) {
+	if w.turns <= len(w.starts) {
+		return backupTurnStart{}, false
 	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
-	turns := 0
-	for {
+	return w.starts[w.turns%len(w.starts)], true
+}
+
+// backupLine is a line of the backup as it will be written: the existing backup followed
+// by the transcript. A line that does not end with a newline is joined to the first line of
+// whatever follows it, so it is only known once that follows. file and offset say where the
+// line starts (file 0 is the existing backup, 1 the transcript); path is the file it is
+// reported in, and joinedTo is the transcript when the line is a backup's unterminated last
+// line joined to the transcript's first line.
+type backupLine struct {
+	data     []byte
+	file     int
+	offset   int64
+	path     string
+	joinedTo string
+}
+
+// observe checks that the line is a JSON object (a blank one is not a record) and, when it
+// has role user and is not marked as steering (SessionInputSteerField), records in window
+// that a turn starts at the line.
+func (l backupLine) observe(window *backupTurnWindow) error {
+	trimmed := bytes.TrimSpace(l.data)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	fields, err := objectFields(trimmed)
+	if err != nil {
+		if l.joinedTo != "" {
+			return fmt.Errorf("%s: record at byte %d has no newline, so it is joined to the first line of %s, which is not a JSON object: %w", l.path, l.offset, l.joinedTo, err)
+		}
+		return fmt.Errorf("%s: record at byte %d is not a JSON object: %w", l.path, l.offset, err)
+	}
+	if roleRaw, ok := fieldValue(fields, "role"); ok {
+		steered, marked := fieldValue(fields, SessionInputSteerField)
+		if role, _ := stringValue(roleRaw); role == "user" && !(marked && string(steered) == "true") {
+			window.starts[window.turns%len(window.starts)] = backupTurnStart{file: l.file, offset: l.offset}
+			window.turns++
+		}
+	}
+	return nil
+}
+
+// scanBackupTurns reads the transcript file at path as it is on disk and records in window
+// where each turn starts. A turn starts at a record with role user that is not marked as
+// steering (SessionInputSteerField): no compaction overlay, and each record of an input
+// batch counts, where the web UI's backup reader merges a batch into one turn. A steering
+// record (a steering message or a stop hook's message) continues the turn before it, as
+// CompactHistory does not start a turn at it; the session's turn numbers and the web UI
+// still count it as a turn of its own. A missing file is empty. A line that is not a JSON
+// object is an error that names the file and the byte offset.
+//
+// The lines are those of the backup that will be written, so the file's last line, when it
+// does not end with a newline, is not read yet: it is returned as rest, for the caller to
+// read once it knows what is joined to it. carry is such a line of the file scanned before:
+// it is joined to the first line of this file, and that one line is read, and counted, as
+// it will be in the backup. When the file has no line, rest is carry. size is the size of
+// what was read.
+func scanBackupTurns(path string, file int, window *backupTurnWindow, carry *backupLine) (size int64, rest *backupLine, err error) {
+	input, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, carry, nil
+		}
+		return 0, nil, err
+	}
+	defer input.Close()
+	reader := bufio.NewReader(input)
+	rest = carry
+	for first := true; ; first = false {
 		line, readErr := reader.ReadBytes('\n')
-		if line = bytes.TrimSpace(line); len(line) > 0 {
-			fields, err := objectFields(line)
-			if err != nil {
-				return 0, err
+		if len(line) > 0 {
+			current := backupLine{data: line, file: file, offset: size, path: path}
+			if first && carry != nil {
+				current = *carry
+				current.data = append(append([]byte(nil), carry.data...), line...)
+				current.joinedTo = path
 			}
-			if roleRaw, ok := fieldValue(fields, "role"); ok {
-				steered, marked := fieldValue(fields, SessionInputSteerField)
-				if role, _ := stringValue(roleRaw); role == "user" && !(marked && string(steered) == "true") {
-					turns++
-				}
+			size += int64(len(line))
+			if readErr == io.EOF {
+				// No newline: joined to what follows.
+				return size, &current, nil
+			}
+			if err := current.observe(window); err != nil {
+				return 0, nil, err
+			}
+			if first {
+				rest = nil
 			}
 		}
 		if readErr == io.EOF {
-			return turns, nil
+			return size, rest, nil
 		}
 		if readErr != nil {
-			return 0, readErr
+			return 0, nil, readErr
 		}
 	}
 }
 
-// keepsFullerBackup reports whether a replace backup must stay as it is: the
-// existing one holds at least minTurns user turns and the new snapshot fewer.
-// A missing or unreadable file on either side never blocks the overwrite.
-func keepsFullerBackup(source, destination string, minTurns int) bool {
-	if minTurns <= 0 {
-		return false
+// copyBackupPart copies the bytes of the file at path from offset to its end, or, when
+// size is not negative, up to size bytes of it. A missing file reports exists false.
+func copyBackupPart(destination *os.File, path string, offset, size int64) (exists bool, err error) {
+	input, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
 	}
-	existing, err := countUserTurns(destination)
-	if err != nil || existing < minTurns {
-		return false
+	defer input.Close()
+	var reader io.Reader = input
+	if offset > 0 || size >= 0 {
+		if size < 0 {
+			size = math.MaxInt64 - offset
+		}
+		reader = io.NewSectionReader(input, offset, size)
 	}
-	snapshot, err := countUserTurns(source)
-	return err == nil && snapshot < minTurns
+	if _, err := io.Copy(destination, reader); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
-func backupTranscript(source, destination, mode string, minTurns int, durability DurabilityMode) error {
+// backupTranscript writes the transcript backup before a compaction: the live transcript
+// at source replaces destination (mode replace), or is added to the end of it (mode append).
+//
+// With mode append and appendLimit above 0 the backup is checked and then cut to the newest
+// appendLimit user turns, each turn being counted as scanBackupTurns says, on the lines of
+// the bytes that would be written: the existing backup followed by the transcript, as they
+// are. An existing backup whose last line has no newline is joined to the first line of the
+// transcript, as it always was, and that joined line is one record: it must be a JSON object
+// (a blank part is fine), and it starts a turn, at the start of the backup's last line, when
+// it is a user record. A record that is not a JSON object stops the backup before anything
+// is written, wherever it is, even in a part the cut would drop: the error names the file and
+// byte offset, and destination is left as it was. The cut is at the record that starts the
+// oldest turn kept, so only whole turns go, steering records stay with the turn before them,
+// and the records in front of the first turn go with the turns dropped. When the files hold no
+// more than appendLimit turns nothing is cut, whatever comes before the first turn. No
+// separator is added. appendLimit 0 appends the bytes as they are and checks nothing.
+//
+// The result goes to a temporary file in the directory of destination and replaces it by
+// rename, with the durability the journal has. A source that does not exist leaves
+// destination alone.
+func backupTranscript(source, destination, mode string, appendLimit int, durability DurabilityMode) error {
 	if source == "" || destination == "" {
 		return errors.New("transcript backup paths are required")
 	}
-	if mode == "replace" && keepsFullerBackup(source, destination, minTurns) {
-		return nil
+	// The parts of the files that go to the backup: from an offset, for a length (-1 is to
+	// the end of the file).
+	var existingFrom, sourceFrom int64
+	existingLength, sourceLength := int64(-1), int64(-1)
+	if mode == "append" && appendLimit > 0 {
+		window := newBackupTurnWindow(appendLimit)
+		existingSize, tail, err := scanBackupTurns(destination, 0, window, nil)
+		if err != nil {
+			return err
+		}
+		sourceSize, last, err := scanBackupTurns(source, 1, window, tail)
+		if err != nil {
+			return err
+		}
+		// The last line of the backup written, which has no newline, is read now.
+		if last != nil {
+			if err := last.observe(window); err != nil {
+				return err
+			}
+		}
+		// What was scanned is what is copied, even if the file grows meanwhile.
+		existingLength, sourceLength = existingSize, sourceSize
+		if start, trimmed := window.cut(); trimmed {
+			if start.file == 0 {
+				existingFrom = start.offset
+				existingLength = existingSize - existingFrom
+			} else {
+				existingLength = 0
+				sourceFrom, sourceLength = start.offset, sourceSize-start.offset
+			}
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
@@ -648,39 +773,16 @@ func backupTranscript(source, destination, mode string, minTurns int, durability
 	}
 	tempPath := temporary.Name()
 	defer os.Remove(tempPath)
-	if mode == "append" {
-		if previous, openErr := os.Open(destination); openErr == nil {
-			if _, err := io.Copy(temporary, previous); err != nil {
-				_ = previous.Close()
-				_ = temporary.Close()
-				return err
-			}
-			if err := previous.Close(); err != nil {
-				_ = temporary.Close()
-				return err
-			}
-		} else if !errors.Is(openErr, os.ErrNotExist) {
+	if mode == "append" && existingLength != 0 {
+		if _, err := copyBackupPart(temporary, destination, existingFrom, existingLength); err != nil {
 			_ = temporary.Close()
-			return openErr
+			return err
 		}
 	}
-	input, err := os.Open(source)
-	if err != nil {
+	exists, err := copyBackupPart(temporary, source, sourceFrom, sourceLength)
+	if err != nil || !exists {
 		_ = temporary.Close()
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
 		return err
-	}
-	_, copyErr := io.Copy(temporary, input)
-	closeErr := input.Close()
-	if copyErr != nil {
-		_ = temporary.Close()
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = temporary.Close()
-		return closeErr
 	}
 	if durability != DurabilityProcess {
 		if err := temporary.Sync(); err != nil {

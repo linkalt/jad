@@ -4,18 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 )
 
-func TestCompactionSummaryAndOverflowAreOffByDefault(t *testing.T) {
-	for _, raw := range []string{``, `{}`, `{"summary":null,"overflow":null}`} {
+func TestCompactionOverflowAreOffByDefault(t *testing.T) {
+	for _, raw := range []string{``, `{}`, `{"overflow":null}`} {
 		settings, err := normalizeCompaction(json.RawMessage(raw), "setting.json")
 		if err != nil {
 			t.Fatalf("%q: %v", raw, err)
-		}
-		if settings.Summary.Enabled || !reflect.DeepEqual(settings.Summary, DefaultCompactionSummary()) {
-			t.Fatalf("%q: summary = %+v, want the defaults with enabled false", raw, settings.Summary)
 		}
 		if settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 1 || !reflect.DeepEqual(settings.Overflow.Patterns, defaultCompactionOverflowPatterns) || settings.Overflow.ToolOutputMaxBytes != 8192 {
 			t.Fatalf("%q: overflow = %+v", raw, settings.Overflow)
@@ -23,14 +19,10 @@ func TestCompactionSummaryAndOverflowAreOffByDefault(t *testing.T) {
 	}
 }
 
-func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
-	settings, err := normalizeCompaction(json.RawMessage(`{"summary":{"enabled":true,"prompt":"P","header":"H","role":"user","max_input_bytes":5000,"max_item_bytes":200,"max_output_tokens":0,"timeout_ms":3000,"on_failure":"skip"},"overflow":{"enabled":true,"max_attempts":3,"patterns":["too big"],"tool_output_max_bytes":0}}`), "setting.json")
+func TestCompactionOverflowReadTheirValues(t *testing.T) {
+	settings, err := normalizeCompaction(json.RawMessage(`{"overflow":{"enabled":true,"max_attempts":3,"patterns":["too big"],"tool_output_max_bytes":0}}`), "setting.json")
 	if err != nil {
 		t.Fatal(err)
-	}
-	want := CompactionSummary{Enabled: true, Prompt: "P", Header: "H", Role: "user", MaxInputBytes: 5000, MaxItemBytes: 200, MaxOutputTokens: 0, TimeoutMS: 3000, OnFailure: "skip"}
-	if settings.Summary != want {
-		t.Fatalf("summary = %+v, want %+v", settings.Summary, want)
 	}
 	if !settings.Overflow.Enabled || settings.Overflow.MaxAttempts != 3 || !reflect.DeepEqual(settings.Overflow.Patterns, []string{"too big"}) || settings.Overflow.ToolOutputMaxBytes != 0 {
 		t.Fatalf("overflow = %+v", settings.Overflow)
@@ -42,19 +34,8 @@ func TestCompactionSummaryAndOverflowReadTheirValues(t *testing.T) {
 	}
 }
 
-func TestCompactionSummaryAndOverflowRefuseBadValues(t *testing.T) {
+func TestCompactionOverflowRefuseBadValues(t *testing.T) {
 	for _, raw := range []string{
-		`{"summary":[]}`,
-		`{"summary":{"enabled":"yes"}}`,
-		`{"summary":{"prompt":""}}`,
-		`{"summary":{"header":"  "}}`,
-		`{"summary":{"role":"system"}}`,
-		`{"summary":{"max_input_bytes":999}}`,
-		`{"summary":{"max_item_bytes":99}}`,
-		`{"summary":{"max_output_tokens":-1}}`,
-		`{"summary":{"timeout_ms":999}}`,
-		`{"summary":{"on_failure":"ignore"}}`,
-		`{"summary":{"model":"x"}}`,
 		`{"overflow":true}`,
 		`{"overflow":{"enabled":1}}`,
 		`{"overflow":{"max_attempts":0}}`,
@@ -72,13 +53,9 @@ func TestCompactionSummaryAndOverflowRefuseBadValues(t *testing.T) {
 			t.Errorf("normalizeCompaction(%s) succeeded, want a config error", raw)
 		}
 	}
-	_, err := normalizeCompaction(json.RawMessage(`{"summary":{"model":"x"}}`), "setting.json")
-	if err == nil || !strings.Contains(err.Error(), "compaction.summary") || !strings.Contains(err.Error(), "model") {
-		t.Fatalf("unknown key error = %v, want it to name compaction.summary and the key", err)
-	}
 }
 
-func TestCompactionSummaryAndOverflowSchemaMatchTheLoader(t *testing.T) {
+func TestCompactionOverflowSchemaMatchesTheLoader(t *testing.T) {
 	data, err := os.ReadFile("../../../sample/schemes/setting.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -103,16 +80,11 @@ func TestCompactionSummaryAndOverflowSchemaMatchTheLoader(t *testing.T) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	summary, overflow := DefaultCompactionSummary(), DefaultCompactionOverflow()
+	overflow := DefaultCompactionOverflow()
 	checks := map[string]map[string]any{
-		"summary": {
-			"enabled": false, "prompt": summary.Prompt, "header": summary.Header, "role": summary.Role,
-			"max_input_bytes": summary.MaxInputBytes, "max_item_bytes": summary.MaxItemBytes,
-			"max_output_tokens": summary.MaxOutputTokens, "timeout_ms": summary.TimeoutMS, "on_failure": summary.OnFailure,
-		},
 		"overflow": {"enabled": overflow.Enabled, "max_attempts": overflow.MaxAttempts, "patterns": overflow.Patterns, "tool_output_max_bytes": overflow.ToolOutputMaxBytes},
 	}
-	keys := map[string][]string{"summary": compactionSummaryKeys, "overflow": compactionOverflowKeys}
+	keys := map[string][]string{"overflow": compactionOverflowKeys}
 	for section, defaults := range checks {
 		object, ok := schema.Properties.Compaction.Properties[section]
 		if !ok {
@@ -137,16 +109,6 @@ func TestCompactionSummaryAndOverflowSchemaMatchTheLoader(t *testing.T) {
 			if !reflect.DeepEqual(got, expected) {
 				t.Errorf("compaction.%s.%s schema default = %s, loader default = %s", section, key, field.Default, encoded)
 			}
-		}
-	}
-	bounds := map[string][2]int64{
-		"max_input_bytes": {1000, maxCompactionSummaryMaxInputBytes}, "max_item_bytes": {100, maxCompactionSummaryMaxItemBytes},
-		"max_output_tokens": {0, maxCompactionSummaryMaxOutputTokens}, "timeout_ms": {1000, maxCompactionSummaryTimeoutMS},
-	}
-	for key, bound := range bounds {
-		field := schema.Properties.Compaction.Properties["summary"].Properties[key]
-		if field.Minimum == nil || field.Maximum == nil || *field.Minimum != bound[0] || *field.Maximum != bound[1] {
-			t.Errorf("compaction.summary.%s schema bounds = %v..%v, loader %v", key, field.Minimum, field.Maximum, bound)
 		}
 	}
 	attempts := schema.Properties.Compaction.Properties["overflow"].Properties["max_attempts"]

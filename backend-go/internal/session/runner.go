@@ -75,18 +75,15 @@ type StateContextPrompt struct {
 
 // RunOptions provides per-run identifiers and an optional raw-event observer.
 type AutomaticCompactionSettings struct {
-	Enabled        bool
-	TriggerTokens  int64
-	TurnType       string
-	KeepTurns      int
-	KeepToolPairs  int
-	BackupMode     string
-	BackupMinTurns int
-	// Summary, when not nil, has the model summarize the turns a compaction drops; see
-	// CompactionSummarySettings.
-	Summary *CompactionSummarySettings
-	// OnSummaryError, when not nil, is told about a summary request that failed.
-	OnSummaryError func(error)
+	Enabled       bool
+	TriggerTokens int64
+	TurnType      string
+	KeepTurns     int
+	KeepToolPairs int
+	BackupMode    string
+	// AppendLimit, with BackupMode append, keeps only the newest this many user turns in the
+	// transcript backup; 0 keeps every turn.
+	AppendLimit int
 	// Overflow, when not nil and Enabled is true, compacts and sends a round again when
 	// the provider refused it for being over the context window; see OverflowSettings.
 	Overflow *OverflowSettings
@@ -876,7 +873,7 @@ func IsContextOverflow(err error, patterns []string) bool {
 // rewritten. When only that turn is left, nothing is compacted and the provider's error
 // stands.
 func (r *Runner) compactForOverflow(ctx context.Context, run *runRounds) (bool, error) {
-	compactionOptions := r.automaticCompactionOptions(ctx, run.options)
+	compactionOptions := r.automaticCompactionOptions(run.options)
 	compactionOptions.KeepLatestTurn = true
 	compacted, err := r.compactAutomatically(compactionOptions, run.options)
 	if err != nil || !compacted {
@@ -976,7 +973,7 @@ func (r *Runner) compactAfterResponse(ctx context.Context, event json.RawMessage
 	if !shouldCompact {
 		return false, nil
 	}
-	compactionOptions := r.automaticCompactionOptions(ctx, options)
+	compactionOptions := r.automaticCompactionOptions(options)
 	if len(calls) > 0 && responseID != "" {
 		compactionOptions.PreserveResponseID = responseID
 	}
@@ -984,20 +981,16 @@ func (r *Runner) compactAfterResponse(ctx context.Context, event json.RawMessage
 }
 
 // automaticCompactionOptions returns the compaction options of the run's automatic
-// compaction settings, with the summary callback when compaction.summary is on.
-func (r *Runner) automaticCompactionOptions(ctx context.Context, options RunOptions) transcript.CompactionOptions {
+// compaction settings.
+func (r *Runner) automaticCompactionOptions(options RunOptions) transcript.CompactionOptions {
 	settings := options.AutomaticCompaction
-	compactionOptions := transcript.CompactionOptions{
-		TurnType:       settings.TurnType,
-		KeepTurns:      settings.KeepTurns,
-		KeepToolPairs:  settings.KeepToolPairs,
-		BackupMode:     settings.BackupMode,
-		BackupMinTurns: settings.BackupMinTurns,
+	return transcript.CompactionOptions{
+		TurnType:      settings.TurnType,
+		KeepTurns:     settings.KeepTurns,
+		KeepToolPairs: settings.KeepToolPairs,
+		BackupMode:    settings.BackupMode,
+		AppendLimit:   settings.AppendLimit,
 	}
-	if settings.Summary != nil {
-		compactionOptions.Summarize = NewCompactionSummarizer(ctx, r.streamer, r.settings, *settings.Summary, settings.OnSummaryError)
-	}
-	return compactionOptions
 }
 
 // compactAutomatically runs one automatic compaction through the caller's CompactHistory
@@ -1070,8 +1063,8 @@ func runLimit(usedTokens int64, meter *CostMeter, options RunOptions) (string, e
 }
 
 // recordBudget adds the tokens of the round's response and what the run's meter counted
-// since the last record (the response, and a compaction summary written for the run) to
-// the session's budget.
+// since the last record (the response, and the cost of sub-agent runs counted toward the
+// run) to the session's budget.
 func (r *Runner) recordBudget(run *runRounds, tokens int64) error {
 	if run.options.Budget == nil {
 		return nil
