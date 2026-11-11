@@ -2,7 +2,7 @@
   "schema_version": 1,
   "tools": [
     {
-      "description": "Read a messages.jsonl transcript: your own by default, or the one path names. Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2), newest step first: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step it returns that step whole, paged by cursor.",
+      "description": "Read a messages.jsonl transcript: your own by default, or the one path names. Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2), oldest step first within the page; the first page holds the newest steps and a cursor continues with older ones: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step it returns that step whole, paged by cursor.",
       "id": "native.transcript",
       "inputSchema": {
         "additionalProperties": false,
@@ -55,7 +55,7 @@
             "type": "string"
           },
           "step": {
-            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list, which starts at the newest step. Not with turns, role, tool, search or context.",
+            "description": "Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list. Not with turns, role, tool, search or context.",
             "minLength": 1,
             "type": "string"
           },

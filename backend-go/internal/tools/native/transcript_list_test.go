@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"jad/backend-go/internal/sessionfs"
 )
 
 func envelope(status, summary string) string {
@@ -23,12 +25,34 @@ func stepLines(out string) []string {
 	return lines
 }
 
-func oldestFirst(lines []string) []string {
-	out := make([]string, len(lines))
-	for index, line := range lines {
-		out[len(lines)-1-index] = line
+// pagedStepLines follows the cursors from the first call and returns the step lines of every page,
+// the first page (the newest steps) first.
+func pagedStepLines(t *testing.T, settings sessionfs.NativeTranscriptSettings, path string, arguments map[string]any) [][]string {
+	t.Helper()
+	var pages [][]string
+	for range 200 {
+		out := runTranscript(t, settings, path, arguments)
+		pages = append(pages, stepLines(out))
+		cursor := cursorOf(out)
+		if cursor == "" {
+			return pages
+		}
+		arguments = map[string]any{"cursor": cursor}
 	}
-	return out
+	t.Fatal("the cursor did not end")
+	return nil
+}
+
+// chronological joins pages (newest page first, each page oldest step first) into one list in file
+// order, and fails when a page is not ascending or does not end before the page before it begins.
+func chronological(t *testing.T, pages [][]string) []string {
+	t.Helper()
+	var all []string
+	for index := len(pages) - 1; index >= 0; index-- {
+		all = append(all, pages[index]...)
+	}
+	ascendingIDs(t, all)
+	return all
 }
 
 func stepsTranscript(t *testing.T) string {
@@ -48,7 +72,7 @@ func stepsTranscript(t *testing.T) string {
 
 func TestTranscriptListNumbersStepsInFileOrderAndPairsACallWithItsResult(t *testing.T) {
 	out := runTranscript(t, transcriptTestSettings(), stepsTranscript(t), map[string]any{"turns": "1-2"})
-	got := oldestFirst(stepLines(out))
+	got := stepLines(out)
 	want := []string{
 		"1.0 user: do the thing",
 		"1.2 call read ok ",
@@ -87,10 +111,10 @@ func TestTranscriptStepNumbersAreTheSameWhateverTheSelection(t *testing.T) {
 	byTurn := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{"turns": "2"}))
 	byTail := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{"turns": "-1"}))
 	byRole := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{"turns": "1-2", "role": "assistant"}))
-	if strings.Join(byTurn, "\n") != strings.Join(byTail, "\n") || byTurn[0] != "2.1 assistant: ok" {
+	if strings.Join(byTurn, "\n") != strings.Join(byTail, "\n") || byTurn[0] != "2.0 user: second" || byTurn[1] != "2.1 assistant: ok" {
 		t.Fatalf("turn = %q, tail = %q", byTurn, byTail)
 	}
-	if len(byRole) != 2 || !strings.HasPrefix(byRole[0], "2.1 assistant") || !strings.HasPrefix(byRole[1], "1.4 assistant") {
+	if len(byRole) != 2 || !strings.HasPrefix(byRole[0], "1.4 assistant") || !strings.HasPrefix(byRole[1], "2.1 assistant") {
 		t.Fatalf("a filter keeps the numbers: %q", byRole)
 	}
 }
@@ -99,7 +123,7 @@ func TestTranscriptStepsFollowFileOrderAcrossACompaction(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("kept"), answerLine(41, 1, textItem("a"), callItem("c", "read", `{}`)), resultLine("c", envelope("ok", "x")), answerLine(41, 2, textItem("b")))
 	out := runTranscript(t, transcriptTestSettings(), path, map[string]any{})
-	got := oldestFirst(stepLines(out))
+	got := stepLines(out)
 	if len(got) != 4 || !strings.HasPrefix(got[0], "41.0 user") || !strings.HasPrefix(got[1], "41.1 assistant") || !strings.HasPrefix(got[2], "41.2 call read ok") || !strings.HasPrefix(got[3], "41.3 assistant") {
 		t.Fatalf("lines = %q", got)
 	}
@@ -111,7 +135,7 @@ func TestTranscriptStepsFollowFileOrderAcrossACompaction(t *testing.T) {
 func TestTranscriptListsAnOrphanResultAndAnOrphanCallOnTheirOwn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("q"), resultLine("gone", envelope("ok", "late")), answerLine(1, 1, callItem("c", "read", `{}`)))
-	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	got := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{}))
 	if len(got) != 3 || !strings.HasPrefix(got[1], "1.1 result [gone] ok") || !strings.Contains(got[1], "without its call") || !strings.HasPrefix(got[2], "1.2 call read no-result {}") {
 		t.Fatalf("lines = %q", got)
 	}
@@ -120,7 +144,7 @@ func TestTranscriptListsAnOrphanResultAndAnOrphanCallOnTheirOwn(t *testing.T) {
 func TestTranscriptMarksUnknownItemsAndUnreadableLinesAsSteps(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path, userLine("q"), "{not json", answerLine(1, 1, map[string]any{"type": "web_search_call"}), `{"type":"compaction_marker"}`)
-	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	got := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{}))
 	want := []string{"1.0 user: q", "1.1 [unreadable record]", "1.2 [web_search_call]", "1.3 [compaction_marker]"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("lines = %q", got)
@@ -132,7 +156,7 @@ func TestTranscriptCallStatusIsOkUnlessTheEnvelopeSaysOtherwise(t *testing.T) {
 	writeTestTranscript(t, path, userLine("q"),
 		answerLine(1, 1, callItem("a", "t", `{}`), callItem("b", "t", `{}`), callItem("c", "t", `{}`)),
 		resultLine("a", envelope("ok", "x")), resultLine("b", envelope("timeout", "x")), resultLine("c", "plain text, no envelope"))
-	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	got := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{}))
 	if !strings.HasPrefix(got[1], "1.1 call t ok ") || !strings.HasPrefix(got[2], "1.2 call t error ") || !strings.HasPrefix(got[3], "1.3 call t ok 23B ") {
 		t.Fatalf("lines = %q", got)
 	}
@@ -184,27 +208,25 @@ func TestTranscriptListPagesByStepWithStableNumbersAndMaxListEntries(t *testing.
 	writeTestTranscript(t, path, lines...)
 	settings := transcriptTestSettings()
 	settings.MaxListEntries = 7
-	var all []string
-	arguments := map[string]any{"turns": "1"}
-	pages := 0
-	for ; pages < 20; pages++ {
-		out := runTranscript(t, settings, path, arguments)
-		page := stepLines(out)
-		if len(page) > 7 || len(page) == 0 {
-			t.Fatalf("page %d holds %d steps", pages, len(page))
-		}
-		all = append(all, page...)
-		cursor := cursorOf(out)
-		if cursor == "" {
-			break
-		}
-		arguments = map[string]any{"cursor": cursor}
+	pages := pagedStepLines(t, settings, path, map[string]any{"turns": "1"})
+	if len(pages) != 4 {
+		t.Fatalf("%d pages: %q", len(pages), pages)
 	}
-	if len(all) != 26 || pages != 3 {
-		t.Fatalf("%d steps in %d pages", len(all), pages+1)
+	for index, want := range []int{7, 7, 7, 5} {
+		if len(pages[index]) != want {
+			t.Fatalf("page %d holds %d steps: %q", index, len(pages[index]), pages[index])
+		}
+	}
+	// The first page is the newest steps, oldest first inside the page.
+	if !strings.HasPrefix(pages[0][0], "1.19 ") || !strings.HasPrefix(pages[0][6], "1.25 ") {
+		t.Fatalf("first page = %q", pages[0])
+	}
+	all := chronological(t, pages)
+	if len(all) != 26 {
+		t.Fatalf("%d steps", len(all))
 	}
 	for index, line := range all {
-		if want := fmt.Sprintf("1.%d ", 25-index); !strings.HasPrefix(line, want) {
+		if want := fmt.Sprintf("1.%d ", index); !strings.HasPrefix(line, want) {
 			t.Fatalf("line %d = %q, want prefix %q", index, line, want)
 		}
 	}
@@ -241,14 +263,14 @@ func TestTranscriptSearchMatchesACallsNameAndArguments(t *testing.T) {
 	}
 }
 
-func descendingIDs(t *testing.T, lines []string) {
+func ascendingIDs(t *testing.T, lines []string) {
 	t.Helper()
-	previous := transcriptStepID{1 << 30, 1 << 30}
+	previous := transcriptStepID{}
 	for _, line := range lines {
 		id, _, _ := strings.Cut(line, " ")
 		current, ok := parseTranscriptStepID(id)
-		if !ok || !current.less(previous) {
-			t.Fatalf("%q does not follow %v: the list must run from the newest step down", line, previous)
+		if !ok || !previous.less(current) {
+			t.Fatalf("%q does not follow %v: the list must run from the oldest step up", line, previous)
 		}
 		previous = current
 	}
@@ -267,38 +289,37 @@ func manyTurns(t *testing.T, turns, steps int) string {
 	return path
 }
 
-func TestTranscriptListsNewestStepFirstAcrossTurns(t *testing.T) {
+func TestTranscriptListsOldestStepFirstAcrossTurns(t *testing.T) {
 	got := stepLines(runTranscript(t, transcriptTestSettings(), manyTurns(t, 3, 4), map[string]any{}))
-	if len(got) != 15 || !strings.HasPrefix(got[0], "3.4 ") || !strings.HasPrefix(got[4], "3.0 ") || !strings.HasPrefix(got[5], "2.4 ") || !strings.HasPrefix(got[14], "1.0 ") {
+	if len(got) != 15 || !strings.HasPrefix(got[0], "1.0 ") || !strings.HasPrefix(got[5], "2.0 ") || !strings.HasPrefix(got[10], "3.0 ") || !strings.HasPrefix(got[14], "3.4 ") {
 		t.Fatalf("lines = %q", got)
 	}
-	descendingIDs(t, got)
+	ascendingIDs(t, got)
 }
-
 func TestTranscriptPagesTowardOlderStepsAcrossTurnsWithoutGapsOrRepeats(t *testing.T) {
 	path := manyTurns(t, 4, 6)
 	settings := transcriptTestSettings()
 	settings.MaxListEntries = 5
-	var all []string
-	arguments := map[string]any{}
-	for page := 0; page < 30; page++ {
-		out := runTranscript(t, settings, path, arguments)
-		all = append(all, stepLines(out)...)
-		cursor := cursorOf(out)
-		if cursor == "" {
-			break
+	pages := pagedStepLines(t, settings, path, map[string]any{})
+	// Every page ascends, the first holds the newest steps, and each page ends where the one after it
+	// (older) has to begin: joined oldest page first they are the whole transcript once.
+	all := chronological(t, pages)
+	if len(all) != 28 || len(pages) != 6 {
+		t.Fatalf("%d steps in %d pages: %q", len(all), len(pages), all)
+	}
+	if !strings.HasPrefix(pages[0][len(pages[0])-1], "4.6 ") || !strings.HasPrefix(all[0], "1.0 ") || !strings.HasPrefix(all[27], "4.6 ") {
+		t.Fatalf("first page %q, all %q", pages[0], all)
+	}
+	for index := 1; index < len(pages); index++ {
+		last, _, _ := strings.Cut(pages[index][len(pages[index])-1], " ")
+		first, _, _ := strings.Cut(pages[index-1][0], " ")
+		a, _ := parseTranscriptStepID(last)
+		b, _ := parseTranscriptStepID(first)
+		if !a.less(b) {
+			t.Fatalf("page %d ends at %s, not before the newer page's first %s", index, last, first)
 		}
-		arguments = map[string]any{"cursor": cursor}
-	}
-	if len(all) != 28 {
-		t.Fatalf("%d steps: %q", len(all), all)
-	}
-	descendingIDs(t, all)
-	if !strings.HasPrefix(all[0], "4.6 ") || !strings.HasPrefix(all[27], "1.0 ") {
-		t.Fatalf("first %q, last %q", all[0], all[27])
 	}
 }
-
 func TestTranscriptCursorKeepsItsPlaceWhenTheFileGrowsBetweenPages(t *testing.T) {
 	path := manyTurns(t, 2, 6)
 	settings := transcriptTestSettings()
@@ -318,27 +339,27 @@ func TestTranscriptCursorKeepsItsPlaceWhenTheFileGrowsBetweenPages(t *testing.T)
 		}
 	}
 	file.Close()
-	all := stepLines(first)
+	pages := [][]string{stepLines(first)}
 	arguments := map[string]any{"cursor": cursor}
 	for page := 0; page < 30; page++ {
 		out := runTranscript(t, settings, path, arguments)
-		all = append(all, stepLines(out)...)
+		pages = append(pages, stepLines(out))
 		if cursor = cursorOf(out); cursor == "" {
 			break
 		}
 		arguments = map[string]any{"cursor": cursor}
 	}
+	all := chronological(t, pages)
 	joined := strings.Join(all, "\n")
 	if strings.Contains(joined, "grown") || len(all) != 14 {
 		t.Fatalf("new steps must not appear nor shift the older pages: %d steps\n%s", len(all), joined)
 	}
-	descendingIDs(t, all)
-	if !strings.HasPrefix(all[0], "2.6 ") || !strings.HasPrefix(all[13], "1.0 ") {
+	if !strings.HasPrefix(all[13], "2.6 ") || !strings.HasPrefix(all[0], "1.0 ") {
 		t.Fatalf("first %q, last %q", all[0], all[13])
 	}
 }
 
-func TestTranscriptFiltersKeepTheNewestFirstOrder(t *testing.T) {
+func TestTranscriptFiltersKeepTheOldestFirstOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeTestTranscript(t, path,
 		userLine("needle one"), answerLine(1, 1, callItem("a", "read", `{"x":"needle"}`), textItem("needle reply")), resultLine("a", envelope("ok", "r")),
@@ -348,10 +369,10 @@ func TestTranscriptFiltersKeepTheNewestFirstOrder(t *testing.T) {
 		arguments map[string]any
 		want      []string
 	}{
-		{map[string]any{"role": "tool"}, []string{"2.2 ", "2.1 ", "1.1 "}},
-		{map[string]any{"tool": "read"}, []string{"2.1 ", "1.1 "}},
-		{map[string]any{"search": "needle"}, []string{"3.0 ", "2.2 ", "1.2 ", "1.1 ", "1.0 "}},
-		{map[string]any{"search": "needle", "context": json.Number("1")}, []string{"3.1 ", "3.0 ", "2.2 ", "2.1 ", "2.0 ", "1.2 ", "1.1 ", "1.0 "}},
+		{map[string]any{"role": "tool"}, []string{"1.1 ", "2.1 ", "2.2 "}},
+		{map[string]any{"tool": "read"}, []string{"1.1 ", "2.1 "}},
+		{map[string]any{"search": "needle"}, []string{"1.0 ", "1.1 ", "1.2 ", "2.2 ", "3.0 "}},
+		{map[string]any{"search": "needle", "context": json.Number("1")}, []string{"1.0 ", "1.1 ", "1.2 ", "2.0 ", "2.1 ", "2.2 ", "3.0 ", "3.1 "}},
 	}
 	for _, tc := range cases {
 		got := stepLines(runTranscript(t, transcriptTestSettings(), path, tc.arguments))
@@ -392,7 +413,7 @@ func TestTranscriptCallStatusOfResultsWithoutAnEnvelope(t *testing.T) {
 		answerLine(1, 1, callItem("a", "t", `{}`), callItem("b", "t", `{}`), callItem("c", "t", `{}`), callItem("d", "t", `{}`)),
 		resultLine("a", ""), partsResultLine("b", "plain server text"),
 		partsResultLine("c", `{"status":"error","server":"s"}`), partsResultLine("d", `{"status":"ok"}`))
-	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	got := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{}))
 	for index, want := range []string{"1.1 call t ok 0B ", "1.2 call t ok 17B ", "1.3 call t error ", "1.4 call t ok "} {
 		if !strings.HasPrefix(got[index+1], want) {
 			t.Fatalf("line %d = %q, want prefix %q", index+1, got[index+1], want)
@@ -404,7 +425,7 @@ func TestTranscriptCallWithoutArgumentsFieldIsOk(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messages.jsonl")
 	call := map[string]any{"type": "function_call", "call_id": "c", "name": "tool_name"}
 	writeTestTranscript(t, path, userLine("q"), answerLine(1, 1, call), resultLine("c", envelope("ok", "done")))
-	got := oldestFirst(stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{})))
+	got := stepLines(runTranscript(t, transcriptTestSettings(), path, map[string]any{}))
 	if len(got) != 2 || !strings.HasPrefix(got[1], "1.1 call tool_name ok ") || !strings.HasSuffix(got[1], " {}") || strings.Contains(got[1], "unknown") {
 		t.Fatalf("lines = %q", got)
 	}

@@ -106,7 +106,7 @@ func TestRemoteTranscriptsListAndReadWithoutPathsOrTokens(t *testing.T) {
 	}
 
 	read := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:demo/dev/coder"})
-	if !strings.Contains(read, "forty-two") || !strings.Contains(read, "newest step first") {
+	if !strings.Contains(read, "forty-two") || !strings.Contains(read, "oldest step first") {
 		t.Fatalf("list:\n%s", read)
 	}
 	if strings.Contains(read, "transcript: ") || strings.Contains(read, file) || strings.Contains(read, "messages.jsonl") {

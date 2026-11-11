@@ -106,12 +106,12 @@ func threeTurns(t *testing.T) string {
 	return path
 }
 
-func TestTranscriptListsTheWholeTranscriptNewestStepFirstByDefault(t *testing.T) {
+func TestTranscriptListsTheWholeTranscriptOldestStepFirstByDefault(t *testing.T) {
 	out := runTranscript(t, transcriptTestSettings(), threeTurns(t), map[string]any{})
-	if !strings.Contains(out, "turns 1-3; the transcript holds turns 1-3; newest step first") {
+	if !strings.Contains(out, "turns 1-3; the transcript holds turns 1-3; oldest step first in the page") {
 		t.Errorf("header: %s", out)
 	}
-	want := []string{"3.1 assistant", "3.0 user", "2.1 assistant", "2.0 user", "1.3 assistant", "1.2 call read", "1.0 user"}
+	want := []string{"1.0 user", "1.2 call read", "1.3 assistant", "2.0 user", "2.1 assistant", "3.0 user", "3.1 assistant"}
 	got := stepLines(out)
 	if len(got) != len(want) {
 		t.Fatalf("lines = %q", got)

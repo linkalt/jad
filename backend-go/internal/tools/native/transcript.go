@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,18 +31,18 @@ var transcriptInputSchema = json.RawMessage(`{
     "tool":{"type":"string","minLength":1,"description":"List mode: only calls of tools whose name matches; * and ? are wildcards (read, exec*)."},
     "search":{"type":"string","minLength":1,"description":"List mode: only steps whose whole text (a call's arguments and result too) contains this, case-insensitive; the line shows only the preview."},
     "context":{"type":"integer","minimum":0,"description":"With search: how many steps to list on each side of a match. Default 0."},
-    "step":{"type":"string","minLength":1,"description":"Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list, which starts at the newest step. Not with turns, role, tool, search or context."},
+    "step":{"type":"string","minLength":1,"description":"Detail mode: read one step whole, 3.2 (turn 3, step 2), or a range 3.1-3.4, which comes back in transcript order, starting at its oldest step. Step numbers come from the list. Not with turns, role, tool, search or context."},
     "part":{"type":"string","enum":["call","result","both","reasoning"],"description":"With step: both (default) is a tool call and its result and the text of a message; call is the call and messages only, result the results only, reasoning the reasoning steps only (they are never listed)."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous response stopped; use the cursor it gave. Not with turns, step or part."}
   },
   "additionalProperties":false
 }`)
 
-const transcriptDescription = "Read a messages.jsonl transcript: your own by default, or the one path names. Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2), newest step first: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step it returns that step whole, paged by cursor."
+const transcriptDescription = "Read a messages.jsonl transcript: your own by default, or the one path names. Two modes. Without step it lists one short line per step (turn.step, e.g. 3.2), oldest step first within the page; the first page holds the newest steps and a cursor continues with older ones: messages cut to a preview, tool calls with their arguments cut, ok or error and the result size; results and reasoning are not listed. With step it returns that step whole, paged by cursor."
 
 var transcriptRejectedProperties = map[string]string{
 	"offset":   "transcript has no offset; select by turns or cursor",
-	"tail":     "transcript has no tail; the list is newest first, so read the first page, or use turns -N for the last N turns",
+	"tail":     "transcript has no tail; the first page of the list holds the newest steps, so read the first page, or use turns -N for the last N turns",
 	"limit":    "transcript has no limit; the response is capped by the configuration, use turns or cursor",
 	"full":     "transcript has no full; give step (3.2 or 3.1-3.4) to read a step whole",
 	"list":     "transcript has no list; a not-found error names the available profiles and sub-agent runs, and path selects one: profile:<category>/<name>, subagent:<run id> or path:<file>",
@@ -383,11 +384,13 @@ func (t *transcriptTool) execute(ctx context.Context, arguments map[string]any, 
 		lines = append(lines, line)
 		used += int64(len(line)) + 1
 	}
+	// The loop above walked newest to oldest to decide which steps fit; a page reads oldest to newest.
+	slices.Reverse(lines)
 	header := label + fmt.Sprintf("turns %d-%d; the transcript holds turns %d-%d", turns[first].number, turns[min(lastTurn, len(turns)-1)].number, turns[0].number, turns[len(turns)-1].number)
 	if turns[0].number != 1 {
 		header += ": it was compacted, its earlier turns may be in the backup"
 	}
-	header += "; newest step first; steps are turn.step in file order, N.0 is the user message, gaps are reasoning"
+	header += "; oldest step first in the page, the first page holds the newest steps and a cursor continues with older ones; steps are turn.step in file order, N.0 is the user message, gaps are reasoning"
 	if len(lines) == 0 {
 		header += "; no step matches"
 	}
