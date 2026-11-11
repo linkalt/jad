@@ -838,13 +838,11 @@ func TestProfileMessageBusyNamesTheProfileThatHoldsTheTarget(t *testing.T) {
 	awaitMessageEnd(t, done)
 }
 
-// Run ids start high so they never equal the ids boundRunner.Run hands the target runs.
-func callerRunContext(t *testing.T, f *layoutFixture, run uint64) context.Context {
+// callerRunContext is the context of a call made by the caller's run. The run number is only a
+// label for the call sites: the messenger keeps nothing per caller run any more.
+func callerRunContext(t *testing.T, f *layoutFixture, _ uint64) context.Context {
 	t.Helper()
-	// The run is active, as boundRunner.Run makes it, until the test ends.
-	f.service.resolver.callerRuns.begin(run + 1000)
-	t.Cleanup(func() { f.service.resolver.callerRuns.forget(run + 1000) })
-	return context.WithValue(callerContext(t, f, context.Background()), callerRunKey{}, run+1000)
+	return callerContext(t, f, context.Background())
 }
 
 func countCompactions(f *layoutFixture) *[]string {
@@ -859,7 +857,7 @@ func countCompactions(f *layoutFixture) *[]string {
 	return calls
 }
 
-func TestProfileMessageCompactsOncePerCallerRunAndTarget(t *testing.T) {
+func TestProfileMessageCompactsOnEveryCallOfACallerRun(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.usage = compactUsageJSON
 	calls := countCompactions(f)
@@ -875,27 +873,25 @@ func TestProfileMessageCompactsOncePerCallerRunAndTarget(t *testing.T) {
 	}
 	send(1, "review/reviewer", true)
 	send(1, "review/reviewer", true)
-	if len(*calls) != 1 {
-		t.Fatalf("compactions after two calls in one run = %v, want 1", *calls)
+	if len(*calls) != 2 {
+		t.Fatalf("compactions after two calls in one run = %v, want 2 (a compact is evaluated on every call)", *calls)
 	}
 	send(2, "review/reviewer", true)
-	if len(*calls) != 2 {
-		t.Fatalf("compactions after a new caller run = %v, want 2", *calls)
+	if len(*calls) != 3 {
+		t.Fatalf("compactions after a call of a new caller run = %v, want 3", *calls)
 	}
 	send(3, "review/reviewer", false)
-	if len(*calls) != 2 {
+	if len(*calls) != 3 {
 		t.Fatalf("compact=false compacted: %v", *calls)
 	}
 }
 
-func TestProfileMessageCompactsEachTargetOnce(t *testing.T) {
+func TestProfileMessageCompactsEachTargetOnEveryCall(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.usage = compactUsageJSON
 	calls := countCompactions(f)
 	messenger := profileMessenger{resolver: f.service.resolver}
 	reviewerCaller := context.WithValue(context.Background(), callerMessagesPathKey{}, boundRunnerOf(t, f, "review/reviewer").config.MessagesPath)
-	reviewerCaller = context.WithValue(reviewerCaller, callerRunKey{}, uint64(1001))
-	f.service.resolver.callerRuns.begin(1001)
 	// Seed a completed response in each target, so both have usage to compact on.
 	if _, err := messenger.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "seed", 0, false); err != nil {
 		t.Fatal(err)
@@ -911,8 +907,9 @@ func TestProfileMessageCompactsEachTargetOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(*calls) != 2 || (*calls)[0] == (*calls)[1] {
-		t.Fatalf("compactions = %v, want one per target", *calls)
+	// Two rounds of one call per target: each call compacts its own target.
+	if len(*calls) != 4 || (*calls)[0] == (*calls)[1] || (*calls)[0] != (*calls)[2] || (*calls)[1] != (*calls)[3] {
+		t.Fatalf("compactions = %v, want one per call, alternating between the two targets", *calls)
 	}
 }
 
@@ -922,34 +919,6 @@ func TestProfileMessageCompactionFailureStillSendsTheMessage(t *testing.T) {
 	answer, err := profileMessenger{resolver: f.service.resolver}.Message(callerRunContext(t, f, 1), profileMessageOwner, "review/reviewer", "hi", 0, true)
 	if err != nil || !strings.Contains(answer, "ok") {
 		t.Fatalf("answer %q, error %v; want the message sent despite the failure", answer, err)
-	}
-}
-
-func TestCallerRunTargetsForgetDropsTheEntry(t *testing.T) {
-	var c callerRunTargets
-	claim := func(run uint64, target string) (claimed, ended bool) { return c.claim(run, target) }
-	c.begin(1)
-	if got, ended := claim(1, "a"); !got || ended {
-		t.Fatal("first claim must succeed")
-	}
-	if got, ended := claim(1, "a"); got || ended {
-		t.Fatal("second claim of the same target must be refused as done, not as ended")
-	}
-	if got, _ := claim(1, "b"); !got {
-		t.Fatal("claim must be true once per target")
-	}
-	c.release(1, "a")
-	if got, _ := claim(1, "a"); !got {
-		t.Fatal("a released claim must be claimable again")
-	}
-	c.forget(1)
-	if len(c.runs) != 0 {
-		t.Fatalf("entry survived forget: %v", c.runs)
-	}
-	// A run that ended (a background sub-agent's call after it) is refused and leaves nothing
-	// behind: no entry that nothing would forget.
-	if got, ended := claim(1, "a"); got || !ended || len(c.runs) != 0 {
-		t.Fatalf("claim after forget = %v, ended %v, runs %v; want refused as ended with no entry", got, ended, c.runs)
 	}
 }
 

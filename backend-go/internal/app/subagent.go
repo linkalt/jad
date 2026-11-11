@@ -92,7 +92,6 @@ func (l subagentLauncher) Run(ctx context.Context, request native.SubagentReques
 	// stream.
 	var onReport func(session.HookReport)
 	if request.CallerValues != nil {
-		ctx = withCallerRun(ctx, request.CallerValues)
 		if callerMeter := session.CostMeterFrom(request.CallerValues); callerMeter != nil && session.CostMeterFrom(ctx) == nil {
 			ctx = session.WithCostMeter(ctx, callerMeter)
 		}
@@ -310,20 +309,4 @@ func copyFileExclusive(src, dst string) error {
 		return err
 	}
 	return file.Close()
-}
-
-// withCallerRun puts the calling run's id (callerRunKey) from the calling tool call's values
-// onto ctx, so a profile_message made by a sub-agent, or by a sub-agent of a sub-agent (each
-// level copies from the context of the call that started it), is keyed to the run that started
-// the tree: a context_trigger acts once per caller run for the whole tree. Only a value is
-// copied. ctx keeps its own cancellation and deadline (the sub-agent manager's, so stopping,
-// timing out and resetting the child work as before), and an id already on ctx is kept.
-func withCallerRun(ctx, callerValues context.Context) context.Context {
-	if ctx.Value(callerRunKey{}) != nil {
-		return ctx
-	}
-	if run, _ := callerValues.Value(callerRunKey{}).(uint64); run != 0 {
-		return context.WithValue(ctx, callerRunKey{}, run)
-	}
-	return ctx
 }

@@ -18,24 +18,28 @@ import (
 // configured context trigger, or nil when the trigger is off. The step runs with the target's
 // transcript held and the run registered, so a compaction or reset cannot meet another writer.
 //
-// It acts at most once per caller run and target. A target whose messages.jsonl is missing,
-// empty or blank is left alone (so a reset does not clear a compaction's summary until the
-// target has answered again). With After zero a target with content is acted on without
-// counting tokens, and the claim is taken before looking, so a reset never wipes what an
-// earlier message of the same run just wrote to a target that was empty. Above zero the tokens
-// are those of the last completed response in messages.jsonl itself, never usage-cache.json,
-// which a compaction leaves with zeroed counts; the claim is taken only once they pass After,
-// so a target that grows past it during the run is handled by a later message.
+// The trigger is evaluated on every message that starts a run of the target (a queued message
+// when the pump starts it, a sub-agent's message too) and keeps no state between messages: a
+// target that was empty, below After, or whose compaction or reset failed at one message is
+// looked at again at the next, and one that grew past After again is acted on again. That
+// holds for a reset as for a compact, so a reset is destructive at every qualifying message: it
+// drops what the messages before it wrote. Nothing depends on the caller's run (a call without
+// one, or from a run that has ended, is evaluated like any other).
+//
+// A target whose messages.jsonl is missing, empty or blank is left alone, with the Warn
+// "messages.jsonl is empty - nothing to compact|reset" for either action (a compaction can leave
+// only the active tail, so a reset does not clear a compaction's summary until the target has
+// answered again). With After zero a target with content is acted on without counting tokens.
+// Above zero the tokens are those of the last completed response in messages.jsonl itself, never
+// usage-cache.json, which a compaction leaves with zeroed counts; the action runs once they pass
+// After.
 //
 // A failed compaction is logged and the message is sent anyway. A reset that is due and cannot
-// be carried out fails closed: the step returns a *native.ContextTriggerError, the message is
-// not sent, and the claim is given back so the caller's next message of the run tries again.
-// That covers a reset that failed, a transcript or token count that could not be read, and a
-// call without a running caller run (no id, or the run has ended, as for a background
-// sub-agent that outlives it), which could not tell its first message from a later one and
-// would reset on every message. A sub-agent's call carries its caller's run id
-// (subagentLauncher.Run), so a sub-agent resets once per caller run like the caller itself.
-func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionfs.ProfileMessageContextTrigger, callerRun uint64) func(context.Context) error {
+// be carried out fails closed: the step returns a *native.ContextTriggerError and the message is
+// not sent, so the target cannot answer from the history it was asked to drop. That covers a
+// reset that failed and a transcript or token count that could not be read. The next message
+// tries again.
+func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionfs.ProfileMessageContextTrigger) func(context.Context) error {
 	if trigger.Action != sessionfs.ProfileMessageContextCompact && trigger.Action != sessionfs.ProfileMessageContextReset {
 		return nil
 	}
@@ -46,36 +50,14 @@ func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionf
 	}
 	return func(ctx context.Context) error {
 		logger := m.resolver.logger
-		claimed, noRun := false, callerRun == 0
-		// claim is false when the run already acted on this target. A run that has ended (a
-		// background sub-agent outliving it) counts as no run: nothing is remembered for it.
-		claim := func() bool {
-			if noRun {
-				return true
-			}
-			var ended bool
-			claimed, ended = m.resolver.callerRuns.claim(callerRun, plan.key)
-			if ended {
-				noRun = true
-				return true
-			}
-			return claimed
-		}
-		// fail ends the step on a problem. A reset gives its claim back and fails the message;
-		// a compaction only logs.
+		// fail ends the step on a problem. A reset fails the message; a compaction only logs.
 		fail := func(reason, what string, err error) error {
 			if !reset {
 				logger.Warn("profile_message "+what+"; not "+verb, "session", plan.reference, "profile", plan.target, "error", err)
 				return nil
 			}
-			if claimed {
-				m.resolver.callerRuns.release(callerRun, plan.key)
-			}
 			logger.Warn("profile_message "+what+"; the reset is not done and the message is not sent", "session", plan.reference, "profile", plan.target, "error", err)
 			return &native.ContextTriggerError{Action: trigger.Action, Reason: reason, Err: err}
-		}
-		if trigger.After == 0 && !claim() {
-			return nil
 		}
 		messages := plan.targetMessages
 		if messages == "" {
@@ -90,11 +72,7 @@ func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionf
 			return fail("the target's transcript could not be read", "could not read the target transcript", err)
 		}
 		if !filled {
-			if reset {
-				logger.Debug("messages.jsonl is empty - nothing to reset", "session", plan.reference, "profile", plan.target)
-			} else {
-				logger.Warn("messages.jsonl is empty - nothing to compact", "session", plan.reference, "profile", plan.target)
-			}
+			logger.Warn("messages.jsonl is empty - nothing to "+noun, "session", plan.reference, "profile", plan.target)
 			return nil
 		}
 		if trigger.After > 0 {
@@ -106,12 +84,9 @@ func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionf
 			if err != nil {
 				return fail("the target's tokens could not be counted", "usage read failed", err)
 			}
-			if tokens == nil || *tokens <= trigger.After || !claim() {
+			if tokens == nil || *tokens <= trigger.After {
 				return nil
 			}
-		}
-		if reset && noRun {
-			return fail("this call has no running caller run to tell its first message from a later one", "has no running caller run (no id, or its run has ended)", errors.New("no running caller run"))
 		}
 		act := m.resolver.compactProfile
 		if reset {

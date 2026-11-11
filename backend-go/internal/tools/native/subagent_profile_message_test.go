@@ -11,8 +11,8 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// callerRunSentinel stands for a value the calling run's context carries (the app's caller-run
-// id is one): a sub-agent runs on a context its manager owns, so it must not reach the child.
+// callerRunSentinel stands for a value the calling run's context carries (a cost meter or
+// hook reporter, say): a sub-agent runs on a context its manager owns, so it must not reach the child.
 type callerRunSentinel struct{}
 
 type childMessenger struct {
@@ -146,11 +146,9 @@ func TestStoppingAChildCancelsItsProfileMessageAndLeavesNoGoroutines(t *testing.
 }
 
 // A profile_message made from a sub-agent runs on the sub-agent's own context, which carries
-// none of the calling run's values: the caller-run id reaches it only because the app's
-// launcher copies it from SubagentRequest.CallerValues (app.withCallerRun, pinned end to end by
-// TestContextTriggerResetRunsOncePerCallerRunAcrossSubagentsAndNestedSubagents). This pins the
-// native layer's half: the child's context does not inherit the caller's, so cancellation and
-// ownership stay the sub-agent manager's, and the launcher's copy is what carries the id.
+// none of the calling run's values. This pins that the child's context does not inherit the
+// caller's, so cancellation and ownership stay the sub-agent manager's; the launcher copies only
+// the values it names from SubagentRequest.CallerValues (the cost meter and hook reporter).
 func TestAChildsProfileMessageCarriesNoCallerRunValues(t *testing.T) {
 	messenger := &childMessenger{}
 	catalog := profileMessageChild(t, subagentSettings(nestingAgent("asker", "read", "profile_message")), messenger,

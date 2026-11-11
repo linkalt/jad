@@ -101,49 +101,6 @@ func reviewerBodies(f *layoutFixture) []string {
 	return out
 }
 
-// The end-to-end case: a sub-agent and its own sub-agent message the reviewer through the real
-// launcher, with the reset trigger on. The tree belongs to one caller run, so the reviewer is
-// reset once, at the first message (the child's), and the grandchild's message finds the
-// child's. Without the caller run id on the sub-agents' contexts, each would be refused.
-func TestContextTriggerResetRunsOncePerCallerRunAcrossSubagentsAndNestedSubagents(t *testing.T) {
-	f, messages := subagentTriggerFixture(t, map[string]any{"action": "reset"})
-	f.script = subagentTriggerScript("mid-says-hello", "leaf-says-hello")
-	status, body := f.do(t, "POST", "/api/sessions/local:demo/run", `{"input":"go"}`)
-	if status != 200 || !strings.Contains(body, "event: completed") {
-		t.Fatalf("run: %d %s", status, body)
-	}
-	bodies := reviewerBodies(f)
-	if len(bodies) != 2 {
-		t.Fatalf("reviewer requests = %d, want 2 (the child's and the grandchild's):\n%v", len(bodies), bodies)
-	}
-	if strings.Contains(bodies[0], "old-secret") || !strings.Contains(bodies[0], "mid-says-hello") {
-		t.Fatalf("the child's message did not reset the reviewer first:\n%s", bodies[0])
-	}
-	if strings.Contains(bodies[1], "old-secret") || !strings.Contains(bodies[1], "mid-says-hello") || !strings.Contains(bodies[1], "leaf-says-hello") {
-		t.Fatalf("the grandchild's message reset again (or saw the old history):\n%s", bodies[1])
-	}
-	data, _ := os.ReadFile(messages)
-	if strings.Contains(string(data), "old-secret") || !strings.Contains(string(data), "leaf-says-hello") {
-		t.Fatalf("reviewer's messages.jsonl:\n%s", data)
-	}
-
-	// The next run of the caller is a new caller run: it resets again.
-	f.mu.Lock()
-	f.bodies = nil
-	f.mu.Unlock()
-	f.script = subagentTriggerScript("second-run-mid", "second-run-leaf")
-	if status, body := f.do(t, "POST", "/api/sessions/local:demo/run", `{"input":"go"}`); status != 200 || !strings.Contains(body, "event: completed") {
-		t.Fatalf("second run: %d %s", status, body)
-	}
-	bodies = reviewerBodies(f)
-	if len(bodies) != 2 || strings.Contains(bodies[0], "mid-says-hello") || !strings.Contains(bodies[0], "second-run-mid") || !strings.Contains(bodies[1], "second-run-mid") || !strings.Contains(bodies[1], "second-run-leaf") {
-		t.Fatalf("second run's reviewer requests:\n%v", bodies)
-	}
-	if len(f.service.resolver.callerRuns.runs) != 0 {
-		t.Fatalf("caller runs left behind: %v", f.service.resolver.callerRuns.runs)
-	}
-}
-
 // The same tree with the trigger off sends both messages to the reviewer's history untouched.
 func TestContextTriggerOffLeavesTheReviewerAloneForSubagents(t *testing.T) {
 	f, messages := subagentTriggerFixture(t, map[string]any{"action": "off"})

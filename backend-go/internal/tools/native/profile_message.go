@@ -173,8 +173,8 @@ type ProfileMessageRequest struct {
 	// Model is the model ID (optionally @<effort>) the target runs this message with; empty
 	// runs the target's model default.
 	Model string
-	// ContextTrigger asks for the target's transcript to be compacted or reset before the
-	// run, once per caller run and target. Its After, when above zero, is the input tokens
+	// ContextTrigger asks for the target's transcript to be compacted or reset before every run
+	// it starts (each message, not once per caller run). Its After, when above zero, is the input tokens
 	// of the target's context (read from its messages.jsonl) that must be passed; zero acts
 	// on any target whose messages.jsonl has content. The zero value does nothing.
 	ContextTrigger sessionfs.ProfileMessageContextTrigger

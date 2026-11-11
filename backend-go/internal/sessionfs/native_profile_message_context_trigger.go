@@ -9,10 +9,13 @@ const (
 	// ProfileMessageContextOff leaves the target's transcript as it is (the default).
 	ProfileMessageContextOff = "off"
 	// ProfileMessageContextCompact compacts the target's transcript, with the target's own
-	// compaction settings, before the first message to it in each run of the caller.
+	// compaction settings, before every message that starts a run of the target (each call,
+	// not once per run of the caller).
 	ProfileMessageContextCompact = "compact"
 	// ProfileMessageContextReset clears the target's whole history, and the data derived from
-	// it, on the same trigger as compact. It is destructive and never on by default.
+	// it, before every message that starts a run of the target, like a compact: each call, not
+	// once per run of the caller, so a message drops what the messages before it wrote. It is
+	// destructive and never on by default.
 	ProfileMessageContextReset = "reset"
 )
 

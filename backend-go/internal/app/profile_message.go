@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/remote"
@@ -127,7 +126,6 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	if sameTranscript(callerMessagesPath, resolved.Runner) {
 		return nil, native.ErrProfileSameTranscript
 	}
-	callerRun, _ := ctx.Value(callerRunKey{}).(uint64)
 	plan := &profileMessagePlan{
 		resolver:  m.resolver,
 		starter:   starter,
@@ -167,7 +165,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		}
 		plan.confine = targetConfiner(callerSandbox, request.CallerPlace, request.Sandbox)
 	}
-	plan.beforeRun = m.contextStep(plan, request.ContextTrigger, callerRun)
+	plan.beforeRun = m.contextStep(plan, request.ContextTrigger)
 	return plan, nil
 }
 
@@ -201,61 +199,6 @@ func (r *Resolver) compactTarget(ctx context.Context, reference, profile string)
 	}
 	_, err = resolved.Session.Compact(ctx)
 	return err
-}
-
-// callerRunKey carries the id of the caller's run (one boundRunner.Run), so the
-// messenger knows which targets that run already compacted.
-type callerRunKey struct{}
-
-// callerRunTargets remembers, per running caller run, the targets profile_message already
-// compacted or reset. A run is active from begin until forget (the end of its
-// boundRunner.Run); a sub-agent's call carries its caller's id (subagentLauncher.Run), so a
-// background child can outlive the run, and a claim for a run that is no longer active is
-// refused instead of recreating its entry (which nothing would ever forget).
-type callerRunTargets struct {
-	mu   sync.Mutex
-	runs map[uint64]map[string]struct{}
-}
-
-// begin marks run active, before any call of it can claim.
-func (c *callerRunTargets) begin(run uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.runs == nil {
-		c.runs = map[uint64]map[string]struct{}{}
-	}
-	if c.runs[run] == nil {
-		c.runs[run] = map[string]struct{}{}
-	}
-}
-
-// claim reports whether target is not yet done in run, and marks it. ended is true, and
-// nothing is marked, when run is not active.
-func (c *callerRunTargets) claim(run uint64, target string) (claimed, ended bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	done, active := c.runs[run]
-	if !active {
-		return false, true
-	}
-	if _, already := done[target]; already {
-		return false, false
-	}
-	done[target] = struct{}{}
-	return true, false
-}
-
-// release gives back a claim whose action did not happen, so the run's next message retries it.
-func (c *callerRunTargets) release(run uint64, target string) {
-	c.mu.Lock()
-	delete(c.runs[run], target)
-	c.mu.Unlock()
-}
-
-func (c *callerRunTargets) forget(run uint64) {
-	c.mu.Lock()
-	delete(c.runs, run)
-	c.mu.Unlock()
 }
 
 // sameTranscript reports whether target runs over the transcript at callerMessagesPath.

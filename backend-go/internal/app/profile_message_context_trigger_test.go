@@ -272,12 +272,9 @@ func TestContextTriggerEmptyMissingOrBlankTranscriptIsLeftAlone(t *testing.T) {
 					if len(*compactions) != 0 || len(*resets) != 0 {
 						t.Fatalf("maintenance on an empty transcript: compactions %v resets %v", *compactions, *resets)
 					}
-					warned := strings.Contains(logs.String(), "level=WARN msg=\"messages.jsonl is empty - nothing to compact\"")
-					if warned != (action == sessionfs.ProfileMessageContextCompact) {
-						t.Fatalf("empty-transcript warning = %v for %s:\n%s", warned, action, logs.String())
-					}
-					if strings.Contains(logs.String(), "level=WARN") && action == sessionfs.ProfileMessageContextReset {
-						t.Fatalf("an empty target must not warn on reset:\n%s", logs.String())
+					want := "level=WARN msg=\"messages.jsonl is empty - nothing to " + action + "\""
+					if strings.Count(logs.String(), want) != 1 || strings.Count(logs.String(), "level=WARN") != 1 {
+						t.Fatalf("want exactly one empty-transcript warning %q for %s:\n%s", want, action, logs.String())
 					}
 				})
 			}
@@ -354,49 +351,8 @@ func TestContextTriggerResetClearsTheTargetHistoryAndDerivedData(t *testing.T) {
 	}
 }
 
-// Reset obeys the same trigger and claim as compact: once per caller run and target, again in
-// the next run, and a message of the same run builds on the one before it.
-func TestContextTriggerResetRunsOncePerCallerRunAndTarget(t *testing.T) {
-	f := newLayoutFixture(t)
-	f.captureBodies = true
-	writeTargetTranscript(t, f, userLine+ctxCompletedLine("old", 5))
-	lastBody := func() string {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.bodies[len(f.bodies)-1]
-	}
-	reset := contextTrigger(sessionfs.ProfileMessageContextReset, 0)
-	sendWithTrigger(t, f, 1, "first-msg", reset)
-	if body := lastBody(); strings.Contains(body, "old question") || !strings.Contains(body, "first-msg") {
-		t.Fatalf("first message of the run: %s", body)
-	}
-	sendWithTrigger(t, f, 1, "second-msg", reset)
-	if body := lastBody(); !strings.Contains(body, "first-msg") || !strings.Contains(body, "second-msg") {
-		t.Fatalf("a second message of the same run must keep the first: %s", body)
-	}
-	sendWithTrigger(t, f, 2, "third-msg", reset)
-	if body := lastBody(); strings.Contains(body, "first-msg") || strings.Contains(body, "second-msg") || !strings.Contains(body, "third-msg") {
-		t.Fatalf("the next caller run must reset again: %s", body)
-	}
-}
-
-// A target that was empty at a run's first message is not wiped by the run's second message,
-// which finds what the first one wrote: the claim is taken before the threshold-free check.
-func TestContextTriggerResetDoesNotWipeWhatAnEarlierMessageOfTheRunWrote(t *testing.T) {
-	f := newLayoutFixture(t)
-	f.captureBodies = true
-	reset := contextTrigger(sessionfs.ProfileMessageContextReset, 0)
-	sendWithTrigger(t, f, 1, "first-msg", reset)
-	sendWithTrigger(t, f, 1, "second-msg", reset)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if body := f.bodies[len(f.bodies)-1]; !strings.Contains(body, "first-msg") {
-		t.Fatalf("the second message wiped the first: %s", body)
-	}
-}
-
 // With a threshold, a target under it is left alone, and the same run resets it once it has
-// grown past it (the claim is only taken when the action runs).
+// grown past it; every later message above it resets again.
 func TestContextTriggerResetPositiveThresholdFollowsTheTranscript(t *testing.T) {
 	f := newLayoutFixture(t)
 	f.captureBodies = true
@@ -412,8 +368,8 @@ func TestContextTriggerResetPositiveThresholdFollowsTheTranscript(t *testing.T) 
 		t.Fatalf("no reset above after: %v", *resets)
 	}
 	sendWithTrigger(t, f, 1, "hi", contextTrigger(sessionfs.ProfileMessageContextReset, 4))
-	if len(*resets) != 1 {
-		t.Fatalf("second reset in the same run: %v", *resets)
+	if len(*resets) != 2 {
+		t.Fatalf("a second message above the threshold did not reset again: %v", *resets)
 	}
 }
 
@@ -511,9 +467,9 @@ func TestContextTriggerResetStopsTheTargetsChildrenOnly(t *testing.T) {
 
 // A reset that is due and fails fails the message: nothing is sent, so the target cannot answer
 // from the history the reset was meant to drop. The history is untouched, the failure is
-// logged with its detail (the tool's text carries none), and the claim is given back: the
-// caller's next message of the same run tries again, succeeds once the cause is gone, and
-// then, as ever, the run's later messages do not reset again.
+// logged with its detail (the tool's text carries none), and nothing is remembered: the
+// caller's next message tries again, succeeds once the cause is gone, and the one after it
+// resets again like every message (TestResetTriggerFailureIsRetriedAndLaterCallsResetAgain).
 func TestContextTriggerResetFailureFailsTheMessageAndTheNextOneRetries(t *testing.T) {
 	f := newLayoutFixture(t)
 	logs := triggerLogs(f)
@@ -548,12 +504,12 @@ func TestContextTriggerResetFailureFailsTheMessageAndTheNextOneRetries(t *testin
 		t.Fatalf("answer %q", answer)
 	}
 	sendWithTrigger(t, f, 1, "later-msg", reset)
-	if attempts != 2 {
-		t.Fatalf("reset attempts in one run = %d, want 2 (the failure, then the retry only)", attempts)
+	if attempts != 3 {
+		t.Fatalf("reset attempts = %d, want 3 (the failure, the retry, the next call)", attempts)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.bodies) != 2 || strings.Contains(f.bodies[0], "old question") || !strings.Contains(f.bodies[0], "retry-msg") || !strings.Contains(f.bodies[1], "retry-msg") {
+	if len(f.bodies) != 2 || strings.Contains(f.bodies[0], "old question") || !strings.Contains(f.bodies[0], "retry-msg") || strings.Contains(f.bodies[1], "retry-msg") || !strings.Contains(f.bodies[1], "later-msg") {
 		t.Fatalf("provider bodies after the retry: %v", f.bodies)
 	}
 }
@@ -688,50 +644,6 @@ func TestContextTriggerFailedResetIsRetriedWithTheHistoryIntactAndFinishesTheCle
 	}
 }
 
-// A call with no running caller run (no id: a genuinely missing one) cannot tell a first message from a later one, so a due reset fails closed instead of
-// resetting on every message; the history stays and nothing is sent.
-func TestContextTriggerResetWithoutACallerRunFailsClosed(t *testing.T) {
-	f := newLayoutFixture(t)
-	logs := triggerLogs(f)
-	f.captureBodies = true
-	messages := writeTargetTranscript(t, f, userLine+ctxCompletedLine("old", 5))
-	resets := countResets(f)
-	ctx := native.WithChildCall(context.Background())
-	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: contextTrigger(sessionfs.ProfileMessageContextReset, 0)}
-	var triggerErr *native.ContextTriggerError
-	for i := 0; i < 2; i++ {
-		if _, err := (profileMessenger{resolver: f.service.resolver}).send(ctx, request); !errors.As(err, &triggerErr) || !strings.Contains(triggerErr.Reason, "no running caller run") {
-			t.Fatalf("send %d error = %v, want the no-caller-run refusal", i, err)
-		}
-	}
-	if len(*resets) != 0 {
-		t.Fatalf("resets = %v, want none", *resets)
-	}
-	if data, _ := os.ReadFile(messages); !strings.Contains(string(data), "old question") {
-		t.Fatalf("history changed: %q", data)
-	}
-	f.mu.Lock()
-	sent := len(f.bodies)
-	f.mu.Unlock()
-	if sent != 0 || !strings.Contains(logs.String(), "no running caller run") {
-		t.Fatalf("provider requests %d, log:\n%s", sent, logs.String())
-	}
-	// Nothing due, nothing refused: an empty target, a positive threshold not passed, and a
-	// compact trigger (which only costs a repeat) all go through without a caller run.
-	request.Message = "again"
-	request.ContextTrigger = contextTrigger(sessionfs.ProfileMessageContextReset, 1_000_000)
-	f.service.resolver.profileUsage = func(context.Context, string, string) (*int64, error) { return ptr64(5), nil }
-	if _, err := (profileMessenger{resolver: f.service.resolver}).send(ctx, request); err != nil {
-		t.Fatalf("reset under a threshold that is not passed: %v", err)
-	}
-	f.service.resolver.profileUsage = nil
-	compactions := countCompactions(f)
-	request.ContextTrigger = contextTrigger(sessionfs.ProfileMessageContextCompact, 0)
-	if _, err := (profileMessenger{resolver: f.service.resolver}).send(ctx, request); err != nil || len(*compactions) != 1 {
-		t.Fatalf("compact without a caller run: err %v, compactions %v", err, *compactions)
-	}
-}
-
 // A reset that cannot read the target's transcript, or count its tokens for a threshold, fails
 // closed too; a compaction in the same position only logs and sends.
 func TestContextTriggerResetUnreadableStateFailsClosed(t *testing.T) {
@@ -785,8 +697,8 @@ func TestResetTargetFailureLeavesTheHistory(t *testing.T) {
 }
 
 // Messages queued behind a busy target are the caller's input: a reset before the first of them
-// must neither drop nor end the others. Both are answered, and only the first message of the
-// caller's run resets, so the second still sees the first.
+// must neither drop nor end the others. Both are answered; each resets the target when it
+// starts, so the second message's reset drops the first one's exchange.
 func TestContextTriggerResetKeepsQueuedMessages(t *testing.T) {
 	p := newPMFixture(t, func(settings *sessionfs.NativeProfileMessageSettings) {
 		settings.ContextTrigger = contextTrigger(sessionfs.ProfileMessageContextReset, 0)
@@ -818,8 +730,8 @@ func TestContextTriggerResetKeepsQueuedMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Contains(text, "old-secret") || !strings.Contains(text, "alpha-1") || !strings.Contains(text, "alpha-2") {
-		t.Fatalf("messages.jsonl after both queued messages:\n%s", text)
+	if strings.Contains(text, "old-secret") || strings.Contains(text, "alpha-1") || !strings.Contains(text, "alpha-2") {
+		t.Fatalf("messages.jsonl after both queued messages (the second reset drops the first):\n%s", text)
 	}
 	if served := p.order.served(); strings.Join(served, ",") != "alpha-1,alpha-2" {
 		t.Fatalf("served %v", served)
@@ -982,60 +894,6 @@ func TestContextTriggerResetFailureOfAQueuedMessageEndsItAndTheLineGoesOn(t *tes
 	}
 	if served := p.order.served(); strings.Join(served, ",") != "alpha-2" {
 		t.Fatalf("served %v, want only alpha-2", served)
-	}
-}
-
-// A caller run that has ended (a background sub-agent's call outliving the run it was started
-// by) is no running caller run: a due reset fails closed, nothing is remembered for the dead
-// run, and a compact acts like it does without an id.
-func TestContextTriggerResetOfAnEndedCallerRunFailsClosed(t *testing.T) {
-	f := newLayoutFixture(t)
-	messages := writeTargetTranscript(t, f, userLine+ctxCompletedLine("old", 5))
-	resets := countResets(f)
-	ctx := callerRunContext(t, f, 1) // begins run 1001
-	f.service.resolver.callerRuns.forget(1001)
-	request := native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "hi", ContextTrigger: contextTrigger(sessionfs.ProfileMessageContextReset, 0)}
-	var triggerErr *native.ContextTriggerError
-	if _, err := (profileMessenger{resolver: f.service.resolver}).send(ctx, request); !errors.As(err, &triggerErr) || !strings.Contains(triggerErr.Reason, "no running caller run") {
-		t.Fatalf("reset of an ended run: error = %v, want the no-running-caller-run refusal", err)
-	}
-	if len(*resets) != 0 || len(f.service.resolver.callerRuns.runs) != 0 {
-		t.Fatalf("resets %v, remembered runs %v; want none", *resets, f.service.resolver.callerRuns.runs)
-	}
-	if data, _ := os.ReadFile(messages); !strings.Contains(string(data), "old question") {
-		t.Fatalf("history changed: %q", data)
-	}
-}
-
-// The launcher hands a child the calling run's id by value only: the child's context keeps its
-// own cancellation, a child's own id is not replaced, and a caller without one adds nothing.
-func TestWithCallerRunCopiesTheIdAndKeepsTheChildsOwnContext(t *testing.T) {
-	callerValues := context.WithValue(context.Background(), callerRunKey{}, uint64(7))
-	childParent, stopChild := context.WithCancel(context.Background())
-	child := withCallerRun(childParent, callerValues)
-	if got, _ := child.Value(callerRunKey{}).(uint64); got != 7 {
-		t.Fatalf("child's caller run = %d, want 7", got)
-	}
-	if child.Err() != nil {
-		t.Fatal("copying the id cancelled the child")
-	}
-	stopChild()
-	if child.Err() == nil {
-		t.Fatal("the child's own cancellation no longer reaches it")
-	}
-	// The calling run ending does not touch the child: only the value is taken.
-	callerCtx, endCaller := context.WithCancel(callerValues)
-	live := withCallerRun(context.Background(), callerCtx)
-	endCaller()
-	if live.Err() != nil {
-		t.Fatal("the calling run's cancellation reached the child")
-	}
-	own := context.WithValue(context.Background(), callerRunKey{}, uint64(3))
-	if got, _ := withCallerRun(own, callerValues).Value(callerRunKey{}).(uint64); got != 3 {
-		t.Fatalf("an id already on the child's context was replaced by %d", got)
-	}
-	if withCallerRun(context.Background(), context.Background()).Value(callerRunKey{}) != nil {
-		t.Fatal("an id appeared from a caller without one")
 	}
 }
 
