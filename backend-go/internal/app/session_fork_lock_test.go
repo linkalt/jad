@@ -30,7 +30,7 @@ func TestForkCopyDoesNotHoldTheSourceJournalLock(t *testing.T) {
 	}
 	defer release()
 	lines := 0
-	err = resolver.copyForkLines(context.Background(), config, forkPoint{end: size, turns: 1}, func([]byte) error {
+	err = resolver.copyForkLines(context.Background(), config, forkPoint{end: size, turns: 1}, func(int64, []byte) error {
 		lines++
 		if lines > 1 {
 			return nil

@@ -54,7 +54,7 @@ type usageBaselineFile struct {
 // errUsageBaselineStale reports that the transcript grew between the usage scan a rewrite starts
 // from and the rewrite itself, so the scan no longer accounts for every byte it replaces. The
 // rewrite did not happen.
-var errUsageBaselineStale = errors.New("the transcript changed while the compaction was prepared; retry")
+var errUsageBaselineStale = errors.New("usage baseline not stored: the transcript changed while the compaction was prepared; retry")
 
 // readUsageBaselineFile reads the baseline; a missing file is an empty baseline.
 func readUsageBaselineFile(path string) (usageBaselineFile, error) {
@@ -159,7 +159,7 @@ func (s *sharedSession) usageBaselineHook(config sessionfs.SessionConfig, before
 		// The transcript is still the file being replaced, and the journal lock keeps it so.
 		replaced, err := transcript.HashFileRange(config.MessagesPath, 0, replacement.PreviousSize)
 		if err != nil {
-			return fmt.Errorf("hash the transcript being replaced: %w", err)
+			return fmt.Errorf("usage baseline not stored: hash the transcript being replaced: %w", err)
 		}
 		*seen = replacement
 		return s.storeUsageBaseline(config, usageBaselineEntry{

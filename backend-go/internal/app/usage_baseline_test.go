@@ -212,8 +212,8 @@ func TestCompactionFailsWithoutChangingTheTranscriptWhenTheBaselineCannotBeStore
 	if err := os.MkdirAll(sessionfs.UsageBaselinePath(b.config.UsageCachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.shared.compactPreservingUsage(b.config, baselineCompaction); err == nil {
-		t.Fatal("compaction succeeded although its baseline could not be stored")
+	if _, err := b.shared.compactPreservingUsage(b.config, baselineCompaction); err == nil || !strings.Contains(err.Error(), "usage baseline") {
+		t.Fatalf("compaction error = %v, want a failure that names the usage baseline", err)
 	}
 	if after := b.transcriptText(t); after != before {
 		t.Fatalf("transcript changed by a failed compaction:\n%q\nwant\n%q", after, before)
@@ -311,8 +311,8 @@ func TestRewriteRefusesWhenTheTranscriptGrewAfterTheUsageScan(t *testing.T) {
 		result, err := b.shared.store.CompactHistory(options)
 		return result.Compacted, err
 	})
-	if !errors.Is(err, errUsageBaselineStale) {
-		t.Fatalf("rewrite error = %v, want errUsageBaselineStale", err)
+	if !errors.Is(err, errUsageBaselineStale) || !strings.Contains(err.Error(), "usage baseline") {
+		t.Fatalf("rewrite error = %v, want errUsageBaselineStale, which names the usage baseline", err)
 	}
 	if !strings.Contains(b.transcriptText(t), `"resp-5"`) || !strings.Contains(b.transcriptText(t), `"resp-1"`) {
 		t.Fatal("a refused rewrite changed the transcript")

@@ -61,7 +61,7 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 	if _, _, err := r.WriteCatalogFile(ctx, "profiles", newProfile, data, "", "*"); err != nil {
 		return httpapi.ForkResult{}, err
 	}
-	undo := []func(){func() { _ = r.DeleteCatalogFile(context.WithoutCancel(ctx), "profiles", newProfile, "") }}
+	undo := []func(){func() { _ = r.DeleteCatalogFile(context.WithoutCancel(ctx), "profiles", newProfile, "*") }}
 	fail := func(err error) (httpapi.ForkResult, error) {
 		for index := len(undo) - 1; index >= 0; index-- {
 			undo[index]()

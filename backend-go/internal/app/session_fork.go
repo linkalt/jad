@@ -25,7 +25,8 @@ import (
 // the new reference, and the profile's transcript is copied up to a turn, line for line,
 // so the new session goes on from that point and the old one is untouched. The copy's
 // history block (the compaction backup) and the images its lines refer to come along;
-// caches are rebuilt by the new session, and tool storage (records, tasks, processes) and
+// caches are rebuilt by the new session (the usage baseline of a compacted source comes along,
+// see forkBaselineEntry), and tool storage (records, tasks, processes) and
 // checkpoints start empty.
 func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, request httpapi.ForkRequest) (httpapi.ForkResult, error) {
 	if ctx == nil {
@@ -102,10 +103,12 @@ func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, r
 }
 
 // forkPoint is how much of the source transcript a fork copies: the lines before byte end,
-// which hold turns turns. A zero forkPoint copies nothing.
+// which hold turns turns. A zero forkPoint copies nothing. baseline is the entry of the
+// source's usage baseline the fork carries over (see forkBaselineEntry), or nil.
 type forkPoint struct {
-	end   int64
-	turns int
+	end      int64
+	turns    int
+	baseline *usageBaselineEntry
 }
 
 // forkPoint finds the end of the lines the fork keeps and how many turns they hold: all of
@@ -156,7 +159,7 @@ func (r *Resolver) forkPoint(ctx context.Context, config sessionfs.SessionConfig
 			}
 		}
 	}
-	return forkPoint{end: end, turns: turns}, nil
+	return forkPoint{end: end, turns: turns, baseline: shared.forkBaselineEntry(config, end)}, nil
 }
 
 // messageTurnCursor finds the turn that holds a message of the live transcript, by
@@ -220,6 +223,21 @@ func messageTurnCursor(ctx context.Context, shared *sharedSession, index transcr
 // the images the two refer to. The target must not have a transcript for the profile yet.
 // The history block comes along only with a transcript: an empty fork starts with none.
 func (r *Resolver) writeFork(ctx context.Context, target sessionfs.Location, profile string, source sessionfs.SessionConfig, point forkPoint) (httpapi.ForkResult, error) {
+	// What this call wrote in the target's state folder, removed again if the fork fails: a
+	// transcript left behind makes the next fork to that name a 409, and a baseline without
+	// its transcript is state that fits nothing.
+	var created []string
+	result, err := r.writeForkFiles(ctx, target, profile, source, point, &created)
+	if err != nil {
+		for _, path := range created {
+			_ = os.Remove(path)
+		}
+		return httpapi.ForkResult{}, err
+	}
+	return result, nil
+}
+
+func (r *Resolver) writeForkFiles(ctx context.Context, target sessionfs.Location, profile string, source sessionfs.SessionConfig, point forkPoint, created *[]string) (httpapi.ForkResult, error) {
 	config, err := sessionfs.LoadSessionSettings(target, profile, "")
 	if err != nil {
 		return httpapi.ForkResult{}, mapSessionError(err)
@@ -229,10 +247,24 @@ func (r *Resolver) writeFork(ctx context.Context, target sessionfs.Location, pro
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return httpapi.ForkResult{}, err
 	}
+	if err := removeStaleUsageState(source, config); err != nil {
+		return httpapi.ForkResult{}, err
+	}
+	// The totals of history the source's rewrites removed come along when the fork keeps the
+	// bytes they are tied to; the entry is stored before the transcript, never after.
+	var inherited *forkBaseline
+	baselinePath := sessionfs.UsageBaselinePath(config.UsageCachePath)
+	if baselinePath != "" && !sameFile(source.UsageCachePath, config.UsageCachePath) {
+		inherited = newForkBaseline(point.baseline)
+	}
 	result := httpapi.ForkResult{Session: target.Reference, Turns: point.turns}
 	images := map[string]struct{}{}
+	if inherited != nil {
+		*created = append(*created, baselinePath)
+	}
 	err = writeStreamAtomic(config.MessagesPath, func(out io.Writer) error {
-		return r.copyForkLines(ctx, source, point, func(line []byte) error {
+		if err := r.copyForkLines(ctx, source, point, func(offset int64, line []byte) error {
+			inherited.reach(offset)
 			result.Bytes += int64(len(line)) + 1
 			for _, name := range imagestore.RefNames(line) {
 				images[name] = struct{}{}
@@ -240,17 +272,26 @@ func (r *Resolver) writeFork(ctx context.Context, target sessionfs.Location, pro
 			if _, err := out.Write(line); err != nil {
 				return err
 			}
-			_, err := out.Write([]byte{'\n'})
+			if _, err := out.Write([]byte{'\n'}); err != nil {
+				return err
+			}
+			inherited.add(line)
+			return nil
+		}); err != nil {
 			return err
-		})
+		}
+		_, err := inherited.store(config, r.logger)
+		return err
 	})
 	if err != nil {
 		return httpapi.ForkResult{}, fmt.Errorf("write the fork's transcript: %w", err)
 	}
+	*created = append(*created, config.MessagesPath)
 	if backup := source.StoragePaths.MessagesBackup; result.Bytes > 0 && backup != "" && config.StoragePaths.MessagesBackup != "" && filepath.Clean(backup) != filepath.Clean(config.StoragePaths.MessagesBackup) {
 		if err := copyHistoryBlock(backup, config.StoragePaths.MessagesBackup, images); err != nil {
 			return httpapi.ForkResult{}, err
 		}
+		*created = append(*created, config.StoragePaths.MessagesBackup)
 	}
 	names := make([]string, 0, len(images))
 	for name := range images {
@@ -304,7 +345,7 @@ func copyStoredImages(from, to string, names []string) (int, error) {
 // visit writes the line out; the fork's gate keeps a compaction or reset of the source out,
 // and a transcript rewritten meanwhile all the same fails the fork (409) instead of copying
 // stale lines.
-func (r *Resolver) copyForkLines(ctx context.Context, source sessionfs.SessionConfig, point forkPoint, visit func(line []byte) error) error {
+func (r *Resolver) copyForkLines(ctx context.Context, source sessionfs.SessionConfig, point forkPoint, visit func(offset int64, line []byte) error) error {
 	if point.end <= 0 {
 		return nil
 	}
@@ -313,11 +354,11 @@ func (r *Resolver) copyForkLines(ctx context.Context, source sessionfs.SessionCo
 		return err
 	}
 	defer release()
-	err = shared.store.ReadRecordsSnapshot(0, point.end, func(_ int64, line []byte) error {
+	err = shared.store.ReadRecordsSnapshot(0, point.end, func(offset int64, line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return visit(line)
+		return visit(offset, line)
 	})
 	if errors.Is(err, transcript.ErrTranscriptChanged) {
 		return &httpapi.StatusError{Code: http.StatusConflict, Message: "the session transcript changed while it was copied; fork again"}

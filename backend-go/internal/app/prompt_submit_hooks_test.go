@@ -21,6 +21,8 @@ import (
 type recordingProvider struct {
 	mu     sync.Mutex
 	bodies []map[string]json.RawMessage
+	// overflowFirst makes the first request fail as a context window overflow.
+	overflowFirst bool
 }
 
 func (p *recordingProvider) handler() http.Handler {
@@ -32,11 +34,20 @@ func (p *recordingProvider) handler() http.Handler {
 		}
 		p.mu.Lock()
 		p.bodies = append(p.bodies, body)
+		count := len(p.bodies)
+		overflow := p.overflowFirst && count == 1
 		p.mu.Unlock()
+		if overflow {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"the context window is exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}`)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
 			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"provider answer"}]}}`,
-			`{"type":"response.completed","response":{"id":"resp-hook","status":"completed","model":"gpt-test","usage":{"input_tokens":100},"output":[]}}`,
+			// One id per request: usage counts a response id once.
+			fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-hook-%d","status":"completed","model":"gpt-test","usage":{"input_tokens":100},"output":[]}}`, count),
 			"[DONE]",
 		} {
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", event); err != nil {
