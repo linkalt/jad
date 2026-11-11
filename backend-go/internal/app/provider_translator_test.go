@@ -208,16 +208,20 @@ func TestTranslatedProviderErrorFailsTheRun(t *testing.T) {
 	}
 }
 
-// With upstream.credential_file the adapter reads its own token, so the model needs no
-// key in the environment.
-func TestAnthropicCredentialFileNeedsNoEnvironmentKey(t *testing.T) {
-	resolver := &Resolver{environment: map[string]string{}}
-	config := sessionfs.SessionConfig{Model: sessionfs.Model{API: sessionfs.APIAnthropicMessages, APIKeyEnv: "ANTHROPIC_API_KEY", Anthropic: json.RawMessage(`{"upstream":{"credential_file":"/tmp/none.json"}}`)}}
-	if key, err := resolver.providerAPIKey(config); err != nil || key != credentialFilePlaceholderKey {
-		t.Fatalf("key = %q, err = %v", key, err)
-	}
-	config.Model.Anthropic = nil
-	if _, err := resolver.providerAPIKey(config); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
-		t.Fatalf("without a credential file: %v", err)
+// An Anthropic model always needs its API key in the environment: the adapter holds no
+// credential of its own (the credential-file sign-in was removed), so a leftover
+// credential_file in its settings must not stand in for the key.
+func TestAnthropicModelNeedsItsEnvironmentKey(t *testing.T) {
+	config := sessionfs.SessionConfig{Model: sessionfs.Model{API: sessionfs.APIAnthropicMessages, APIKeyEnv: "ANTHROPIC_API_KEY"}}
+	for _, settings := range []string{``, `{"upstream":{"credential_file":"/tmp/none.json"}}`} {
+		config.Model.Anthropic = json.RawMessage(settings)
+		resolver := &Resolver{environment: map[string]string{}}
+		if _, err := resolver.providerAPIKey(config); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+			t.Fatalf("settings %q without the key: %v", settings, err)
+		}
+		resolver = &Resolver{environment: map[string]string{"ANTHROPIC_API_KEY": " sk-ant-api03-x "}}
+		if key, err := resolver.providerAPIKey(config); err != nil || key != "sk-ant-api03-x" {
+			t.Fatalf("settings %q with the key: %q %v", settings, key, err)
+		}
 	}
 }

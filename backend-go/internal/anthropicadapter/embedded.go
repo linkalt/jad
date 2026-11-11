@@ -13,6 +13,14 @@ import (
 // file says why instead of reporting an unknown field.
 var embeddedRefusedKeys = []string{"listen", "caller_token_env"}
 
+// removedUpstreamKeys are the upstream keys of the Claude subscription sign-in, which was
+// removed. They are refused by name: dropping them quietly would send the request with the
+// caller's credential instead of the signed-in account the key promised.
+var removedUpstreamKeys = []struct{ name, hint string }{
+	{"credential_file", "signing in with a Claude subscription is no longer supported; use an Anthropic API key (api_key_env in the model file) and delete the key"},
+	{"expiry_margin_ms", "it only applied to upstream.credential_file, which was removed; delete the key"},
+}
+
 // EmbeddedCacheDefault is the prompt caching of a model jad serves in process when its file
 // sets no cache: breakpoints on the tools, the system prompt and the last conversation
 // block, with the 5-minute lifetime. An agent sends the same tools, instructions and
@@ -49,6 +57,11 @@ func ParseEmbeddedConfig(raw json.RawMessage, baseURL string) (*Config, error) {
 			if json.Unmarshal(upstream, &upstreamKeys) == nil {
 				if _, ok := upstreamKeys["base_url"]; ok {
 					return nil, errors.New("upstream.base_url is not used: set base_url in the model file")
+				}
+				for _, removed := range removedUpstreamKeys {
+					if _, ok := upstreamKeys[removed.name]; ok {
+						return nil, fmt.Errorf("upstream.%s was removed: %s", removed.name, removed.hint)
+					}
 				}
 			}
 		}

@@ -76,7 +76,7 @@ var agentConfigFields = map[string]agentConfigField{
 	"StagingDir": fieldLayer, "StoragePaths": fieldLayer, "WorkingDir": fieldLayer, "SessionFiles": fieldLayer,
 	"FilePolicy": fieldLayer, "GlobalJadRoot": fieldLayer, "HTTPDebug": fieldLayer, "ToolDefinitionPaths": fieldLayer,
 	"MaxToolRounds": fieldLayer, "MaxParallelToolCalls": fieldLayer, "ToolCallScheduling": fieldLayer,
-	"ProviderRetry": fieldLayer, "ProviderStream": fieldLayer, "ProviderNetwork": fieldLayer, "OpenAIOAuth": fieldLayer,
+	"ProviderRetry": fieldLayer, "ProviderStream": fieldLayer, "ProviderNetwork": fieldLayer,
 	"MaxRunTokens": fieldLayer, "ModelFallback": fieldLayer, "Sandbox": fieldLayer, "Isolation": fieldLayer,
 	"Budget": fieldLayer, "ProjectInstructions": fieldLayer, "MaxRunCostUSD": fieldLayer, "MaxRunDurationMS": fieldLayer,
 	"Checkpoint": fieldLayer, "PlanMode": fieldLayer, "ProfileTools": fieldLayer, "ImageResize": fieldLayer,

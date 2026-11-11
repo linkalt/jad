@@ -36,7 +36,7 @@ type Layout struct {
 // root `defaults` may carry. Everything else has its own file or field in the new layout.
 var layoutSettingKeys = map[string]struct{}{
 	"statecontext": {}, "max_tool_rounds": {}, "max_parallel_tool_calls": {}, "tool_call_scheduling": {},
-	"provider_retry": {}, "provider_stream": {}, "provider_network": {}, "openai_oauth": {}, "max_run_tokens": {}, "max_run_cost_usd": {}, "max_run_duration_ms": {}, "model_fallback": {}, "checkpoint": {}, "plan_mode": {},
+	"provider_retry": {}, "provider_stream": {}, "provider_network": {}, "max_run_tokens": {}, "max_run_cost_usd": {}, "max_run_duration_ms": {}, "model_fallback": {}, "checkpoint": {}, "plan_mode": {},
 	"hooks": {}, "image_resize": {}, "image_store": {}, "persistence": {}, "front_compaction": {},
 	"compaction": {}, "http_debug": {}, "cwd": {}, "env_file": {}, "tool_storage_dir": {},
 	"session_files": {}, "sandbox": {}, "budget": {}, "project_instructions": {},
@@ -205,6 +205,9 @@ func parseLayoutFile(path string, contents []byte, into any) error {
 // checkLayoutSettings refuses a settings object with a key outside layoutSettingKeys.
 func checkLayoutSettings(settings map[string]json.RawMessage, where string) error {
 	if err := rejectRemovedApproval(settings, "settings", where); err != nil {
+		return err
+	}
+	if err := rejectRemovedOpenAIOAuthSetting(settings, where); err != nil {
 		return err
 	}
 	var unknown []string

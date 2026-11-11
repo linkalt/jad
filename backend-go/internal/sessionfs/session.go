@@ -85,12 +85,7 @@ type Model struct {
 	Name      string
 	APIKeyEnv string
 	BaseURL   string
-	// AuthMode is "api_key" (the key is read from APIKeyEnv) or "openai_oauth" (the
-	// credential is read from OAuthAuthFile).
-	AuthMode string
-	// OAuthAuthFile is the absolute credential file path; set only for openai_oauth.
-	OAuthAuthFile string
-	Request       json.RawMessage
+	Request   json.RawMessage
 	// Efforts are the reasoning efforts a run may choose with "<model>@<effort>"; empty
 	// means the model has no choice. Effort is the one applied to Request, "" when none.
 	Efforts []string
@@ -227,8 +222,6 @@ type SessionConfig struct {
 	ProviderStream ProviderStreamSettings
 	// ProviderNetwork chooses the address family of connections to the provider.
 	ProviderNetwork ProviderNetworkSettings
-	// OpenAIOAuth configures requests of a model file whose auth_mode is openai_oauth.
-	OpenAIOAuth OpenAIOAuthSettings
 	// MaxRunTokens is the most tokens one run may use before it starts another
 	// provider round; zero means no cap (the key is absent).
 	MaxRunTokens int64
@@ -387,10 +380,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		return SessionConfig{}, err
 	}
 	providerNetwork, err := normalizeProviderNetworkSettings(setting["provider_network"], settingPath)
-	if err != nil {
-		return SessionConfig{}, err
-	}
-	openAIOAuth, err := normalizeOpenAIOAuthSettings(setting["openai_oauth"], settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -679,7 +668,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ProviderRetry:            providerRetry,
 		ProviderStream:           providerStream,
 		ProviderNetwork:          providerNetwork,
-		OpenAIOAuth:              openAIOAuth,
 		MaxRunTokens:             maxRunTokens,
 		ModelFallback:            modelFallback,
 		Sandbox:                  sandbox,
@@ -1001,33 +989,12 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 			return Model{}, configError("%s: base_url must use http or https", path)
 		}
 	}
-	authMode, err := stringField(fields, "auth_mode", "api_key", path)
-	if err != nil {
+	if err := rejectRemovedOAuthFields(fields, path); err != nil {
 		return Model{}, err
 	}
-	if authMode != "api_key" && authMode != "openai_oauth" {
-		return Model{}, configError("%s: auth_mode must be api_key or openai_oauth", path)
-	}
-	api, anthropicConfig, chatConfig, err := modelAPIFields(fields, path, baseURL, authMode)
+	api, anthropicConfig, chatConfig, err := modelAPIFields(fields, path, baseURL)
 	if err != nil {
 		return Model{}, err
-	}
-	if authMode == "api_key" {
-		if _, exists := fields["oauth_auth_file"]; exists {
-			return Model{}, configError("%s: oauth_auth_file requires auth_mode openai_oauth", path)
-		}
-	}
-	oauthAuthFile := ""
-	if authMode == "openai_oauth" {
-		// base_url means the same here as in api_key mode: the root the Responses path is
-		// appended to. It is how a proxy is put in front of the endpoint.
-		if baseURL == "" {
-			baseURL = defaultOpenAIOAuthBaseURL
-		}
-		oauthAuthFile, err = oauthAuthFilePath(fields, path)
-		if err != nil {
-			return Model{}, err
-		}
 	}
 	apiKeyEnvDefault := "OPENAI_API_KEY"
 	if strings.EqualFold(provider, "openrouter") || strings.Contains(baseURL, "openrouter.ai") {
@@ -1086,8 +1053,6 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 		Name:            modelName,
 		APIKeyEnv:       apiKeyEnv,
 		BaseURL:         baseURL,
-		AuthMode:        authMode,
-		OAuthAuthFile:   oauthAuthFile,
 		Request:         request,
 		HostedTools:     hostedTools,
 		PromptRole:      promptRole,
@@ -1156,33 +1121,6 @@ func hostedToolsField(fields map[string]json.RawMessage, path string) ([]json.Ra
 		return nil, nil
 	}
 	return tools, nil
-}
-
-// defaultOAuthAuthFile is the credential file used when model.json names none, relative
-// to the home directory.
-const defaultOAuthAuthFile = ".jad/auth/openai-codex.json"
-
-// oauthAuthFilePath resolves oauth_auth_file: absent means the default file in the home
-// directory; a given value must be absolute or start with "~/" so the file never depends
-// on the working directory. A null value is an error, not a quiet default.
-func oauthAuthFilePath(fields map[string]json.RawMessage, path string) (string, error) {
-	raw, exists := fields["oauth_auth_file"]
-	if !exists {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", configError("%s: oauth_auth_file is not set and the home directory is unknown: %v", path, err)
-		}
-		return filepath.Join(home, filepath.FromSlash(defaultOAuthAuthFile)), nil
-	}
-	var configured string
-	if err := json.Unmarshal(raw, &configured); err != nil || strings.TrimSpace(configured) == "" {
-		return "", configError("%s: oauth_auth_file must be a non-empty string", path)
-	}
-	expanded := expandHome(strings.TrimSpace(configured))
-	if !filepath.IsAbs(expanded) {
-		return "", configError("%s: oauth_auth_file must be absolute or start with ~", path)
-	}
-	return filepath.Clean(expanded), nil
 }
 
 func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (string, string, []string, error) {

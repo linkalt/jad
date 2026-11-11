@@ -49,7 +49,7 @@
           "maxItems": 64,
           "items": {"type": "string", "pattern": "^(/|\\{)"},
           "default": ["{home}/.ssh", "{home}/.gnupg", "{home}/.aws", "{home}/.kube", "{home}/.config/gcloud", "{home}/.azure", "{home}/.config/gh", "{home}/.git-credentials", "{home}/.netrc", "{home}/.npmrc", "{home}/.pypirc", "{home}/.cargo/credentials", "{home}/.docker/config.json", "{home}/.jad/auth"],
-          "description": "Backend bwrap or seatbelt: paths the child sees empty, whatever read and write say: a folder becomes an empty tmpfs, a file an empty file. The default hides the usual credential stores and jad's own provider logins; a profile that needs one replaces the list (and should list the others again), or uses add_hide_paths to add to it."
+          "description": "Backend bwrap or seatbelt: paths the child sees empty, whatever read and write say: a folder becomes an empty tmpfs, a file an empty file. The default hides the usual credential stores and jad's credential directory {home}/.jad/auth; a profile that needs one replaces the list (and should list the others again), or uses add_hide_paths to add to it."
         },
         "add_hide_paths": {"type": "array", "maxItems": 64, "items": {"type": "string", "pattern": "^(/|\\{)"}, "description": "Paths added to hide_paths, so a layer hides one more secret without dropping the default list; they add up across the layers."},
         "isolation": {
@@ -412,7 +412,6 @@
           "provider_retry",
           "provider_stream",
           "provider_network",
-          "openai_oauth",
           "max_run_tokens",
           "max_run_cost_usd",
           "max_run_duration_ms",
@@ -456,9 +455,6 @@
         },
         "provider_network": {
           "$ref": "#/properties/provider_network"
-        },
-        "openai_oauth": {
-          "$ref": "#/properties/openai_oauth"
         },
         "max_run_tokens": {
           "$ref": "#/properties/max_run_tokens"
@@ -603,15 +599,6 @@
       "description": "Go backend only: the address family of connections to the model provider. Other keys are rejected. With an HTTP(S) proxy the family applies to the connection to the proxy.",
       "properties": {
         "network": {"enum": ["tcp", "tcp4", "tcp6"], "default": "tcp", "description": "tcp lets Go choose between IPv4 and IPv6 (the default, unchanged). tcp4 forces IPv4 and tcp6 forces IPv6; tcp6 on a host without IPv6 fails every call, naming provider_network."}
-      },
-      "additionalProperties": false,
-      "default": {}
-    },
-    "openai_oauth": {
-      "type": "object",
-      "description": "Go backend only: requests of a model file with auth_mode openai_oauth. The backend reads the credential file but never writes or refreshes it. Other keys are rejected.",
-      "properties": {
-        "expiry_margin_ms": {"type": "integer", "minimum": 0, "maximum": 86400000, "default": 300000, "description": "An access token that expires within this time counts as expired, and the request fails with an error naming the credential file instead of being sent."}
       },
       "additionalProperties": false,
       "default": {}

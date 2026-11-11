@@ -5,12 +5,10 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
-	"jad/backend-go/internal/openaioauth"
 	"jad/backend-go/internal/sessionfs"
 )
 
@@ -85,51 +83,4 @@ func TestDebugWrapperDialsThroughTheNetworkTransport(t *testing.T) {
 	if len(dialed) != 1 || dialed[0] != "tcp6" || err == nil || !strings.Contains(err.Error(), "provider_network.network") {
 		t.Fatalf("dialed %v, err %v", dialed, err)
 	}
-}
-
-func TestOAuthTransportUsesTheNetworkTransportAsBase(t *testing.T) {
-	config := sessionfs.SessionConfig{ProviderNetwork: sessionfs.ProviderNetworkSettings{Network: "tcp4"}}
-	config.Model.AuthMode = "openai_oauth"
-	client := providerHTTPClient(config, nil)
-	oauth, ok := client.Transport.(*openaioauth.Transport)
-	if !ok {
-		t.Fatalf("transport = %T", client.Transport)
-	}
-	base, ok := oauth.Base.(*http.Transport)
-	if !ok || base == http.DefaultTransport {
-		t.Fatalf("oauth base = %T, want the forced-family transport", oauth.Base)
-	}
-}
-
-func TestOAuthProviderClientRefusesACrossOriginRedirectButFollowsASameOriginOne(t *testing.T) {
-	var reached bool
-	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
-	defer other.Close()
-	var origin *httptest.Server
-	origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/away":
-			http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
-		case "/within":
-			http.Redirect(w, r, origin.URL+"/done", http.StatusTemporaryRedirect)
-		}
-	}))
-	defer origin.Close()
-	config := sessionfs.SessionConfig{}
-	config.Model.AuthMode = "openai_oauth"
-	client := providerHTTPClient(config, nil)
-	client.Transport = http.DefaultTransport
-
-	if response, err := client.Get(origin.URL + "/away"); err == nil {
-		_ = response.Body.Close()
-		t.Error("a redirect to another origin was followed")
-	}
-	if reached {
-		t.Error("the other origin was contacted")
-	}
-	response, err := client.Get(origin.URL + "/within")
-	if err != nil {
-		t.Fatalf("same-origin redirect failed: %v", err)
-	}
-	_ = response.Body.Close()
 }

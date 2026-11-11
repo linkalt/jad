@@ -31,7 +31,6 @@ func TestLoadModelAPIRefusals(t *testing.T) {
 		"api not a string":    {`,"api":1`, "api"},
 		"object of other api": {`,"api":"chat_completions","anthropic":{}`, "anthropic needs api anthropic_messages"},
 		"object without api":  {`,"chat_completions":{}`, "chat_completions needs api chat_completions"},
-		"oauth":               {`,"api":"chat_completions","auth_mode":"openai_oauth"`, "needs api responses"},
 		"hosted tools":        {`,"api":"anthropic_messages","hosted_tools":[{"type":"web_search"}]`, "hosted_tools needs api responses"},
 		"bad adapter key":     {`,"api":"anthropic_messages","anthropic":{"listen":"127.0.0.1:1"}`, "anthropic: listen is not used"},
 		"bad adapter value":   {`,"api":"anthropic_messages","anthropic":{"cache":{"ttl":"2h"}}`, "anthropic: config: cache.ttl"},

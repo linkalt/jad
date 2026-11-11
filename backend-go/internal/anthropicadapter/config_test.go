@@ -164,9 +164,7 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	if upstream.Properties["base_url"].Default != config.Upstream.BaseURL ||
 		upstream.Properties["anthropic_version"].Default != config.Upstream.AnthropicVersion ||
 		upstream.Properties["auth_header"].Default != config.Upstream.AuthHeader ||
-		upstream.Properties["credential_file"].Default != config.Upstream.CredentialFile ||
 		upstream.Properties["system_prefix"].Default != config.Upstream.SystemPrefix ||
-		upstream.Properties["expiry_margin_ms"].Default != float64(config.Upstream.ExpiryMarginMS) ||
 		upstream.Properties["max_event_bytes"].Default != float64(config.Upstream.MaxEventBytes) ||
 		upstream.Properties["request_timeout_ms"].Default != float64(config.Upstream.RequestTimeoutMS) {
 		t.Errorf("upstream schema defaults differ from Go: %+v", upstream.Properties)
@@ -242,8 +240,8 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 		`{"upstream":{"max_event_bytes":1.5}}`:                  "max_event_bytes",
 		`{"upstream":{"beta":["a,b"]}}`:                         "beta",
 		`{"upstream":{"auth_header":"basic"}}`:                  "auth_header",
-		`{"upstream":{"credential_file":"relative.json"}}`:      "credential_file",
-		`{"upstream":{"expiry_margin_ms":-1}}`:                  "expiry_margin_ms",
+		`{"upstream":{"credential_file":"~/x.json"}}`:           "unknown field",
+		`{"upstream":{"expiry_margin_ms":1}}`:                   "unknown field",
 		`{"upstream":{"extra_headers":{"bad name":"x"}}}`:       "valid HTTP header name",
 		`{"upstream":{"extra_headers":{"Authorization":"x"}}}`:  "cannot be overridden",
 		`{"upstream":{"extra_headers":{"Anthropic-Beta":"x"}}}`: "cannot be overridden",

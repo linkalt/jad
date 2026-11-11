@@ -15,10 +15,6 @@ import (
 // answers every request itself.
 const inProcessBaseURL = "http://in-process.invalid/v1"
 
-// credentialFilePlaceholderKey is handed to the Responses client of an Anthropic model
-// whose adapter reads its token from upstream.credential_file: the adapter ignores it.
-const credentialFilePlaceholderKey = "anthropic-credential-file"
-
 // providerTranslator returns the in-process handler that serves the Responses API for a
 // model whose provider speaks another protocol, or nil for api responses. upstream is
 // the client the translator calls the provider with; nil means a plain client. The model
@@ -45,13 +41,6 @@ func providerTranslator(config sessionfs.SessionConfig, upstream *http.Client, l
 		return chatadapter.NewHandler(chatConfig, upstream, logger)
 	}
 	return nil
-}
-
-// anthropicHoldsCredential reports whether the model's adapter settings read the token
-// from upstream.credential_file.
-func anthropicHoldsCredential(config sessionfs.SessionConfig) bool {
-	adapterConfig, err := anthropicadapter.ParseEmbeddedConfig(config.Model.Anthropic, config.Model.BaseURL)
-	return err == nil && adapterConfig.HoldsCredential()
 }
 
 // refusedTranslator answers 422 with the settings error, which the run reports.

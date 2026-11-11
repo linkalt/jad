@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // syncBuffer is a log sink the handler goroutine writes and the test reads.
@@ -75,18 +74,18 @@ func TestHTTPErrorIsLoggedWithHeadersAndBody(t *testing.T) {
 	}
 }
 
-func TestTheCredentialNeverReachesTheLog(t *testing.T) {
+func TestTheCallersCredentialNeverReachesTheLog(t *testing.T) {
 	upstream, _ := fakeAnthropic(t, 401, `{"type":"error","error":{"type":"authentication_error","message":"bad"}}`, nil)
-	path := writeCredential(t, validCredential("sk-ant-oat01-TOPSECRET", time.Hour))
-	adapter, sink := adapterWithLog(t, `{"upstream":{"base_url":"`+upstream.URL+`","credential_file":"`+path+`","extra_headers":{"X-Custom":"VALUE-SECRET"}}}`)
+	adapter, sink := adapterWithLog(t, `{"upstream":{"base_url":"`+upstream.URL+`","extra_headers":{"X-Custom":"VALUE-SECRET"}}}`)
+	headers := map[string]string{"Authorization": "Bearer sk-ant-api03-TOPSECRET"}
 	for _, body := range []string{`{"model":"claude-x","input":"hi"}`, `{"model":"claude-x","input":"hi","stream":true}`} {
-		post(t, adapter.URL+"/v1/responses", body, nil)
+		post(t, adapter.URL+"/v1/responses", body, headers)
 	}
 	line := sink.String()
 	if line == "" {
 		t.Fatal("nothing was logged")
 	}
-	for _, secret := range []string{"TOPSECRET", "REFRESH-SECRET", "VALUE-SECRET", "Bearer"} {
+	for _, secret := range []string{"TOPSECRET", "VALUE-SECRET", "Bearer"} {
 		if strings.Contains(line, secret) {
 			t.Fatalf("%q reached the log:\n%s", secret, line)
 		}

@@ -11,7 +11,7 @@ func TestParseEmbeddedConfigDefaultsAndValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Upstream.BaseURL != DefaultUpstreamBaseURL || config.DefaultMaxTokens != DefaultMaxTokens || config.HoldsCredential() {
+	if config.Upstream.BaseURL != DefaultUpstreamBaseURL || config.DefaultMaxTokens != DefaultMaxTokens {
 		t.Fatalf("defaults = %+v", config)
 	}
 	config, err = ParseEmbeddedConfig(json.RawMessage(`{"default_max_tokens":1000,"cache":{"system":true},"models":[{"match":"^claude-","thinking":"adaptive"}]}`), "http://gateway:8080")
@@ -43,6 +43,18 @@ func TestParseEmbeddedConfigRefusals(t *testing.T) {
 		if err == nil || !strings.HasPrefix(err.Error(), key+" is not used") || !strings.Contains(err.Error(), "no listener") {
 			t.Errorf("%s: error %v", key, err)
 		}
+	}
+	// The Claude subscription sign-in was removed. Its keys are refused by name, with the way
+	// out, instead of being dropped (the request would go out with the caller's credential)
+	// or reported as an unknown field.
+	for _, key := range []string{"credential_file", "expiry_margin_ms"} {
+		_, err := ParseEmbeddedConfig(json.RawMessage(`{"upstream":{"`+key+`":"x"}}`), "")
+		if err == nil || !strings.HasPrefix(err.Error(), "upstream."+key+" was removed") || strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("%s: error %v", key, err)
+		}
+	}
+	if _, err := ParseEmbeddedConfig(json.RawMessage(`{"upstream":{"credential_file":"~/x.json"}}`), ""); err == nil || !strings.Contains(err.Error(), "API key") {
+		t.Errorf("credential_file error does not say to use an API key: %v", err)
 	}
 	if _, err := ParseEmbeddedConfig(nil, "ftp://x"); err == nil || !strings.Contains(err.Error(), "base_url") {
 		t.Errorf("a base URL that is not http: %v", err)

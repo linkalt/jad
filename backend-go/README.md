@@ -52,13 +52,13 @@ Set `server.tracing.enabled` in the root setting to export OpenTelemetry spans (
 {"server": {"tracing": {"enabled": true, "endpoint": "http://127.0.0.1:4318"}}}
 ```
 
-## ChatGPT sign-in: `openai-auth`
+## Subscription sign-in was removed
 
-`cmd/openai-auth` signs in to a ChatGPT account, refreshes its tokens and reports the credential file that a session with `auth_mode: "openai_oauth"` reads. The backend never writes that file. See `cmd/openai-auth/README.md`.
+Signing in with a ChatGPT or Claude subscription is not supported: the `openai-auth` and `claude-auth` commands, `auth_mode: "openai_oauth"`, `oauth_auth_file`, the `openai_oauth` setting and `anthropic.upstream.credential_file` were removed. A model file or setting that still has one of them fails to load with an error that says so; nothing falls back to an API key. Use an API key in the environment variable named by `api_key_env`. A credential file an earlier sign-in wrote (`~/.jad/auth/`) is not read or deleted. MCP server sign-in (`jad mcp login`) is separate and unchanged. See `DECISIONS.md`.
 
 ## Other provider protocols: `api` in `model.json`
 
-jad speaks the Responses API. A model whose provider speaks another protocol names it in `api`, and jad translates in its own process: no adapter to start, no port, no second credential hop. The translation sits behind the ordinary Responses client (`internal/inprocess` answers its requests with the translator's handler), so `provider_retry`, the idle timeout, HTTP debug logging (of the real upstream call), tracing and `messages.jsonl` work as for any model. Neither protocol can run `hosted_tools`, and both need `auth_mode` `api_key`.
+jad speaks the Responses API. A model whose provider speaks another protocol names it in `api`, and jad translates in its own process: no adapter to start, no port, no second credential hop. The translation sits behind the ordinary Responses client (`internal/inprocess` answers its requests with the translator's handler), so `provider_retry`, the idle timeout, HTTP debug logging (of the real upstream call), tracing and `messages.jsonl` work as for any model. Neither protocol can run `hosted_tools`.
 
 **Claude: `"api": "anthropic_messages"`.** The Anthropic translator (`internal/anthropicadapter`), run in process. `base_url` is the Anthropic API root (default `https://api.anthropic.com`), `api_key_env` defaults to `ANTHROPIC_API_KEY`, and the optional `anthropic` object takes the adapter's own config keys (thinking and effort per model, prompt caching, `stream_retry`, `extra_body`, `log`, ...), except `listen`, `caller_token_env` and `upstream.base_url`. Example: `sample/jad/models/cheap/haiku.json`. The adapter's behaviour and limits are in `internal/anthropicadapter/README.md`. The standalone `anthropic-adapter` command was removed (see `DECISIONS.md`).
 
@@ -70,7 +70,3 @@ jad speaks the Responses API. A model whose provider speaks another protocol nam
 ```
 
 **OpenAI-compatible servers: `"api": "chat_completions"`.** `internal/chatadapter` calls `{base_url}/chat/completions` (vLLM, Ollama, llama.cpp, LM Studio, DeepSeek, Groq, gateways) and streams the answer back as Responses events. Function tools, tool rounds, images and files in user messages, reasoning text (`reasoning_content` or `reasoning` deltas become a reasoning item), structured output (`text.format`) and usage are translated. The optional `chat_completions` object sets `max_tokens_field`, `include_usage`, `system_role`, `reasoning_fields`, `echo_reasoning_field`, `missing_tool_result_text`, `request_timeout_ms`, `max_event_bytes`, `max_request_bytes`, `extra_headers` and `extra_body`; the schema has their defaults. Example: `sample/model-chat-completions.json` (Ollama).
-
-## Claude subscription sign-in: `claude-auth`
-
-`cmd/claude-auth` signs in to a Claude account (Pro, Max, Team or Enterprise), refreshes its tokens and reports the credential file that the adapter reads when `upstream.credential_file` is set. Unofficial and untested against Anthropic; read its README before using it. See `cmd/claude-auth/README.md`.

@@ -60,7 +60,8 @@ var defaultSandboxPlanWritablePaths = []string{"{tmp}"}
 
 // defaultSandboxHidePaths are the credential stores a sandboxed child should not read: ssh and
 // gpg keys, cloud and cluster logins, git, package registry and container registry tokens, and
-// jad's own provider logins (openaiauth, claudeauth). A profile that needs one replaces
+// jad's credential directory ({home}/.jad/auth, where the removed provider sign-in tools
+// wrote their files; still hidden so a leftover file stays unreadable). A profile that needs one replaces
 // hide_paths; add_hide_paths adds to the list instead (docs/isolation-decisions.md D5).
 var defaultSandboxHidePaths = []string{
 	"{home}/.ssh", "{home}/.gnupg", "{home}/.aws", "{home}/.kube", "{home}/.config/gcloud", "{home}/.azure",

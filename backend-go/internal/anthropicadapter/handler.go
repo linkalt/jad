@@ -37,13 +37,6 @@ func NewHandler(config *Config, httpClient *http.Client) *Handler {
 
 // ServeHTTP routes /v1/responses and /responses.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Browsers always send Origin on a cross-origin POST; the API clients this adapter serves never do.
-	// Only checked when the adapter spends its own credential.
-	if h.config.HoldsCredential() && r.Header.Get("Origin") != "" {
-		writeError(w, &apiError{Status: http.StatusForbidden, Type: "invalid_request_error",
-			Code: "origin_not_allowed", Message: "browser cross-origin requests are not accepted"})
-		return
-	}
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	path = strings.TrimPrefix(path, "/v1")
 	switch {
@@ -166,4 +159,14 @@ func apiKeyFrom(r *http.Request) string {
 		return strings.TrimSpace(token)
 	}
 	return strings.TrimSpace(r.Header.Get("x-api-key"))
+}
+
+// upstreamToken returns the credential to send upstream: the one the caller sent. The
+// adapter holds none of its own, so a request without one is refused.
+func (h *Handler) upstreamToken(r *http.Request) (string, *apiError) {
+	token := apiKeyFrom(r)
+	if token == "" {
+		return "", unauthorized("send the Anthropic credential (an API key or an access token) as a Bearer token or x-api-key header")
+	}
+	return token, nil
 }

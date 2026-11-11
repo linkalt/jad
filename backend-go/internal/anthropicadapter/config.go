@@ -71,17 +71,11 @@ type UpstreamConfig struct {
 	// AuthHeader is bearer or x-api-key: how the caller's token goes upstream.
 	AuthHeader string   `json:"auth_header"`
 	Beta       []string `json:"beta"`
-	// CredentialFile, when set, is a file written by the claude-auth command. The adapter then
-	// sends the access token stored in it, read on every request, and ignores the credential
-	// the caller sent. Empty (the default) forwards the caller's credential.
-	CredentialFile string `json:"credential_file"`
 	// SystemPrefix, when not empty, is sent as the first system block of every request, before
-	// the caller's instructions, as a block of its own. A Claude subscription token is refused
-	// with 429 unless the request opens with the Claude Code sentence (found by a live probe).
+	// the caller's instructions, as a block of its own. Empty (the default) adds nothing. It
+	// claims whatever the text says, so it is for a gateway that requires a fixed opening
+	// sentence, not for pretending to be another client.
 	SystemPrefix string `json:"system_prefix"`
-	// ExpiryMarginMS is how long before its stored expiry a credential-file token already
-	// counts as expired. It applies only with credential_file.
-	ExpiryMarginMS int `json:"expiry_margin_ms"`
 	// ExtraHeaders are added to every upstream request, for a gateway or an endpoint that
 	// wants more than the headers the adapter sets itself.
 	ExtraHeaders     map[string]string `json:"extra_headers"`
@@ -91,9 +85,6 @@ type UpstreamConfig struct {
 	// StreamRetry retries a streaming request whose upstream answered with an
 	// error event before any output was written.
 	StreamRetry StreamRetryConfig `json:"stream_retry"`
-
-	// credentialPath is CredentialFile with "~/" expanded.
-	credentialPath string
 }
 
 // StreamRetryConfig controls the invisible retry of a stream that fails at
@@ -148,9 +139,7 @@ func DefaultConfig() Config {
 			AnthropicVersion: DefaultAnthropicVersion,
 			AuthHeader:       DefaultAuthHeader,
 			Beta:             []string{},
-			CredentialFile:   DefaultCredentialFile,
 			SystemPrefix:     DefaultSystemPrefix,
-			ExpiryMarginMS:   DefaultExpiryMarginMS,
 			ExtraHeaders:     map[string]string{},
 			RequestTimeoutMS: DefaultRequestTimeoutMS,
 			MaxEventBytes:    DefaultMaxEventBytes,
@@ -266,16 +255,6 @@ func (u *UpstreamConfig) validate() error {
 		if strings.TrimSpace(beta) == "" || strings.ContainsAny(beta, ", \t") {
 			return fmt.Errorf("config: upstream.beta entries must be single non-empty tokens, got %q", beta)
 		}
-	}
-	if u.CredentialFile != "" {
-		path, err := ExpandCredentialPath(u.CredentialFile)
-		if err != nil {
-			return fmt.Errorf("config: upstream.credential_file: %w", err)
-		}
-		u.credentialPath = path
-	}
-	if u.ExpiryMarginMS < 0 || u.ExpiryMarginMS > MaxRequestTimeoutMS {
-		return fmt.Errorf("config: upstream.expiry_margin_ms must be 0..%d, got %d", MaxRequestTimeoutMS, u.ExpiryMarginMS)
 	}
 	for name, value := range u.ExtraHeaders {
 		if !validHeaderName(name) {
@@ -396,5 +375,18 @@ func (c *Config) ProfileFor(model string) *ModelProfile {
 	return &c.DefaultProfile
 }
 
-// HoldsCredential reports whether the adapter spends a credential of its own on callers' behalf.
-func (c *Config) HoldsCredential() bool { return c.Upstream.credentialPath != "" }
+// validHeaderName reports whether name is an RFC 9110 token.
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", r):
+		default:
+			return false
+		}
+	}
+	return true
+}

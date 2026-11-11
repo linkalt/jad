@@ -78,7 +78,7 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 	}
 }
 
-func TestLoadSessionConfigRejectsUnknownProfileModelAndOAuth(t *testing.T) {
+func TestLoadSessionConfigRejectsUnknownProfileAndModel(t *testing.T) {
 	location, _ := layoutLocation(t, layouttest.Spec{
 		Models:   map[string]map[string]any{"openai/model": {"model": "gpt-test", "api_key_env": "TEST_OPENAI_KEY"}, "openai/other": {"model": "gpt-other"}},
 		Profiles: map[string]map[string]any{"dev/one": {"models": []any{"openai/model"}, "model_default": "openai/model"}},
@@ -97,15 +97,6 @@ func TestLoadSessionConfigRejectsUnknownProfileModelAndOAuth(t *testing.T) {
 		var clientErr *ClientError
 		if !errors.As(err, &clientErr) || clientErr.Message == "" {
 			t.Fatalf("unavailable model error = %T %v, want ClientError", err, err)
-		}
-	}
-
-	if _, err := loadLayoutConfig(t, layouttest.Spec{ModelRaw: `{"model":"gpt-test","oauth_auth_file":null}`}); err == nil {
-		t.Fatal("LoadSessionConfig(API key with oauth_auth_file) succeeded")
-	} else {
-		var configErr *ConfigError
-		if !errors.As(err, &configErr) {
-			t.Fatalf("API key oauth_auth_file error = %T %v, want ConfigError", err, err)
 		}
 	}
 }

@@ -59,6 +59,7 @@ func TestCatalogModelWriteIsCheckedByTheLoader(t *testing.T) {
 		"bad version":      {`{"schema_version":7,"model":"m"}`, "schema_version"},
 		"bad base_url":     {`{"model":"m","base_url":"ftp://x"}`, "base_url"},
 		"bad auth mode":    {`{"model":"m","auth_mode":"basic"}`, "auth_mode"},
+		"removed oauth":    {`{"model":"m","auth_mode":"openai_oauth"}`, "no longer supported"},
 		"bad env name":     {`{"model":"m","api_key_env":"not valid"}`, "api_key_env"},
 		"instructions":     {`{"model":"m","instructions":"x"}`, "instructions"},
 		"reserved request": {`{"model":"m","request":{"input":1}}`, "request.input"},

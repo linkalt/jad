@@ -26,7 +26,7 @@
       "type": "string",
       "enum": ["responses", "anthropic_messages", "chat_completions"],
       "default": "responses",
-      "description": "Protocol of the provider. responses calls {base_url}/responses. anthropic_messages and chat_completions are translated in jad's own process, with no separate adapter to run: anthropic_messages calls the Anthropic Messages API ({base_url}/v1/messages, base_url defaults to https://api.anthropic.com, api_key_env to ANTHROPIC_API_KEY) with the settings in anthropic; chat_completions calls an OpenAI-compatible {base_url}/chat/completions (vLLM, Ollama, llama.cpp, LM Studio, DeepSeek, Groq, gateways; base_url defaults to https://api.openai.com/v1) with the settings in chat_completions. Both need auth_mode api_key and no hosted_tools."
+      "description": "Protocol of the provider. responses calls {base_url}/responses. anthropic_messages and chat_completions are translated in jad's own process, with no separate adapter to run: anthropic_messages calls the Anthropic Messages API ({base_url}/v1/messages, base_url defaults to https://api.anthropic.com, api_key_env to ANTHROPIC_API_KEY) with the settings in anthropic; chat_completions calls an OpenAI-compatible {base_url}/chat/completions (vLLM, Ollama, llama.cpp, LM Studio, DeepSeek, Groq, gateways; base_url defaults to https://api.openai.com/v1) with the settings in chat_completions. Both need no hosted_tools."
     },
     "base_url": {
       "type": "string",
@@ -36,18 +36,13 @@
     "api_key_env": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-      "description": "Environment variable containing the provider API key. Not used when auth_mode is openai_oauth."
+      "description": "Environment variable containing the provider API key. The key is always read from this variable; signing in with a ChatGPT subscription (auth_mode openai_oauth) was removed."
     },
     "auth_mode": {
       "type": "string",
-      "enum": ["api_key", "openai_oauth"],
+      "enum": ["api_key"],
       "default": "api_key",
-      "description": "api_key reads the key from api_key_env. openai_oauth sends requests to the Codex endpoint with the access token read from oauth_auth_file; base_url is the endpoint and defaults to https://chatgpt.com/backend-api/codex, so a proxy can be put in front of it. The backend only reads that file: sign-in and token refresh are done by a separate tool. Go backend: the expiry margin is the openai_oauth node of setting.json. The request body is the same as in api_key mode."
-    },
-    "oauth_auth_file": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Credential file for auth_mode openai_oauth; absolute or starting with ~/. Defaults to ~/.jad/auth/openai-codex.json. Not allowed with auth_mode api_key."
+      "description": "api_key reads the key from api_key_env; it is the only mode and the key may be left out. The value openai_oauth (ChatGPT subscription sign-in) and the key oauth_auth_file were removed and are refused with an error that says to use an API key; they are never read as an API key session."
     },
     "model": {
       "type": "string",
@@ -101,7 +96,7 @@
       }
     },
     "anthropic": {
-      "description": "Settings of the Anthropic translation, for api anthropic_messages only. The keys of anthropic-adapter.schema.json (thinking and effort per model, prompt caching, stream_retry, extra_body, log, credential_file, ...). listen and caller_token_env (keys of the removed standalone adapter command) are refused because nothing listens, and so is upstream.base_url, which is this file's base_url. Absent means the adapter's defaults, with one exception: when no cache object is set, prompt caching is on, with breakpoints on the tools, the system prompt and the last conversation block (cache {\"tools\": true, \"system\": true, \"history\": true}, 5-minute lifetime), because an agent resends the same prefix every round. A cache object replaces that default as a whole: {} turns caching off. Price cache writes with pricing.cache_write_per_mtok. With upstream.credential_file set, api_key_env needs no value.",
+      "description": "Settings of the Anthropic translation, for api anthropic_messages only. The keys of anthropic-adapter.schema.json (thinking and effort per model, prompt caching, stream_retry, extra_body, log, ...). listen and caller_token_env (keys of the removed standalone adapter command) are refused because nothing listens, and so is upstream.base_url, which is this file's base_url. Absent means the adapter's defaults, with one exception: when no cache object is set, prompt caching is on, with breakpoints on the tools, the system prompt and the last conversation block (cache {\"tools\": true, \"system\": true, \"history\": true}, 5-minute lifetime), because an agent resends the same prefix every round. A cache object replaces that default as a whole: {} turns caching off. Price cache writes with pricing.cache_write_per_mtok. upstream.credential_file and upstream.expiry_margin_ms (the Claude subscription sign-in) were removed and are refused with an error that says to use an API key.",
       "allOf": [
         { "$ref": "anthropic-adapter.schema.json" },
         {

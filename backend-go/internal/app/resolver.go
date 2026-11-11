@@ -601,19 +601,6 @@ func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settin
 // providerAPIKey returns the key handed to the provider client for a loaded model, and
 // fails the run before it starts when the credential cannot be used.
 func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error) {
-	if config.Model.AuthMode == "openai_oauth" {
-		// The token itself is read from the file on every request, so it is not part of
-		// the runner's identity; the file path and the OAuth settings are.
-		if err := checkOAuthCredential(config, r.logger); err != nil {
-			return "", err
-		}
-		return oauthPlaceholderKey, nil
-	}
-	if config.Model.API == sessionfs.APIAnthropicMessages && anthropicHoldsCredential(config) {
-		// The adapter reads its token from upstream.credential_file on every request and
-		// ignores the key it is handed, so api_key_env needs no value.
-		return credentialFilePlaceholderKey, nil
-	}
 	apiKey := strings.TrimSpace(r.environment[config.Model.APIKeyEnv])
 	if apiKey == "" {
 		return "", &httpapi.StatusError{
@@ -624,11 +611,10 @@ func (r *Resolver) providerAPIKey(config sessionfs.SessionConfig) (string, error
 	return apiKey, nil
 }
 
-// newProviderStreamer builds the provider client of a loaded model: the OAuth
-// transport when the model uses it, wrapped by the HTTP debug logger when that is on.
-// A model in api anthropic_messages or chat_completions gets the same Responses client
-// with an in-process translator in place of the network; the translator's own calls
-// use the network, OAuth-free, and the HTTP debug logger records them.
+// newProviderStreamer builds the provider client of a loaded model, wrapped by the HTTP
+// debug logger when that is on. A model in api anthropic_messages or chat_completions
+// gets the same Responses client with an in-process translator in place of the network;
+// the translator's own calls use the network, and the HTTP debug logger records them.
 func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey string) *openaiapi.Client {
 	httpClient := providerHTTPClient(config, r.logger)
 	baseURL := config.Model.BaseURL
@@ -640,9 +626,9 @@ func (r *Resolver) newProviderStreamer(config sessionfs.SessionConfig, apiKey st
 	return openaiapi.NewClient(openaiapi.Config{APIKey: apiKey, BaseURL: baseURL, HTTPClient: httpClient, Retry: &retry, IdleTimeout: time.Duration(config.ProviderStream.IdleTimeoutMS) * time.Millisecond})
 }
 
-// providerHTTPClient returns nil when nothing changes the default client: no OAuth, no
-// HTTP debug, no header timeout and the default network. The base transport is built once and shared by the
-// OAuth wrapper and the debug wrapper.
+// providerHTTPClient returns nil when nothing changes the default client: no HTTP debug,
+// no header timeout and the default network. The base transport is built once and shared by
+// the debug wrapper and an in-process translator's calls.
 func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *http.Client {
 	var httpClient *http.Client
 	var network http.RoundTripper = http.DefaultTransport
@@ -651,8 +637,8 @@ func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *ht
 		base = newNetworkTransport(config.ProviderNetwork.Network, providerDial)
 	}
 	if config.ProviderStream.HeaderTimeoutMS > 0 {
-		// The wrappers below (OAuth, HTTP debug) and an in-process translator's own calls
-		// all go through this transport, so they all get the header timeout.
+		// The HTTP debug wrapper below and an in-process translator's own calls all go
+		// through this transport, so they all get the header timeout.
 		if base == nil {
 			base = http.DefaultTransport.(*http.Transport).Clone()
 		}
@@ -660,10 +646,6 @@ func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *ht
 	}
 	if base != nil {
 		network = base
-		httpClient = &http.Client{Transport: network}
-	}
-	if config.Model.AuthMode == "openai_oauth" {
-		network = oauthTransport(config, network)
 		httpClient = &http.Client{Transport: network}
 	}
 	if config.HTTPDebug.Enabled {
@@ -678,9 +660,6 @@ func providerHTTPClient(config sessionfs.SessionConfig, logger *slog.Logger) *ht
 			MaxTotalBytes:          config.HTTPDebug.MaxTotalBytes,
 		}, network)
 		httpClient = &http.Client{Transport: transport}
-	}
-	if config.Model.AuthMode == "openai_oauth" {
-		httpClient.CheckRedirect = refuseCrossOriginRedirect
 	}
 	return httpClient
 }
@@ -1309,7 +1288,6 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		APIKeyEnv    string
 		APIKeyHash   string
 		BaseURL      string
-		AuthMode     string
 		Request      json.RawMessage
 		HostedTools  []json.RawMessage
 		PromptRole   string
@@ -1322,10 +1300,6 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		ProviderStream sessionfs.ProviderStreamSettings
 		// The transport's dialer holds the address family.
 		ProviderNetwork sessionfs.ProviderNetworkSettings
-		// The runner holds the OAuth transport, so the credential file and the endpoint
-		// and margin it was built with identify the runner. The token is not included.
-		OAuthAuthFile string
-		OpenAIOAuth   sessionfs.OpenAIOAuthSettings
 		// The in-process translator is built from the protocol and its settings.
 		API             string
 		Anthropic       json.RawMessage
@@ -1341,7 +1315,6 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		Model:           config.Model.Name,
 		APIKeyEnv:       config.Model.APIKeyEnv,
 		BaseURL:         config.Model.BaseURL,
-		AuthMode:        config.Model.AuthMode,
 		Request:         config.Model.Request,
 		HostedTools:     config.Model.HostedTools,
 		PromptRole:      config.Model.PromptRole,
@@ -1351,8 +1324,6 @@ func fingerprintRunner(config sessionfs.SessionConfig, apiKey string) string {
 		ProviderRetry:   config.ProviderRetry,
 		ProviderStream:  config.ProviderStream,
 		ProviderNetwork: config.ProviderNetwork,
-		OAuthAuthFile:   config.Model.OAuthAuthFile,
-		OpenAIOAuth:     config.OpenAIOAuth,
 		API:             config.Model.API,
 		Anthropic:       config.Model.Anthropic,
 		ChatCompletions: config.Model.ChatCompletions,

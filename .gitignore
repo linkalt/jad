@@ -24,8 +24,6 @@ backend-go/jad
 /frontend_new/CLAUDE.md
 /frontend_new/dist/
 /backend-go/jad_ant
-/backend-go/openai-auth
-/backend-go/claude-auth
 /backend-go/jad2
 *.kate-swp
 MASTER.md

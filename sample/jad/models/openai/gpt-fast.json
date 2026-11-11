@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
-  "provider": "openai-codex",
-  "auth_mode": "openai_oauth",
-  "oauth_auth_file": "~/.jad/auth/openai-codex.json",
+  "provider": "openai",
+  "api_key_env": "OPENAI_API_KEY",
   "model": "gpt-6-luna",
   "request": {
     "reasoning": {
