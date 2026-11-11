@@ -1,6 +1,6 @@
 # claude-auth
 
-Signs in to a Claude account (Pro, Max, Team or Enterprise), refreshes its tokens and reports the state of the credential file that `anthropic-adapter` reads when `upstream.credential_file` is set. The adapter never writes that file; this command is its only writer.
+Signs in to a Claude account (Pro, Max, Team or Enterprise), refreshes its tokens and reports the state of the credential file that the in-process Anthropic adapter (`internal/anthropicadapter`) reads when `upstream.credential_file` is set. The adapter never writes that file; this command is its only writer.
 
 ```sh
 go build -o /tmp/claude-auth ./cmd/claude-auth

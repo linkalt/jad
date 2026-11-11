@@ -1,36 +1,16 @@
-# anthropic-adapter
+# anthropic adapter
 
-Serves the OpenAI **Responses API** (`POST /v1/responses`, streaming and not) on top of the **Anthropic Messages API**. A session uses a Claude model by pointing its `model.json` `base_url` at the adapter. Neither backend (TypeScript or Go) changes.
+Serves the OpenAI **Responses API** (`POST /v1/responses`, streaming and not) on top of the **Anthropic Messages API**. jad runs it in its own process when a model file says `"api": "anthropic_messages"`: nothing to start. The settings below go in the model file's `anthropic` object (`sample/schemes/model.schema.json`, `sample/jad/models/cheap/haiku.json`), except `listen`, `caller_token_env` and `upstream.base_url`, which are refused there: nothing listens, and the upstream is the model file's `base_url`. See "Other provider protocols" in `backend-go/README.md`.
 
-**jad runs this adapter in its own process** when a model file says `"api": "anthropic_messages"`: nothing to start, and the settings below go in the model file's `anthropic` object instead of a config file (without `listen`, `caller_token_env` and `upstream.base_url`, which is the model file's `base_url`). See "Other provider protocols" in `backend-go/README.md`. The standalone command is for other clients, or for one adapter shared by several machines.
+**The standalone `anthropic-adapter` command was removed** (T-014, `backend-go/DECISIONS.md`). It served this translation on a TCP port for other clients; a model file that pointed `base_url` at it must switch to `"api": "anthropic_messages"` with the real Anthropic `base_url` (or leave `base_url` out), and a config file of that command becomes the model file's `anthropic` object without `listen`, `caller_token_env` and `upstream.base_url`. The text below was written for the command and keeps its description of the translation, the limits and the credential findings.
 
 ```
-backend (TS or Go)  --Responses-->  anthropic-adapter  --Messages-->  api.anthropic.com
+jad run  --Responses-->  in-process adapter  --Messages-->  api.anthropic.com
 ```
 
-## Run it
+## Passing the caller's token
 
-```sh
-cd backend-go
-go build -o /tmp/anthropic-adapter ./cmd/anthropic-adapter
-/tmp/anthropic-adapter --config ../sample/anthropic-adapter.json
-```
-
-Without `--config` the defaults apply: listen on `127.0.0.1:8788`, upstream `https://api.anthropic.com`, no thinking parameter, no caching.
-
-Point a session at it, in that session's `model.json`:
-
-```json
-{
-  "schema_version": 1,
-  "provider": "anthropic",
-  "model": "claude-opus-5-5",
-  "api_key_env": "ANTHROPIC_API_KEY",
-  "base_url": "http://127.0.0.1:8788/v1"
-}
-```
-
-The adapter holds no credential. The backend sends the token from `api_key_env` as `Authorization: Bearer ...` (an `x-api-key` header from the caller is accepted too) and the adapter forwards it upstream as `Authorization: Bearer ...`, the form Anthropic documents. `upstream.auth_header: "x-api-key"` sends the legacy header instead, for a proxy that expects it. A request with neither header gets 401 and never reaches Anthropic.
+By default the adapter passes the caller's token through (the backend sends the token from `api_key_env`) and forwards it upstream as `Authorization: Bearer ...`, the form Anthropic documents. `upstream.auth_header: "x-api-key"` sends the legacy header instead, for a proxy that expects it. A request with neither header gets 401 and never reaches Anthropic.
 
 **Credentials.** By default the adapter passes the token through and does not know what kind it is, so an API key (`sk-ant-api...`) and a short-lived Workload Identity Federation access token both work. Getting and refreshing a WIF token is a job for a separate tool: put the current token in the environment variable named by `api_key_env`. With `upstream.credential_file` set, it reads a credential file instead (next section).
 
@@ -48,17 +28,15 @@ So Anthropic recognises this traffic as a third-party app and bills it as **extr
 
 ## Configuration
 
-Schema: `sample/schemes/anthropic-adapter.schema.json`. A working example: `sample/anthropic-adapter.json`. Unknown keys are rejected, so a misspelled key cannot fall back to a default silently. Every key below is optional.
+Schema: `sample/schemes/anthropic-adapter.schema.json`. A standalone-format test fixture with the per-model table: `testdata/adapter.json`. Unknown keys are rejected, so a misspelled key cannot fall back to a default silently. Every key below is optional.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `listen` | `127.0.0.1:8788` | Address to listen on. |
-| `caller_token_env` | `""` | Name of an environment variable holding a caller token (32+ characters). Every request must send it as `Authorization: Bearer` or `x-api-key`; it is compared in constant time and not forwarded. Needs `upstream.credential_file`. **Required** when `credential_file` is set and `listen` is not loopback (the adapter refuses to start without it); optional on loopback, but without it any local process or browser page can spend the credential. With `credential_file`, requests with an `Origin` header (browsers) get 403. |
 | `upstream.base_url` | `https://api.anthropic.com` | `/v1/messages` is appended. |
 | `upstream.anthropic_version` | `2023-06-01` | `anthropic-version` header. |
 | `upstream.auth_header` | `bearer` | `bearer` sends `Authorization: Bearer <token>`; `x-api-key` sends the legacy header. |
 | `upstream.beta` | `[]` | Joined into `anthropic-beta`. For a `budget` profile with tool loops that should think between calls (Opus 4.5, Sonnet 4.5 and earlier Claude 4 models), add `interleaved-thinking-2025-05-14`; Haiku 4.5 ignores it, and Opus 4.6 has no interleaving in manual mode (use `adaptive`). |
-| `upstream.credential_file` | `""` | A `claude-auth` credential file (absolute or `~/…`). When set, its access token is sent upstream and the caller's credential is ignored. Empty forwards the caller's credential. |
+| `upstream.credential_file` | `""` | A `claude-auth` credential file (absolute or `~/…`). When set, its access token is sent upstream and the caller's credential is ignored. Empty forwards the caller's credential. With it set, a request with an `Origin` header (a browser) gets 403. The removed command guarded this with a caller token (`caller_token_env`) on its port; in process nothing listens, so there is nothing to guard. |
 | `upstream.system_prefix` | `""` | Sent as the first system block of every request, as a block of its own, before the caller's instructions. Empty sends nothing extra. **Discouraged:** it makes the request claim to be Claude Code, and it does not avoid the third-party billing refusal described in the credentials section. |
 | `upstream.expiry_margin_ms` | `300000` | With `credential_file`: a token whose stored expiry is this close is refused with 401 before the request. |
 | `upstream.extra_headers` | `{}` | Headers added to every upstream request. `authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `content-type`, `content-length` and `host` are refused here: they come from other keys. |
@@ -95,7 +73,7 @@ Which thinking parameters a Claude model accepts differs per model, and changes 
 | `structured_output` | `native` (default) sends a `text.format` of type `json_schema` as `output_config.format` `{"type":"json_schema","schema":...}`; `name`, `description` and `strict` have no Anthropic equivalent and are dropped (the schema is always enforced). `unsupported` is for models without structured outputs: the `text` field then goes through `unsupported_fields`. The sample sets `unsupported` on `default_profile`, which serves model names no profile matches. |
 | `extra_body` | Top-level fields merged last into the `/v1/messages` body of requests this profile serves (`models[]` entry or `default_profile`; no global one, since models differ in what they accept). Values are sent as written: `metadata`, `top_k`, `stop_sequences`, `service_tier`, `cache_control` `{"type":"ephemeral","ttl":"1h"}`. Fields the adapter builds from the client request are refused at load, and so is `cache_control` when `cache.automatic` is on. Default `{}`. |
 
-`sample/anthropic-adapter.json` encodes the per-model table as read from the Anthropic documentation on the day it was written. A test checks that it loads, validates against the schema, and gives each family the profile it names, but **the table itself has not been checked against the live API**. Check it against the current documentation before relying on it.
+`testdata/adapter.json` encodes the per-model table as read from the Anthropic documentation on the day it was written. A test checks that it loads, validates against the schema, and gives each family the profile it names, but **the table itself has not been checked against the live API**. Check it against the current documentation before relying on it.
 
 ### Prompt caching
 

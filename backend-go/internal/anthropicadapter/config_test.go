@@ -2,6 +2,7 @@ package anthropicadapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,28 @@ import (
 )
 
 const schemaPath = "../../../sample/schemes/anthropic-adapter.schema.json"
+
+// LoadConfig reads a standalone-format config file (testdata/*.json, written by writeConfig)
+// the way ParseEmbeddedConfig reads a model file's anthropic object, minus the embedded
+// restrictions (upstream.base_url is allowed) and the embedded cache default. An empty path
+// returns the defaults. The standalone command that used it is gone; tests keep it as
+// the fixture loader.
+func LoadConfig(path string) (*Config, error) {
+	config := DefaultConfig()
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
+		if err := decodeConfig(data, &config); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if err := config.finish(); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
@@ -27,7 +50,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Listen != DefaultListen || config.DefaultMaxTokens != DefaultMaxTokens ||
+	if config.DefaultMaxTokens != DefaultMaxTokens ||
 		config.Upstream.BaseURL != DefaultUpstreamBaseURL || config.UnsupportedFields != UnsupportedIgnore {
 		t.Fatalf("unexpected defaults: %+v", config)
 	}
@@ -59,8 +82,6 @@ func TestSchemaDefaultsMatchGo(t *testing.T) {
 	}
 	config := DefaultConfig()
 	checks := map[string]any{
-		"listen":                          config.Listen,
-		"caller_token_env":                config.CallerTokenEnv,
 		"default_max_tokens":              float64(config.DefaultMaxTokens),
 		"max_request_bytes":               float64(config.MaxRequestBytes),
 		"unsupported_fields":              config.UnsupportedFields,
@@ -176,10 +197,12 @@ func compileSchema(t *testing.T) *jsonschema.Schema {
 
 func TestSchemaAcceptsAndRejects(t *testing.T) {
 	schema := compileSchema(t)
-	valid := `{"schema_version":1,"listen":"0.0.0.0:9000","upstream":{"beta":["a-b"]},
+	valid := `{"schema_version":1,"upstream":{"beta":["a-b"]},
 	  "models":[{"match":"^claude-opus-5","thinking":"adaptive","display":"summarized","effort_map":{"max":"max"}}]}`
 	invalid := map[string]string{
 		"unknown key":       `{"bogus":1}`,
+		"listen":            `{"listen":"127.0.0.1:8788"}`,
+		"caller token":      `{"caller_token_env":"TOKEN"}`,
 		"bad policy":        `{"unsupported_fields":"maybe"}`,
 		"model w/o match":   `{"models":[{"thinking":"adaptive"}]}`,
 		"low budget":        `{"default_profile":{"effort_budget":{"low":10}}}`,
@@ -210,7 +233,8 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 	cases := map[string]string{
 		`{"bogus":1}`:                                           "unknown field",
 		`{"schema_version":2}`:                                  "schema_version",
-		`{"listen":""}`:                                         "listen",
+		`{"listen":"127.0.0.1:8788"}`:                           "unknown field",
+		`{"caller_token_env":"TOKEN"}`:                          "unknown field",
 		`{"upstream":{"base_url":"ftp://x"}}`:                   "base_url",
 		`{"upstream":{"request_timeout_ms":0}}`:                 "request_timeout_ms",
 		`{"upstream":{"max_event_bytes":0}}`:                    "max_event_bytes",

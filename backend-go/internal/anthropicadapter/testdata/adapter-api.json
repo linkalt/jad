@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
-  "listen": "127.0.0.1:8788",
   "upstream": {
-    "base_url": "https://api.anthropic.com",
+    "base_url": "http://localhost:3456",
     "anthropic_version": "2023-06-01",
     "beta": [],
     "request_timeout_ms": 600000,
@@ -15,14 +14,13 @@
       ]
     }
   },
-  "default_max_tokens": 16384,
+  "default_max_tokens": 384000,
   "cache": {
     "system": true,
     "history": true
   },
   "default_profile": {
     "thinking": "none",
-    "structured_output": "unsupported",
     "extra_body": {
       "cache_control": {
         "type": "ephemeral",
@@ -45,7 +43,7 @@
       }
     },
     {
-      "match": "^claude-(fable|mythos|opus|sonnet|haiku)-5",
+      "match": "^claude-(fable|mythos|opus|sonnet|haiku)-5-5",
       "thinking": "adaptive",
       "display": "summarized",
       "fixed_sampling": true,

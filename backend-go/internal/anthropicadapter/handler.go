@@ -3,8 +3,6 @@ package anthropicadapter
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -44,10 +42,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.config.HoldsCredential() && r.Header.Get("Origin") != "" {
 		writeError(w, &apiError{Status: http.StatusForbidden, Type: "invalid_request_error",
 			Code: "origin_not_allowed", Message: "browser cross-origin requests are not accepted"})
-		return
-	}
-	if !h.callerAllowed(r) {
-		writeError(w, unauthorized("send the adapter caller token as a Bearer token or x-api-key header"))
 		return
 	}
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -172,13 +166,4 @@ func apiKeyFrom(r *http.Request) string {
 		return strings.TrimSpace(token)
 	}
 	return strings.TrimSpace(r.Header.Get("x-api-key"))
-}
-
-// callerAllowed enforces caller_token_env; without it every caller is allowed.
-func (h *Handler) callerAllowed(r *http.Request) bool {
-	if !h.config.hasCallerToken {
-		return true
-	}
-	candidate := sha256.Sum256([]byte(apiKeyFrom(r)))
-	return subtle.ConstantTimeCompare(candidate[:], h.config.callerTokenHash[:]) == 1
 }

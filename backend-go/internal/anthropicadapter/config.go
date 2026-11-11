@@ -2,12 +2,10 @@ package anthropicadapter
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,13 +14,7 @@ import (
 // Config is the adapter's JSON configuration. Unknown keys are rejected so a
 // misspelled key cannot silently fall back to a default.
 type Config struct {
-	SchemaVersion int    `json:"schema_version"`
-	Listen        string `json:"listen"`
-	// CallerTokenEnv names the environment variable holding the token every caller must send
-	// (Authorization: Bearer or x-api-key). Only meaningful with upstream.credential_file, where
-	// the caller sends no upstream credential of its own. Mandatory for that setup on a
-	// non-loopback listen address (checked at startup by the command).
-	CallerTokenEnv               string         `json:"caller_token_env"`
+	SchemaVersion                int            `json:"schema_version"`
 	Upstream                     UpstreamConfig `json:"upstream"`
 	DefaultMaxTokens             int            `json:"default_max_tokens"`
 	MaxRequestBytes              int64          `json:"max_request_bytes"`
@@ -37,10 +29,6 @@ type Config struct {
 	Cache               CacheConfig    `json:"cache"`
 	DefaultProfile      ModelProfile   `json:"default_profile"`
 	Models              []ModelProfile `json:"models"`
-
-	// callerTokenHash is the SHA-256 of the caller token; hasCallerToken says it is set.
-	callerTokenHash [sha256.Size]byte
-	hasCallerToken  bool
 }
 
 // LogConfig controls what the adapter writes to stderr when an upstream call fails. Without it a
@@ -151,12 +139,10 @@ type ModelProfile struct {
 	pattern *regexp.Regexp
 }
 
-// DefaultConfig returns the configuration used when no file is given.
+// DefaultConfig returns the configuration used when the model file sets no anthropic object.
 func DefaultConfig() Config {
 	return Config{
-		SchemaVersion:  1,
-		Listen:         DefaultListen,
-		CallerTokenEnv: DefaultCallerTokenEnv,
+		SchemaVersion: 1,
 		Upstream: UpstreamConfig{
 			BaseURL:          DefaultUpstreamBaseURL,
 			AnthropicVersion: DefaultAnthropicVersion,
@@ -200,25 +186,6 @@ func defaultProfile() ModelProfile {
 	}
 }
 
-// LoadConfig reads and validates a configuration file. An empty path returns
-// the defaults.
-func LoadConfig(path string) (*Config, error) {
-	config := DefaultConfig()
-	if path != "" {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read config: %w", err)
-		}
-		if err := decodeConfig(data, &config); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
-	}
-	if err := config.finish(); err != nil {
-		return nil, err
-	}
-	return &config, nil
-}
-
 func decodeConfig(data []byte, config *Config) error {
 	// Each profile starts from the defaults so a partial profile keeps the
 	// default effort tables; json merges into existing map entries.
@@ -238,13 +205,7 @@ func (c *Config) finish() error {
 	if c.SchemaVersion != 1 {
 		return fmt.Errorf("config: schema_version must be 1, got %d", c.SchemaVersion)
 	}
-	if strings.TrimSpace(c.Listen) == "" {
-		return errors.New("config: listen must be a non-empty host:port")
-	}
 	if err := c.Upstream.validate(); err != nil {
-		return err
-	}
-	if err := c.resolveCallerToken(); err != nil {
 		return err
 	}
 	if c.DefaultMaxTokens < 1 {
@@ -435,29 +396,5 @@ func (c *Config) ProfileFor(model string) *ModelProfile {
 	return &c.DefaultProfile
 }
 
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-func (c *Config) resolveCallerToken() error {
-	if c.CallerTokenEnv == "" {
-		return nil
-	}
-	if !envNamePattern.MatchString(c.CallerTokenEnv) {
-		return fmt.Errorf("config: caller_token_env must be an environment variable name, got %q", c.CallerTokenEnv)
-	}
-	if c.Upstream.credentialPath == "" {
-		return errors.New("config: caller_token_env needs upstream.credential_file: without it the caller's own Anthropic credential is forwarded and the adapter holds nothing to protect")
-	}
-	token := os.Getenv(c.CallerTokenEnv)
-	if len(token) < MinCallerTokenLength {
-		return fmt.Errorf("config: environment variable %s (caller_token_env) must hold a token of at least %d characters", c.CallerTokenEnv, MinCallerTokenLength)
-	}
-	c.callerTokenHash = sha256.Sum256([]byte(token))
-	c.hasCallerToken = true
-	return nil
-}
-
 // HoldsCredential reports whether the adapter spends a credential of its own on callers' behalf.
 func (c *Config) HoldsCredential() bool { return c.Upstream.credentialPath != "" }
-
-// HasCallerToken reports whether callers must present a token.
-func (c *Config) HasCallerToken() bool { return c.hasCallerToken }

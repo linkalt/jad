@@ -36,6 +36,14 @@ func TestParseEmbeddedConfigRefusals(t *testing.T) {
 			t.Errorf("%s: no error", name)
 		}
 	}
+	// The listener keys of the removed standalone command are refused by name, not as
+	// unknown fields, so a model file copied from an old adapter config says why.
+	for _, key := range []string{"listen", "caller_token_env"} {
+		_, err := ParseEmbeddedConfig(json.RawMessage(`{"`+key+`":"x"}`), "")
+		if err == nil || !strings.HasPrefix(err.Error(), key+" is not used") || !strings.Contains(err.Error(), "no listener") {
+			t.Errorf("%s: error %v", key, err)
+		}
+	}
 	if _, err := ParseEmbeddedConfig(nil, "ftp://x"); err == nil || !strings.Contains(err.Error(), "base_url") {
 		t.Errorf("a base URL that is not http: %v", err)
 	}
@@ -63,7 +71,7 @@ func TestEmbeddedConfigCachesByDefault(t *testing.T) {
 			t.Errorf("%q: marked %q, want %q", test.raw, got, test.want)
 		}
 	}
-	// The standalone adapter's default stays off.
+	// DefaultConfig itself keeps caching off.
 	if DefaultConfig().Cache != (CacheConfig{}) {
 		t.Fatalf("DefaultConfig().Cache = %+v", DefaultConfig().Cache)
 	}

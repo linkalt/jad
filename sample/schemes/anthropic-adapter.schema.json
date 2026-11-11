@@ -2,23 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "anthropic-adapter.schema.json",
   "title": "Anthropic adapter config",
-  "description": "Configuration of the anthropic-adapter command, which serves the OpenAI Responses API on top of the Anthropic Messages API. Every key is optional; the defaults are shown. No credential is stored here: the caller sends it as a Bearer token or x-api-key header and the adapter forwards it.",
+  "description": "Settings of the in-process Anthropic adapter, which serves the OpenAI Responses API on top of the Anthropic Messages API. In a jad model file this is the anthropic object (model.schema.json), which also refuses listen and caller_token_env (nothing listens) and upstream.base_url (the model file's base_url). Every key is optional; the defaults are shown. No credential is stored here: the caller sends it as a Bearer token or x-api-key header and the adapter forwards it.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "const": 1, "default": 1 },
-    "listen": {
-      "type": "string",
-      "minLength": 1,
-      "default": "127.0.0.1:8788",
-      "description": "host:port the adapter listens on."
-    },
-    "caller_token_env": {
-      "type": "string",
-      "pattern": "^([A-Za-z_][A-Za-z0-9_]*)?$",
-      "default": "",
-      "description": "Name of the environment variable holding a token (at least 32 characters) that every caller must send as Authorization: Bearer or x-api-key; it is compared in constant time and never forwarded upstream. Requires upstream.credential_file. Empty (the default) leaves callers unauthenticated, which is allowed only on a loopback listen address: with credential_file and a non-loopback listen the adapter refuses to start unless this is set. While credential_file is set, requests carrying an Origin header (browsers) are refused with 403."
-    },
     "upstream": {
       "type": "object",
       "additionalProperties": false,
@@ -49,7 +37,7 @@
         "credential_file": {
           "type": "string",
           "default": "",
-          "description": "Path of a credential file written by the claude-auth command (a Claude Pro, Max, Team or Enterprise sign-in). Absolute, or starting with ~/. When set, the adapter sends the access token stored in it as the upstream credential, reads the file on every request (so a refresh by claude-auth needs no restart), never writes it, and ignores the credential the caller sent. Empty forwards the caller's credential. Anthropic does not document this sign-in and limits subscription credentials to its own applications; see cmd/anthropic-adapter/README.md."
+          "description": "Path of a credential file written by the claude-auth command (a Claude Pro, Max, Team or Enterprise sign-in). Absolute, or starting with ~/. When set, the adapter sends the access token stored in it as the upstream credential, reads the file on every request (so a refresh by claude-auth needs no restart), never writes it, and ignores the credential the caller sent. Empty forwards the caller's credential. Anthropic does not document this sign-in and limits subscription credentials to its own applications; see backend-go/internal/anthropicadapter/README.md."
         },
         "system_prefix": {
           "type": "string",
@@ -157,7 +145,7 @@
     "cache": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Prompt-caching breakpoints. All off by default in the standalone adapter (a jad model file with api anthropic_messages and no cache object gets tools, system and history on instead): a cache write costs 1.25x (5 minutes) or 2x (1 hour) the input price, so caching only pays when the same prefix is reused within the TTL. Anthropic allows 4 breakpoints per request; these four switches use at most 4. Prompts below the model's minimum cacheable length are processed without caching and without an error.",
+      "description": "Prompt-caching breakpoints. All off by default (a jad model file with api anthropic_messages and no cache object gets tools, system and history on instead): a cache write costs 1.25x (5 minutes) or 2x (1 hour) the input price, so caching only pays when the same prefix is reused within the TTL. Anthropic allows 4 breakpoints per request; these four switches use at most 4. Prompts below the model's minimum cacheable length are processed without caching and without an error.",
       "properties": {
         "automatic": { "type": "boolean", "default": false, "description": "Send the top-level cache_control, which marks the last cacheable block of the request." },
         "tools": { "type": "boolean", "default": false, "description": "Mark the last tool definition." },

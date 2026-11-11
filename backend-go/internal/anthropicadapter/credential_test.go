@@ -249,51 +249,11 @@ func TestNoSystemPrefixByDefault(t *testing.T) {
 
 func strconvQuote(s string) string { raw, _ := json.Marshal(s); return string(raw) }
 
-const callerToken = "caller-token-0123456789abcdef0123456789"
-
-func adapterWithCallerToken(t *testing.T) (*httptest.Server, *[]upstreamCall) {
-	t.Helper()
-	t.Setenv("ADAPTER_CALLER_TOKEN", callerToken)
+func TestBrowserOriginIsRefusedWhenTheAdapterHoldsACredential(t *testing.T) {
 	upstream, calls := fakeAnthropic(t, 200, messageBody, nil)
 	path := writeCredential(t, validCredential("sk-ant-oat01-FILE", time.Hour))
-	config := mustConfig(t, `{"caller_token_env":"ADAPTER_CALLER_TOKEN","upstream":{"base_url":"`+upstream.URL+`","credential_file":"`+path+`"}}`)
-	server := httptest.NewServer(NewHandler(config, nil))
-	t.Cleanup(server.Close)
-	return server, calls
-}
-
-func TestCallerTokenGuardsTheCredentialFile(t *testing.T) {
-	adapter, calls := adapterWithCallerToken(t)
-	url := adapter.URL + "/v1/responses"
-	for name, headers := range map[string]map[string]string{
-		"missing":       nil,
-		"wrong bearer":  {"Authorization": "Bearer wrong-token"},
-		"wrong api key": {"x-api-key": "wrong-token"},
-		"prefix":        {"Authorization": "Bearer " + callerToken[:10]},
-	} {
-		if status, _, raw := post(t, url, simpleRequest, headers); status != 401 {
-			t.Errorf("%s: status %d body %s", name, status, raw)
-		}
-	}
-	if len(*calls) != 0 {
-		t.Fatalf("upstream called %d times for refused callers", len(*calls))
-	}
-	for _, headers := range []map[string]string{
-		{"Authorization": "Bearer " + callerToken},
-		{"x-api-key": callerToken},
-	} {
-		if status, _, raw := post(t, url, simpleRequest, headers); status != 200 {
-			t.Fatalf("right token: status %d body %s", status, raw)
-		}
-	}
-	if got := (*calls)[0].Header.Get("Authorization"); got != "Bearer sk-ant-oat01-FILE" {
-		t.Errorf("upstream got %q: the caller token must not be forwarded", got)
-	}
-}
-
-func TestBrowserOriginIsRefusedWhenTheAdapterHoldsACredential(t *testing.T) {
-	adapter, calls := adapterWithCallerToken(t)
-	headers := map[string]string{"Authorization": "Bearer " + callerToken, "Origin": "https://evil.example"}
+	adapter := adapterWithCredential(t, upstream.URL, path, "")
+	headers := map[string]string{"Authorization": "Bearer t", "Origin": "https://evil.example"}
 	if status, _, _ := post(t, adapter.URL+"/v1/responses", simpleRequest, headers); status != 403 {
 		t.Fatalf("status %d, want 403", status)
 	}
@@ -302,33 +262,14 @@ func TestBrowserOriginIsRefusedWhenTheAdapterHoldsACredential(t *testing.T) {
 	}
 }
 
-func TestCallerTokenIsOptionalWithoutIt(t *testing.T) {
+// Without a credential of its own the adapter forwards the caller's, so a browser Origin is
+// not refused: the page would only spend its own key.
+func TestBrowserOriginIsAcceptedWithoutACredentialFile(t *testing.T) {
 	upstream, _ := fakeAnthropic(t, 200, messageBody, nil)
-	path := writeCredential(t, validCredential("tok", time.Hour))
-	adapter := adapterWithCredential(t, upstream.URL, path, "")
-	if status, _, raw := post(t, adapter.URL+"/v1/responses", simpleRequest, nil); status != 200 {
+	adapter := adapterFor(t, upstream.URL, "")
+	headers := map[string]string{"Authorization": "Bearer t", "Origin": "https://example.test"}
+	if status, _, raw := post(t, adapter.URL+"/v1/responses", simpleRequest, headers); status != 200 {
 		t.Fatalf("status %d body %s", status, raw)
-	}
-}
-
-func TestCallerTokenConfigValidation(t *testing.T) {
-	path := writeCredential(t, validCredential("tok", time.Hour))
-	t.Setenv("ADAPTER_SHORT", "short")
-	t.Setenv("ADAPTER_OK", callerToken)
-	cases := map[string]string{
-		"unset variable":          `{"caller_token_env":"ADAPTER_UNSET_XYZ","upstream":{"credential_file":"` + path + `"}}`,
-		"short token":             `{"caller_token_env":"ADAPTER_SHORT","upstream":{"credential_file":"` + path + `"}}`,
-		"bad name":                `{"caller_token_env":"1 bad","upstream":{"credential_file":"` + path + `"}}`,
-		"without credential file": `{"caller_token_env":"ADAPTER_OK"}`,
-	}
-	for name, text := range cases {
-		file := filepath.Join(t.TempDir(), "c.json")
-		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LoadConfig(file); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
 	}
 }
 

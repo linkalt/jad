@@ -11,7 +11,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const samplePath = "../../../sample/anthropic-adapter.json"
+const samplePath = "testdata/adapter.json"
 
 // The shipped sample must be a valid config, by the schema and by the loader,
 // and it must give each model family the profile its comment claims.
@@ -36,12 +36,12 @@ func TestSampleConfigIsValid(t *testing.T) {
 // -api / -oauth file) must also validate and load, so an edit that breaks one
 // shows up here and not at startup.
 func TestSampleConfigVariantsAreValid(t *testing.T) {
-	paths, err := filepath.Glob("../../../sample/anthropic-adapter*.json")
+	paths, err := filepath.Glob("testdata/adapter*.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) == 0 {
-		t.Fatal("no sample/anthropic-adapter*.json found")
+		t.Fatal("no testdata/adapter*.json found")
 	}
 	schema := compileSchema(t)
 	for _, path := range paths {
