@@ -143,11 +143,11 @@ func (c *connection) callTool(ctx context.Context, params *mcpSDK.CallToolParams
 	defer cancel()
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
-	// callMu makes this the connection's only call, so its user is the one to ask.
-	if c.state != nil {
-		c.state.setCall(activeCallFrom(ctx))
-		defer c.state.setCall(nil)
-	}
+	// The call is marked on the request's own context, which the SDK hands to the input requests
+	// (sampling, elicitation) of its result, so they are attributed to it (attributedCall); a
+	// request the server sends on its own is not, whatever call is in progress.
+	call := activeCallFrom(ctx)
+	callCtx = withInlineRequest(callCtx, call)
 	if c.logLevel != "" {
 		meta := params.GetMeta()
 		if meta == nil {
@@ -262,8 +262,22 @@ type serverLoad struct {
 
 // LoadTools refreshes the enabled MCP servers and returns their validated tools in the
 // configured server order. Servers load concurrently; the error returned is the one the
-// first failing server in configured order produced.
+// first failing server in configured order produced. A sampling request during a call of
+// these tools is answered by the manager's sampler (SetSampler), refused without one.
 func (m *Manager) LoadTools(ctx context.Context, servers []sessionfs.MCPServerReference, cwd string) ([]tools.Tool, error) {
+	return m.loadTools(ctx, servers, cwd, nil)
+}
+
+// LoadToolsSampled is LoadTools whose tools have sampler answer the sampling requests a server
+// sends during their calls, whatever sampler the manager has. The manager is shared by the runs
+// of a profile, so each run lists its tools with its own sampler and a server asks the model of
+// the run whose call it is serving (a connection runs one call at a time), never the model of
+// whichever run listed last. A nil sampler is LoadTools.
+func (m *Manager) LoadToolsSampled(ctx context.Context, servers []sessionfs.MCPServerReference, cwd string, sampler Sampler) ([]tools.Tool, error) {
+	return m.loadTools(ctx, servers, cwd, sampler)
+}
+
+func (m *Manager) loadTools(ctx context.Context, servers []sessionfs.MCPServerReference, cwd string, sampler Sampler) ([]tools.Tool, error) {
 	if ctx == nil {
 		return nil, errors.New("MCP tool loading context is required")
 	}
@@ -327,7 +341,7 @@ func (m *Manager) LoadTools(ctx context.Context, servers []sessionfs.MCPServerRe
 					finish(index, nil, err)
 					continue
 				}
-				serverTools, err := m.loadServer(runCtx, ctx, enabled[index], cwd)
+				serverTools, err := m.loadServer(runCtx, ctx, enabled[index], cwd, sampler)
 				finish(index, serverTools, err)
 			}
 		}()
@@ -347,7 +361,7 @@ func (m *Manager) LoadTools(ctx context.Context, servers []sessionfs.MCPServerRe
 // loadServer connects to one server, lists its tools and validates them. A list failure
 // that only follows the cancellation of runCtx by an earlier server's failure leaves the
 // healthy connection in place.
-func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs.MCPServerReference, cwd string) ([]tools.Tool, error) {
+func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs.MCPServerReference, cwd string, sampler Sampler) ([]tools.Tool, error) {
 	current, err := m.getConnection(runCtx, server, cwd)
 	if err != nil {
 		return nil, err
@@ -370,11 +384,11 @@ func (m *Manager) loadServer(runCtx, callerCtx context.Context, server sessionfs
 		}
 		return nil, configError(server.ConfigPath, "failed to list tools from MCP server %s (%s)", server.ID, safeErrorType(err))
 	}
-	loaded, err := m.toolsFromList(server, current, remoteTools)
+	loaded, err := m.toolsFromList(server, current, remoteTools, sampler)
 	if err != nil {
 		return nil, err
 	}
-	features, err := m.featureTools(server, current)
+	features, err := m.featureTools(server, current, sampler)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +403,9 @@ func remoteToolName(tool *mcpSDK.Tool) string {
 	return tool.Name
 }
 
-func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool) ([]tools.Tool, error) {
+// sampler (nil: the manager's) answers the sampling requests of the server during the calls of
+// the tools it returns.
+func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *connection, remoteTools []*mcpSDK.Tool, sampler Sampler) ([]tools.Tool, error) {
 	denied := make(map[string]struct{}, len(server.DenyTools))
 	for _, name := range server.DenyTools {
 		denied[name] = struct{}{}
@@ -451,8 +467,10 @@ func (m *Manager) toolsFromList(server sessionfs.MCPServerReference, current *co
 				if output, routed, err := route.call(ctx, definition, remoteName, arguments, execution); routed {
 					return output, err
 				}
-				// A server's elicitation request during the call asks this call's user.
-				ctx = withActiveCall(ctx, &activeCall{request: execution.RequestInteraction, identity: tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}})
+				// A server's elicitation input request in the call's result asks this call's user,
+				// and its sampling input request is answered by the sampler of the listing (sample,
+				// elicit).
+				ctx = withActiveCall(ctx, &activeCall{request: execution.RequestInteraction, identity: tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}, sampler: sampler})
 				return executeTool(ctx, current, serverID, remoteName, arguments)
 			},
 		})
@@ -624,6 +642,28 @@ func (m *Manager) serverLock(id string) *sync.Mutex {
 		m.serverLocks[id] = lock
 	}
 	return lock
+}
+
+// StopStdioServers stops the stdio servers the manager started and keeps its other connections
+// (streamable HTTP). A tool listed from a stopped server fails when called; the manager starts
+// the server again only for a later listing. It returns how many it stopped.
+func (m *Manager) StopStdioServers() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	var stdio []*connection
+	for id, current := range m.connections {
+		if current.stdioCommand != nil {
+			stdio = append(stdio, current)
+			delete(m.connections, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, current := range stdio {
+		_ = current.close()
+	}
+	return len(stdio)
 }
 
 // Close shuts down all owned MCP sessions. It is safe to call more than once.

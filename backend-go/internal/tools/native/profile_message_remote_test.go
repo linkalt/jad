@@ -33,6 +33,8 @@ type peerRun struct {
 	mu      sync.Mutex
 	result  remoteapi.RunResult
 	stopped []string
+	// stubborn makes Stop only record the request, as a remote that has not yet acted on it.
+	stubborn bool
 }
 
 func newPeerRun() *peerRun               { return &peerRun{done: make(chan struct{})} }
@@ -48,9 +50,21 @@ func (r *peerRun) finish(result remoteapi.RunResult) {
 func (r *peerRun) Stop(reason string) {
 	r.mu.Lock()
 	r.stopped = append(r.stopped, reason)
+	stubborn := r.stubborn
 	r.mu.Unlock()
+	if stubborn {
+		return
+	}
 	r.finish(remoteapi.RunResult{State: "stopped", Reason: reason, Text: "partial"})
 }
+
+// ignoreStops makes later stops only be recorded; the test ends the run with finish.
+func (r *peerRun) ignoreStops() {
+	r.mu.Lock()
+	r.stubborn = true
+	r.mu.Unlock()
+}
+
 func (r *peerRun) stops() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

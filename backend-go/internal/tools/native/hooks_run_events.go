@@ -68,6 +68,9 @@ type RunEvent struct {
 	Title string `json:"title,omitempty"`
 	// Continues is how many times stop commands already made this run go on.
 	Continues int `json:"continues,omitempty"`
+	// ModelKeyEnvs, not part of the payload, are key variables the commands never get beside the
+	// apiKeyEnv they are fired with: for subagent_stop, those of the ended child's run (T-009).
+	ModelKeyEnvs []string `json:"-"`
 }
 
 // RunEventResult is what the commands of one event had to say.
@@ -163,6 +166,7 @@ func FireRunEventResult(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 	for _, hook := range list {
 		section, passed, stdout := runHookChildOutput(ctx, hooks, apiKeyEnv, event.WorkspaceRoot, hookChild{
 			name:          hook.Name,
+			modelKeys:     event.ModelKeyEnvs,
 			setting:       "hooks." + event.Event + "[" + hook.Name + "].argv",
 			argv:          hook.Argv,
 			cwd:           event.WorkspaceRoot,

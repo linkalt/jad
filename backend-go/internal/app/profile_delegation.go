@@ -27,14 +27,39 @@ type profileDelegation struct {
 	commitMessage string
 	// report receives the worktree's end once the run is over.
 	report func(native.DelegatedWorktreeResult)
+	// lineage is the run lineage the run works under (native.RunLineageOf): the caller's, its
+	// session key and the message's own key. Empty for a run the remote API started, whose
+	// caller is on another server.
+	lineage []string
+	// deny is the caller's ExecutionContext.Deny (U3): the run's catalog loses the tools it covers
+	// and the run hands it on with the target's own deny. It narrows this run only; the profile's
+	// settings and its other runs are unchanged. Nil for a caller on another server.
+	deny []string
+	// modelKeys is the caller's ExecutionContext.ModelKeyEnvs (T-009): the key variables of the
+	// models that may answer the caller and the local runs above it. The run's tools and hooks hide
+	// them beside its own models' keys, and every run it starts gets them. Like deny, it holds for
+	// this run only; the target's settings and its own runs are unchanged. Nil for a caller on
+	// another server.
+	modelKeys []string
+	// mcpScope is the wrapper key of the run's MCP sandbox when the caller's narrowing changed it
+	// (holdMCPScope), with a key of the run's own added for an isolated run; empty when the run's
+	// servers start as the profile's own do.
+	mcpScope string
 }
 
 // targetRunner is the Confine hook of a profile_message run: the target's runner narrowed
 // by the caller's sandbox when the caller has one (targetConfiner), and marked as delegated
-// so that an isolated target works in a worktree and reports it through report.
-func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), caller, message string, report func(native.DelegatedWorktreeResult)) func(httpapi.RunSession) (httpapi.RunSession, error) {
+// so that an isolated target works in a worktree and reports it through report, and narrowed by
+// the caller's deny (profileDelegation.deny), and made to hide the caller's model keys
+// (profileDelegation.modelKeys). A runner that is not a boundRunner (a test's) builds no tools
+// from settings, so it has no environment to narrow by modelKeys.
+func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), caller, message string, report func(native.DelegatedWorktreeResult), lineage, deny, modelKeys []string) func(httpapi.RunSession) (httpapi.RunSession, error) {
 	return func(runner httpapi.RunSession) (httpapi.RunSession, error) {
 		bound, ok := runner.(boundRunner)
+		if !ok && len(deny) > 0 {
+			// Its tools cannot be narrowed: refuse rather than run it with what the caller denies.
+			return nil, errors.New("the target's run cannot be narrowed by the caller's tools.deny")
+		}
 		if !ok {
 			// Not a session resolved from its settings (a test's runner): nothing to isolate.
 			if confine != nil {
@@ -42,6 +67,7 @@ func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), 
 			}
 			return runner, nil
 		}
+		ownMCP, _ := mcpSandboxWrapper(bound.config)
 		if confine != nil {
 			confined, err := confine(bound)
 			if err != nil {
@@ -58,6 +84,19 @@ func targetRunner(confine func(httpapi.RunSession) (httpapi.RunSession, error), 
 			isolation:     bound.config.Isolation,
 			commitMessage: fmt.Sprintf("jad profile run %s (message from %s)\n\n%s", bound.config.Profile, caller, message),
 			report:        report,
+			lineage:       lineage,
+			deny:          deny,
+			modelKeys:     modelKeys,
+		}
+		// A narrowing that changes where the stdio MCP servers start gives the run servers of
+		// that narrowing, never the profile's shared ones rewrapped (runMCPManager).
+		if runMCP, _ := mcpSandboxWrapper(bound.config); runMCP != ownMCP {
+			bound.delegation.mcpScope = runMCP
+			if bound.config.Isolation.Mode == sessionfs.SandboxIsolationWorktree {
+				// An isolated run calls its worktree's servers and stops the ones it listed its
+				// tools from once those started (runLocked): a manager no other run shares.
+				bound.delegation.mcpScope += "\x00" + native.NewRunLineageKey("isolated_run")
+			}
 		}
 		return bound, nil
 	}
@@ -132,4 +171,14 @@ func (e *delegatedWorktreeError) ClientMessage() string {
 		message += ": the profile's working directory is not in a git repository"
 	}
 	return message + ". Details are in the server log."
+}
+
+// withLineage puts the run's lineage on ctx, so the handles and sub-agent runs it starts carry
+// it: for a run profile_message started, the lineage it was given, and for every run its own key.
+func (r boundRunner) withLineage(ctx context.Context, key string) context.Context {
+	var lineage []string
+	if r.delegation != nil {
+		lineage = r.delegation.lineage
+	}
+	return native.WithRunLineage(ctx, native.ExtendRunLineage(lineage, key))
 }

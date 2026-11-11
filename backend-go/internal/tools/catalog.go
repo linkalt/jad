@@ -75,6 +75,44 @@ type ExecutionContext struct {
 	// empty at depth 0.
 	AgentDepth int
 	RootRun    string
+	// RunNode is the run tree node (native.RunTree) of the run the call belongs to: a sub-agent
+	// run's, or a profile_message run's that a run started. A run the call starts, of either kind,
+	// hangs off it and is counted against its tree's max_runs_per_root and its session's
+	// max_runs_per_session. Empty in a user's own run, whose starts are roots. It is not carried
+	// across a remote hop.
+	RunNode string
+	// ChainDepth is how many local runs of either kind lie between the user's run and this
+	// call (design section 3.5, phase R6): a sub-agent is one below its caller, and so is the run
+	// of a profile that profile_message started. max_depth is checked on it (RunDepth). Unlike
+	// AgentDepth, it says nothing about what the run is: a profile_message target is a session's
+	// own run (AgentDepth 0) whatever its ChainDepth. It is not carried across a remote hop.
+	ChainDepth int
+	// Deny is the tools.deny entries in force for the run the call belongs to (design decision
+	// U3): its own profile's or agent's, and every local caller's above it. A run it starts, of
+	// either kind, is narrowed by them as by a sandbox ceiling: a sub-agent's catalog, a
+	// profile_message target's for that run only, and the tools a tool_smith script reaches. Allow
+	// lists are not carried. Nil in a run of a user's message before its bound runner sets the
+	// profile's own. It is not carried across a remote hop.
+	Deny []string
+	// ModelKeyEnvs are the API key variables (api_key_env) of the models that may answer the run
+	// the call belongs to and every local sub-agent or profile_message run above it: each run's model and its
+	// model_fallback models (T-009). A child process of the call (exec, tool_smith, a pre_tool,
+	// post_tool or post_edit command) never gets them, even from a configured env or env_file,
+	// beside the key of the model the tool was built with. The bound runner sets the run's own; a
+	// sub-agent run adds its own, whose model a call's model argument may have chosen. Nil: only
+	// the build-time key is hidden. A local profile_message target's run hides its caller's too
+	// (the caller's list joined to its own run's), for that run only. It is not carried across a
+	// remote hop.
+	ModelKeyEnvs []string
+	// RunTools, when set, says whether a tool is one the run the call belongs to may use itself:
+	// a sub-agent's catalog (its agent's allow and deny, its toolset, every caller's deny), or the
+	// tools a request named for a run of a user's or remote message (RunOptions.Tools). The
+	// tool_smith bridge offers a script only the tools it covers, so a script reaches no tool its
+	// own run is not given. Unlike Deny it is no ceiling: every run sets its own (nil when nothing
+	// narrows it), so an allow list never reaches the runs it starts. Plan mode does not change it:
+	// what plan mode keeps of tool_smith keeps its tools. Nil: no narrowing beyond the profile's
+	// tools block and Deny. It is not carried across a remote hop.
+	RunTools func(Definition) bool
 	// RemoteHops is how many JAD servers the request that started this run passed through
 	// (0 for a run a user started). A remote call made from here sends RemoteHops+1.
 	RemoteHops int
@@ -839,4 +877,10 @@ func DecodeArguments(raw []byte) (map[string]any, error) {
 		return nil, errors.New("arguments must be a JSON object")
 	}
 	return object, nil
+}
+
+// RunDepth is the depth max_depth is checked on: ChainDepth, or AgentDepth when a caller set
+// only that (a sub-agent is never shallower than its sub-agent level).
+func (e ExecutionContext) RunDepth() int {
+	return max(e.ChainDepth, e.AgentDepth)
 }

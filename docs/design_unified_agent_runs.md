@@ -1,8 +1,27 @@
 # Design: one run model for sub-agents and profiles
 
-**Status:** plan, not started. Begin after the isolation work (T-120, including P4) is done; see
-`docs/isolation-handoff.md`. The user agreed to the direction on 2026-11-09. File and line
-references are from `d72ef85` and were read, not run.
+**Status (T-007, 2026-11-11): partly implemented, not complete.** The text below is the plan as
+agreed on 2026-11-09; each section of §3 now ends with a status note, and §4 and §5 say what was
+decided and built. In short:
+
+- **Built:** R0 (goldens, inventory), R1 (`CallerContext`), R2 (ephemeral runs through
+  `Resolver.StartRun`), R4a/R4b (one catalog assembly and one ordered section list for the owner
+  and its children), R5 (one admission check, run lineage, and `native.RunTree` for the run caps
+  and writer places of both kinds), R6 depth (`max_depth` over both kinds) and U3 (deny ceiling).
+- **Accepted departures, not built by decision:** the one loader (§3.1), the configuration order
+  (§3.2), `RunTemplateRef` and steps 1, 2, 4 and 5 inside `StartRun` (§3.4), the catalog from
+  `prepareRun` keyed by (template, environment, plan mode) and the removal of the `leaf` catalog
+  and `nestedSelf` (§3.6), the one registry for stop, reset and delete (§3.7).
+- **Settled, current behaviour kept:** U5 (an ephemeral run fires `subagent_stop` only) and U6
+  (ephemeral runs stay inside the caller's tool call in the UI). `run_start`/`run_end` for
+  ephemeral runs and ephemeral runs in the run list or SSE stream are optional extensions that
+  were not built; they are not open decisions.
+- **Deferred, not approved:** U1 (a profile as an ephemeral run, with the unified loader) and a
+  higher U7 maximum (`max_depth` stays default 2, maximum 8).
+
+The reasons and the remaining gaps are in `backend-go/DECISIONS.md`, "Unified agent runs:
+completion assessment and accepted departures". File and line references in §2 are from
+`d72ef85` and were read, not run.
 
 ## 1. Goal
 
@@ -143,6 +162,12 @@ a third path again, the chain check.
 - Whether a profile can also be started as an ephemeral run is decision U1. Old `agent.json` keys
   keep loading, mapped to the new shape. None are refused unless U2 says so.
 
+*Status (T-007, accepted departure):* no one loader. Inline `agents` and `agents_dir` folders share
+one key check and one mapping (`checkAgentDefinitionKeys`, `buildNativeSubagentAgent`), and
+`agent.json` keeps loading with its existing refusals (`paths`, `read_only`, unknown keys) and no
+new ones (U2). Profiles keep their own loader. A unified loader is deferred with U1, as a separate
+behaviour change.
+
 ### 3.2 Configuration of a run
 
 The run's `SessionConfig` is resolved like a profile's:
@@ -159,6 +184,15 @@ changes:
   is the inherited default.
 - An agent with no `tools` list gets what the session gives a profile, narrowed by the caller, as
   T-118 already does.
+
+*Status (T-007, accepted departure):* not built. A child's run configuration is still
+`childConfig` (the caller's `SessionConfig` with the agent's model, effort and instructions), and
+its tools come from a second derivation, `native.NewAgentToolConfigs` (the agent's toolset
+composition, with the owner's model). One composed config cannot serve both: `Hooks`,
+`NativeSubagent`, `StateContext` and `Model` are read by both sides with different values
+(`agent_config_fields_test.go`), and the run config takes a per-call `model` argument the tools
+config is built before. The two configs also keep each refusal at the time it is raised today
+(load for a toolset, call for a model).
 
 ### 3.3 CallerContext
 
@@ -179,6 +213,19 @@ from `ExecutionContext.ForNested()` plus what is now in `SubagentRequest` and
 | `CallerTranscript` | `callerMessagesPathKey` | Used by the shared-transcript check |
 
 A test that walks every field, like `TestForNestedKeepsEveryRunScopedField`, guards this type.
+
+*Status (T-007, partly built):* `tools.CallerContext` exists, is built by
+`ExecutionContext.Caller()` and is guarded by `TestCallerContextCarriesEveryRunScopedField`. It is
+not the single carrier:
+
+- The local `profile_message` plan reads it (run node, run depth, deny, model keys, remote hops).
+- An ephemeral run does not. `SubagentRequest.Caller` reaches `RunSpec.Caller` unread, and the
+  run's scope comes from `SubagentRequest.Execution`, derived from the same call. Both fields are
+  kept reserved for U1; if U1 is declined, removing them is a separate R7 cleanup.
+- Still context values: the cost meter and hook reporter (`session` types; `session` imports
+  `tools`), `CallerTranscript` (`callerMessagesPathKey`), `max_chain` and the child-call mark. The
+  chain is read from the run registry. `Parent` is the manager's context tree plus the run
+  lineage keys, not a field.
 
 ### 3.4 One starter
 
@@ -209,18 +256,41 @@ The starter runs these steps in order:
 The `subagent` and `profile_message` tools become thin adapters. Each turns its arguments into a
 `RunSpec` and its `RunHandle` into today's result text and async handle.
 
+*Status (T-007, accepted departure):* `Resolver.StartRun` exists for both kinds, but as a thin
+starter. `RunSpec` has `Template RunTemplate{Base, Agent}` (no `RunTemplateRef`) and carries the
+bridging fields `Tools`, `Execution`, `CallerValues` and `Profile`. Steps 1 (the caller's config
+plus the agent's model), 2 (admission in the sub-agent manager, the run tree and the profile
+queue) and 4 (worktrees in the manager and in the delegated profile path) stay where they were;
+step 5 is not taken for children: an ephemeral run keeps its own runner (`runEphemeral`, no runner
+cache, its own prompt-cache scope) and its catalog from the subagent tool, which shares the
+catalog assembly with `prepareRun` (R4a/R4b). A persistent run is handed to the httpapi run
+registry unchanged.
+
 ### 3.5 Admission and limits (one place)
 
 - **Depth:** `max_depth` covers both kinds, counted on `CallerContext.Depth`. Today
   `tools.native.subagent.max_depth` defaults to 2 with a maximum of 8. The maximum can rise, but it
   stays finite. "Unlimited nesting" means a configurable cap, not none, because every level is a
-  paid model loop.
+  paid model loop. *Done (R6):* the gate counts `RunDepth` (`max(ChainDepth, AgentDepth)`), so a
+  `profile_message` run is one level below its sender, and `profile_message` is checked on the
+  caller's own `max_depth`. A remote hop starts again at 0 and is bounded by the hop limit. The
+  maximum stays 8 (U7).
 - **Run counts:** `max_runs_per_root` and `max_runs_per_session` cover every run in the tree, of
-  either kind.
+  either kind. *Done (T-007, 2026-11-11):* `native.RunTree`, shared by every manager and every local
+  `profile_message` run; the root's `max_runs_per_root` is a ceiling a caller may narrow, and the
+  session cap counts the session that executes the run, under that session's own value
+  (`backend-go/DECISIONS.md`, "Shared run tree" and its follow-up). A nested remote start holds a
+  `remote_subagent` node in the calling session until the remote run ends; a top-level remote
+  start holds none on the calling host, and the receiving host counts its run as a root there.
 - **Chain and cycle:** a single `Chain` of nodes. A persistent node is (session, profile); an
   ephemeral node is (template, run id). A start whose persistent target is already in the chain is
   refused as a cycle. Ephemeral nodes never form a cycle, because each one is new. `max_chain`
   becomes a cap on persistent hops only, or is folded into `max_depth` (decision U4).
+  *Status (accepted departure):* the chain records persistent nodes only (the httpapi run
+  registry's chain of (session, profile)); a sub-agent call uses its session's profile as the
+  caller. Cycle refusal is the same, because ephemeral nodes never form a cycle, and it is tested
+  with ephemeral levels in between. `max_chain` stays a cap of its own beside `max_depth`, with no
+  alias (U4).
 - **Fail fast:** a start from inside a run never waits in a queue for a slot; it fails with
   `busy`. That rule exists today because a parent waiting for its own queued child can deadlock,
   and it stays. A persistent target that is busy still queues its message: the target's queue is
@@ -237,6 +307,15 @@ The `subagent` and `profile_message` tools become thin adapters. Each turns its 
   `hookWith` wrapping goes away.
 - MCP servers stay per session or toolset (D10); this design doesn't change that.
 
+*Status (T-007, accepted departure):* children's catalogs are built from the same acquired parts
+and one ordered `CatalogSections` list as the owner's (R4a/R4b), but by the subagent tool, cached
+per (agent, sandbox choice, leaf), not by `prepareRun` per (template, environment, plan mode).
+Plan mode and the caller's environment act at call time (the plan-mode refusal, `callSandbox`), so
+they need no catalog variant; a sandbox choice changes only descriptions. The `leaf` catalog (no
+`subagent` tool at the deepest level, pinned by the R0 goldens) stays, beside the call-time depth
+gate, and so do `nestedSelf` and `hookTool`, which hook the nested copy of the subagent tool with
+the owner's hooks.
+
 ### 3.7 Lifecycle and records
 
 - **One run tree registry** (from `SubagentManager`) holds every run started by a caller, of either
@@ -246,6 +325,27 @@ The `subagent` and `profile_message` tools become thin adapters. Each turns its 
   - stop, reset and delete fan-out;
   - background writer slots;
   - recovery after a restart.
+
+  *Status (T-007 Q3, accepted 2026-11-11):* the registry is split, by decision.
+  - `native.RunTree` does admission: the nodes for `max_runs_per_root` and `max_runs_per_session`,
+    and the background writer places (one count per owner across every manager). It holds no
+    owner, lineage key or cancel function and never stops anything.
+  - The owner and lineage managers do cancellation, handles and persistence: the run contexts,
+    the lineage keys, `asyncmgr` (handles), the sub-agent managers (runs) and `liveRunStops`
+    (user runs) pick and stop the targets of stop, reset and delete; recovery stays with the
+    per-folder manifests.
+  - **Release is asynchronous.** A stop, reset or delete only asks; it does not wait and does not
+    touch the tree. A node is released by its own run's end: a sub-agent node when the run ends
+    (`endRun`), a `profile_message` node when the target run released its transcript and nothing
+    under its lineage is left, a `remote_subagent` node when the remote run ends (it is counted
+    until then, also after its call was cancelled or its handle stopped or deleted, bounded by
+    `remote_timeout_ms` or the end of the connection). Until then the places stay taken.
+  - **Rule for new node kinds:** a new kind of node (or a new path that reserves one) must name the
+    fan-out that stops its run, release its node exactly once on every end of that run (done,
+    failed, stopped, refused, panic, close), and come with tests of stop, reset and delete showing
+    the node released.
+
+  See `backend-go/DECISIONS.md`, "Run tree Q3" and its follow-up.
 - User-started persistent runs stay in `httpapi` `activeRun`. Persistent runs started by a caller
   are registered in both places, as `profile_message` handles are today.
 - **Checkpoints:**
@@ -255,7 +355,9 @@ The `subagent` and `profile_message` tools become thin adapters. Each turns its 
 - **Hooks:**
   - An ephemeral run fires `subagent_stop`, not `session_start` or `prompt_submit`, as today.
   - A persistent run fires its own hooks.
-  - Whether an ephemeral run should fire `run_start` and `run_end` is decision U5.
+  - Whether an ephemeral run should fire `run_start` and `run_end` was decision U5. *Status:*
+    settled, current behaviour kept (`subagent_stop` only); `run_start`/`run_end` for ephemeral
+    runs is an optional extension, not built.
 
 ### 3.8 What stays byte-for-byte
 
@@ -291,6 +393,21 @@ The `subagent` and `profile_message` tools become thin adapters. Each turns its 
 7. **U7:** Defaults and maximums: `max_depth` default 2 with maximum 8 today. Raise the maximum
    (for example to 32), and keep the default?
 
+*Status (T-007, 2026-11-11):*
+
+- U1: deferred, not approved. Not built: `selectAgent` looks names up in `agents` and `agents_dir`
+  only. It needs the unified loader and is a separate behaviour change.
+- U2: kept, with the existing validation and no new refusals.
+- U3: done (a caller's `tools.deny` is a ceiling for every local run it starts).
+- U4: decided otherwise: `profile_message` is checked on `max_depth`, and `max_chain` stays an
+  additional cap, not an alias.
+- U5: settled, current behaviour kept (`subagent_stop` only). `run_start`/`run_end` for ephemeral
+  runs is an optional extension, not built and not an open decision.
+- U6: settled, current behaviour kept (ephemeral runs stay inside the caller's tool call). Showing
+  them in the run list and SSE stream is an optional extension for a frontend task, not built.
+- U7: current values kept (default 2, maximum 8). A higher maximum is deferred, not approved; no
+  reason to raise it was given.
+
 ## 5. Phases
 
 Every phase:
@@ -314,6 +431,16 @@ Every phase:
 R2 to R5 must leave the model-facing definitions, result texts and transcripts unchanged; tests
 compare them byte for byte.
 
+*Status (T-007, 2026-11-11):* R0, R1 and R2 done. R3 done for the shared key check and the pins;
+the one loader is not built (accepted departure). R4 done as R4a/R4b (one assembly, one section
+order, shared MCP copies); the catalog from `prepareRun`, the leaf removal and the `hookTool`
+removal are not built (accepted departure). R5 done for admission, lineage and the run tree; one
+chain is not built and `profile_message` reaches the run registry through `StartRun` without a
+`RunTemplateRef`. R6 done for depth and U3; U1 deferred (not approved), U7 kept, U5/U6 settled as today. R7 partly:
+schema text and docs updated; the unread `Caller` fields are kept reserved for U1, and their
+removal is a separate R7 cleanup if U1 is declined (`DECISIONS.md`). No phase changed the R0
+goldens except where an R6 decision recorded it.
+
 ## 6. Tests that must exist
 
 - **Nesting matrix**, using a scripted model and real runs, at depths 1, 2 and the cap:
@@ -333,6 +460,23 @@ compare them byte for byte.
 - **Compatibility:** an old `agent.json`, a resume of a run recorded before R3 and R4, and a remote
   caller on the old version.
 - **Output:** golden `messages.jsonl` and identical tool definitions before and after.
+
+*Status (T-007, 2026-11-11):* present except where noted.
+
+- **Nesting matrix:** all four local pairs, and depth at 1, 2 and the cap (`run_baseline_golden_test.go`,
+  `run_mixed_depth_test.go`, `run_profile_depth_test.go`). Through a remote hop, only
+  ephemeral→remote ephemeral at app level (`TestRunBaselineMixedChainThroughARemoteSubagent`) and
+  the remote `profile_message` hop at native level. Not every pair at every depth through a remote
+  hop.
+- **Cascades, cycles, fail fast, concurrency:** present (the R5c lineage tests, the mixed-chain
+  cycle goldens, `TestMixedChainSubagentOfATargetFailsFastWhenItsCallerHoldsTheSlot`,
+  `TestSandboxChoiceCatalogsAreBuiltOnce` for concurrent calls of one agent, and
+  `TestProfileMessageConcurrentArrivalsQueueInOrderWithoutARace`).
+- **Narrowing:** U3 and sandbox narrowing are tested, and the isolation tests run with bwrap where
+  present. Not every level of a chain is checked with real bwrap.
+- **Compatibility:** `agent.json` loading is pinned (`agent_definitions.txt`), and resume is
+  pinned through the fingerprint goldens. There is no recorded pre-R3 manifest fixture and no
+  remote caller on an older version.
 
 ## 7. Risks
 

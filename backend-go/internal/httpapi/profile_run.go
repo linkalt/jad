@@ -25,6 +25,14 @@ type ProfileRunRequest struct {
 	Model string
 	// Hops is the remote hop count of the request that caused this message (0 when none).
 	Hops int
+	// Depth is the run's depth across both kinds of run: its caller's RunDepth plus one, 0 for a
+	// run no local run started. Its tools get it as ExecutionContext.ChainDepth, so the runs it
+	// starts count max_depth from there; its AgentDepth stays 0, as it is a profile's own run.
+	Depth int
+	// RunNode is the run's node in the caller's run tree (native.RunTree); its tools get it as
+	// ExecutionContext.RunNode, so the runs it starts are counted in that tree. Empty for a run no
+	// local run started.
+	RunNode string
 	// Wait queues behind the run that holds the transcript, in the order user messages
 	// queue, instead of failing at once with ErrSessionBusy. WaitLimit bounds that wait;
 	// zero waits until ctx ends. The limit ending while ctx lives is ErrSessionBusy.
@@ -132,6 +140,8 @@ func (s profileRunStarter) StartProfileRun(ctx context.Context, request ProfileR
 	run.supportsInteraction = true
 	run.chain = append([]string(nil), request.Chain...)
 	run.hops = request.Hops
+	run.depth = request.Depth
+	run.runNode = request.RunNode
 	run.onEnd = request.OnEnd
 	run.mu.Unlock()
 	runner := started.resolved.Runner

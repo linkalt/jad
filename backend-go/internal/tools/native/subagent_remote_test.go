@@ -343,13 +343,13 @@ func TestRemoteSubagentStartRefusedByAClosedHubStopsTheRemoteRun(t *testing.T) {
 func TestRemoteSubagentStartHonoursMaxDepth(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth = 2 })
 	atMax := remoteCaller
-	atMax.AgentDepth, atMax.RootRun = 2, "sub_00000001"
+	atMax.AgentDepth, atMax.RootRun, atMax.RunNode = 2, "sub_00000001", seedRunRoot(t, f.manager)
 	out := f.start(t, remoteAgent, 0, atMax)
 	if !strings.Contains(out, "subagent_depth_exceeded") || len(f.peer.backend.subs) != 0 {
 		t.Fatalf("a remote start at max_depth reached the peer:\n%s", out)
 	}
 	below := remoteCaller
-	below.AgentDepth, below.RootRun = 1, "sub_00000001"
+	below.AgentDepth, below.RootRun, below.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	if out := f.start(t, remoteAgent, 5000, below); !strings.Contains(out, "finished") || len(f.peer.backend.subs) != 1 {
 		t.Fatalf("a remote start one level below max_depth was refused:\n%s", out)
@@ -359,7 +359,7 @@ func TestRemoteSubagentStartHonoursMaxDepth(t *testing.T) {
 func TestRemoteSubagentStartIsRefusedAtTheSessionRunCap(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	nested := remoteCaller
-	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	nested.AgentDepth, nested.RootRun, nested.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 	// The first run stays going: it is the one run the cap of 1 allows.
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	f.start(t, remoteAgent, 0, nested)
@@ -370,13 +370,10 @@ func TestRemoteSubagentStartIsRefusedAtTheSessionRunCap(t *testing.T) {
 
 func TestRemoteSubagentStartIsRefusedAtTheRootRunCap(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerRoot = 2, 1 })
-	// The top-level run counts under its own id, as a local one does; the cap of 1 then admits
-	// one nested run below it.
-	f.manager.mu.Lock()
-	f.manager.byRoot["sub_00000001"] = 1
-	f.manager.mu.Unlock()
+	// The top-level run is the root of the tree (seedRunRoot); the cap of 1 then admits one nested
+	// run below it.
 	nested := remoteCaller
-	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	nested.AgentDepth, nested.RootRun, nested.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 	// The first nested run stays going, so its place stays taken.
 	first := make(chan *peerRun, 1)
 	go func() { first <- f.peer.backend.run(t, 0) }()
@@ -397,7 +394,7 @@ func TestRemoteRunReleasesItsCapSlotOnEveryEndPath(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 			nested := remoteCaller
-			nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+			nested.AgentDepth, nested.RootRun, nested.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 			held := make(chan int, 1)
 			go func() {
 				run := f.peer.backend.run(t, 0)
@@ -418,7 +415,7 @@ func TestRemoteRunReleasesItsCapSlotOnEveryEndPath(t *testing.T) {
 func TestRemoteRunReleasesItsCapSlotOnCancel(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	nested := remoteCaller
-	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	nested.AgentDepth, nested.RootRun, nested.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 	ctx, cancel := context.WithCancel(context.Background())
 	held := make(chan *peerRun, 1)
 	go func() { held <- f.peer.backend.run(t, 0) }()
@@ -442,11 +439,11 @@ func TestRemoteRunReleasesItsCapSlotOnCancel(t *testing.T) {
 // two, after the double release one place is still taken.
 func TestReleaseRemoteTwiceDoesNotFreeAnotherRunsPlace(t *testing.T) {
 	manager := NewSubagentManager()
-	first, err := manager.reserveRemote("sub_00000001", remoteCaller.SessionKey, 0, 2, 1, 2)
+	first, err := manager.reserveRemote(runAdmission{rootRun: "sub_00000001", parent: seedRunRoot(t, manager), session: remoteCaller.SessionKey, maxPerSession: 2, depth: 1, maxDepth: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.reserveRemote("sub_00000002", remoteCaller.SessionKey, 0, 2, 1, 2); err != nil {
+	if _, err := manager.reserveRemote(runAdmission{rootRun: "sub_00000002", parent: seedRunRoot(t, manager), session: remoteCaller.SessionKey, maxPerSession: 2, depth: 1, maxDepth: 2}); err != nil {
 		t.Fatal(err)
 	}
 	manager.releaseRemote(first)
@@ -670,7 +667,7 @@ func TestRemoteSyncRunGivesItsCapSlotBackBeforeTheReply(t *testing.T) {
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	t.Cleanup(func() { releaseSeamVars(t, f.manager, bg) })
 	f.tool = newSyncRemoteTool(t, f)
-	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", SessionKey: remoteCaller.SessionKey}
+	nested := tools.ExecutionContext{AgentDepth: 1, RootRun: "sub_00000001", RunNode: seedRunRoot(t, f.manager), SessionKey: remoteCaller.SessionKey}
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "ok"}) }()
 	f.start(t, remoteAgent, 0, nested)
 	if !remoteSeamWait(bg.reached) {
@@ -692,7 +689,7 @@ func TestRemoteAsyncRunGivesItsCapSlotBackBeforeItsHandleCompletes(t *testing.T)
 	f := newRemoteSubagentFixture(t, peerGrant, func(s *sessionfs.NativeSubagentSettings) { s.MaxDepth, s.MaxRunsPerSession = 2, 1 })
 	t.Cleanup(func() { releaseSeamVars(t, f.manager, bg, done) })
 	nested := remoteCaller
-	nested.AgentDepth, nested.RootRun = 1, "sub_00000001"
+	nested.AgentDepth, nested.RootRun, nested.RunNode = 1, "sub_00000001", seedRunRoot(t, f.manager)
 	id := remoteRunHandle.FindString(f.start(t, remoteAgent, 0, nested))
 	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "found it"}) }()
 	if !remoteSeamWait(done.reached) {

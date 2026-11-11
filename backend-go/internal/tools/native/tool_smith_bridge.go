@@ -55,10 +55,15 @@ func (n *ToolSmithNested) Bind(available []tools.Tool, profile sessionfs.Profile
 }
 
 // allowed is the native tools named in settings.Tools, in that order, minus the always
-// excluded ones and what the profile does not show the model (deny, or outside allow).
+// excluded ones, what the profile does not show the model (deny, or outside allow), and what
+// deny covers: the ExecutionContext.Deny of the run whose call runs the script (U3). The bound
+// tools are the owner's, so without it a script of a sub-agent, or of a profile_message target a
+// caller narrowed, would reach a tool its own run is denied.
+// It also drops what the run's own tools do not cover (ExecutionContext.RunTools): a sub-agent's
+// allow list, its toolset, a request's tools. That narrowing is the run's own, never its caller's.
 // A lazy gate is already on each lazy tool; the bridge's dispatch is a runner's (ViaRunner), so a lazy
 // tool a script names runs, and one it does not name is not in the list at all.
-func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []tools.Tool {
+func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings, deny []string, runTools func(tools.Definition) bool) []tools.Tool {
 	if n == nil {
 		return nil
 	}
@@ -71,7 +76,7 @@ func (n *ToolSmithNested) allowed(settings sessionfs.NativeToolSmithSettings) []
 			continue
 		}
 		for _, tool := range n.available {
-			if (tool.Definition.Source == "native" || tool.Definition.Source == "extension") && tool.Definition.Name == name && tools.ProfileShows(n.profile, tool.Definition) {
+			if (tool.Definition.Source == "native" || tool.Definition.Source == "extension") && tool.Definition.Name == name && tools.ProfileShows(n.profile, tool.Definition) && !tools.AnyEntryMatches(deny, tool.Definition) && (runTools == nil || runTools(tool.Definition)) {
 				picked = append(picked, tool)
 				break
 			}

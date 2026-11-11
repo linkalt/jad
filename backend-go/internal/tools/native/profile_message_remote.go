@@ -78,6 +78,11 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 	case sessionfs.ProfileMessageContextCompact:
 		notes = []tools.Information{{Key: "context_trigger", Value: "compact was not applied: a remote profile is never compacted by a caller's context_trigger"}}
 	}
+	if p.depthExceeded(execution) {
+		// After every refusal above, before anything is sent: the remote run would be one level
+		// below this caller, as a local one would.
+		return p.renderFailure(callID, reference, errProfileDepthExceeded), nil
+	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments, execution)

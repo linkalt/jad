@@ -126,7 +126,17 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	if options.OnInputAccepted != nil {
 		options.OnInputAccepted(*persisted)
 	}
-	prepared, err := r.resolver.prepareRun(ctx, r.shared, r.config)
+	// A run whose caller's narrowing moved where the stdio MCP servers start holds the manager of
+	// that narrowing until the run and what it left going under its lineage key ended
+	// (mcpScopeHold); a run that ends before it has a key releases it at once. Registered first,
+	// so it runs after every other deferred end of the run (the worktree, the sweep, the stops).
+	mcpHold, err := r.resolver.holdMCPScope(r.config, r.mcpScope())
+	if err != nil {
+		return session.RunResult{}, err
+	}
+	var lineageKey string
+	defer func() { r.resolver.releaseMCPScopeAfter(mcpHold, lineageKey) }()
+	prepared, err := r.resolver.prepareRun(ctx, r.shared, r.config, mcpHold)
 	if err != nil {
 		return session.RunResult{}, err
 	}
@@ -141,13 +151,30 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 		}
 		options.PlanPrompt = planModePrompt(r.config.PlanMode)
 	}
-	if note := r.resourceChangesNote(); note.Text != "" {
+	if note := r.resourceChangesNote(mcpHold); note.Text != "" {
 		options.Notes = append(options.Notes, note)
 	}
 	if options.Tools != nil {
 		if options.ToolCatalog, err = options.ToolCatalog.Only(options.Tools); err != nil {
 			return session.RunResult{}, fmt.Errorf("narrow the run's tools: %w", err)
 		}
+	}
+	// A profile_message run is narrowed by its caller's deny (U3) for this run only: its catalog
+	// loses what the caller's chain denies, and every run it starts gets that with its own deny.
+	inherited := r.inheritedDeny()
+	if options.ToolCatalog, err = options.ToolCatalog.WithoutDenied(inherited); err != nil {
+		return session.RunResult{}, fmt.Errorf("narrow the run's tools by its caller's tools.deny: %w", err)
+	}
+	options.ToolExecution.Deny = tools.JoinDeny(inherited, r.config.ProfileTools.Deny)
+	// The run's tools and hooks hide the key variables of the models that may answer it (T-009);
+	// set on every run, so none inherits another run's, beside its caller's for a profile_message
+	// run (profileDelegation.modelKeys). A sub-agent run adds its own (runEphemeral).
+	options.ToolExecution.ModelKeyEnvs = tools.JoinDeny(r.inheritedModelKeys(), runModelKeys(r.config))
+	// The run's own tools are what the request named, if it named any; a tool_smith script reaches no
+	// other. Set on every run, so none inherits a caller's.
+	options.ToolExecution.RunTools = nil
+	if entries := options.Tools; entries != nil {
+		options.ToolExecution.RunTools = func(definition tools.Definition) bool { return tools.AnyEntryMatches(entries, definition) }
 	}
 	options.ImageResizer = newImageResizer(r.config.ImageResize)
 	options.ImageStore = newImageStore(r.config.ImageStore)
@@ -181,6 +208,10 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 			if err := opened.worktree.StartMCP(ctx, options.ToolExecution, r.resolver.runMCPLoader(r.config)); err != nil {
 				return session.RunResult{}, mapSessionError(err)
 			}
+			// Its calls to the stdio servers now go to the worktree's, so the ones its narrowing
+			// started to list its tools (a manager of this run alone, profileDelegation.mcpScope)
+			// would only idle: they stop. Its streamable HTTP connections stay, they are called.
+			mcpHold.stopStdioServers()
 		}
 	}
 	options.AutomaticCompaction = &session.AutomaticCompactionSettings{
@@ -197,7 +228,7 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	}
 	options.NextSessionTurn = nextSessionTurn
 	options.CompactHistory = func(compaction transcript.CompactionOptions) (transcript.CompactionResult, error) {
-		hooked := fireSessionHook(ctx, r.resolver.logger, r.reference, r.config, native.RunEvent{Event: native.HookEventPreCompact, TurnID: options.TurnID, Trigger: native.CompactTriggerAutomatic}, options.OnHookReport)
+		hooked := r.fireHook(ctx, r.config.Model.APIKeyEnv, native.RunEvent{Event: native.HookEventPreCompact, TurnID: options.TurnID, Trigger: native.CompactTriggerAutomatic}, options.OnHookReport)
 		if hooked.BlockedBy != "" {
 			// A blocked automatic compaction is skipped, and the run goes on uncompacted.
 			return transcript.CompactionResult{}, nil
@@ -230,9 +261,17 @@ func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, optio
 	r.applyStopHooks(&options)
 	r.applyNotificationHooks(ctx, &options)
 	finish := r.runEndHook(ctx, options.OnHookReport)
-	runCtx, sweepChildren := native.WithChildGroups(context.WithValue(ctx, callerMessagesPathKey{}, r.config.MessagesPath))
+	// The run's own lineage key: what its calls start carries it, so a stop that reached the run
+	// reaches that work too, once the run starts nothing more (liveRunStops).
+	lineageKey = native.NewRunLineageKey("session_run")
+	stop := r.resolver.runStops.begin(r.reference, r.config.Profile, lineageKey)
+	runCtx, sweepChildren := native.WithChildGroups(context.WithValue(r.withLineage(ctx, lineageKey), callerMessagesPathKey{}, r.config.MessagesPath))
 	defer sweepChildren()
+	defer r.resolver.endRunStop(ctx, stop)
 	result, err := prepared.runner.Run(runCtx, input, options)
+	if r.resolver.runnerReturned != nil {
+		r.resolver.runnerReturned(runCtx)
+	}
 	finish(result.TurnID, err)
 	return result, err
 }
@@ -411,14 +450,16 @@ func planModePrompt(settings sessionfs.PlanModeSettings) session.StateContextPro
 	return prompt
 }
 
-// resourceChangesNote tells the run what the profile's MCP servers reported changed since
-// its last run (resources it watches, resource lists); each change is told once. It is sent
-// in the model's prompt role and is not stored.
-func (r boundRunner) resourceChangesNote() session.StateContextPrompt {
+// resourceChangesNote tells the run what the MCP servers it calls reported changed since the last
+// run that called them (resources it watches, resource lists); each change is told once. Those are
+// the profile's shared servers, or for a run narrowed by its caller (scope) the servers of that
+// narrowing, so a narrowed run does not take the changes the profile's own next run is to hear.
+// It is sent in the model's prompt role and is not stored.
+func (r boundRunner) resourceChangesNote(scope *mcpScopeHold) session.StateContextPrompt {
 	if len(r.config.MCPServers) == 0 {
 		return session.StateContextPrompt{}
 	}
-	manager, err := r.resolver.sharedMCPManager(r.config)
+	manager, err := r.resolver.runMCPManager(r.config, scope)
 	if err != nil {
 		return session.StateContextPrompt{}
 	}
@@ -440,4 +481,31 @@ func runEnvironment(config sessionfs.SessionConfig) *tools.Environment {
 		return nil
 	}
 	return &tools.Environment{Sandbox: config.Sandbox}
+}
+
+// mcpScope is the run's MCP sandbox scope (profileDelegation.mcpScope): empty for a user's run and
+// for a run whose caller did not change where the servers start.
+func (r boundRunner) mcpScope() string {
+	if r.delegation == nil {
+		return ""
+	}
+	return r.delegation.mcpScope
+}
+
+// inheritedDeny is the deny ceiling the run got from the caller that started it
+// (profileDelegation.deny): nil for a user's run and for a run the remote API started.
+func (r boundRunner) inheritedDeny() []string {
+	if r.delegation == nil {
+		return nil
+	}
+	return r.delegation.deny
+}
+
+// inheritedModelKeys is the model key variables the run got from the caller that started it
+// (profileDelegation.modelKeys): nil for a user's run and for a run the remote API started.
+func (r boundRunner) inheritedModelKeys() []string {
+	if r.delegation == nil {
+		return nil
+	}
+	return r.delegation.modelKeys
 }

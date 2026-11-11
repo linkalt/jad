@@ -3,6 +3,7 @@ package asyncmgr
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -45,6 +46,9 @@ type row struct {
 	// progress is the driver side cursor of what a "latest" view already showed; it lives
 	// only while the handle is live.
 	progress any
+	// lineage is Registration.Lineage and key Registration.Key; a recovered row has neither.
+	lineage []string
+	key     string
 }
 
 // endAction says what happens to a handle's signal when its end arrives after a user
@@ -131,6 +135,9 @@ type Manager struct {
 	// Close waits for before it writes the final index.
 	peerTimer  *time.Timer
 	peerChecks sync.WaitGroup
+	// lineageEnd, when set, is called outside every lock once a handle that carries a lineage
+	// is no longer live (SetLineageEnd).
+	lineageEnd atomic.Pointer[func()]
 }
 
 // Open creates or recovers the manager in opts.Dir. Handles recorded as running by an
@@ -325,7 +332,7 @@ func (m *Manager) Register(reg Registration) error {
 	if int64(m.liveTotal) >= m.cfg.MaxHandlesTotal {
 		return refuse(&CapacityError{Scope: "total", Limit: m.cfg.MaxHandlesTotal, Live: int64(m.liveTotal)})
 	}
-	r := &row{id: reg.ID, owner: reg.Owner, kind: reg.Kind, state: state, label: label, started: now, changed: now, rec: &rec}
+	r := &row{id: reg.ID, owner: reg.Owner, kind: reg.Kind, state: state, label: label, started: now, changed: now, rec: &rec, lineage: slices.Clone(reg.Lineage), key: reg.Key}
 	m.addRowLocked(r)
 	m.mu.Unlock()
 
@@ -337,6 +344,8 @@ func (m *Manager) Register(reg Registration) error {
 	}
 	m.ioMu.Unlock()
 	if err != nil {
+		// A look at the lineage may have seen the row live meanwhile.
+		m.lineageEnded(r)
 		return fmt.Errorf("save async record: %w", err)
 	}
 	m.writeIndex()
@@ -508,7 +517,43 @@ func (m *Manager) Complete(id string, res Result) (bool, error) {
 	m.completing--
 	m.notifyLocked()
 	m.mu.Unlock()
+	m.lineageEnded(r)
 	return true, nil
+}
+
+// SetLineageEnd sets what the manager calls, outside every lock, each time a handle that carries
+// a lineage stops being live (it ended, or its registration failed after the row was added): the
+// app layer then looks again whether work is still going under a run's lineage key
+// (HasLiveLineage). Nil sets none. notify must not wait for this manager's handles.
+func (m *Manager) SetLineageEnd(notify func()) {
+	if notify == nil {
+		m.lineageEnd.Store(nil)
+		return
+	}
+	m.lineageEnd.Store(&notify)
+}
+
+// lineageEnded tells the lineage-end callback that r is no longer live, when r carries a lineage.
+func (m *Manager) lineageEnded(r *row) {
+	if len(r.lineage) == 0 {
+		return
+	}
+	if notify := m.lineageEnd.Load(); notify != nil {
+		(*notify)()
+	}
+}
+
+// HasLiveLineage reports whether a handle whose lineage has a key that match accepts is live
+// (queued or running, a handle still finishing included).
+func (m *Manager) HasLiveLineage(match func(key string) bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.rows {
+		if !r.state.Terminal() && slices.ContainsFunc(r.lineage, match) {
+			return true
+		}
+	}
+	return false
 }
 
 // CancelOwner asks every live handle of owner to stop and returns how many it asked.
@@ -524,6 +569,13 @@ func (m *Manager) Now() time.Time { return m.opts.Now() }
 // work one run started, when the run ends and the folder it worked in goes away.
 func (m *Manager) CancelOwnerSince(owner string, since time.Time, reason string) int {
 	return m.cancel(func(r *row) bool { return r.owner == owner && !r.started.Before(since) }, reason, endKeep)
+}
+
+// CancelLineage is CancelOwner for the live handles whose lineage has a key that match accepts:
+// the work started under a run or owner, whoever owns the handle. The handles keep their records
+// and unread signals (the owner's own stop, reset or delete decides those). It does not wait.
+func (m *Manager) CancelLineage(match func(key string) bool, reason string) int {
+	return m.cancel(func(r *row) bool { return slices.ContainsFunc(r.lineage, match) }, reason, endKeep)
 }
 
 // CancelOwnersWithPrefix is CancelOwner for every owner that starts with prefix (all the
@@ -547,6 +599,29 @@ func (m *Manager) ResetOwner(owner, reason string) int {
 func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
 	match := func(r *row) bool { return strings.HasPrefix(r.owner, prefix) }
 	n := m.cancel(match, reason, endRemove)
+	m.removeFinished(match)
+	return n
+}
+
+// DeleteLineage is CancelLineage for a session delete that reaches work after its owner fan-out
+// (DeleteOwnersWithPrefix) looked: of the handles whose lineage has a key that match accepts,
+// those owned under prefix (the deleted session) are deleted as that fan-out deletes them (a live
+// one is removed when it ends, a finished one now), and those of other owners are only asked to
+// stop and keep their records, as CancelLineage leaves them. It does not wait.
+func (m *Manager) DeleteLineage(match func(key string) bool, prefix, reason string) int {
+	inLineage := func(r *row) bool { return slices.ContainsFunc(r.lineage, match) }
+	n := m.cancelEach(inLineage, reason, func(r *row) endAction {
+		if strings.HasPrefix(r.owner, prefix) {
+			return endRemove
+		}
+		return endKeep
+	})
+	m.removeFinished(func(r *row) bool { return inLineage(r) && strings.HasPrefix(r.owner, prefix) })
+	return n
+}
+
+// removeFinished removes the finished handles match accepts and their records now.
+func (m *Manager) removeFinished(match func(*row) bool) {
 	m.commit(false, func() pruneWork {
 		var work pruneWork
 		for _, r := range sortedRows(m.rows) {
@@ -557,13 +632,17 @@ func (m *Manager) DeleteOwnersWithPrefix(prefix, reason string) int {
 		}
 		return work
 	})
-	return n
 }
 
 func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) int {
+	return m.cancelEach(match, reason, func(*row) endAction { return after })
+}
+
+// cancelEach is cancel with the end action of each matched row chosen by afterOf.
+func (m *Manager) cancelEach(match func(*row) bool, reason string, afterOf func(*row) endAction) int {
 	type target struct {
-		driver Driver
-		id     string
+		driver  Driver
+		id, key string
 	}
 	var targets []target
 	m.mu.Lock()
@@ -579,17 +658,17 @@ func (m *Manager) cancel(match func(*row) bool, reason string, after endAction) 
 		// not undo a reset's born-read end or a delete's removal. A finishing row is not
 		// stopped again, but Complete reads its end action once more before it commits,
 		// so a reset or delete that arrives meanwhile still applies to it.
-		if after > r.after {
+		if after := afterOf(r); after > r.after {
 			r.after = after
 		}
 		if !r.finishing {
-			targets = append(targets, target{d, r.id})
+			targets = append(targets, target{d, r.id, r.key})
 		}
 	}
 	m.mu.Unlock()
 	sort.Slice(targets, func(i, j int) bool { return targets[i].id < targets[j].id })
 	for _, t := range targets {
-		t.driver.Stop(t.id, reason)
+		stopHandle(t.driver, t.id, t.key, reason)
 	}
 	return len(targets)
 }

@@ -72,6 +72,9 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 			f.bodies = append(f.bodies, string(raw))
 		}
 		hold, reached, cancelled, script, usage := f.hold, f.reached, f.cancelled, f.script, f.usage
+		// The response id counts the requests so far, read under the lock: a background child's
+		// request and its parent's can be served at once.
+		requests := len(f.models)
 		f.mu.Unlock()
 		if hold {
 			reached <- struct{}{}
@@ -97,7 +100,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"output_index\":%d,\"item\":%s}\n\n", index, one)
 		}
 		for _, event := range []string{
-			`{"type":"response.completed","response":{"id":"r` + fmt.Sprint(len(f.models)) + `","status":"completed","model":"` + request.Model + `",` + usage + `"output":[]}}`,
+			`{"type":"response.completed","response":{"id":"r` + fmt.Sprint(requests) + `","status":"completed","model":"` + request.Model + `",` + usage + `"output":[]}}`,
 			"[DONE]",
 		} {
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)

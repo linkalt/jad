@@ -20,20 +20,85 @@ type subagentAsyncHandle struct {
 	host  *AsyncHost
 	owner string
 	label string
+	// lineage is the run lineage of the call that started the run (RunLineageOf).
+	lineage []string
 }
 
-func newSubagentAsyncHandle(host *AsyncHost, owner, agent, task string) *subagentAsyncHandle {
-	return &subagentAsyncHandle{host: host, owner: owner, label: agent + ": " + task}
+func newSubagentAsyncHandle(host *AsyncHost, owner, agent, task string, lineage []string) *subagentAsyncHandle {
+	return &subagentAsyncHandle{host: host, owner: owner, label: agent + ": " + task, lineage: lineage}
 }
 
-func (h *subagentAsyncHandle) begin(id string, queued bool) error {
-	return h.host.Manager().Register(asyncmgr.Registration{ID: id, Owner: h.owner, Kind: asyncKindSubagent, Label: h.label, Queued: queued})
+// begin registers the handle of run id. The run joins its manager only after this returns, so
+// the handle is marked as starting first: a stop that chooses the handle meanwhile is kept and
+// applied once the run exists (started), instead of finding no run and being lost.
+//
+// key is the run's lineage key: the handle keeps it (Registration.Key), so a stop that lands once
+// the run is gone still reaches the work under it (subagentDriver.StopKeyed).
+func (h *subagentAsyncHandle) begin(id, key string, queued bool) error {
+	if !h.host.beginSubagentStart(id) {
+		// Another manager on this host is starting a handle of the same id; Register would
+		// refuse it as a duplicate too, and ending this one's mark would end that one's.
+		return fmt.Errorf("%w: %q", asyncmgr.ErrDuplicate, id)
+	}
+	if err := h.host.Manager().Register(asyncmgr.Registration{ID: id, Owner: h.owner, Kind: asyncKindSubagent, Label: h.label, Queued: queued, Lineage: h.lineage, Key: key}); err != nil {
+		h.host.endSubagentStart(id)
+		return err
+	}
+	return nil
+}
+
+// started ends the starting mark of run id, now in its manager, and returns the stop that came
+// in before, if any.
+func (h *subagentAsyncHandle) started(id string) (reason string, stopped bool) {
+	return h.host.endSubagentStart(id)
+}
+
+// subagentStartStop is a stop that reached a sub-agent handle still starting.
+type subagentStartStop struct {
+	stopped bool
+	reason  string
+}
+
+// beginSubagentStart marks handle id as starting, and reports false when it already is (a run of
+// another manager of this host drew the same id and is starting).
+func (h *AsyncHost) beginSubagentStart(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.subagentStarting == nil {
+		h.subagentStarting = map[string]subagentStartStop{}
+	}
+	if _, starting := h.subagentStarting[id]; starting {
+		return false
+	}
+	h.subagentStarting[id] = subagentStartStop{}
+	return true
+}
+
+// noteSubagentStop keeps a stop for a handle still starting and reports whether it was one. The
+// first stop's reason is kept.
+func (h *AsyncHost) noteSubagentStop(id, reason string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pending, starting := h.subagentStarting[id]
+	if starting && !pending.stopped {
+		h.subagentStarting[id] = subagentStartStop{stopped: true, reason: reason}
+	}
+	return starting
+}
+
+func (h *AsyncHost) endSubagentStart(id string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pending := h.subagentStarting[id]
+	delete(h.subagentStarting, id)
+	return pending.reason, pending.stopped
 }
 
 func (h *subagentAsyncHandle) markRunning(id string) { h.host.Manager().MarkRunning(id) }
 
 // abort ends a handle whose run never started; nobody is told about it.
 func (h *subagentAsyncHandle) abort(id string, cause error) {
+	h.host.endSubagentStart(id)
 	manager := h.host.Manager()
 	_, _ = manager.Complete(id, asyncmgr.Result{State: asyncmgr.StateFailed, Reason: cause.Error()})
 	manager.MarkRead(h.owner, id)
@@ -131,9 +196,32 @@ type subagentDriver struct{ host *AsyncHost }
 
 func (d *subagentDriver) Kind() asyncmgr.Kind { return asyncKindSubagent }
 
-func (d *subagentDriver) Stop(id, reason string) {
-	if run := d.find(id); run != nil {
+func (d *subagentDriver) Stop(id, reason string) { d.StopKeyed(id, "", reason) }
+
+// StopKeyed stops the run of handle id; key is the run's lineage key the handle was registered
+// with (empty for a handle recovered from disk, which has no run).
+func (d *subagentDriver) StopKeyed(id, key, reason string) {
+	run := d.findHandle(id)
+	if run == nil {
+		// A handle still starting has no run in its manager yet: the stop is kept and applied
+		// once it has (subagentAsyncHandle.started). The run may have joined since the find.
+		if d.host.noteSubagentStop(id, reason) {
+			return
+		}
+		run = d.findHandle(id)
+	}
+	if run != nil {
 		run.stopWith(reason)
+		return
+	}
+	// The handle was chosen while live, but its run has ended and been dropped (keep_finished)
+	// since: it cannot be stopped any more, but what it started is reached as a late stop's would
+	// be, under the run's own key. The id alone would not do: another manager may hold a run of
+	// the same id, whose work is not this handle's.
+	for _, manager := range d.host.subagentManagers() {
+		if manager.cascadeStop(key, reason) {
+			return
+		}
 	}
 }
 
@@ -170,6 +258,17 @@ func (d *subagentDriver) Detail(id string, maxBytes int) string {
 	}
 	text, _ = cutUTF8(text, int64(maxBytes))
 	return text
+}
+
+// findHandle is find for a stop: only a run that is a handle of this host, so a run of another
+// manager that drew the same id, and is not this handle, is never the one stopped.
+func (d *subagentDriver) findHandle(id string) *subagentRun {
+	for _, manager := range d.host.subagentManagers() {
+		if run := manager.byID(id); run != nil && run.async != nil && run.async.host == d.host {
+			return run
+		}
+	}
+	return nil
 }
 
 func (d *subagentDriver) find(id string) *subagentRun {

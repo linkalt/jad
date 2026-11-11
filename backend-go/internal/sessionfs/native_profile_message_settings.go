@@ -56,7 +56,9 @@ type NativeProfileMessageSettings struct {
 	// ResultMaxBytes is the most reply text one call returns.
 	ResultMaxBytes int
 	// MaxChain is the most profiles one message chain may hold, the first caller included.
-	// 2 lets a profile message another but that one message no further.
+	// 2 lets a profile message another but that one message no further. It is a cap of its
+	// own beside tools.native.subagent.max_depth (NativeSubagentSettings.RunMaxDepth): a message
+	// must pass both, so a longer max_chain never lets a chain run deeper than max_depth.
 	MaxChain int
 	// Sessions are globs of session ids (not root-qualified; '*' and '?' only) whose profiles
 	// the model may message as <session>/<category>/<profile>, besides its own session's.
@@ -65,9 +67,9 @@ type NativeProfileMessageSettings struct {
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
 	Remotes []string
-	// ContextTrigger (context_trigger) is what happens to the target's transcript before the
-	// first message to it in each run of the caller: nothing (default), a compaction, or a
-	// reset of its whole history.
+	// ContextTrigger (context_trigger) is what happens to the target's transcript before a
+	// message: nothing (default), a compaction before every message, or a reset of its whole
+	// history before every message.
 	ContextTrigger ProfileMessageContextTrigger
 	// ModelChoice (model_choice, off by default) gives the tool a model argument, the model
 	// the target answers with. Off, the tool's definition is the one it had before the model

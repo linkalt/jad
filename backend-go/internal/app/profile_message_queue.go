@@ -159,10 +159,19 @@ func (s *profileQueueSet) pump(key string, q *targetQueue) {
 		}
 		head := q.waiting[0]
 		s.mu.Unlock()
-		run, err := head.plan.starter.StartProfileRun(head.startCtx, head.plan.request(head, true))
+		if !head.beginStart() {
+			// It ended (stopped or expired) after the line was read: nothing to start.
+			s.remove(key, head)
+			continue
+		}
+		run, err := head.plan.startRun(head.startCtx, head, true)
 		s.remove(key, head)
 		if err != nil {
+			head.endStart()
 			head.startFailed(err)
+			// Its start is over and no run holds it: its node leaves the tree (finish may have
+			// seen the start still going and left it).
+			head.releaseNode()
 			continue
 		}
 		head.attach(run)
@@ -187,6 +196,22 @@ type profileMessagePlan struct {
 	maxQueued int
 	blocking  bool
 	hops      int
+	// parentNode is the caller's node in the run tree (CallerContext.RunNode), empty for a user's
+	// run; maxPerRoot is the caller's max_runs_per_root and maxPerSession the target's own
+	// max_runs_per_session, the session the run executes in. The message's run joins the tree
+	// under them (reserveNode).
+	parentNode                string
+	maxPerRoot, maxPerSession int
+	// depth is the target run's depth across both kinds of run: the caller's plus one.
+	depth int
+	// deny is the caller's tools.deny ceiling (CallerContext.Deny), which narrows the target's run.
+	deny []string
+	// modelKeys is the caller's model key variables (CallerContext.ModelKeyEnvs), which the
+	// target's run hides beside its own (T-009).
+	modelKeys []string
+	// lineage is the caller's run lineage with the caller's session key added; each message adds
+	// its own key (profileMessageRun.lineageKey) for the run it starts.
+	lineage   []string
 	beforeRun func(context.Context) error
 	// confine narrows the target's run by the caller's sandbox (D20); nil for a caller
 	// without one.
@@ -200,6 +225,13 @@ func (p *profileMessagePlan) Transcripts() (target, caller string) {
 	return p.targetMessages, p.callerMessages
 }
 
+// startRun starts the target run of the message run through Resolver.StartRun (R5b), waiting for
+// a busy target when wait is set.
+func (p *profileMessagePlan) startRun(ctx context.Context, run *profileMessageRun, wait bool) (*httpapi.ProfileRun, error) {
+	handle, err := p.resolver.StartRun(ctx, RunSpec{Kind: RunPersistent, Profile: p.request(run, wait)})
+	return handle.ProfileRun(), err
+}
+
 func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.ProfileRunRequest {
 	return httpapi.ProfileRunRequest{
 		Reference: p.reference,
@@ -209,9 +241,11 @@ func (p *profileMessagePlan) request(run *profileMessageRun, wait bool) httpapi.
 		Message:   p.message,
 		Model:     p.model,
 		Hops:      p.hops,
+		Depth:     p.depth,
+		RunNode:   run.node.ID(),
 		Wait:      wait,
 		BeforeRun: p.beforeRun,
-		Confine:   targetRunner(p.confine, p.caller, p.message, run.setWorktree),
+		Confine:   targetRunner(p.confine, p.caller, p.message, run.setWorktree, native.ExtendRunLineage(p.lineage, run.lineageKey), p.deny, p.modelKeys),
 		OnCommitted: func(event json.RawMessage) {
 			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
 				run.lastText.Store(text)
@@ -233,6 +267,13 @@ func (p *profileMessagePlan) busy(queueFull int) error {
 // only this start: the message goes on after the call ends.
 func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRun, error) {
 	r := newProfileMessageRun(p)
+	// A message that is not handed to the caller (refused, or a panic on the way) leaves no node.
+	handed := false
+	defer func() {
+		if !handed {
+			r.releaseNode()
+		}
+	}()
 	set := &p.resolver.profileQueues
 	if p.blocking {
 		r.startEnd = set.beginWait(p.edge())
@@ -255,17 +296,40 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 			r.discard()
 			return nil, native.ErrProfileCycle
 		}
+		// The run caps come after the target's full line and the wait cycle, which a busy target
+		// is known to have here; a queued message holds its place until it ends.
+		if err := r.reserveNode(); err != nil {
+			set.mu.Unlock()
+			q.try.Unlock()
+			set.release(p.key, q)
+			r.discard()
+			return nil, err
+		}
 		r.queued = true
 		q.waiting = append(q.waiting, r)
 		set.mu.Unlock()
 		q.try.Unlock()
 		set.release(p.key, q)
 		r.beginQueued()
+		handed = true
 		return r, nil
+	}
+	// The target looks free: the run caps are checked before the start is tried. A wait cycle,
+	// which only a target that is itself blocked (so busy) can close, keeps its precedence as it
+	// had when the start found the target busy and the message could queue.
+	if err := r.reserveNode(); err != nil {
+		if p.maxQueued > 0 && p.blocking && set.waitsForCaller(p) {
+			err = native.ErrProfileCycle
+		}
+		set.mu.Unlock()
+		q.try.Unlock()
+		set.release(p.key, q)
+		r.discard()
+		return nil, err
 	}
 	set.mu.Unlock()
 
-	run, err := p.starter.StartProfileRun(ctx, p.request(r, false))
+	run, err := p.startRun(ctx, r, false)
 	if errors.Is(err, httpapi.ErrSessionBusy) && p.maxQueued > 0 {
 		set.mu.Lock()
 		if p.blocking && set.waitsForCaller(p) {
@@ -282,6 +346,7 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 		q.try.Unlock()
 		r.beginQueued()
 		go set.pump(p.key, q)
+		handed = true
 		return r, nil
 	}
 	q.try.Unlock()
@@ -294,13 +359,72 @@ func (p *profileMessagePlan) Start(ctx context.Context) (native.ProfileMessageRu
 		return nil, err
 	}
 	r.attach(run)
+	handed = true
 	return r, nil
+}
+
+// reserveNode admits the message's run into the run tree below the caller's node (a root for a
+// user's run), executed in the target's session, under the caller's root cap and the target's
+// own session cap (native.ErrRunTreeLimit beyond them). The node is counted from here until the
+// message ends and, when a target run started, that run has released the target's transcript
+// (releaseNode, endNode); the caller holds the queue set's lock, and the tree's lock is a leaf.
+func (r *profileMessageRun) reserveNode() error {
+	p := r.plan
+	node, err := p.resolver.runTree.Reserve(native.RunReservation{
+		Parent: p.parentNode, Session: p.key, Kind: native.RunNodeProfileMessage, State: native.RunNodeQueued,
+		MaxPerRoot: p.maxPerRoot, MaxPerSession: p.maxPerSession,
+	})
+	if err != nil {
+		return err
+	}
+	r.node = node
+	return nil
+}
+
+// releaseNode takes the message's run out of the run tree; more calls do nothing. It is for a
+// message whose target run never started, which left no work behind.
+func (r *profileMessageRun) releaseNode() {
+	r.node.Release()
+}
+
+// endNode gives back the places of the message's run once its target run ended and released the
+// transcript, and keeps the node as the parent of what that run left going until that is gone
+// (Resolver.releaseNodeAfter, under the run's lineage key).
+func (r *profileMessageRun) endNode() {
+	if r.plan.resolver == nil {
+		r.node.Release()
+		return
+	}
+	r.plan.resolver.releaseNodeAfter(r.node, r.lineageKey)
+}
+
+// beginStart marks that the pump is starting the message's target run, so a finish meanwhile
+// leaves its node to whoever ends the start (attach, or the pump on a failed start). It reports
+// false for a message that has already ended, which is not started.
+func (r *profileMessageRun) beginStart() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished {
+		return false
+	}
+	r.starting = true
+	return true
+}
+
+// endStart marks that a start of the pump ended without a run.
+func (r *profileMessageRun) endStart() {
+	r.mu.Lock()
+	r.starting = false
+	r.mu.Unlock()
 }
 
 // profileMessageRun is one message in flight: queued for a busy target, or running as the
 // target's own run. It is the handle's work, so it outlives the call that sent it.
 type profileMessageRun struct {
 	plan *profileMessagePlan
+	// lineageKey is the key of the run this message starts in the run lineage of the work that
+	// run starts; a stop of the message stops that work (attach).
+	lineageKey string
 
 	ctx    context.Context // the message's whole life; its deadline is the call timeout
 	cancel context.CancelFunc
@@ -329,12 +453,27 @@ type profileMessageRun struct {
 	finished     bool
 	outcome      native.ProfileMessageOutcome
 	queueTimer   *time.Timer
+	// runEnded is set once the attached target run has ended (it starts nothing more), and
+	// cascaded once the work under lineageKey was stopped. A stop that reached the message
+	// cascades exactly once after runEnded, whenever it came (endRun, Stop).
+	runEnded, cascaded bool
 	// stopWatch unregisters the callback that reacts to the context ending while the message waits.
 	stopWatch func() bool
+	// starting is set while the pump starts the message's target run (beginStart): a finish then
+	// leaves the node to the end of that start.
+	starting bool
+	// node is the message's run in the resolver's run tree (reserveNode), set before the message
+	// is handed out and never changed; it is counted until the message ended and its target run,
+	// if one started, released the transcript, and then stays an ended parent while work that run
+	// left goes (endNode).
+	node *native.RunNode
 }
 
 func newProfileMessageRun(plan *profileMessagePlan) *profileMessageRun {
 	r := &profileMessageRun{plan: plan, startedC: make(chan struct{}), doneC: make(chan struct{}), released: make(chan struct{}), began: time.Now()}
+	if plan.resolver != nil {
+		r.lineageKey = fmt.Sprintf("profile_run_%d", plan.resolver.lineageSeq.Add(1))
+	}
 	if plan.timeout > 0 {
 		r.ctx, r.cancel = context.WithTimeout(context.Background(), plan.timeout)
 	} else {
@@ -344,7 +483,8 @@ func newProfileMessageRun(plan *profileMessagePlan) *profileMessageRun {
 	return r
 }
 
-// discard releases a message that never became visible to the caller.
+// discard releases a message that never became visible to the caller. Start's own deferred
+// release gives back its node.
 func (r *profileMessageRun) discard() {
 	r.EndStartWait()
 	r.startCancel()
@@ -401,17 +541,47 @@ func (r *profileMessageRun) Status() string {
 
 // Stop ends the message: a queued one leaves its line, a running one stops the target run.
 // It does not wait.
+//
+// A stop is chosen while the message is live and can land after the target run ended (attach's
+// watch has then looked for a stop already), even after the message finished: what that run left
+// going is stopped all the same, once.
 func (r *profileMessageRun) Stop(reason string) {
 	r.mu.Lock()
-	if r.finished {
-		r.mu.Unlock()
-		return
+	late := r.runEnded && !r.cascaded
+	if late {
+		r.cascaded = true
 	}
-	if r.stopReason == "" {
+	finished := r.finished
+	if !finished && r.stopReason == "" {
 		r.stopReason = reason
 	}
 	r.mu.Unlock()
-	r.cancel()
+	if !finished {
+		r.cancel()
+	}
+	if late {
+		r.cascade(reason)
+	}
+}
+
+// endRun marks that the attached target run has ended, and reports whether the work under the
+// message's key is stopped now and with which reason: when a stop reached the message before.
+func (r *profileMessageRun) endRun() (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runEnded = true
+	if r.cascaded || r.stopReason == "" {
+		return "", false
+	}
+	r.cascaded = true
+	return r.stopReason, true
+}
+
+// cascade stops the work under the message's key in every manager (Resolver.cancelDescendants).
+func (r *profileMessageRun) cascade(reason string) {
+	if r.lineageKey != "" && r.plan.resolver != nil {
+		r.plan.resolver.cancelDescendants(r.lineageKey, reason)
+	}
 }
 
 // onCtxDone reacts to a stop or the timeout while the message waits for its target. Once the
@@ -494,9 +664,24 @@ func (r *profileMessageRun) startFailed(err error) {
 // attach binds the started target run and watches it to its end.
 func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 	r.mu.Lock()
+	r.starting = false
 	if r.finished {
+		// The message ended (stopped or expired in the line) while its start was on its way: the
+		// run is stopped at once, and what it may have started already goes with it once it ended.
+		// The node is counted until that run released the target's transcript.
+		reason := r.stopReason
+		r.cascaded = true
 		r.mu.Unlock()
 		run.Stop()
+		if reason == "" {
+			reason = "target_stopped"
+		}
+		go func() {
+			<-run.Done()
+			r.cascade(reason)
+			<-r.released
+			r.endNode()
+		}()
 		return
 	}
 	r.run = run
@@ -504,6 +689,7 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 		r.queueTimer.Stop()
 	}
 	r.mu.Unlock()
+	r.node.SetState(native.RunNodeRunning)
 	close(r.startedC)
 	if r.ctx.Err() != nil {
 		run.Stop()
@@ -519,7 +705,15 @@ func (r *profileMessageRun) attach(run *httpapi.ProfileRun) {
 			<-run.Done()
 		}
 		<-r.released
+		// A stopped message stops what its run left going (handles, sub-agent runs, further
+		// messages), now that the run has ended and starts nothing more; a stop that comes later
+		// does it from Stop. A message that ended on its own or timed out, unasked, leaves that work
+		// alone, as a user's run does.
+		if reason, stopped := r.endRun(); stopped {
+			r.cascade(reason)
+		}
 		r.finish(r.conclude(run))
+		r.endNode()
 	}()
 }
 
@@ -570,7 +764,13 @@ func (r *profileMessageRun) finish(outcome native.ProfileMessageOutcome) {
 		r.queueTimer.Stop()
 	}
 	stopWatch := r.stopWatch
+	// A message no target run holds, and whose start is not on its way, is over: its node goes
+	// now. Otherwise the end of that run or start releases it (attach, pump).
+	ended := r.run == nil && !r.starting
 	r.mu.Unlock()
+	if ended {
+		r.releaseNode()
+	}
 	close(r.doneC)
 	if stopWatch != nil {
 		stopWatch()

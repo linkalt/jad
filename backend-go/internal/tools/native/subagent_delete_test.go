@@ -27,7 +27,7 @@ func runOne(t *testing.T, root, name string, manager *SubagentManager, keep int)
 	}}
 	run, err := manager.start(subagentStart{
 		launcher: launcher, owner: "o", request: SubagentRequest{Agent: agentNamed("explore"), Task: "t " + name},
-		limit: 4, maxQueued: 4, keep: keep, resultMax: 1000,
+		admission: runAdmission{limit: 4, maxQueued: 4}, keep: keep, resultMax: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestSubagentDeleteTranscriptsNeverTouchesARunThatIsStillGoing(t *testing.T)
 	}}
 	slowRun, err := manager.start(subagentStart{
 		launcher: slow, owner: "o", request: SubagentRequest{Agent: agentNamed("explore"), Task: "slow"},
-		limit: 4, maxQueued: 4, keep: 1, resultMax: 1000,
+		admission: runAdmission{limit: 4, maxQueued: 4}, keep: 1, resultMax: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestSubagentDeleteTranscriptsIgnoresAFolderOutsideTheStorageDirectory(t *te
 	for range 3 {
 		run, err := manager.start(subagentStart{
 			launcher: launcher, owner: "o", request: SubagentRequest{Agent: agentNamed("explore"), Task: "t"},
-			limit: 4, maxQueued: 4, keep: 1, resultMax: 1000,
+			admission: runAdmission{limit: 4, maxQueued: 4}, keep: 1, resultMax: 1000,
 		})
 		if err != nil {
 			t.Fatal(err)

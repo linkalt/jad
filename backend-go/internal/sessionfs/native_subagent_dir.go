@@ -127,19 +127,14 @@ func loadSubagentFolder(name, folder string) (NativeSubagentAgent, error) {
 		if err != nil {
 			return NativeSubagentAgent{}, configError("%s: expected a JSON object", settingsPath)
 		}
+		definitionKeys := make([]string, 0, len(keys))
 		for _, key := range keys {
-			if key == "schema_version" {
-				continue
+			if key != "schema_version" {
+				definitionKeys = append(definitionKeys, key)
 			}
-			if key == "paths" {
-				return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingsPath, subagentDirSection, removedAgentPathsHint)
-			}
-			if key == "read_only" {
-				return NativeSubagentAgent{}, configError("%s: %s.read_only was removed; %s", settingsPath, subagentDirSection, removedAgentReadOnlyHint)
-			}
-			if !containsString(nativeSubagentAgentKeys, key) {
-				return NativeSubagentAgent{}, unsupportedToolKey(settingsPath+": "+subagentDirSection, key, nativeSubagentAgentKeys, "")
-			}
+		}
+		if err := checkAgentDefinitionKeys(definitionKeys, settingsPath, subagentDirSection); err != nil {
+			return NativeSubagentAgent{}, err
 		}
 	}
 	promptText := ""

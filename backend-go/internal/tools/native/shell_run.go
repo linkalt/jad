@@ -147,7 +147,7 @@ func runShellChildDetailed(
 	if watch := outputWatchFrom(ctx); watch != nil {
 		watch.set(collector)
 	}
-	environment := shellChildEnvironment(run, settings, apiKeyEnv)
+	environment := shellChildEnvironment(run, settings, callModelKeys(apiKeyEnv, execution)...)
 	sandbox := childCallSandbox(run.sandboxTool(), settings, execution)
 	tmp, err := callTempDir(sandbox, execution)
 	if err != nil {
@@ -195,8 +195,10 @@ func runShellChildDetailed(
 
 // shellChildEnvironment is the environment a run's child gets: the process environment under
 // the settings' allowlist and denials, then the run's own variables and list prefixes.
-func shellChildEnvironment(run shellChildRun, settings sessionfs.NativeBashSettings, apiKeyEnv string) []string {
-	environment := buildNativeBashEnvironment(os.Environ(), settings, apiKeyEnv)
+// The run's extraEnv and prependEnv are the tool's own variables (the exec helpers, a tool_smith
+// bridge), never configured ones, so they are not filtered.
+func shellChildEnvironment(run shellChildRun, settings sessionfs.NativeBashSettings, modelKeys ...string) []string {
+	environment := buildNativeBashEnvironment(os.Environ(), settings, modelKeys...)
 	for _, name := range sortedKeys(run.extraEnv) {
 		environment = append(environment, name+"="+run.extraEnv[name])
 	}
@@ -278,10 +280,23 @@ func effectiveBashTimeoutMs(requested *int64, settings sessionfs.NativeBashSetti
 	return *requested
 }
 
-func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSettings, apiKeyEnv string) []string {
+// callModelKeys are the model key variables a child process of a call never gets: apiKeyEnv, the
+// key of the model the tool was built with, and the keys of the models that answer the call's
+// run and the sub-agent runs above it (ExecutionContext.ModelKeyEnvs), so a tool shared by runs
+// on different models hides from each call the key of its own run's model (T-009).
+func callModelKeys(apiKeyEnv string, execution tools.ExecutionContext) []string {
+	return append([]string{apiKeyEnv}, execution.ModelKeyEnvs...)
+}
+
+// buildNativeBashEnvironment is the environment of a native child process: the allowlisted names
+// of base, then settings.Env, without JAD_API_TOKEN, any of modelKeys (empty ones are skipped) and
+// settings.EnvDeny, whichever of base and settings.Env sets them.
+func buildNativeBashEnvironment(base []string, settings sessionfs.NativeBashSettings, modelKeys ...string) []string {
 	denied := map[string]struct{}{"JAD_API_TOKEN": {}}
-	if apiKeyEnv != "" {
-		denied[apiKeyEnv] = struct{}{}
+	for _, name := range modelKeys {
+		if name != "" {
+			denied[name] = struct{}{}
+		}
 	}
 	for _, name := range settings.EnvDeny {
 		denied[name] = struct{}{}

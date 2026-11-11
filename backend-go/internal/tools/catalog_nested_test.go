@@ -23,6 +23,10 @@ func filledExecutionContext(t *testing.T) ExecutionContext {
 		case reflect.Int, reflect.Int64:
 			field.SetInt(int64(index) + 1)
 		case reflect.Slice:
+			if field.Type().Elem().Kind() == reflect.String {
+				field.Set(reflect.ValueOf([]string{name + "-value"}))
+				continue
+			}
 			field.SetBytes([]byte(`{"filled":true}`))
 		case reflect.Pointer:
 			field.Set(reflect.New(field.Type().Elem()))

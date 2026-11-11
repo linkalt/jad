@@ -15,7 +15,7 @@ func runOwnedOne(t *testing.T, root, name, owner string, manager *SubagentManage
 	}}
 	run, err := manager.start(subagentStart{
 		launcher: launcher, owner: owner, request: SubagentRequest{Agent: agentNamed("explore"), Task: "t " + name},
-		limit: 4, maxQueued: 4, keep: keep, resultMax: 1000,
+		admission: runAdmission{limit: 4, maxQueued: 4}, keep: keep, resultMax: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -180,7 +180,7 @@ type toolSmithScript struct {
 // interpreter (standby), which loaded the prelude before the call.
 func runToolSmithScript(ctx context.Context, script toolSmithScript) shellRunResult {
 	settings, execution, callID := script.settings, script.execution, script.execution.CallID
-	allowed := script.nested.allowed(settings)
+	allowed := script.nested.allowed(settings, execution.Deny, execution.RunTools)
 	bridged := len(allowed) > 0
 	standby := takeToolSmithStandby(settings, script.apiKeyEnv, execution, bridged)
 	handedOver := false
@@ -324,7 +324,7 @@ func takeToolSmithStandby(settings sessionfs.NativeToolSmithSettings, apiKeyEnv 
 	}
 	build := func(workDir, token string) standbySpawn {
 		launch := toolSmithLaunch(settings, workDir, bridged, token)
-		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, apiKeyEnv)
+		environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv}, settings.Child, callModelKeys(apiKeyEnv, execution)...)
 		return standbySpawn{file: launch.argv[0], argv: launch.argv[1:], cwd: resolved.realPath, environment: environment, files: launch.files, gate: true, token: token, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}
 	}
 	spawn := func(workDir string) (standbySpawn, error) {

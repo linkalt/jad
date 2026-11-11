@@ -233,8 +233,9 @@ Concrete hygiene the tool does own:
 * **Credential hygiene in the environment:** the child inherits only `PATH`, `HOME`, locale/temp, and
   platform shell variables from the backend. It then merges default values (`NO_COLOR=1`, `TERM=dumb`,
   `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `PAGER=cat`), optional `env_file` values, and inline `env`
-  values in that order. `env_deny` and the harness credential (`model.api_key_env`, e.g.
-  `OPENAI_API_KEY`) are removed last. Put command credentials in a protected dotenv file rather than
+  values in that order. `env_deny` and the harness credentials are removed last: the `model.api_key_env` of the model the
+  tool was built with (e.g. `OPENAI_API_KEY`) and, per call, of every model that may answer the call's
+  run and the local sub-agent and `profile_message` runs above it (`ExecutionContext.ModelKeyEnvs`, T-009). Put command credentials in a protected dotenv file rather than
   `setting.json`; this is still not a sandbox, because a command can read any file the backend user can read.
 * **No leaked processes:** the process group is signalled on timeout and, by default, on completion.
 * **No unbounded calls:** the timeout ladder ends in a hard deadline, so a command cannot hold a call open
@@ -383,8 +384,9 @@ All ten open items were confirmed as recommended. Where the implementation diffe
    is reaped, so a recycled pid cannot be hit.
 5. **Environment:** `tools.native.bash.env_file` is a strict dotenv file; paths are session-relative or
    absolute. Its values merge over `DEFAULT_NATIVE_BASH_ENV`, then inline `tools.native.bash.env` wins.
-   `buildCommandEnvironment()` removes `model.api_key_env` (resolved when the catalog is built) plus every
-   name in `env_deny` last, so neither source can re-enable the harness credential.
+   `buildCommandEnvironment()` removes `model.api_key_env` (resolved when the catalog is built), the
+   call's `ExecutionContext.ModelKeyEnvs` (the keys of the models answering its run and the local sub-agent and
+   `profile_message` runs above it, T-009) plus every name in `env_deny` last, so neither source can re-enable the harness credential.
 6. **Budgets:** per stream — stdout 16 KiB head / 32 KiB tail, stderr 4 KiB head / 12 KiB tail, together no
    more than `max_bytes` (64 KiB) — plus `max_line_chars` 2000; the middle is dropped and the complete
    stream lives in its spill file while it is read.

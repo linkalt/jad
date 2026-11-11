@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -29,6 +30,17 @@ const (
 	// appStdioMCPStubbornEnvironment makes the fixture ignore SIGTERM and keep running when its
 	// stdin closes, so only a kill ends it and what it started.
 	appStdioMCPStubbornEnvironment = "JAD_APP_STDIO_MCP_STUBBORN"
+	// appStdioMCPStartLogEnvironment names a file the fixture appends one line to each time it
+	// starts, so a test can count the starts of one server.
+	appStdioMCPStartLogEnvironment = "JAD_APP_STDIO_MCP_START_LOG"
+	// appStdioMCPAskEnvironment adds the ask tool (addAskTool).
+	appStdioMCPAskEnvironment = "JAD_APP_STDIO_MCP_ASK"
+	// appStdioMCPTagEnvironment, when a wrapper sets it, starts the lookup tool's answer with
+	// [tag], so a test sees which start of a server answered.
+	appStdioMCPTagEnvironment = "JAD_APP_STDIO_MCP_TAG"
+	// appStdioMCPTouchEnvironment adds one resource and the touch tool, which adds another (a
+	// resource list change the client is told of).
+	appStdioMCPTouchEnvironment = "JAD_APP_STDIO_MCP_TOUCH"
 	// appGrandchildSleep is how long the grandchild sleeps; no other process sleeps this long.
 	appGrandchildSleep = "600123.456"
 )
@@ -49,6 +61,15 @@ func TestAppStdioMCPFixtureProcess(t *testing.T) {
 			os.Exit(2)
 		}
 	}
+	if log := os.Getenv(appStdioMCPStartLogEnvironment); log != "" {
+		file, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		_, _ = fmt.Fprintln(file, "start")
+		_ = file.Close()
+	}
 	if os.Getenv(appStdioMCPHangEnvironment) == "1" {
 		// A server that never answers the initialize request.
 		time.Sleep(time.Hour)
@@ -68,11 +89,22 @@ func TestAppStdioMCPFixtureProcess(t *testing.T) {
 			target = "from-mcp.txt"
 		}
 		text := "MCP wrote " + target + " in " + cwd
+		if tag := os.Getenv(appStdioMCPTagEnvironment); tag != "" {
+			text = "[" + tag + "] " + text
+		}
 		if err := os.WriteFile(target, []byte(arguments["word"]), 0o644); err != nil {
 			text = "MCP could not write " + target + ": " + err.Error()
 		}
 		return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: text}}}, nil
 	})
+	// ask (with appStdioMCPAskEnvironment) has the client answer one sampling request and
+	// reports the model that answered it.
+	if os.Getenv(appStdioMCPAskEnvironment) == "1" {
+		addAskTool(server)
+	}
+	if os.Getenv(appStdioMCPTouchEnvironment) == "1" {
+		addTouchTool(server)
+	}
 	if os.Getenv(appStdioMCPStubbornEnvironment) == "1" {
 		signal.Ignore(syscall.SIGTERM)
 		_ = server.Run(context.Background(), &mcpSDK.StdioTransport{})
@@ -83,6 +115,57 @@ func TestAppStdioMCPFixtureProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+// addTouchTool adds the resource doc://first and touch, which adds one more resource each call,
+// so the server tells its client that its resource list changed.
+func addTouchTool(server *mcpSDK.Server) {
+	read := func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
+		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: request.Params.URI, Text: "t"}}}, nil
+	}
+	server.AddResource(&mcpSDK.Resource{URI: "doc://first", Name: "first"}, read)
+	var touched atomic.Int64
+	server.AddTool(&mcpSDK.Tool{Name: "touch", Description: "adds a resource", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		func(context.Context, *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
+			uri := fmt.Sprintf("doc://added-%d", touched.Add(1))
+			server.AddResource(&mcpSDK.Resource{URI: uri, Name: uri}, read)
+			return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: "touched " + uri}}}, nil
+		})
+}
+
+// addAskTool adds ask: it has the client answer one sampling request and reports the model
+// that answered it ("none" when the answer is missing). Reading the resource doc://ask does the
+// same during the read.
+func addAskTool(server *mcpSDK.Server) {
+	server.AddResource(&mcpSDK.Resource{URI: "doc://ask", Name: "ask"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
+		if len(request.Params.InputResponses) == 0 {
+			return &mcpSDK.ReadResourceResult{InputRequests: mcpSDK.InputRequestMap{"sample": &mcpSDK.CreateMessageParams{
+				MaxTokens: 50, Messages: []*mcpSDK.SamplingMessage{{Role: "user", Content: &mcpSDK.TextContent{Text: "say hi"}}},
+			}}}, nil
+		}
+		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: "doc://ask", MIMEType: "text/plain", Text: "sampled by " + sampledModel(request.Params.InputResponses["sample"])}}}, nil
+	})
+	server.AddTool(&mcpSDK.Tool{Name: "ask", Description: "asks the client's model", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		func(_ context.Context, request *mcpSDK.CallToolRequest) (*mcpSDK.CallToolResult, error) {
+			responses := request.Params.InputResponses
+			if len(responses) == 0 {
+				return &mcpSDK.CallToolResult{InputRequests: mcpSDK.InputRequestMap{"sample": &mcpSDK.CreateMessageParams{
+					MaxTokens: 50, Messages: []*mcpSDK.SamplingMessage{{Role: "user", Content: &mcpSDK.TextContent{Text: "say hi"}}},
+				}}}, nil
+			}
+			return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: "sampled by " + sampledModel(responses["sample"])}}}, nil
+		})
+}
+
+// sampledModel is the model that answered a sampling input request, "none" when missing.
+func sampledModel(response mcpSDK.InputResponse) string {
+	switch response := response.(type) {
+	case *mcpSDK.CreateMessageResult:
+		return response.Model
+	case *mcpSDK.CreateMessageWithToolsResult:
+		return response.Model
+	}
+	return "none"
 }
 
 // appStdioMCPServerFile is the config of the fixture server: the test binary run as the fixture,
@@ -240,6 +323,71 @@ func TestDelegatedRunsMCPServerWorksInItsWorktree(t *testing.T) {
 				t.Fatalf("%d managers of a finished run's servers are left", count)
 			}
 		})
+	}
+}
+
+// A delegated run in a worktree whose caller's sandbox covers mcp lists its tools on a manager of
+// that narrowing of its own (holdMCPScope), and its calls still reach the server started in its
+// worktree: the file is on the run's branch, not in the session's folder, and the worktree's server
+// started in the caller's sandbox. The server it listed from stops once the worktree's started, so
+// one server runs while the run goes, and none of the run's is left after it.
+func TestConfinedDelegatedRunsMCPCallsStillReachItsWorktreeServer(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh for the command sandbox")
+	}
+	f := delegatedMCPFixture(t, `{"mode":"worktree","materialize":"`+sessionfs.SandboxIsolationMaterializeCheckout+`"}`, "")
+	logs := t.TempDir()
+	wrapped := filepath.Join(logs, "wrapped")
+	caller := loggingSandbox(wrapped, "caller", logs)
+	caller.Tools = []string{"mcp"}
+	running := -2
+	f.service.resolver.runnerReturned = func(context.Context) {
+		if waitFixtureProcesses(1) {
+			running = 1
+		} else {
+			running = fixtureProcesses()
+		}
+	}
+	messenger := profileMessenger{resolver: f.service.resolver}
+	ctx, cancel := context.WithTimeout(callerContext(t, f, context.Background()), time.Minute)
+	defer cancel()
+	plan, err := messenger.Prepare(ctx, native.ProfileMessageRequest{OwnerKey: profileMessageOwner, Target: "review/reviewer", Message: "write it",
+		Environment: &tools.Environment{Sandbox: caller}, CallerPlace: sessionfs.SandboxPlace{Workspace: f.cwd, CWD: f.cwd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := plan.Start(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-run.Done()
+	outcome := run.Outcome()
+	if outcome.Err != nil {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if _, err := os.Stat(filepath.Join(f.cwd, "from-mcp.txt")); !os.IsNotExist(err) {
+		t.Fatalf("the run's MCP call reached a server in the session's folder: %v", err)
+	}
+	branch := worktreeValue(outcome, "worktree_branch")
+	if got := gitIn(t, f.cwd, "show", branch+":from-mcp.txt"); got != "by the server" {
+		t.Fatalf("from-mcp.txt on %s = %q", branch, got)
+	}
+	data, _ := os.ReadFile(wrapped)
+	// Only the MCP server starts count; the worktree's git commands go through the sandbox too.
+	if got := strings.Count(string(data), "TestAppStdioMCPFixtureProcess"); got != 2 {
+		t.Fatalf("%d server starts in the caller's sandbox, want 2 (the narrowing's listing and the worktree's server): %s", got, data)
+	}
+	if running != 1 {
+		t.Fatalf("%d fixture servers ran while the run went, want 1 (the worktree's; the listing one stopped)", running)
+	}
+	if count := perRunManagers(f.service.resolver); count != 0 {
+		t.Fatalf("%d managers of a finished run's servers are left", count)
+	}
+	if count := confinedManagers(f.service.resolver); count != 0 {
+		t.Fatalf("%d managers of the run's narrowing are left", count)
+	}
+	if !waitFixtureProcesses(0) {
+		t.Fatalf("%d fixture servers left after the run", fixtureProcesses())
 	}
 }
 

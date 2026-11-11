@@ -83,7 +83,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	}
 	starter := m.resolver.profileRunStarter()
 	if starter == nil {
-		return nil, errors.New("profile messages are unavailable: the run registry is not set")
+		return nil, errProfileRunsUnset
 	}
 	resolved, err := m.resolver.Resolve(ctx, targetReference, target, request.Model)
 	if err != nil {
@@ -141,7 +141,18 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		queueWait: request.QueueWait,
 		maxQueued: request.MaxQueued,
 		blocking:  request.Blocking,
-		hops:      native.RemoteHopsOf(ctx),
+		// The run joins the caller's run tree below the caller's node, under the caller's root
+		// cap; it executes in the target's session, under the target's own session cap.
+		parentNode:    request.Caller.RunNode,
+		maxPerRoot:    request.MaxRunsPerRoot,
+		maxPerSession: targetMaxRunsPerSession(resolved.Runner),
+		hops:          request.Caller.RemoteHops,
+		depth:         request.Caller.RunDepth() + 1,
+		deny:          request.Caller.Deny,
+		modelKeys:     request.Caller.ModelKeyEnvs,
+		// The target's run works under the caller's lineage and the caller's session key, so a
+		// stop, reset or delete of the caller reaches what that run leaves going.
+		lineage: native.ExtendRunLineage(native.RunLineageOf(ctx), request.OwnerKey),
 
 		callerMessages: callerMessagesPath,
 	}
@@ -167,6 +178,17 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	}
 	plan.beforeRun = m.contextStep(plan, request.ContextTrigger)
 	return plan, nil
+}
+
+// targetMaxRunsPerSession is the max_runs_per_session of the session a message's run executes
+// in, the target's own (the section's default when the target has none, or when its settings are
+// not known), as a sub-agent run is counted under its executing session's own cap (T-007).
+func targetMaxRunsPerSession(runner httpapi.RunSession) int {
+	var subagent *sessionfs.NativeSubagentSettings
+	if bound, ok := runner.(boundRunner); ok {
+		subagent = bound.config.NativeSubagent
+	}
+	return int(subagent.RunMaxRunsPerSession())
 }
 
 // chainNode names a profile of a session in a message chain or wait edge.

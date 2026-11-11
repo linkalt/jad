@@ -173,6 +173,21 @@ type Driver interface {
 	Stop(id, reason string)
 }
 
+// KeyedStopper is optional: a driver whose stop also takes the handle's Key (Registration.Key).
+// A stop of such a driver's handle calls StopKeyed instead of Stop.
+type KeyedStopper interface {
+	StopKeyed(id, key, reason string)
+}
+
+// stopHandle asks d to stop handle id, with its key when d takes one.
+func stopHandle(d Driver, id, key, reason string) {
+	if keyed, ok := d.(KeyedStopper); ok {
+		keyed.StopKeyed(id, key, reason)
+		return
+	}
+	d.Stop(id, reason)
+}
+
 // Detailer is optional: a driver that can describe a live handle in more than a
 // summary (status). The text is cut to status_summary_max_bytes.
 type Detailer interface {
@@ -187,6 +202,13 @@ type Registration struct {
 	Label string
 	// Queued starts the handle in the queued state (counts as live); MarkRunning moves it.
 	Queued bool
+	// Lineage is the keys of the runs and owners the handle was started under (native run
+	// lineage); CancelLineage matches them. It is kept in memory only, never in the record.
+	Lineage []string
+	// Key is the handle's own key in the run lineage of the work it starts (a sub-agent run's
+	// lineage key), kept in memory only. A stop gives it to a driver that is a KeyedStopper, so
+	// the driver can still reach that work once the run the id named is gone.
+	Key string
 }
 
 // Result is the terminal outcome a driver reports.

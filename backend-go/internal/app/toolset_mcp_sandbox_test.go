@@ -22,26 +22,26 @@ func TestToolsetMCPServersStartInTheAgentSandbox(t *testing.T) {
 		AgentToolsets:  map[string]sessionfs.SessionConfig{"extra/search": {WorkingDir: "/work", Sandbox: session}},
 		NativeSubagent: &sessionfs.NativeSubagentSettings{Agents: []sessionfs.NativeSubagentAgent{agent("a", nil), agent("b", nil), agent("boxed", reader), agent("exec-only", execOnly), {Name: "plain"}}},
 	}
-	uses := toolsetMCPUses(config)
-	if len(uses) != 2 {
-		t.Fatalf("uses = %+v", uses)
+	views := native.NewAgentToolConfigs(config).MCP
+	if len(views) != 2 {
+		t.Fatalf("views = %+v", views)
 	}
-	byKey := map[string]toolsetMCPUse{}
-	for _, use := range uses {
-		byKey[use.key] = use
+	byKey := map[string]native.AgentMCPView{}
+	for _, view := range views {
+		byKey[view.Key] = view
 	}
 	shared, boxed := byKey["extra/search"], byKey[native.ToolsetMCPKey(agent("boxed", reader))]
-	if shared.config.Sandbox != session || boxed.config.Sandbox != reader || boxed.toolset != "extra/search" {
-		t.Fatalf("shared %+v, boxed %+v", shared.config.Sandbox, boxed.config.Sandbox)
+	if shared.Config.Sandbox != session || boxed.Config.Sandbox != reader || boxed.Toolset != "extra/search" {
+		t.Fatalf("shared %+v, boxed %+v", shared.Config.Sandbox, boxed.Config.Sandbox)
 	}
 	if config.AgentToolsets["extra/search"].Sandbox != session {
 		t.Fatal("the toolset's own settings changed")
 	}
-	key, wrap := mcpSandboxWrapper(boxed.config)
+	key, wrap := mcpSandboxWrapper(boxed.Config)
 	if wrap == nil || !strings.Contains(key, `"{tmp}"`) || strings.Contains(key, `"{workspace}"`) {
 		t.Fatalf("the boxed agent's servers are not wrapped in its sandbox: %q", key)
 	}
-	if toolsetMCPUses(sessionfs.SessionConfig{NativeSubagent: config.NativeSubagent}) != nil {
+	if native.NewAgentToolConfigs(sessionfs.SessionConfig{NativeSubagent: config.NativeSubagent}).MCP != nil {
 		t.Fatal("no toolsets, yet uses")
 	}
 }

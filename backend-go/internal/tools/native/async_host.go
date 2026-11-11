@@ -38,6 +38,9 @@ type AsyncHost struct {
 	// profileStarting holds the handles registered but not yet bound to a run, with the
 	// reason of a stop that arrived meanwhile.
 	profileStarting map[string]string
+	// subagentStarting holds the sub-agent handles registered but whose run is not yet in its
+	// manager, with a stop that arrived meanwhile (subagentDriver.Stop finds no run to stop then).
+	subagentStarting map[string]subagentStartStop
 }
 
 // AsyncResources is implemented by the application resolver: it hands out the host shared

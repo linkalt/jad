@@ -7,12 +7,11 @@ import (
 	"testing"
 
 	"jad/backend-go/internal/sessionfs"
-	"jad/backend-go/internal/tools/native"
 )
 
 // seededRequest is a child request that resumes from seed, as startResume makes one.
-func seededRequest(seed string) native.SubagentRequest {
-	return native.SubagentRequest{CallID: "call-2", Seed: seed}
+func seededRequest(seed string) RunSpec {
+	return RunSpec{Kind: RunEphemeral, CallID: "call-2", Seed: seed}
 }
 
 func TestResumedRunCopiesTheSourceTranscriptAndLeavesTheSourceAlone(t *testing.T) {
@@ -30,8 +29,7 @@ func TestResumedRunCopiesTheSourceTranscriptAndLeavesTheSourceAlone(t *testing.T
 		NativeSubagent: &sessionfs.NativeSubagentSettings{StorageDir: storage},
 		Persistence:    sessionfs.Persistence{Durability: "turn", MaxItemBytes: 1 << 20, ResponseMetadata: "minimal", CursorCacheCheckpointBytes: 1 << 20},
 	}
-	launcher := subagentLauncher{resolver: &Resolver{}}
-	store, dir, err := launcher.openStore(config, seededRequest(filepath.Join(source, "messages.jsonl")))
+	store, dir, err := (&Resolver{}).openEphemeralStore(config, seededRequest(filepath.Join(source, "messages.jsonl")))
 	if err != nil {
 		t.Fatal(err)
 	}

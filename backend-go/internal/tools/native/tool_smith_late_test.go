@@ -196,3 +196,32 @@ func TestToolSmithScriptRunsAnAllowlistedLazyExtensionToolOnly(t *testing.T) {
 		t.Fatalf("the model's direct call of the lazy tool was not refused (searches %d): %s", searches.Load(), direct)
 	}
 }
+
+// A run's own tools (ExecutionContext.RunTools) keep a lazy extension tool a script names when they
+// hold it: a request that names it, or a child's catalog, which holds a lazy tool gated, not dropped.
+// A request that leaves it out refuses it as not allowed, and the tool never runs.
+func TestToolSmithScriptReachesALazyExtensionToolOnlyWhenTheRunsOwnToolsHoldIt(t *testing.T) {
+	root := shortTempDir(t)
+	catalog, searches := lazyExtensionSmithCatalog(t, root, []string{"web_search"})
+	code := "const a = await tools.web_search({query: 'go'});\nreturn a.status + ':' + a.summary;"
+	for name, tc := range map[string]struct {
+		runTools func(tools.Definition) bool
+		want     string
+		searches int32
+	}{
+		"request names it":  {func(d tools.Definition) bool { return tools.AnyEntryMatches([]string{"tool_smith", "web_search"}, d) }, "ok:1 results for", 1},
+		"child's catalog":   {func(d tools.Definition) bool { return catalog.Has(d.Name) }, "ok:1 results for", 1},
+		"request leaves it": {func(d tools.Definition) bool { return tools.AnyEntryMatches([]string{"tool_smith"}, d) }, "tool web_search not allowed", 0},
+	} {
+		before := searches.Load()
+		arguments, _ := json.Marshal(map[string]string{"code": code})
+		call, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "smith-lazy", "name": "tool_smith", "arguments": string(arguments)})
+		raw, err := catalog.ExecuteFunctionCall(context.Background(), call, tools.ExecutionContext{CallID: "smith-lazy", WorkspaceRoot: root, SessionDir: root, SessionKey: testSessionKey, RunTools: tc.runTools})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), tc.want) || searches.Load()-before != tc.searches {
+			t.Errorf("%s: searches %d, want %d:\n%s", name, searches.Load()-before, tc.searches, raw)
+		}
+	}
+}

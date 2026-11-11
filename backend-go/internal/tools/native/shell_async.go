@@ -288,7 +288,7 @@ func startShellAsync(ctx context.Context, host *AsyncHost, spec shellAsyncSpec, 
 		cancel()
 		return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The server is shutting down"), nil
 	}
-	if err := host.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: spec.kind, Label: label}); err != nil {
+	if err := host.Manager().Register(asyncmgr.Registration{ID: id, Owner: owner, Kind: spec.kind, Label: label, Lineage: RunLineageOf(ctx)}); err != nil {
 		host.dropShellRun(id)
 		cancel()
 		code := "spawn_failed"

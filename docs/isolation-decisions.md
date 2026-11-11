@@ -246,7 +246,7 @@ bwrap 0.9.0; nothing was run on macOS.
    definition text plus the agent's sandbox sentence (`describeAgentSandbox`, base texts from
    the session's and each toolset's definitions), and a toolset agent whose own sandbox covers
    `mcp` gets that toolset's stdio servers started for it, in its sandbox (`ToolsetMCPKey` =
-   toolset + agent name; `toolsetMCPUses`). Keyed by agent, not by sandbox, so an edited sandbox
+   toolset + agent name; `native.NewAgentToolConfigs`). Keyed by agent, not by sandbox, so an edited sandbox
    restarts the servers (the manager compares the wrapper key) instead of leaving old ones;
    the toolset's other agents share its servers as before (U4: in the toolset's sandbox).
    Still the session's: the MCP servers of an agent without a toolset (D10; an isolated run's own start in its worktree, P6 implementation); the text of an

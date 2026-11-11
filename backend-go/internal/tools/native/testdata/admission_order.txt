@@ -1,0 +1,87 @@
+local nested: depth, both caps, no slot and a full queue:
+  {"id":"call_a","status":"error","summary":"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_depth_exceeded
+
+local nested: both caps, no slot and a full queue:
+  {"id":"call_a","status":"error","summary":"this sub-agent tree or session already has the most runs it may have going"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+local nested: root cap and no slot:
+  {"id":"call_a","status":"error","summary":"this sub-agent tree or session already has the most runs it may have going"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+local nested: session cap and no slot:
+  {"id":"call_a","status":"error","summary":"this sub-agent tree or session already has the most runs it may have going"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+local nested: root cap at its bound (root plus two):
+  admitted: holds a slot
+local nested: no slot, queue room:
+  {"id":"call_a","status":"error","summary":"no free sub-agent slot: a run started from inside a sub-agent is not queued; try again later or do the work yourself"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_busy
+
+local nested: closed with every limit hit:
+  {"id":"call_a","status":"error","summary":"sub-agent runs are shutting down"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_unavailable
+
+local top level: both caps hit, a free slot:
+  admitted: holds a slot
+local top level: both caps hit, no slot, queue room:
+  admitted: queued
+local top level: no slot and a full queue:
+  {"id":"call_a","status":"error","summary":"too many sub-agent runs are going or waiting"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_busy
+
+local top level: closed with no slot and a full queue:
+  {"id":"call_a","status":"error","summary":"sub-agent runs are shutting down"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_unavailable
+
+remote nested: both caps, no slot and a full queue:
+  {"id":"call","status":"error","summary":"this sub-agent tree or session already has the most runs it may have going"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+remote nested: session cap only:
+  {"id":"call","status":"error","summary":"this sub-agent tree or session already has the most runs it may have going"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+remote nested: no slot and a full queue:
+  admitted: reached the peer, the session counted 1 runs while it ran (seeded 0)
+remote nested: closed with both caps hit:
+  {"id":"call","status":"error","summary":"sub-agent runs are shutting down"}
+
+--- INFORMATION ---
+error_type: execution
+error_code: subagent_limit_reached
+
+remote top level: both caps, no slot and a full queue:
+  admitted: reached the peer, the session counted 3 runs while it ran (seeded 3)

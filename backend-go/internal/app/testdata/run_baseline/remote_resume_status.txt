@@ -1,0 +1,7 @@
+=== status keys elapsed_ms,id,kind,state,text
+state: "done"
+text: "the answer is 42"
+=== status keys elapsed_ms,id,kind,resumed_from,state,text
+state: "done"
+text: "the answer is 42"
+resumed_from: "<source-id>"

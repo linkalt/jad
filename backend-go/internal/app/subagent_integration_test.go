@@ -511,6 +511,13 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	// __parent_model adds fields to the parent's model file (for example pricing).
 	parentModelExtra, _ := agentSetting["__parent_model"].(map[string]any)
 	delete(agentSetting, "__parent_model")
+	// __extra_models adds model files (id -> fields) that point at the parent's server, which
+	// treats every model but parent-model as a child; __environment adds variables to the
+	// loaded environment, such as their keys.
+	extraModels, _ := agentSetting["__extra_models"].(map[string]map[string]any)
+	delete(agentSetting, "__extra_models")
+	extraEnvironment, _ := agentSetting["__environment"].(map[string]string)
+	delete(agentSetting, "__environment")
 	for name, text := range files {
 		writeFile(t, filepath.Join(workspace, name), []byte(text))
 	}
@@ -649,6 +656,16 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		environment["CHILD_PROVIDER_KEY"] = childProviderKey
 	}
 	spec.Models = map[string]map[string]any{"openai/parent": parentModel, "openai/child": childModel}
+	for id, fields := range extraModels {
+		model := map[string]any{"provider": "openai", "base_url": server.URL + "/v1"}
+		for key, value := range fields {
+			model[key] = value
+		}
+		spec.Models[id] = model
+	}
+	for name, value := range extraEnvironment {
+		environment[name] = value
+	}
 	layout := layouttest.Write(t, spec)
 	writeNotesSkill(t, layout.Root, "the secret is 42\n")
 	if mcpServerFile != nil {

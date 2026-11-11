@@ -132,14 +132,20 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	if s.launcher == nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "Sub-agent runs are not available in this session"), nil
 	}
-	if agent.catalog == nil {
+	// A child at the deepest level gets no subagent tool: a call to it could only be refused.
+	catalog, childCatalog := s.catalogsFor(agent, sandboxName, s.depthExceeded(execution.RunDepth()+1))
+	if catalog == nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable",
 			fmt.Sprintf("The MCP tools of agent %s were not loaded", agent.config.Name)), nil
 	}
-	// A child at the deepest level gets no subagent tool: a call to it could only be refused.
-	childCatalog := agent.catalog
-	if s.depthExceeded(execution.AgentDepth+1) && agent.leaf != nil {
-		childCatalog = agent.leaf
+	// What any run above the child denies is its ceiling (U3), as a sandbox is: the child's catalog
+	// loses those tools for this call only, the agent's cached ones stay whole, and one no entry
+	// narrows is the very catalog it had. The fingerprint (catalog) stays the agent definition's: a
+	// caller's ceiling is inherited, like its model, so a resume from another caller does not report
+	// a changed definition.
+	childCatalog, narrowErr := childCatalog.WithoutDenied(execution.Deny)
+	if narrowErr != nil {
+		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "The agent's tools could not be narrowed by this run's tools.deny: "+narrowErr.Error()), nil
 	}
 	// An agent that may nest is a writer when it can start one (nestsWriter): the checkpoint and the
 	// ordered slot of this call are the only ones its grandchild's writes have, and a handle would
@@ -152,10 +158,16 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	// servers start in the worktree.
 	touches := agent.changesWorkspace() || nestsWriter
 	depth := execution.AgentDepth
-	if s.depthExceeded(depth) {
+	if s.depthExceeded(execution.RunDepth()) {
 		return depthExceededError(callID), nil
 	}
 	childExecution := childExecutionContext(execution, agent.config)
+	// The child hands its own runs this ceiling with its agent's deny added (the session's deny is
+	// part of that already).
+	childExecution.Deny = tools.JoinDeny(execution.Deny, agent.filter.Deny)
+	// The child's own tools are its catalog, not its caller's: a tool_smith script of the child
+	// reaches only what the child may call itself.
+	childExecution.RunTools = func(definition tools.Definition) bool { return childCatalog.Has(definition.Name) }
 	environment, err := childEnvironment(execution, agent.config)
 	if err != nil && sandboxName != "" {
 		return sandboxUnavailable(callID, widensProblem(sandboxName, err), s.settings.SandboxChoices), nil
@@ -180,7 +192,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	var handle *subagentAsyncHandle
 	observe := externalObserver(ctx)
 	if observe == nil && s.async != nil && (!touches || background) && canHandle {
-		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task))
+		handle = newSubagentAsyncHandle(s.async, asyncOwner, agent.config.Name, subagentTaskPreview(task), RunLineageOf(ctx))
 	}
 	// The question channel is the caller's only while the call is open: a run that outlives it
 	// (a handle, a background writer) fails a question closed instead of asking nobody.
@@ -190,7 +202,7 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	if handle != nil || background {
 		childExecution.RequestInteraction = closedChannelGuard(childExecution.RequestInteraction, callOpen)
 	}
-	config, err := subagentFingerprint(agent.config, agent.catalog)
+	config, err := subagentFingerprint(agent.config, catalog)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", "The agent definition could not be fingerprinted: "+err.Error()), nil
 	}
@@ -204,17 +216,13 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 		async:          handle,
 		external:       observe != nil,
 		asyncHost:      s.async,
-		childAsync:     agent.hasNativeTool(asyncToolID),
+		childAsync:     agent.keepsNativeTool(asyncToolID, execution.Deny),
 		launcher:       s.launcher,
 		owner:          execution.SessionKey,
-		session:        execution.SessionKey,
 		handleOwner:    asyncOwner,
-		depth:          depth,
-		rootRun:        execution.RootRun,
+		admission:      s.admissionFor(execution),
 		parentID:       execution.ProcessOwner,
-		maxDepth:       int(s.settings.MaxDepth),
-		maxPerRoot:     int(s.settings.MaxRunsPerRoot),
-		maxPerSession:  int(s.settings.MaxRunsPerSession),
+		lineage:        RunLineageOf(ctx),
 		changes:        changes,
 		worktree:       s.worktreeStart(agent.config, from),
 		runMCP:         runMCP,
@@ -229,9 +237,8 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 			Execution: childExecution,
 			// Values only: a background child outlives the call that started it.
 			CallerValues: context.WithoutCancel(ctx),
+			Caller:       subagentCaller(ctx, execution, arguments, sandboxName),
 		},
-		limit:      int(s.settings.MaxConcurrent),
-		maxQueued:  int(s.settings.MaxQueued),
 		changedMax: int(s.settings.ChangedFilesMax),
 		keep:       int(s.settings.KeepFinished),
 		resultMax:  s.settings.ResultMaxBytes,
@@ -260,8 +267,10 @@ func (s *subagentTool) startRunFrom(ctx context.Context, callID, task string, ar
 	// A run without a handle (a writer, or a session without the async tool) has nobody to
 	// collect it later: the checkpoint belongs to this call, which waits
 	// for its end whatever block_ms says, and cancelling the call cancels the run. The
-	// agent's timeout_ms still bounds it. A handle outlives the call: the call's end stops
-	// the wait, never the run.
+	// agent's timeout_ms bounds the run only from the moment it holds a slot
+	// (SubagentManager.execute): a top-level run that queued waits for its slot with no time
+	// limit, ended only by a stop or the call's cancel. A handle outlives the call: the call's
+	// end stops the wait, never the run.
 	wait := -time.Millisecond
 	if handle != nil {
 		wait = s.blockFor(arguments, execution)
@@ -303,14 +312,26 @@ func (s *subagentTool) worktreeStart(agent sessionfs.NativeSubagentAgent, from r
 	return &subagentWorktreeStart{options: options, from: from.branch, materialize: agent.IsolationMaterialize, share: agent.IsolationShare}
 }
 
-// depthExceeded reports whether a call at depth may not start a sub-agent, local or remote.
+// depthExceeded reports whether a call at depth (its RunDepth) may not start a sub-agent, local
+// or remote.
 func (s *subagentTool) depthExceeded(depth int) bool {
-	return depth+1 > max(int(s.settings.MaxDepth), 1)
+	return depthExceeds(depth, int(s.settings.MaxDepth))
 }
 
 func depthExceededError(callID string) string {
 	return tools.ExecutionError(callID, tools.StatusError, "subagent_depth_exceeded",
 		"A sub-agent cannot start another one from this depth (tools.native.subagent.max_depth)")
+}
+
+// subagentCaller is the CallerContext of a subagent call (phase R1): the run scope of the call,
+// the remote caller the remote API marked, the model the call named, and the sandbox the run
+// starts in (the one the call named, or for a resume the source's, as subagentStart.sandbox).
+func subagentCaller(ctx context.Context, execution tools.ExecutionContext, arguments map[string]any, sandboxName string) tools.CallerContext {
+	caller := execution.Caller()
+	caller.RemoteCaller = remoteCallerOf(ctx)
+	caller.ModelChoice, _ = arguments["model"].(string)
+	caller.SandboxChoice = sandboxName
+	return caller
 }
 
 // handleOwner is the owner under which a call registers a handle of the async manager and

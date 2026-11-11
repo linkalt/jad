@@ -156,6 +156,9 @@ func (r *Resolver) forgetStores(dir string) {
 // sessions' handles are left alone.
 func (r *Resolver) CancelAllSessionChildren(reference string) int {
 	prefix := sessionKey(reference, "")
+	// First, as in CancelSessionChildren: a run of the session that is still going reaches, once
+	// its stop ends it, what its calls start after this fan-out has looked.
+	r.runStops.note(func(o string) bool { return strings.HasPrefix(o, prefix) }, reasonSessionDelete)
 	cancelled := 0
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.DeleteOwnersWithPrefix(prefix, reasonSessionDelete)
@@ -164,7 +167,10 @@ func (r *Resolver) CancelAllSessionChildren(reference string) int {
 	for _, manager := range r.subagentManagerList() {
 		subagents += manager.CancelUnmanagedOwnersWithPrefix(prefix, reasonSessionDelete)
 	}
-	return cancelled + subagents
+	// The work the session's chains left in other sessions is stopped; its records stay with
+	// the sessions that own it.
+	descendants := r.cancelLineage(func(key string) bool { return strings.HasPrefix(key, prefix) }, reasonSessionDelete)
+	return cancelled + subagents + descendants
 }
 
 // CanonicalSessionReference implements httpapi.SessionReferences. It does not need the

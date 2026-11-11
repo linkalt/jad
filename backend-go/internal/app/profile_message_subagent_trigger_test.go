@@ -68,6 +68,8 @@ func subagentTriggerScript(midMessage, leafMessage string) func(model, body stri
 
 // subagentTriggerFixture is the layout session whose profile can start sub-agents that message
 // the reviewer, with a context_trigger of the given action over a reviewer that holds history.
+// The leaf runs at depth 2, so its message starts a run at depth 3: max_depth is 3 (since R6 a
+// profile_message counts against max_depth, and the default 2 refuses it, profile_depth_exceeded).
 func subagentTriggerFixture(t *testing.T, trigger map[string]any) (*layoutFixture, string) {
 	t.Helper()
 	f := newLayoutFixture(t)
@@ -76,7 +78,7 @@ func subagentTriggerFixture(t *testing.T, trigger map[string]any) (*layoutFixtur
 			"profile_message": map[string]any{"context_trigger": trigger},
 			"skill":           map[string]any{},
 			"async":           map[string]any{},
-			"subagent": map[string]any{"agents": map[string]any{
+			"subagent": map[string]any{"max_depth": 3, "agents": map[string]any{
 				"mid":  map[string]any{"tools": []string{"profile_message", "subagent"}},
 				"leaf": map[string]any{"tools": []string{"profile_message"}},
 			}},

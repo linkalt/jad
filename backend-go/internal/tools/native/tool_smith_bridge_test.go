@@ -138,11 +138,11 @@ func TestToolSmithNestedCatalogHoldsOnlyAllowedNativeTools(t *testing.T) {
 	list := []tools.Tool{bridgeTestTool(t, "read", true, nil), bridgeTestTool(t, "grep", true, nil), bridgeTestTool(t, "exec", false, nil), mcpReadOnlyTool("read_mcp")}
 	nested := &ToolSmithNested{}
 	nested.Bind(list, sessionfs.ProfileToolSettings{Restricted: true, Deny: []string{"grep"}})
-	got := poolNames(nested.allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"exec", "grep", "read", "read_mcp"}}))
+	got := poolNames(nested.allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"exec", "grep", "read", "read_mcp"}}, nil, nil))
 	if len(got) != 1 || got[0] != "read" {
 		t.Fatalf("allowed = %v", got)
 	}
-	if (*ToolSmithNested)(nil).allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"read"}}) != nil {
+	if (*ToolSmithNested)(nil).allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"read"}}, nil, nil) != nil {
 		t.Fatal("a nil ToolSmithNested gave tools")
 	}
 }
@@ -652,7 +652,7 @@ func TestToolSmithBridgeAnswersAPanicInsideAFrameWithAnInternalError(t *testing.
 }
 
 func TestToolSmithUnboundNestedGivesNoTools(t *testing.T) {
-	if got := (&ToolSmithNested{}).allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"read"}}); len(got) != 0 {
+	if got := (&ToolSmithNested{}).allowed(sessionfs.NativeToolSmithSettings{Tools: []string{"read"}}, nil, nil); len(got) != 0 {
 		t.Fatalf("an unbound ToolSmithNested gave %v", poolNames(got))
 	}
 }

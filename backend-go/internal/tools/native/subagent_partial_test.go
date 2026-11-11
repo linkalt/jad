@@ -94,7 +94,7 @@ func TestSubagentRunKnowsItsTranscriptBeforeTheLauncherReturns(t *testing.T) {
 	defer manager.Close()
 	run, err := manager.start(subagentStart{
 		launcher: launcher, owner: "o", request: SubagentRequest{Agent: agentNamed("explore"), Task: "x"},
-		limit: 1, maxQueued: 1, keep: 5, resultMax: 100,
+		admission: runAdmission{limit: 1, maxQueued: 1}, keep: 5, resultMax: 100,
 	})
 	if err != nil {
 		t.Fatal(err)

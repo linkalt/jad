@@ -166,10 +166,13 @@ func TestNestedChildHoldsNativeSubagentAndReadEager(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(mcp.tool.agents) != 1 || mcp.tool.agents[0].catalog == nil {
+	if len(mcp.tool.agents) != 1 || mcp.tool.agents[0].catalogs == nil {
 		t.Fatal("the child catalog was not built")
 	}
-	child := mcp.tool.agents[0].catalog
+	child, err := mcp.tool.childCatalog(mcp.tool.agents[0], "", false)
+	if err != nil || child == nil {
+		t.Fatalf("the child catalog was not built: %v", err)
+	}
 	for _, name := range []string{"read_image", "subagent"} {
 		args := `{"path":"notes.png"}`
 		if name == "subagent" {

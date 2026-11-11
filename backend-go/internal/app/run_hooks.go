@@ -18,7 +18,14 @@ import (
 // fireRunHook runs the run_start or run_end commands of the session and writes each
 // report to the server log. The reports never reach the model or messages.jsonl.
 func (r boundRunner) fireRunHook(ctx context.Context, event native.RunEvent, onReport func(session.HookReport)) {
-	fireSessionHook(ctx, r.resolver.logger, r.reference, r.config, event, onReport)
+	r.fireHook(ctx, r.config.Model.APIKeyEnv, event, onReport)
+}
+
+// fireHook is fireSessionHookWithKey for an event of the run: its commands also hide the model
+// keys of the caller that started the run (boundRunner.inheritedModelKeys, T-009).
+func (r boundRunner) fireHook(ctx context.Context, apiKeyEnv string, event native.RunEvent, onReport func(session.HookReport)) native.RunEventResult {
+	event.ModelKeyEnvs = tools.JoinDeny(event.ModelKeyEnvs, r.inheritedModelKeys())
+	return fireSessionHookWithKey(ctx, r.resolver.logger, r.reference, r.config, apiKeyEnv, event, onReport)
 }
 
 // fireSessionHook fills in the session fields of event, runs its commands, logs each report
@@ -33,6 +40,10 @@ func fireSessionHookWithKey(ctx context.Context, logger *slog.Logger, reference 
 	event.Session = reference
 	event.Profile = config.Profile
 	event.WorkspaceRoot = config.WorkingDir
+	if config.Hooks.RunEventsActive() {
+		// The model_fallback models may answer the run too: their keys are hidden as its own is (T-009).
+		event.ModelKeyEnvs = tools.JoinDeny(event.ModelKeyEnvs, runModelKeys(config))
+	}
 	result := native.FireRunEventResult(ctx, config.Hooks, apiKeyEnv, event)
 	for _, report := range result.Reports {
 		logger.Info("hook "+event.Event,
@@ -76,7 +87,7 @@ func (r boundRunner) promptSubmitInput(ctx context.Context, input json.RawMessag
 		apiKeyEnv = withModel.Model.APIKeyEnv
 	}
 	event := native.RunEvent{Event: native.HookEventPromptSubmit, TurnID: turnID, Prompt: inputPromptText(items)}
-	result := fireSessionHookWithKey(ctx, r.resolver.logger, r.reference, r.config, apiKeyEnv, event, onReport)
+	result := r.fireHook(ctx, apiKeyEnv, event, onReport)
 	if err := blockedByHook(native.HookEventPromptSubmit, result); err != nil {
 		return nil, err
 	}
@@ -110,7 +121,7 @@ func (r boundRunner) sessionStartInput(ctx context.Context, input json.RawMessag
 	if err != nil {
 		return input, nil
 	}
-	result := fireSessionHookWithKey(ctx, r.resolver.logger, r.reference, r.config, r.hookAPIKeyEnv(), native.RunEvent{Event: native.HookEventSessionStart, TurnID: turnID, Prompt: inputPromptText(items)}, onReport)
+	result := r.fireHook(ctx, r.hookAPIKeyEnv(), native.RunEvent{Event: native.HookEventSessionStart, TurnID: turnID, Prompt: inputPromptText(items)}, onReport)
 	if len(result.Context) == 0 {
 		return input, nil
 	}
@@ -136,7 +147,7 @@ func (r boundRunner) applyStopHooks(options *session.RunOptions) {
 	options.StopMessageRole = hooks.StopMessageRole
 	onReport := options.OnHookReport
 	options.OnStop = func(ctx context.Context, turnID, answer string, continues int) (string, error) {
-		result := fireSessionHook(ctx, r.resolver.logger, r.reference, r.config, native.RunEvent{Event: native.HookEventStop, TurnID: turnID, Answer: answer, Continues: continues}, onReport)
+		result := r.fireHook(ctx, r.config.Model.APIKeyEnv, native.RunEvent{Event: native.HookEventStop, TurnID: turnID, Answer: answer, Continues: continues}, onReport)
 		if result.Continue == "" {
 			return "", nil
 		}
@@ -168,7 +179,7 @@ func (r boundRunner) applyNotificationHooks(ctx context.Context, options *sessio
 	detached := context.WithoutCancel(ctx)
 	turnID, onReport := options.TurnID, options.OnHookReport
 	options.ToolExecution.RequestInteraction = func(ctx context.Context, identity tools.InteractionIdentity, question tools.InteractionQuestion) (tools.InteractionAnswer, error) {
-		go fireSessionHook(detached, r.resolver.logger, r.reference, r.config, native.RunEvent{
+		go r.fireHook(detached, r.config.Model.APIKeyEnv, native.RunEvent{
 			Event: native.HookEventNotification, Trigger: native.NotificationInteraction, TurnID: turnID,
 			Tool: identity.Tool, CallID: identity.ToolCallID, Title: question.Title,
 		}, onReport)

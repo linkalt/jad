@@ -125,6 +125,9 @@ type hookChild struct {
 	// starts in that call's sandbox: in a plan-mode run (or for a read_only exec call) the
 	// sandbox's plan-mode form, with the call's own temp folder.
 	call *tools.ExecutionContext
+	// modelKeys are key variables the command never gets beside apiKeyEnv and, for a call, the
+	// call's ModelKeyEnvs (for a run event, RunEvent.ModelKeyEnvs).
+	modelKeys []string
 }
 
 // runHookChild runs one hook command under the hooks' own child-process settings and
@@ -162,7 +165,9 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		hooks.StripANSI,
 	)
 	sandbox, tmp, sessionDir := hooks.Sandbox, "", ""
+	modelKeys := []string{apiKeyEnv}
 	if hook.call != nil {
+		modelKeys = callModelKeys(apiKeyEnv, *hook.call)
 		sandbox, sessionDir = callSandbox("hooks", sandbox, *hook.call), hook.call.SessionDir
 		var err error
 		if tmp, err = callTempDir(sandbox, *hook.call); err != nil {
@@ -174,7 +179,7 @@ func runHookChildOutput(ctx context.Context, hooks sessionfs.HooksSettings, apiK
 		args:                     hook.argv[1:],
 		stdin:                    hook.stdin,
 		cwd:                      cwd,
-		environment:              buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{Env: hooks.Env, EnvDeny: hooks.EnvDeny}, apiKeyEnv),
+		environment:              buildNativeBashEnvironment(os.Environ(), sessionfs.NativeBashSettings{Env: hooks.Env, EnvDeny: hooks.EnvDeny}, append(modelKeys, hook.modelKeys...)...),
 		timeout:                  time.Duration(hooks.TimeoutMS) * time.Millisecond,
 		killGrace:                time.Duration(hooks.KillGraceMs) * time.Millisecond,
 		killDeadline:             time.Duration(hooks.KillDeadlineMs) * time.Millisecond,

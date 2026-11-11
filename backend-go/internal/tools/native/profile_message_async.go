@@ -164,7 +164,7 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 			tools.Information{Key: "system_error", Value: err.Error()}), nil
 	}
 	id := "pm_" + hex.EncodeToString(random)
-	if err := host.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindProfileMessage, Label: handleLabel(profile + ": " + oneLine(message)), Queued: true}); err != nil {
+	if err := host.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindProfileMessage, Label: handleLabel(profile + ": " + oneLine(message)), Queued: true, Lineage: RunLineageOf(ctx)}); err != nil {
 		return tools.ExecutionError(callID, tools.StatusError, registerErrorCode(err), err.Error()), nil
 	}
 	run, err := plan.Start(ctx)

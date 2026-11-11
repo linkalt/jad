@@ -24,7 +24,8 @@ const clientFeaturesFixtureEnvironment = "JAD_MCP_CLIENT_FEATURES_FIXTURE"
 
 // TestMCPClientFeaturesFixtureProcess is the stdio server of the client feature tests. Its
 // probe tool lists the client's roots, asks it to sample and to elicit, logs a message and
-// adds a tool (a tool list change), and answers with what it got. It does nothing unless
+// adds a tool (a tool list change), and answers with what it got; reading doc://elicit asks a
+// question during the read. It does nothing unless
 // started as the fixture.
 func TestMCPClientFeaturesFixtureProcess(t *testing.T) {
 	if os.Getenv(clientFeaturesFixtureEnvironment) != "1" {
@@ -94,6 +95,23 @@ func TestMCPClientFeaturesFixtureProcess(t *testing.T) {
 			return &mcpSDK.CallToolResult{}, nil
 		})
 		return &mcpSDK.CallToolResult{Content: []mcpSDK.Content{&mcpSDK.TextContent{Text: strings.Join(report, "\n")}}}, nil
+	})
+	// Reading doc://elicit asks the client a question in the read's result and answers with
+	// what it got.
+	server.AddResource(&mcpSDK.Resource{URI: "doc://elicit", Name: "elicit"}, func(_ context.Context, request *mcpSDK.ReadResourceRequest) (*mcpSDK.ReadResourceResult, error) {
+		response, given := request.Params.InputResponses["elicit"]
+		if !given {
+			return &mcpSDK.ReadResourceResult{InputRequests: mcpSDK.InputRequestMap{"elicit": &mcpSDK.ElicitParams{
+				Message:         "Which color?",
+				RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{"color": map[string]any{"type": "string", "default": "red"}}},
+			}}}, nil
+		}
+		text := fmt.Sprintf("%T", response)
+		if result, ok := response.(*mcpSDK.ElicitResult); ok {
+			content, _ := json.Marshal(result.Content)
+			text = "elicited " + result.Action + " " + string(content)
+		}
+		return &mcpSDK.ReadResourceResult{Contents: []*mcpSDK.ResourceContents{{URI: "doc://elicit", MIMEType: "text/plain", Text: text}}}, nil
 	})
 	_ = server.Run(context.Background(), &mcpSDK.StdioTransport{})
 	os.Exit(0)
@@ -225,10 +243,6 @@ func TestMCPClientOffersRootsSamplingElicitationAndLogs(t *testing.T) {
 	}
 	if output := runProbe(t, probe, execution, "sample"); !strings.Contains(output, `\"status\":\"error\"`) || strings.Contains(output, "sampled") {
 		t.Fatalf("over-budget probe output:\n%s", output)
-	}
-	// No call is running between calls: an elicitation then could not be answered.
-	if call := probeState(t, manager).currentCall(); call != nil {
-		t.Fatalf("a call is still set after the call: %+v", call)
 	}
 }
 

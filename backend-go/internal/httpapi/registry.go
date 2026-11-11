@@ -276,7 +276,13 @@ type activeRun struct {
 	// under mu before the run starts, empty for a user run.
 	chain []string
 	// hops is the remote hop count a tool-started run inherits; set under mu before it starts.
-	hops                int
+	hops int
+	// depth is the run's depth across both kinds of run (ProfileRunRequest.Depth), 0 for a user
+	// run; set under mu before it starts.
+	depth int
+	// runNode is the run's run tree node (ProfileRunRequest.RunNode), empty for a user run; set
+	// under mu before it starts.
+	runNode             string
 	cancel              context.CancelFunc
 	ctx                 context.Context
 	interactions        *interactionbroker.Broker

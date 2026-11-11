@@ -197,8 +197,7 @@ func (b remoteBackend) resolveProfile(ctx context.Context, session, profile stri
 }
 
 func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.MessageRequest) (remoteapi.Run, error) {
-	starter := b.resolver.profileRunStarter()
-	if starter == nil {
+	if b.resolver.profileRunStarter() == nil {
 		return nil, &remoteapi.Refusal{Code: "unavailable", Message: "profile messages are unavailable on this server"}
 	}
 	resolved, err := b.resolveProfile(ctx, request.Session, request.Profile)
@@ -206,7 +205,7 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 		return nil, err
 	}
 	run := &remoteMessageRun{done: make(chan struct{})}
-	started, err := starter.StartProfileRun(ctx, httpapi.ProfileRunRequest{
+	handle, err := b.resolver.StartRun(ctx, RunSpec{Kind: RunPersistent, Profile: httpapi.ProfileRunRequest{
 		Reference: resolved.Reference,
 		Profile:   resolved.Profile,
 		Caller:    request.Caller,
@@ -222,8 +221,10 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 		// The target's own sandbox.isolation applies as for a local profile_message: an
 		// isolated target works in a git worktree of its own and the result says where its
 		// work is. The caller's sandbox is on its own server and does not narrow this one.
-		Confine: targetRunner(nil, request.Caller, request.Message, run.setWorktree),
-	})
+		// Nor does its tools.deny (U3): no deny crosses the remote hop, so the run has the
+		// target's own tools only. Nor do its model keys (T-009): the run hides its own models'.
+		Confine: targetRunner(nil, request.Caller, request.Message, run.setWorktree, nil, nil, nil),
+	}})
 	if errors.Is(err, httpapi.ErrSessionBusy) {
 		return nil, remoteapi.ErrBusy
 	}
@@ -234,7 +235,7 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 	if timeout <= 0 {
 		timeout = time.Hour
 	}
-	run.arm(started, timeout)
+	run.arm(handle.ProfileRun(), timeout)
 	return run, nil
 }
 
@@ -379,7 +380,7 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	if err != nil {
 		return nil, mapSessionError(err)
 	}
-	catalog, _, _, err := b.resolver.buildRegisteredCatalog(ctx, config)
+	catalog, _, _, err := b.resolver.buildRegisteredCatalog(ctx, config, nil)
 	if err != nil {
 		return nil, err
 	}

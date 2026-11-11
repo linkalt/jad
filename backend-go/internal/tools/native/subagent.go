@@ -65,6 +65,13 @@ type SubagentRequest struct {
 	// max_run_cost_usd and budget). The child's cancellation does not come from it: a run
 	// hangs off the manager. Nil when there is no caller.
 	CallerValues context.Context
+	// Caller is the calling run (design section 3.3, phase R1): the run scope of the call that
+	// starts this run, before the child's own depth, handle owner, worktree and environment are
+	// set on Execution, plus the remote caller and the model and sandbox names. It is filled but
+	// not read today: Execution and CallerValues are what the launcher uses. It is kept reserved
+	// for U1 (a profile started as an ephemeral run); if U1 is declined, removing it here and on
+	// RunSpec is a separate R7 cleanup (DECISIONS.md, "Unified agent runs: completion assessment").
+	Caller tools.CallerContext
 }
 
 // SubagentResult is what a finished child run reports.
@@ -85,10 +92,12 @@ type SubagentLauncher interface {
 	Run(ctx context.Context, request SubagentRequest) (SubagentResult, error)
 }
 
-func (a subagentAgent) hasNativeTool(id string) bool {
+// keepsNativeTool reports whether the agent has the native tool and a run narrowed by deny (the
+// caller's ExecutionContext.Deny) keeps it.
+func (a subagentAgent) keepsNativeTool(id string, deny []string) bool {
 	for _, tool := range a.nativeTools {
 		if tool.Definition.ID == id {
-			return true
+			return !tools.AnyEntryMatches(deny, tool.Definition)
 		}
 	}
 	return false
@@ -96,11 +105,10 @@ func (a subagentAgent) hasNativeTool(id string) bool {
 
 type subagentAgent struct {
 	config sessionfs.NativeSubagentAgent
-	// catalog is what the child may call; leaf is the same without the subagent tool, for a
-	// child that is at the deepest level (see buildCatalogs). Both are nil for an agent whose allow
-	// list names MCP tools until SubagentMCP.Bind has seen the loaded MCP tools.
-	catalog *tools.Catalog
-	leaf    *tools.Catalog
+	// catalogs are the catalogs its children get, built from the fields below (childCatalog); a
+	// new set whenever they change (buildCatalogs). Nil for an agent whose allow list names MCP
+	// tools until SubagentMCP.Bind has seen the loaded MCP tools.
+	catalogs *childCatalogSet
 	// filter is the agent's own narrowing, written as a profile's tools block (see
 	// NativeSubagentAgent.ToolSettings): what a profile's applyProfileTools would apply to it.
 	filter sessionfs.ProfileToolSettings
@@ -120,7 +128,7 @@ type subagentAgent struct {
 	// the agent can change files; see backgroundSafe.
 	background bool
 	// descriptions are the base descriptions of the sandbox-described tools of its pool
-	// (sandboxBaseDescriptions), for the catalog of a sandbox choice (choiceAgent).
+	// (sandboxBaseDescriptions), for the catalog of a sandbox choice (childCatalogSections).
 	descriptions map[string]string
 }
 
@@ -185,6 +193,9 @@ type SubagentMCP struct {
 	// its nested copy to each child with them, so a nested call fires them as the parent's does.
 	hooks     sessionfs.HooksSettings
 	apiKeyEnv string
+	// assembled is set for a build whose children's catalogs are assembled by AssembleChildren:
+	// the subagent tool then builds none of them when it is made (newSubagentToolDescribed).
+	assembled bool
 }
 
 // NewSubagentMCP is the handle for a session whose subagent tool is built with the owning
@@ -193,14 +204,51 @@ func NewSubagentMCP(hooks sessionfs.HooksSettings, apiKeyEnv string) *SubagentMC
 	return &SubagentMCP{hooks: hooks, apiKeyEnv: apiKeyEnv}
 }
 
+// NewAssembledSubagentMCP is NewSubagentMCP for a catalog build that assembles the owner's and the
+// children's catalogs from the same parts once it has acquired them all (AssembleChildren). The
+// subagent tool builds no child catalog when it is made, only its agents (their native tools and
+// filters); AssembleChildren builds each agent's catalogs once, from every input at once.
+func NewAssembledSubagentMCP(hooks sessionfs.HooksSettings, apiKeyEnv string) *SubagentMCP {
+	return &SubagentMCP{hooks: hooks, apiKeyEnv: apiKeyEnv, assembled: true}
+}
+
+// ChildParts are the parts of one catalog build that its children's catalogs are assembled from,
+// besides the agents the subagent tool resolved from the native pool: the owner's lazy set, the
+// owner's own load_tool (its LoadTool section, built from that set; nil when the owner enables
+// none), the loader of an isolated run's MCP servers, and the build's MCP copies, the same ones the
+// owner's catalog holds.
+type ChildParts struct {
+	Lazy     *tools.LazySet
+	LoadTool *tools.Tool
+	RunMCP   RunMCPLoader
+	MCP      MCPCopies
+}
+
+// AssembleChildren gives the subagent tool every part its children's catalogs depend on and then
+// builds each agent's catalogs (its own and the deepest level's) once, under one lock. It is the
+// child half of a build's assembly: it starts no server and changes no part; each agent shows its
+// own copies (bindMCP) with its own filter, the owner's narrowing (allow, strict entries) is left
+// to the owner's catalog. For a handle made by NewSubagentMCP it does what SetLazy, SetRunMCP and
+// BindCopies do together.
+func (m *SubagentMCP) AssembleChildren(parts ChildParts) error {
+	if m == nil || m.tool == nil {
+		return nil
+	}
+	s := m.tool
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lazy, s.loadTool, s.runMCP = parts.Lazy, parts.LoadTool, parts.RunMCP
+	return s.bindMCPLocked(parts.MCP)
+}
+
 // Bind gives each agent that lists MCP tools its catalog. It fails when a listed tool
 // is not among the loaded ones. It does nothing when the session has no subagent tool.
 func (m *SubagentMCP) Bind(mcpTools []tools.Tool) error {
 	return m.BindToolsets(mcpTools, nil)
 }
 
-// SetLazy gives the owning profile's lazy set to the children: each child's MCP tools in that set are
-// gated with it. loadTool is the child's load_tool, built by the owner from the
+// SetLazy gives the owning profile's lazy set to the children: BindToolsets gates each child's MCP
+// tools in that set with it (BindCopies takes copies already gated with it). loadTool is the child's load_tool, built by the owner from the
 // same set and manifest; nil when the owner enables no load_tool. A child gets it when its own
 // settings show it, as a profile gets its own.
 func (m *SubagentMCP) SetLazy(lazy *tools.LazySet, loadTool *tools.Tool) error {
@@ -239,11 +287,69 @@ type ToolsetMCP struct {
 // BindToolsets is Bind plus the MCP tools loaded for each toolset an agent names, by
 // ToolsetMCPKey (the toolset ID, with the agent's name when they start in its own sandbox). An
 // agent with a toolset resolves its mcp: entries against those tools only, never the session's.
+// The tools are raw, as their managers listed them: they are gated with the lazy set SetLazy gave
+// and hooked with the owner's (or the toolset's) hooks here (NewMCPCopies), for a caller that has
+// not built the copies itself. A profile's catalog build calls BindCopies with the copies its own
+// catalog holds.
 func (m *SubagentMCP) BindToolsets(mcpTools []tools.Tool, toolsetTools map[string]ToolsetMCP) error {
 	if m == nil || m.tool == nil {
 		return nil
 	}
-	return m.tool.bindMCP(mcpTools, toolsetTools, m.hooks, m.hookWith)
+	m.tool.mu.RLock()
+	lazy := m.tool.lazy
+	m.tool.mu.RUnlock()
+	return m.BindCopies(NewMCPCopies(mcpTools, toolsetTools, lazy, m.hooks, m.apiKeyEnv))
+}
+
+// BindCopies gives each agent the MCP copies its settings show, from copies: the session's for an
+// agent without a toolset, its toolset's (by ToolsetMCPKey) otherwise. The copies are already gated
+// and hooked, so the child holds the very copy the owner's catalog (or another agent of the same
+// toolset) holds, and the order of SetLazy and BindCopies does not decide whether it is gated.
+func (m *SubagentMCP) BindCopies(copies MCPCopies) error {
+	if m == nil || m.tool == nil {
+		return nil
+	}
+	return m.tool.bindMCP(copies)
+}
+
+// MCPCopies are the MCP tools of one catalog build as every catalog of that build holds them: the
+// profile's own (session) tools, and each agent toolset's by ToolsetMCPKey. Each tool is gated once
+// with the owning profile's lazy set and hooked once by its hook owner: the profile's hooks for a
+// session tool, the toolset's own hooks for a toolset's. The owner's catalog holds the session
+// copies, and every child catalog (each agent, sandbox choice and depth class) holds the same copies
+// its agent shows, so a build wraps each listed tool once however many catalogs hold it.
+type MCPCopies struct {
+	session  []tools.Tool
+	toolsets map[string][]tools.Tool
+}
+
+// NewMCPCopies gates and hooks the listed MCP tools of one build. The gate is GateFor, never the
+// set's one-shot Gate: a toolset's copy of a tool with the ID of an owner's lazy tool is gated as
+// well (it wraps the toolset's copy, so the toolset's connection and hooks stay), and building the
+// copies twice from one set gates both. The hooks wrap the gate, so a refused lazy call still fires
+// them once. lazy is the owner's set after it bound the session tools; nil gates nothing. It starts
+// no server and changes neither the set nor the listed tools.
+func NewMCPCopies(session []tools.Tool, toolsets map[string]ToolsetMCP, lazy *tools.LazySet, hooks sessionfs.HooksSettings, apiKeyEnv string) MCPCopies {
+	copies := MCPCopies{session: mcpCopiesOf(session, lazy, hooks, apiKeyEnv), toolsets: make(map[string][]tools.Tool, len(toolsets))}
+	for key, loaded := range toolsets {
+		copies.toolsets[key] = mcpCopiesOf(loaded.Tools, lazy, loaded.Hooks, apiKeyEnv)
+	}
+	return copies
+}
+
+// Session is the session's MCP copies, in the order the manager listed them, as the owner's catalog
+// holds them. The slice is the copies' own; a caller must not change it.
+func (c MCPCopies) Session() []tools.Tool {
+	return c.session
+}
+
+func mcpCopiesOf(list []tools.Tool, lazy *tools.LazySet, hooks sessionfs.HooksSettings, apiKeyEnv string) []tools.Tool {
+	copies := make([]tools.Tool, len(list))
+	for index, tool := range list {
+		gated, _ := lazy.GateFor(tool)
+		copies[index] = WithToolEventHooks(gated, hooks, apiKeyEnv)
+	}
+	return copies
 }
 
 // hookTool wraps a nested copy of a tool with the owning profile's hooks. A nil handle returns the
@@ -252,15 +358,7 @@ func (m *SubagentMCP) hookTool(tool tools.Tool) tools.Tool {
 	if m == nil {
 		return tool
 	}
-	return m.hookWith(m.hooks, tool)
-}
-
-// hookWith wraps a nested copy of a tool with the given profile's hooks (a toolset's, for its tool).
-func (m *SubagentMCP) hookWith(hooks sessionfs.HooksSettings, tool tools.Tool) tools.Tool {
-	if m == nil {
-		return tool
-	}
-	return WithToolEventHooks(tool, hooks, m.apiKeyEnv)
+	return WithToolEventHooks(tool, m.hooks, m.apiKeyEnv)
 }
 
 type subagentTool struct {
@@ -288,10 +386,6 @@ type subagentTool struct {
 	// runMCP starts the stdio MCP servers of an isolated run's own (SubagentMCP.SetRunMCP); nil
 	// leaves every run on the session's servers. Guarded by mu.
 	runMCP RunMCPLoader
-	// choiceCatalogs are the agents' catalogs for the sandbox choices calls made, by agent and
-	// choice name (choiceAgent); choiceMu guards them.
-	choiceMu       sync.Mutex
-	choiceCatalogs map[string]choiceCatalogs
 }
 
 // NewSubagentTool builds the subagent tool over the already built tools of the same
@@ -454,6 +548,11 @@ func newSubagentToolDescribed(settings sessionfs.NativeSubagentSettings, parentT
 	}
 	self.Definition.Description = runtime.description()
 	runtime.self = self
+	// A build that assembles its children's catalogs later (NewAssembledSubagentMCP) builds them
+	// once there, from every input; any other builds them now, and again as inputs arrive.
+	if mcp != nil && mcp.assembled {
+		return self, nil
+	}
 	if err := runtime.buildAllCatalogs(); err != nil {
 		return tools.Tool{}, err
 	}
@@ -476,13 +575,34 @@ func (s *subagentTool) description() string {
 // native catalog, before the MCP tools exist, and whether an agent changes files depends on them
 // (mcpWrites), so the owner calls this once after Bind. A catalog without the tool is returned as it is.
 func (m *SubagentMCP) Redescribe(catalog *tools.Catalog) (*tools.Catalog, error) {
-	if m == nil || m.tool == nil {
+	text, ok := m.currentDescription()
+	if !ok {
 		return catalog, nil
 	}
-	m.tool.mu.RLock()
-	text := m.tool.description()
-	m.tool.mu.RUnlock()
 	return catalog.WithDescription(subagentToolID, text)
+}
+
+// RedescribeSections is Redescribe for an owner composed from its sections (the resolver's
+// assembly): the subagent section gets the description as it is now, before the catalog is
+// composed once, instead of composing and then rebuilding the catalog for one description.
+func (m *SubagentMCP) RedescribeSections(sections CatalogSections) CatalogSections {
+	text, ok := m.currentDescription()
+	if !ok || sections.Subagent == nil {
+		return sections
+	}
+	described := *sections.Subagent
+	described.Definition.Description = text
+	sections.Subagent = &described
+	return sections
+}
+
+func (m *SubagentMCP) currentDescription() (string, bool) {
+	if m == nil || m.tool == nil {
+		return "", false
+	}
+	m.tool.mu.RLock()
+	defer m.tool.mu.RUnlock()
+	return m.tool.description(), true
 }
 
 // nestsFor reports whether a child of agent may be offered the subagent tool: max_depth is 2 or more
@@ -512,36 +632,26 @@ func (s *subagentTool) nestedSelf() tools.Tool {
 	return s.mcp.hookTool(s.self)
 }
 
-// buildCatalogs builds the two catalogs of an agent from its native tools, the owner's load_tool
-// (when the agent's settings show it) and the MCP tools bound so far. catalog is what a child gets
-// that may still start a child of its own: it holds the subagent tool when the agent's settings show
-// it and max_depth is 2 or more. leaf is the same without it, for a child at the deepest level,
-// where a call would only be refused (startRunFrom picks one by depth; the depth check stays the
-// gate). An agent that lists MCP tools has no catalog until bindMCP has seen them.
+// buildCatalogs gives agent a new catalog set (childCatalogSet) for its current inputs: its native
+// tools, the owner's load_tool (when the agent's settings show it) and the MCP tools bound so far.
+// Its two own catalogs are built here, from the inputs as they are now, so a catalog that cannot be
+// built fails the owner's prepare and not a later call, and a later change of an input that does
+// not call buildCatalogs (SetLazy without a load_tool) leaves both as they were built. The first is
+// what a child that may still start a child of its own gets: it holds the subagent tool when the
+// agent's settings show it and max_depth is 2 or more. The second is the deepest level's, the same
+// without it, where a call would only be refused (startRunFrom picks it by depth; the depth check
+// stays the gate). A sandbox choice's catalogs are built by the first call that picks it. An agent
+// that lists MCP tools has no catalog until bindMCP has seen them. The caller holds s.mu.
 func (s *subagentTool) buildCatalogs(agent *subagentAgent) error {
 	agent.nests = s.nestsFor(*agent)
 	if agent.needsMCP && !agent.mcpBound {
-		agent.catalog, agent.leaf = nil, nil
+		agent.catalogs = nil
 		return nil
 	}
-	leaf := append([]tools.Tool(nil), agent.nativeTools...)
-	var loadTool []tools.Tool
-	if s.loadTool != nil && tools.ProfileShows(agent.filter, s.loadTool.Definition) {
-		loadTool = []tools.Tool{*s.loadTool}
-	}
-	leaf = append(append(leaf, loadTool...), agent.mcpTools...)
-	full := leaf
-	if agent.nests {
-		full = append(append(append(append([]tools.Tool(nil), agent.nativeTools...), s.nestedSelf()), loadTool...), agent.mcpTools...)
-	}
-	var err error
-	if agent.leaf, err = tools.NewCatalog(leaf); err != nil {
-		return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
-	}
-	agent.catalog = agent.leaf
-	if len(full) != len(leaf) {
-		if agent.catalog, err = tools.NewCatalog(full); err != nil {
-			return fmt.Errorf("tools.native.subagent.agents.%s: %w", agent.config.Name, err)
+	agent.catalogs = newChildCatalogSet()
+	for _, leaf := range []bool{false, true} {
+		if _, err := s.childCatalogLocked(*agent, "", leaf); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -890,26 +1000,28 @@ func newSubagentAgent(agent sessionfs.NativeSubagentAgent, sessionDeny []string,
 // the session's (or its toolset's) MCP tools, narrowed by the agent's allow and deny lists and the
 // session profile's tools.deny.
 //
-// Each child's copy is the raw tool, gated by the owner's lazy set (the gate wraps the tool it is
-// given, so a toolset's copy stays the toolset's) and then wrapped by hook: with the owner's hooks
-// for a session tool, with the toolset's own hooks (ToolsetMCP.Hooks) for a toolset tool. The hooks
-// wrap the gate, so a refused call to a lazy tool still fires them once.
-func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]ToolsetMCP, ownerHooks sessionfs.HooksSettings, hook func(sessionfs.HooksSettings, tools.Tool) tools.Tool) error {
-	session := newMCPPool(mcpTools)
-	pools := make(map[string]mcpPool, len(toolsetTools))
-	toolsetHooks := make(map[string]sessionfs.HooksSettings, len(toolsetTools))
-	for id, loaded := range toolsetTools {
-		pools[id] = newMCPPool(loaded.Tools)
-		toolsetHooks[id] = loaded.Hooks
-	}
-
+// Each child's copy is the build's copy (MCPCopies): the tool gated by the owner's lazy set (the
+// gate wraps the tool it is given, so a toolset's copy stays the toolset's) and hooked with the
+// owner's hooks for a session tool, with the toolset's own hooks (ToolsetMCP.Hooks) for a toolset
+// tool. The hooks wrap the gate, so a refused call to a lazy tool still fires them once. A child gets
+// the copy itself, wrapped no further, so it holds what the owner's catalog holds.
+func (s *subagentTool) bindMCP(copies MCPCopies) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.bindMCPLocked(copies)
+}
+
+// bindMCPLocked is bindMCP for a caller that holds s.mu.
+func (s *subagentTool) bindMCPLocked(copies MCPCopies) error {
+	session := newMCPPool(copies.session)
+	pools := make(map[string]mcpPool, len(copies.toolsets))
+	for id, list := range copies.toolsets {
+		pools[id] = newMCPPool(list)
+	}
 	for index := range s.agents {
 		agent := &s.agents[index]
-		pool, hooks, where := session, ownerHooks, ""
+		pool, where := session, ""
 		if toolsetKey := agent.config.ToolsetKey(); toolsetKey != "" {
-			hooks = toolsetHooks[ToolsetMCPKey(agent.config)]
 			pool = pools[ToolsetMCPKey(agent.config)]
 			if pool.byID == nil {
 				pool = mcpPool{byID: map[string]tools.Tool{}, loadedText: "none"}
@@ -924,11 +1036,9 @@ func (s *subagentTool) bindMCP(mcpTools []tools.Tool, toolsetTools map[string]To
 			if !tools.ProfileShows(agent.filter, tool.Definition) {
 				continue
 			}
-			// The owning profile's lazy set gates the child's copy: a lazy tool is never in the child's
-			// tools array, and runs only through the child's load_tool (run). GateFor leaves the set's
-			// one-shot gate to the parent.
-			gated, _ := s.lazy.GateFor(tool)
-			agent.mcpTools = append(agent.mcpTools, hook(hooks, gated))
+			// The copy is already gated by the owning profile's lazy set: a lazy tool is never in the
+			// child's tools array, and runs only through the child's load_tool (run).
+			agent.mcpTools = append(agent.mcpTools, tool)
 		}
 		agent.mcpBound = true
 		// Bound MCP tools can make an isolated agent a writer (changesWorkspace).

@@ -28,7 +28,7 @@ func TestSubagentRunIDIsNotReusedWhileTheRunIsHeld(t *testing.T) {
 	start := func() *subagentRun {
 		run, err := manager.start(subagentStart{
 			launcher: launcher, owner: "o", request: SubagentRequest{Agent: agentNamed("explore"), Task: "t"},
-			limit: 4, maxQueued: 4, keep: 4, resultMax: 1000,
+			admission: runAdmission{limit: 4, maxQueued: 4}, keep: 4, resultMax: 1000,
 		})
 		if err != nil {
 			t.Fatal(err)

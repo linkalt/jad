@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"jad/backend-go/internal/sessionfs"
@@ -47,7 +49,7 @@ var (
 	// A nested start (a child starting a child) is never queued: a parent that holds a slot
 	// and waits for a queued child of its own could never be freed.
 	errSubagentNoSlot   = errors.New("no free sub-agent slot: a run started from inside a sub-agent is not queued; try again later or do the work yourself")
-	errSubagentRunLimit = errors.New("this sub-agent tree or session already has the most runs it may have going")
+	errSubagentRunLimit = ErrRunTreeLimit
 )
 
 // SubagentManager owns the child runs of one storage directory. A run belongs to the
@@ -68,15 +70,12 @@ type SubagentManager struct {
 	runs     map[string]*subagentRun
 	finished []string // ids of ended runs, oldest first; keep_finished trims it per owner
 	running  int      // slots held
-	// writers counts the runs of each owner that can change files and run as handles,
-	// from reservation to end; see reserveWriter.
-	writers map[string]int
-	// byRoot and bySession count the runs going (queued or running) per top-level run and
-	// per session, for the nested-start limits.
-	byRoot    map[string]int
-	bySession map[string]int
-	queued    int // runs waiting for a slot
-	freed     chan struct{}
+	// tree is the run tree the nested-start limits and the background writer places count in
+	// (RunTree): the manager's own until SetRunTree gives it the one every manager of the process
+	// shares.
+	tree   *RunTree
+	queued int // runs waiting for a slot
+	freed  chan struct{}
 	// store keeps a manifest per run so ids survive a restart; nil keeps runs in
 	// memory only.
 	store *subagentStore
@@ -97,15 +96,27 @@ type SubagentManager struct {
 	// afterLaunch, when set, runs in execute right after the launcher returned; it is a field
 	// so a test can panic past the launcher's own recovery and reach recoverRun.
 	afterLaunch func()
+	// afterBegin, when set, runs in start right after a run's handle was registered and before
+	// the run joins the manager; it is a field so a test can stop the handle in that window.
+	afterBegin func(id string)
+	// inFinish, when set, runs in finish after the run's end was saved and before its node leaves
+	// the tree; it is a field so a test can panic inside finish and reach recoverRun's release.
+	inFinish func()
 	// transcriptRoot, when set, is the storage directory whose child folders are
 	// deleted as runs are dropped; see DeleteTranscriptsUnder.
 	transcriptRoot string
+	// stopCascade, when set, is told the lineage key and stop reason of each run that ended stopped after
+	// its launcher ran, or that a stop reached whatever its end (SetStopCascade, endLineage).
+	stopCascade atomic.Pointer[func(key, reason string)]
+	// runEnd, when set, is called outside every lock once a run that carries a lineage ended
+	// (SetRunEnd).
+	runEnd atomic.Pointer[func()]
 }
 
 // NewSubagentManager returns an empty manager that keeps its runs in memory only.
 func NewSubagentManager() *SubagentManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), writers: make(map[string]int), byRoot: make(map[string]int), bySession: make(map[string]int), freed: make(chan struct{})}
+	manager := &SubagentManager{ctx: ctx, cancel: cancel, runs: make(map[string]*subagentRun), tree: &RunTree{}, freed: make(chan struct{})}
 	// A nil store removes nothing, so a memory-only manager keeps no manifests.
 	manager.removeManifest = manager.store.remove
 	manager.newRunID = newSubagentRunID
@@ -308,15 +319,17 @@ func (m *SubagentManager) removeDropped(dropped []droppedRun) {
 	m.mu.Unlock()
 	for _, run := range dropped {
 		if onDropped != nil && run.run != nil {
-			onDropped(run.run)
+			endStep(run.id, "dropped_callback", nil, func() { onDropped(run.run) })
 		}
-		m.removeManifest(run.id)
-		if run.dir == "" {
-			continue
-		}
-		if err := os.RemoveAll(run.dir); err != nil {
-			m.logger().Warn("delete sub-agent transcript folder", "dir", run.dir, "error", err)
-		}
+		endStep(run.id, "dropped_files", nil, func() {
+			m.removeManifest(run.id)
+			if run.dir == "" {
+				return
+			}
+			if err := os.RemoveAll(run.dir); err != nil {
+				m.logger().Warn("delete sub-agent transcript folder", "dir", run.dir, "error", err)
+			}
+		})
 	}
 }
 
@@ -336,10 +349,18 @@ type subagentRun struct {
 	// handleOwner owns the run's async handle: the session key, or the run id of the
 	// parent run for a run a child starts (see handleOwner).
 	handleOwner string
-	// session is the session of the whole run tree and root the top-level run (its own id
-	// for one); they key the nested-start limits.
+	// session is the session of the whole run tree and root the top-level run of this manager
+	// (its own id for one); the manifest records them. node is the run's place in the run tree,
+	// which the nested-start limits count; nil for a run loaded from disk, which is not going.
 	session string
 	root    string
+	node    *RunNode
+	// lineage is the run lineage of the call that started the run (RunLineageOf); the run's own
+	// context carries it with lineageKey added. CancelUnmanagedLineage matches it.
+	lineage []string
+	// lineageKey is the run's own key in the lineage of what it starts (NewRunLineageKey), unique
+	// in the process; it is what the run's stop cascades. Empty for a run loaded from disk.
+	lineageKey string
 	// callID is the parent's tool call that started the run (SubagentRequest.CallID); it
 	// names the child's transcript folder and is how a reader finds the run of a call.
 	callID    string
@@ -366,6 +387,13 @@ type subagentRun struct {
 	stopReason string
 	endedAt    time.Time
 	cut        bool // the answer was longer than the limit and was cut
+	// stopAsked is set by the first stop request (stopWith), whenever it came, and askedReason
+	// keeps its reason. lineageEnded is set once the run starts nothing more (its launcher
+	// returned), lineageCascaded once its lineageKey went to the stop cascade. Together they make a stop
+	// that reached the run while it could still start work cascade exactly once, after that point,
+	// whatever state the run ends in (endLineage, stopWith).
+	stopAsked, lineageEnded, lineageCascaded bool
+	askedReason                              string
 	// external is set for a run the remote API serves; full then holds its whole answer, which
 	// the remote API hands out in parts, as the cut result does not.
 	external bool
@@ -381,6 +409,10 @@ type subagentRun struct {
 	// countedWriter is set when the run holds one of its owner's background writer places,
 	// which finish gives back.
 	countedWriter bool
+	// listed, writerReleased, asyncEnded and notified mark the steps of a run's end (endRun) that
+	// have begun, so a second endRun (recoverRun after a panic inside finish) does exactly the ones
+	// still to do, and a step that panicked is not tried again.
+	listed, writerReleased, asyncEnded, notified atomic.Bool
 	// note says why a writer that could have been handed off was not; it rides on the result.
 	note string
 	// configNote says the agent definition changed since a resumed run's source; see configChangedNote.
@@ -409,11 +441,14 @@ type subagentRun struct {
 	async *subagentAsyncHandle
 
 	store *subagentStore // nil when runs are not persisted
+	// manager started the run and holds its stop cascade; nil for a run loaded from disk.
+	manager *SubagentManager
 	// restored marks a run loaded from disk. Its text is not in memory: it is read
 	// from the transcript the first time the run is looked at; a reader that arrives
 	// during that read waits for it.
 	restored bool
 	textOnce sync.Once
+	doneOnce sync.Once
 }
 
 // subagentRunView is a copy of a run's state taken under its lock.
@@ -452,13 +487,46 @@ func (r *subagentRun) view() subagentRunView {
 
 // stopWith cancels the run and keeps why, so the stopped result can say it. A run that
 // is already being stopped (by the model, a reset or shutdown) keeps no reason of ours.
+//
+// A stop is chosen while the run is live and applied after, outside the chooser's lock, so it can
+// land after the launcher returned, even after the run ended done or failed. The work the run
+// started meanwhile carries its lineage key: once the run starts nothing more, a stop that reached
+// it hands that key to the stop cascade, here when it came after that point (endLineage when before).
 func (r *subagentRun) stopWith(reason string) {
 	r.mu.Lock()
 	if r.stopReason == "" && r.ctx.Err() == nil {
 		r.stopReason = reason
 	}
+	if !r.stopAsked {
+		r.stopAsked, r.askedReason = true, reason
+	}
+	late := r.lineageEnded && !r.lineageCascaded
+	if late {
+		r.lineageCascaded = true
+	}
 	r.mu.Unlock()
 	r.cancel()
+	if late {
+		r.manager.cascadeStop(r.lineageKey, reason)
+	}
+}
+
+// endLineage marks that the run starts nothing more, and reports whether its lineage key goes to the stop
+// cascade now and with which reason: a run that ended stopped (reason), or one a stop reached
+// before this point whatever its end (that stop's reason). A stop that comes later cascades from
+// stopWith. A run that ended on its own or timed out, unasked, cascades nothing.
+func (r *subagentRun) endLineage(stopped bool, reason string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lineageEnded = true
+	if r.lineageCascaded || (!stopped && !r.stopAsked) {
+		return "", false
+	}
+	r.lineageCascaded = true
+	if !stopped {
+		reason = r.askedReason
+	}
+	return reason, true
 }
 
 func (r *subagentRun) takeStopReason() string {
@@ -563,18 +631,12 @@ type subagentStart struct {
 	owner string
 	// handleOwner owns the async handle; see subagentRun.handleOwner.
 	handleOwner string
-	// session is the session the whole tree belongs to. depth is the AgentDepth of the
-	// starting call (0 for the session's own call), rootRun the top-level run it runs
-	// under and parentID the run it runs in; the last two are empty at depth 0.
-	session  string
-	depth    int
-	rootRun  string
+	// admission is where the start sits in its tree and the limits it is admitted under (admitLocked).
+	admission runAdmission
+	// parentID is the run the starting call runs in; empty at depth 0.
 	parentID string
-	// maxDepth, maxPerRoot and maxPerSession bound nested starts; zero means 1 level
-	// deep and no count limit.
-	maxDepth      int
-	maxPerRoot    int
-	maxPerSession int
+	// lineage is the run lineage of the starting call (RunLineageOf); see subagentRun.lineage.
+	lineage []string
 	// changes is set when the agent can change files; see subagentRun.changes.
 	changes bool
 	// worktree, when set, runs the child in a git worktree of its own.
@@ -582,10 +644,8 @@ type subagentStart struct {
 	// runMCP, when set, starts the child's stdio MCP servers in the worktree it works in
 	// (startRunMCP); nil for an agent without MCP tools, or a session without the loader.
 	runMCP *subagentRunMCP
-	// limit, maxQueued, keep and resultMax are the starting session's settings.
-	limit     int
-	maxQueued int
-	// changedMax is how many changed files the run lists; see recordChange.
+	// changedMax is how many changed files the run lists (see recordChange); keep and resultMax
+	// are the starting session's settings.
 	changedMax int
 	keep       int
 	resultMax  int64
@@ -622,43 +682,31 @@ type subagentStart struct {
 // reserveWriter takes one of owner's background writer places and reports whether there
 // was one: a limit of zero or less means no limit. The caller that gets true passes
 // writerReserved to start, or gives the place back with releaseWriter when start fails.
-// A closed manager reserves, so start reports the closure itself.
+// A closed manager reserves, so start reports the closure itself. The places are the owner's in
+// the run tree, so every manager sharing it counts the same writers.
 func (m *SubagentManager) reserveWriter(owner string, limit int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.closed && limit > 0 && m.writers[owner] >= limit {
-		return false
-	}
-	m.writers[owner]++
-	return true
+	return m.tree.ReserveWriter(owner, limit, m.closed)
 }
 
 func (m *SubagentManager) releaseWriter(owner string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.writers[owner] > 1 {
-		m.writers[owner]--
-		return
-	}
-	delete(m.writers, owner)
+	m.runTree().ReleaseWriter(owner)
 }
 
 // BackgroundWriters is how many runs of owner can change files and are going as handles,
-// queued ones included. A checkpoint restore of the session is refused while it is not 0.
+// queued ones included, in every manager sharing the run tree. A checkpoint restore of the session is refused while it is not 0.
 func (m *SubagentManager) BackgroundWriters(owner string) int {
 	if m == nil {
 		return 0
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.writers[owner]
+	return m.runTree().Writers(owner)
 }
 
-// undoReservationLocked gives back the slot or queue place start took for a run that was
-// not created.
-func (m *SubagentManager) undoReservationLocked(holdsSlot bool, root, session string) {
-	countDown(m.byRoot, root)
-	countDown(m.bySession, session)
+// undoReservationLocked gives back the node, and the slot or queue place, start took for a run
+// that was not created.
+func (m *SubagentManager) undoReservationLocked(holdsSlot bool, node *RunNode) {
+	node.Release()
 	if holdsSlot {
 		m.running--
 		close(m.freed)
@@ -688,59 +736,57 @@ func (m *SubagentManager) freeRunIDLocked() (string, error) {
 // in practice.
 const runIDAttempts = 8
 
-// admitNestedLocked is the gate a nested start passes, local or remote: the depth, then the run
-// caps of its root and its session. The caller holds mu. A start at depth 0 is not nested and
-// never reaches it.
-func (m *SubagentManager) admitNestedLocked(depth, maxDepth, maxPerRoot, maxPerSession int, root, session string) error {
-	if depth+1 > max(maxDepth, 1) {
-		return errSubagentDepth
-	}
-	if (maxPerRoot > 0 && m.byRoot[root]-1 >= maxPerRoot) || (maxPerSession > 0 && m.bySession[session] >= maxPerSession) {
-		return errSubagentRunLimit
-	}
-	return nil
-}
-
 // remoteReservation is one place a remote start takes in the root and session counts for the
 // run's lifetime. It is released once: a second release does nothing.
 type remoteReservation struct {
-	manager       *SubagentManager
-	root, session string
-	releaseOnce   sync.Once
+	node *RunNode
 }
 
-// reserveRemote takes a place in the counts of root and session for a remote run, after the
-// same gate a local nested start passes (admitNestedLocked). The remote run has no local record,
-// slot or queue place: only these counts, which this host's caps read.
-func (m *SubagentManager) reserveRemote(root, session string, maxPerRoot, maxPerSession, depth, maxDepth int) (*remoteReservation, error) {
+// reserveRemote takes a node in the run tree for a nested remote run, after the same admission a
+// local nested start passes (admitLocked). The remote run has no local record, slot or queue
+// place: only this node, counted in the calling session and under the caller's root, which this
+// host's caps read.
+func (m *SubagentManager) reserveRemote(admission runAdmission) (*remoteReservation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, errSubagentManagerClosed
 	}
-	if err := m.admitNestedLocked(depth, maxDepth, maxPerRoot, maxPerSession, root, session); err != nil {
+	_, node, err := m.admitLocked(admission, false)
+	if err != nil {
 		return nil, err
 	}
-	m.byRoot[root]++
-	m.bySession[session]++
-	return &remoteReservation{manager: m, root: root, session: session}, nil
+	return &remoteReservation{node: node}, nil
 }
 
-// releaseRemote gives back a remote run's places. It is safe to call more than once.
+// releaseRemote gives back a remote run's node. It is safe to call more than once.
 func (m *SubagentManager) releaseRemote(reservation *remoteReservation) {
-	reservation.releaseOnce.Do(func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		countDown(m.byRoot, reservation.root)
-		countDown(m.bySession, reservation.session)
-	})
+	reservation.node.Release()
 }
 
-// sessionRuns is how many runs of session are counted as going, local or remote.
+// sessionRuns is how many runs session executes that the run tree counts as going, local or
+// remote, of either kind and in every manager sharing the tree.
 func (m *SubagentManager) sessionRuns(session string) int {
+	return m.runTree().SessionRuns(session)
+}
+
+// runTree is the tree the manager admits into.
+func (m *SubagentManager) runTree() *RunTree {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.bySession[session]
+	return m.tree
+}
+
+// SetRunTree makes the manager admit into tree, the one the resolver shares between every manager
+// and the profile_message runs. It must be called before the manager starts a run; nil keeps the
+// manager's own.
+func (m *SubagentManager) SetRunTree(tree *RunTree) {
+	if m == nil || tree == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tree = tree
 }
 
 // start registers a run and launches its goroutine. It fails when the manager is
@@ -756,53 +802,44 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	root := spec.rootRun
+	admission := spec.admission
+	root := admission.rootRun
 	if root == "" {
 		root = id
 	}
-	nested := spec.depth > 0
-	if nested {
-		if err := m.admitNestedLocked(spec.depth, spec.maxDepth, spec.maxPerRoot, spec.maxPerSession, root, spec.session); err != nil {
-			m.mu.Unlock()
-			return nil, err
-		}
-	}
-	// The slot is taken here, not in the goroutine, so a free slot is never refused
-	// because runs that were just started have not reached it yet.
-	holdsSlot := m.running < spec.limit
-	switch {
-	case holdsSlot:
-		m.running++
-	case nested:
+	nested := admission.nested()
+	holdsSlot, node, err := m.admitLocked(admission, true)
+	if err != nil {
 		m.mu.Unlock()
-		return nil, errSubagentNoSlot
-	case m.queued < spec.maxQueued:
-		m.queued++
-	default:
-		m.mu.Unlock()
-		return nil, errSubagentQueueFull
+		return nil, err
 	}
-	m.byRoot[root]++
-	m.bySession[spec.session]++
 	// A nested run ends with the run it belongs to: its context hangs off the parent's.
 	parentContext := m.ctx
 	if parent := m.runs[spec.parentID]; nested && parent != nil {
 		parentContext = parent.ctx
 	}
 	ctx, cancel := context.WithCancel(parentContext)
+	// The child's calls run under the run's lineage: the caller's and the run's own key, which
+	// is unique in the process where the id is unique only in this manager.
+	lineageKey := NewRunLineageKey("subagent:" + id)
+	ctx = WithRunLineage(ctx, ExtendRunLineage(spec.lineage, lineageKey))
 	if spec.async != nil {
 		m.mu.Unlock()
-		if err := spec.async.begin(id, !holdsSlot); err != nil {
+		err := spec.async.begin(id, lineageKey, !holdsSlot)
+		if err == nil && m.afterBegin != nil {
+			m.afterBegin(id)
+		}
+		if err != nil {
 			cancel()
 			m.mu.Lock()
-			m.undoReservationLocked(holdsSlot, root, spec.session)
+			m.undoReservationLocked(holdsSlot, node)
 			m.mu.Unlock()
 			return nil, err
 		}
 		m.mu.Lock()
 		if m.closed {
 			cancel()
-			m.undoReservationLocked(holdsSlot, root, spec.session)
+			m.undoReservationLocked(holdsSlot, node)
 			m.mu.Unlock()
 			spec.async.abort(id, errSubagentManagerClosed)
 			return nil, errSubagentManagerClosed
@@ -811,11 +848,15 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	run := &subagentRun{
 		async:         spec.async,
 		store:         m.store,
+		manager:       m,
 		id:            id,
 		owner:         spec.owner,
 		handleOwner:   spec.handleOwner,
-		session:       spec.session,
+		session:       admission.session,
 		root:          root,
+		node:          node,
+		lineage:       spec.lineage,
+		lineageKey:    lineageKey,
 		callID:        spec.request.CallID,
 		agent:         spec.request.Agent.Name,
 		task:          subagentTaskPreview(spec.request.Task),
@@ -845,8 +886,10 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	// its own and the run's end can stop them.
 	spec.request.Seed = spec.seed
 	spec.request.Execution.ProcessOwner = id
-	spec.request.Execution.AgentDepth = spec.depth + 1
+	spec.request.Execution.AgentDepth = admission.depth + 1
+	spec.request.Execution.ChainDepth = admission.runDepth() + 1
 	spec.request.Execution.RootRun = root
+	spec.request.Execution.RunNode = node.ID()
 	spec.request.Execution.ProcessAsync = spec.asyncHost != nil && spec.childAsync
 	if spec.changes && spec.changedMax > 0 {
 		run.tracked = true
@@ -863,6 +906,12 @@ func (m *SubagentManager) start(spec subagentStart) (*subagentRun, error) {
 	m.runs[id] = run
 	m.active.Add(1)
 	m.mu.Unlock()
+	// A stop of the handle that came while the run was not in the manager yet applies now.
+	if spec.async != nil {
+		if reason, stopped := spec.async.started(id); stopped {
+			run.stopWith(reason)
+		}
+	}
 	run.store.save(run)
 	go m.execute(ctx, run, spec, holdsSlot)
 	return run, nil
@@ -873,11 +922,12 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	defer run.cancel()
 	defer m.recoverRun(run, spec)
 	if !holdsSlot {
-		if !m.acquire(ctx, spec.limit) {
+		if !m.acquire(ctx, spec.admission.limit) {
 			m.finish(run, subagentRunStopped, SubagentResult{}, "", spec)
 			return
 		}
 		run.setState(subagentRunRunning)
+		run.node.SetState(RunNodeRunning)
 		if run.async != nil {
 			run.async.markRunning(run.id)
 		}
@@ -936,6 +986,13 @@ func (m *SubagentManager) execute(ctx context.Context, run *subagentRun, spec su
 	default:
 		state, reason = subagentRunFailed, boundedReason(err.Error())
 	}
+	// A stopped run's own handles went with the sweep above; what it started in another profile
+	// (the work of a run its profile_message started) is reached through the lineage. So is the
+	// work of a run a stop reached after its launcher had returned, which can end done or failed.
+	// A run that ended on its own or timed out, unasked, leaves that work alone, as before.
+	if cascadeReason, cascade := run.endLineage(state == subagentRunStopped, reason); cascade {
+		m.cascadeStop(run.lineageKey, cascadeReason)
+	}
 	// The worktree is committed once nothing of the child runs any more, whatever the
 	// end, so what it did is on its branch before the run is reported ended.
 	if tree != nil {
@@ -968,25 +1025,30 @@ func (m *SubagentManager) runLauncher(ctx context.Context, spec subagentStart) (
 // recoverRun is the panic boundary of the rest of execute (the handle sweep, finish and
 // the bookkeeping in it): the goroutine has no caller that could recover it, and a panic
 // would end the server and leave the run going. The run is finished as failed, unless
-// finish had already begun, in which case only the waiters are released.
+// finish had already recorded its end, in which case the steps of endRun it had not begun are
+// done (its node, its finished-list place, its writer place, its async handle, done).
 func (m *SubagentManager) recoverRun(run *subagentRun, spec subagentStart) {
 	recovered := recover()
 	if recovered == nil {
 		return
 	}
 	slog.Error("sub-agent run failed inside the server", "run", run.id, "panic", recovered, "stack", string(debug.Stack()))
+	// Whatever finish got to, the run is over: its node leaves the tree (Release counts once).
+	defer run.node.Release()
 	run.mu.Lock()
 	ended := !run.endedAt.IsZero()
+	answer := run.result.Text
+	if run.external {
+		answer = run.full
+	}
 	run.mu.Unlock()
 	if !ended {
 		m.finish(run, subagentRunFailed, SubagentResult{}, "internal error", spec)
 		return
 	}
-	select {
-	case <-run.done:
-	default:
-		close(run.done)
-	}
+	// finish recorded the end and then panicked: the steps of endRun it had not begun are done
+	// now (the async handle ends with the recorded state, the answer as the run keeps it).
+	m.endRun(run, spec, answer)
 }
 
 // acquire waits for a free slot. It reports false when ctx ends first.
@@ -1041,25 +1103,89 @@ func (m *SubagentManager) finish(run *subagentRun, state string, result Subagent
 	// The manifest is written before the waiters wake, so a read of the file after a
 	// wait returns sees the end.
 	run.store.save(run)
+	if m.inFinish != nil {
+		m.inFinish()
+	}
+	m.endRun(run, spec, answer)
+}
 
+// closeDone wakes the run's waiters once.
+func (r *subagentRun) closeDone() { r.doneOnce.Do(func() { close(r.done) }) }
+
+// endRun gives back what a run whose end finish recorded holds, and wakes its waiters: its node,
+// its place in the finished list (with the trim to keep and the removal of what the trim dropped),
+// its writer place, its async handle, done and the run-end notification. Each step runs at most once
+// (the run's marks are taken before the step), so a second call, as recoverRun makes after a panic
+// in finish before endRun, does only what is left. A panic inside a step is logged and ends that
+// step only: the later steps still run, and the step that panicked is not tried again, so whatever
+// it had not given back yet stays held (see DECISIONS.md, T-007 end steps).
+func (m *SubagentManager) endRun(run *subagentRun, spec subagentStart, answer string) {
 	var dropped []droppedRun
-	m.mu.Lock()
-	countDown(m.byRoot, run.root)
-	countDown(m.bySession, run.session)
-	m.finished = append(m.finished, run.id)
-	dropped = m.trimOwnerLocked(run.owner, spec.keep)
-	m.mu.Unlock()
+	endStep(run.id, "finished_list", nil, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		run.node.Release()
+		if run.listed.CompareAndSwap(false, true) {
+			m.finished = append(m.finished, run.id)
+			dropped = m.trimOwnerLocked(run.owner, spec.keep)
+		}
+	})
+	// Each dropped run is removed in its own steps (removeDropped), so a panic for one leaves the
+	// others, and the files of the one, to go.
 	m.removeDropped(dropped)
 	if run.countedWriter {
-		m.releaseWriter(run.owner)
+		endStep(run.id, "writer_place", &run.writerReleased, func() { m.releaseWriter(run.owner) })
 	}
 	// The async signal is queued before the waiters wake, so a caller released by done
 	// finds it.
 	if run.async != nil {
-		run.async.end(run.view(), subagentTranscriptRef(run), answer)
+		endStep(run.id, "async_handle", &run.asyncEnded, func() {
+			run.async.end(run.view(), subagentTranscriptRef(run), answer)
+		})
 	}
 	// Waiters wake last, so a wait that returns sees the disk already settled.
-	close(run.done)
+	endStep(run.id, "done", nil, run.closeDone)
+	if notify := m.runEnd.Load(); notify != nil && len(run.lineage) > 0 {
+		endStep(run.id, "run_end_notify", &run.notified, *notify)
+	}
+}
+
+// endStep runs one step of a run's end. A non-nil mark that was already taken skips it; it is
+// taken before the step, so a step that panicked is never tried again. A panic is logged with the
+// run and the step and goes no further.
+func endStep(runID, step string, mark *atomic.Bool, do func()) {
+	if mark != nil && !mark.CompareAndSwap(false, true) {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("sub-agent run end step failed inside the server", "run", runID, "step", step, "panic", recovered, "stack", string(debug.Stack()))
+		}
+	}()
+	do()
+}
+
+// SetRunEnd sets what the manager calls, outside every lock, each time a run that carries a
+// lineage ended: the app layer then looks again whether work is still going under a run's
+// lineage key (HasLiveLineage). Nil sets none.
+func (m *SubagentManager) SetRunEnd(notify func()) {
+	if m == nil {
+		return
+	}
+	if notify == nil {
+		m.runEnd.Store(nil)
+		return
+	}
+	m.runEnd.Store(&notify)
+}
+
+// HasLiveLineage reports whether a run whose lineage has a key that match accepts is queued or
+// running, a run with a handle or not.
+func (m *SubagentManager) HasLiveLineage(match func(key string) bool) bool {
+	if m == nil {
+		return false
+	}
+	return len(m.liveRuns(func(run *subagentRun) bool { return slices.ContainsFunc(run.lineage, match) })) > 0
 }
 
 func countDown(counts map[string]int, key string) {
@@ -1144,7 +1270,7 @@ func (m *SubagentManager) CancelOwner(owner string) int {
 	if m == nil {
 		return 0
 	}
-	return cancelActive(m.ownedRuns(owner), false, "")
+	return stopRuns(m.liveRuns(func(run *subagentRun) bool { return run.owner == owner }), "")
 }
 
 // CancelUnmanagedOwner is CancelOwner for the runs that are not async handles. A handle is
@@ -1154,7 +1280,48 @@ func (m *SubagentManager) CancelUnmanagedOwner(owner, reason string) int {
 	if m == nil {
 		return 0
 	}
-	return cancelActive(m.ownedRuns(owner), true, reason)
+	return stopRuns(m.liveRuns(func(run *subagentRun) bool { return run.owner == owner && run.async == nil }), reason)
+}
+
+// SetStopCascade sets what the manager tells, outside its lock, of each run that ended stopped
+// after its launcher ran, or that a stop reached at any time, even after its launcher returned
+// or the run ended: the run's lineage key (a key of its descendants' lineage, not its id) and
+// the stop's reason, once per run and only once the run starts nothing more. The app layer stops the work under that key
+// in every manager with it.
+func (m *SubagentManager) SetStopCascade(cascade func(key, reason string)) {
+	if m == nil {
+		return
+	}
+	if cascade == nil {
+		m.stopCascade.Store(nil)
+		return
+	}
+	m.stopCascade.Store(&cascade)
+}
+
+// cascadeStop hands key and reason to the stop cascade, outside every lock, and reports whether
+// there was one to hand them to. An empty key (a run loaded from disk) has nothing under it.
+func (m *SubagentManager) cascadeStop(key, reason string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	cascade := m.stopCascade.Load()
+	if cascade == nil {
+		return false
+	}
+	(*cascade)(key, reason)
+	return true
+}
+
+// CancelUnmanagedLineage is CancelUnmanagedOwner for the runs whose lineage has a key that match
+// accepts: the runs started under a run or owner of another profile, whoever owns them.
+func (m *SubagentManager) CancelUnmanagedLineage(match func(key string) bool, reason string) int {
+	if m == nil {
+		return 0
+	}
+	return stopRuns(m.liveRuns(func(run *subagentRun) bool {
+		return run.async == nil && slices.ContainsFunc(run.lineage, match)
+	}), reason)
 }
 
 // CancelUnmanagedOwnersWithPrefix is CancelUnmanagedOwner for every session key that starts
@@ -1163,32 +1330,34 @@ func (m *SubagentManager) CancelUnmanagedOwnersWithPrefix(prefix, reason string)
 	if m == nil {
 		return 0
 	}
+	return stopRuns(m.liveRuns(func(run *subagentRun) bool {
+		return run.async == nil && strings.HasPrefix(run.owner, prefix)
+	}), reason)
+}
+
+// liveRuns returns the runs keep accepts that are queued or running, chosen under the manager's
+// lock (each run's lock nests inside it) before any is stopped: a stop can end a nested run of
+// the same list during the stops, and that run was still one the call asked to stop. A run chosen
+// here that ends before its stop lands is still asked, so its stop cascade is not lost (stopWith).
+func (m *SubagentManager) liveRuns(keep func(*subagentRun) bool) []*subagentRun {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	var runs []*subagentRun
 	for _, run := range m.runs {
-		if run.async == nil && strings.HasPrefix(run.owner, prefix) {
+		if keep(run) && run.active() {
 			runs = append(runs, run)
 		}
 	}
-	m.mu.Unlock()
-	return cancelActive(runs, false, reason)
+	return runs
 }
 
-// cancelActive asks every run of runs that is still queued or running to stop and returns
-// how many it asked. The runs are chosen before any is cancelled: a cancel can end a nested
-// run of the same list during the call, and that run was still one the call asked to stop.
-// unmanaged keeps only the runs that are not async handles. An empty reason keeps none.
-func cancelActive(runs []*subagentRun, unmanaged bool, reason string) int {
-	var active []*subagentRun
+// stopRuns asks every run of runs to stop, outside every lock, and returns how many it asked. An
+// empty reason keeps none.
+func stopRuns(runs []*subagentRun, reason string) int {
 	for _, run := range runs {
-		if (!unmanaged || run.async == nil) && run.active() {
-			active = append(active, run)
-		}
-	}
-	for _, run := range active {
 		run.stopWith(reason)
 	}
-	return len(active)
+	return len(runs)
 }
 
 // list returns the retained runs of one session, newest first.

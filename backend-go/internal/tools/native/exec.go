@@ -531,11 +531,11 @@ func takeExecStandby(plan execPlan, settings sessionfs.NativeExecSettings, apiKe
 				// The call's own launch: argv, environment and code file path are what a fresh
 				// start of this call would have; only the code file is a named pipe for now.
 				launch := plan.launch(workDir, "", "code", template, helperPrepend, helperEnv)
-				environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
+				environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, callModelKeys(apiKeyEnv, execution)...)
 				return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: launch.templateFiles, pipe: launch.codeFiles[0].path, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}, nil
 			}
 			launch := plan.launch(workDir, shim, standbyShimName, template, helperPrepend, helperEnv)
-			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, apiKeyEnv)
+			environment := shellChildEnvironment(shellChildRun{extraEnv: launch.extraEnv, prependEnv: launch.prependEnv}, settings.Child, callModelKeys(apiKeyEnv, execution)...)
 			files := append(append([]standbyFile(nil), launch.templateFiles...), launch.codeFiles...)
 			return standbySpawn{file: launch.file, argv: launch.argv, cwd: resolved.realPath, environment: environment, files: files, sandbox: sandbox, workspace: execution.WorkspaceRoot, tmp: tmp, sessionDir: execution.SessionDir}, nil
 		}

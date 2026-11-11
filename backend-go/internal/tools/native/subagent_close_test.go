@@ -23,9 +23,9 @@ func TestSubagentManagerCloseReturnsAfterTheGraceWhenAChildIgnoresCancellation(t
 		return SubagentResult{Text: "late", Rounds: 1}, nil
 	}}
 	run, err := manager.start(subagentStart{
-		launcher: launcher, owner: "o", session: "s",
-		request: SubagentRequest{Agent: agentNamed("explore"), Task: "t"},
-		limit:   1, maxQueued: 1, keep: 4, resultMax: 1000,
+		launcher: launcher, owner: "o",
+		request:   SubagentRequest{Agent: agentNamed("explore"), Task: "t"},
+		admission: runAdmission{session: "s", limit: 1, maxQueued: 1}, keep: 4, resultMax: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)

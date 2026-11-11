@@ -150,7 +150,7 @@ func TestChildExecutionContextKeepsTheCallersChannelAndChangeListener(t *testing
 			request.Execution.OnFileChange("a.txt", "created")
 			return SubagentResult{Text: "ok"}, nil
 		}},
-		owner: "o", session: "o", changes: true, changedMax: 10, limit: 2, keep: 10, resultMax: 1024,
+		owner: "o", admission: runAdmission{session: "o", limit: 2}, changes: true, changedMax: 10, keep: 10, resultMax: 1024,
 		request: SubagentRequest{Agent: sessionfs.NativeSubagentAgent{Name: "a"}, Execution: child},
 	})
 	if err != nil {

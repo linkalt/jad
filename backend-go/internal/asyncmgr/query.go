@@ -198,6 +198,7 @@ func (m *Manager) Stop(ctx context.Context, owner, id, reason string) (Entry, er
 		return Entry{}, fmt.Errorf("%w: %q", ErrUnknownHandle, id)
 	}
 	driver := m.drivers[r.kind]
+	key := r.key
 	live := !r.state.Terminal()
 	if server, foreign := m.foreign[id]; foreign && live {
 		m.mu.Unlock()
@@ -206,7 +207,7 @@ func (m *Manager) Stop(ctx context.Context, owner, id, reason string) (Entry, er
 	m.mu.Unlock()
 
 	if live && driver != nil {
-		driver.Stop(id, reason)
+		stopHandle(driver, id, key, reason)
 		m.awaitTerminal(ctx, id)
 	}
 	entry, err := m.Status(owner, id)

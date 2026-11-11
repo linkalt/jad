@@ -39,7 +39,7 @@ const getPromptSchema = `{"type":"object","properties":{"name":{"type":"string",
 // featureTools are the tools that reach a server's resources and prompts, as the toolset
 // entry turns them on. A server that does not offer a feature the entry asks for is a
 // configuration error, so the entry cannot silently do nothing.
-func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *connection) ([]tools.Tool, error) {
+func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *connection, sampler Sampler) ([]tools.Tool, error) {
 	if !server.Resources && !server.Prompts {
 		return nil, nil
 	}
@@ -69,6 +69,9 @@ func (m *Manager) featureTools(server sessionfs.MCPServerReference, current *con
 				if output, routed, err := route.call(ctx, definition, remoteName, arguments, execution); routed {
 					return output, err
 				}
+				// Like a tool call: the server's sampling or elicitation input request in this
+				// request's result belongs to the run that made it (sample, elicit).
+				ctx = withActiveCall(ctx, &activeCall{request: execution.RequestInteraction, identity: tools.InteractionIdentity{Tool: execution.ToolName, ToolCallID: execution.CallID}, sampler: sampler})
 				return execute(ctx, current, arguments)
 			},
 		})
@@ -128,7 +131,12 @@ func (c *connection) capabilities() *mcpSDK.ServerCapabilities {
 }
 
 // request runs one request on the session under the same rules as a tool call: one at a
-// time per connection, bounded by the server's timeout, and stopped by close.
+// time per connection, bounded by the server's timeout, and stopped by close. A request a run's
+// tool makes (a resource or prompt tool) is the connection's call while it runs, as callTool's
+// is; one whose context carries no run's call (the user's resource and prompt requests, a
+// resubscribe or the log level outside a call) leaves the connection with none, so a server's
+// sampling request meanwhile is refused. The request's context carries the call (or none) to the
+// input requests of its result (attributedCall).
 func (c *connection) request(ctx context.Context, send func(context.Context, *mcpSDK.ClientSession) error) error {
 	c.callMu.Lock()
 	defer c.callMu.Unlock()
@@ -137,8 +145,10 @@ func (c *connection) request(ctx context.Context, send func(context.Context, *mc
 	if c.closed {
 		return errors.New("MCP connection is closed")
 	}
+	call := activeCallFrom(ctx)
 	callCtx, cancel := context.WithTimeout(c.ctx, c.timeout)
 	defer cancel()
+	callCtx = withInlineRequest(callCtx, call)
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
 	return send(callCtx, c.session)

@@ -1,0 +1,483 @@
+== boxed
+{
+  "Name": "boxed",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": [
+    "exec",
+    "async"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false,
+  "Sandbox": {
+    "Template": "reader",
+    "Tools": [
+      "exec",
+      "tool_smith",
+      "lsp"
+    ],
+    "Backend": "command",
+    "Executable": "env",
+    "Network": false,
+    "NetworkAllow": null,
+    "ProxyPort": 3128,
+    "ReadPaths": [
+      "/"
+    ],
+    "WritablePaths": [
+      "{tmp}"
+    ],
+    "PlanWritablePaths": [
+      "{tmp}"
+    ],
+    "HidePaths": [
+      "{home}/.ssh",
+      "{home}/.gnupg",
+      "{home}/.aws",
+      "{home}/.kube",
+      "{home}/.config/gcloud",
+      "{home}/.azure",
+      "{home}/.config/gh",
+      "{home}/.git-credentials",
+      "{home}/.netrc",
+      "{home}/.npmrc",
+      "{home}/.pypirc",
+      "{home}/.cargo/credentials",
+      "{home}/.docker/config.json",
+      "{home}/.jad/auth"
+    ],
+    "Command": [
+      "env"
+    ],
+    "CheckTimeoutMs": 10000,
+    "ReadOnlyPaths": [
+      "<root>/setting.json",
+      "<root>/sessions/session-1.json",
+      "<root>/profiles",
+      "<root>/models",
+      "<root>/tools",
+      "<root>/mcp",
+      "<root>/.jad/remotes",
+      "<root>/state",
+      "<root>/.jad/sandbox"
+    ],
+    "Isolation": {
+      "Mode": "none"
+    }
+  }
+}
+== boxed_worktree
+{
+  "Name": "boxed_worktree",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": [
+    "exec"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false,
+  "Isolation": "worktree",
+  "IsolationBase": "working",
+  "IsolationMaterialize": "overlay",
+  "IsolationShare": [
+    "node_modules"
+  ],
+  "Sandbox": {
+    "Template": "reader",
+    "Tools": [
+      "exec",
+      "tool_smith",
+      "lsp"
+    ],
+    "Backend": "command",
+    "Executable": "env",
+    "Network": false,
+    "NetworkAllow": null,
+    "ProxyPort": 3128,
+    "ReadPaths": [
+      "/"
+    ],
+    "WritablePaths": [
+      "{tmp}"
+    ],
+    "PlanWritablePaths": [
+      "{tmp}"
+    ],
+    "HidePaths": [
+      "{home}/.ssh",
+      "{home}/.gnupg",
+      "{home}/.aws",
+      "{home}/.kube",
+      "{home}/.config/gcloud",
+      "{home}/.azure",
+      "{home}/.config/gh",
+      "{home}/.git-credentials",
+      "{home}/.netrc",
+      "{home}/.npmrc",
+      "{home}/.pypirc",
+      "{home}/.cargo/credentials",
+      "{home}/.docker/config.json",
+      "{home}/.jad/auth"
+    ],
+    "Command": [
+      "env"
+    ],
+    "CheckTimeoutMs": 10000,
+    "ReadOnlyPaths": [
+      "<root>/setting.json",
+      "<root>/sessions/session-1.json",
+      "<root>/profiles",
+      "<root>/models",
+      "<root>/tools",
+      "<root>/mcp",
+      "<root>/.jad/remotes",
+      "<root>/state",
+      "<root>/.jad/sandbox"
+    ],
+    "Isolation": {
+      "Mode": "worktree",
+      "Base": "working",
+      "Materialize": "overlay",
+      "SharePaths": [
+        "node_modules"
+      ]
+    }
+  }
+}
+== finder
+{
+  "Name": "finder",
+  "Description": "",
+  "ModelPath": "<root>/models/openai/default.json",
+  "ReasoningEffort": "",
+  "Model": "openai/default",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": null,
+  "HasTools": false,
+  "Toolset": [
+    "extra/search"
+  ],
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== listed
+{
+  "Name": "listed",
+  "Description": "listed tools",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": [
+    "exec",
+    "async"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 5,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 2000,
+  "AutoCompaction": true,
+  "HasAutoCompaction": true,
+  "CompactionTriggerTokens": 1000,
+  "StateContext": true
+}
+== objected
+{
+  "Name": "objected",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "be brief",
+  "PromptDocuments": [],
+  "PromptText": "be brief",
+  "Dir": "",
+  "Tools": [
+    "exec"
+  ],
+  "HasTools": true,
+  "DenyTools": [
+    "async"
+  ],
+  "ToolsObject": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 5000,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false,
+  "Isolation": "worktree"
+}
+== plain
+{
+  "Name": "plain",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": null,
+  "HasTools": false,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== unboxed_worktree
+{
+  "Name": "unboxed_worktree",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [],
+  "PromptText": "",
+  "Dir": "",
+  "Tools": [
+    "exec"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false,
+  "Isolation": "worktree"
+}
+== folded
+{
+  "Name": "folded",
+  "Description": "folder agent",
+  "ModelPath": "<cwd>/.jad/agents/folded/own.json",
+  "ReasoningEffort": "",
+  "Model": "own.json",
+  "Instructions": "",
+  "PromptDocuments": [
+    "<cwd>/.jad/agents/folded/prompt.md",
+    "<cwd>/.jad/agents/folded/notes.md"
+  ],
+  "PromptText": "folder prompt\n\nfolder notes\n",
+  "Dir": "<cwd>/.jad/agents/folded",
+  "Tools": [
+    "exec"
+  ],
+  "HasTools": true,
+  "ToolsObject": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": true,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== folded_box
+{
+  "Name": "folded_box",
+  "Description": "folder sandbox",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [
+    "<cwd>/.jad/agents/folded_box/prompt.md"
+  ],
+  "PromptText": "boxed folder",
+  "Dir": "<cwd>/.jad/agents/folded_box",
+  "Tools": [
+    "exec"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false,
+  "Isolation": "worktree",
+  "IsolationBase": "working",
+  "Sandbox": {
+    "Tools": [
+      "exec",
+      "tool_smith"
+    ],
+    "Backend": "command",
+    "Executable": "env",
+    "Network": false,
+    "NetworkAllow": null,
+    "ProxyPort": 3128,
+    "ReadPaths": [
+      "/"
+    ],
+    "WritablePaths": [
+      "{tmp}"
+    ],
+    "PlanWritablePaths": [
+      "{tmp}"
+    ],
+    "HidePaths": [
+      "{home}/.ssh",
+      "{home}/.gnupg",
+      "{home}/.aws",
+      "{home}/.kube",
+      "{home}/.config/gcloud",
+      "{home}/.azure",
+      "{home}/.config/gh",
+      "{home}/.git-credentials",
+      "{home}/.netrc",
+      "{home}/.npmrc",
+      "{home}/.pypirc",
+      "{home}/.cargo/credentials",
+      "{home}/.docker/config.json",
+      "{home}/.jad/auth"
+    ],
+    "Command": [
+      "env"
+    ],
+    "CheckTimeoutMs": 10000,
+    "ReadOnlyPaths": [
+      "<root>/setting.json",
+      "<root>/sessions/session-1.json",
+      "<root>/profiles",
+      "<root>/models",
+      "<root>/tools",
+      "<root>/mcp",
+      "<root>/.jad/remotes",
+      "<root>/state",
+      "<root>/.jad/sandbox"
+    ],
+    "Isolation": {
+      "Base": "working"
+    }
+  }
+}
+== prompt_only
+{
+  "Name": "prompt_only",
+  "Description": "",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [
+    "<cwd>/.jad/agents/prompt_only/prompt.md"
+  ],
+  "PromptText": "prompt only",
+  "Dir": "<cwd>/.jad/agents/prompt_only",
+  "Tools": null,
+  "HasTools": false,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== explore
+{
+  "Name": "explore",
+  "Description": "Code search. Use it to find files and symbols and report paths and line numbers. It investigates and does not edit files (its instruction, not something enforced: it has the session's tools and works in the session's folder).",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [
+    "<sample>/explore/prompt.md"
+  ],
+  "PromptText": "You are a research helper. You investigate and do not edit files: read and search, and do not write, edit or delete any file or run a command that changes anything. This is an instruction to you; no setting enforces it, so keep to it.\n\nYou start with no context. The task you were given is all you know.\n\nAnswer with the facts the task asks for, as short as possible: file paths with line numbers, names, and the exact values you saw. Say what you could not find. Do not describe how you searched, and do not suggest changes.",
+  "Dir": "<sample>/explore",
+  "Tools": null,
+  "HasTools": false,
+  "Toolset": null,
+  "MaxToolRounds": 30,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 600000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== triager
+{
+  "Name": "triager",
+  "Description": "Classifies or scores a piece of text with the decide_systemone tool: yes/no checks, routing to a category, severity. Give it the text and the questions; it returns the answers.",
+  "ModelPath": "",
+  "ReasoningEffort": "",
+  "Model": "",
+  "Instructions": "",
+  "PromptDocuments": [
+    "<sample>/triager/prompt.md"
+  ],
+  "PromptText": "You classify text. You have one tool, decide_systemone, and no other: you cannot read files or search.\n\nYou start with no context. The task you were given holds the text and the questions; if the text is not in the task, say so and stop.\n\nCall decide_systemone once, with the text as input parts (use a json part for structured data) and all the questions, as separate questions with their own names. Write each question around something observable in the text, give choices distinct meanings and score levels distinct criteria.\n\nAnswer with the numbers decide_systemone returned, one line per question: the name, the probability, choice or level, and the confidence. Do not turn a number into a verdict unless the task gave a threshold. Report a refused or missing answer as it is.",
+  "Dir": "<sample>/triager",
+  "Tools": [
+    "decide_systemone"
+  ],
+  "HasTools": true,
+  "Toolset": null,
+  "MaxToolRounds": 4,
+  "MaxRunTokens": 0,
+  "TimeoutMS": 120000,
+  "AutoCompaction": false,
+  "HasAutoCompaction": false,
+  "CompactionTriggerTokens": 0,
+  "StateContext": false
+}
+== agent toolsets
+extra/search

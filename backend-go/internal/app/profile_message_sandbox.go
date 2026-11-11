@@ -16,9 +16,13 @@ import (
 // reach more is refused. The narrowing is applied to the runner of the target run, after the
 // target's settings are loaded, so a cached config of the target is never the narrowed one.
 //
-// Not covered: the target's stdio MCP servers are started by its own session, in the sandbox its
-// own settings give them (D10; an isolated target's start in its worktree instead, run_mcp.go), and
-// a remote target runs on its own server, outside any sandbox of this one.
+// MCP: when the narrowing changes where the target's stdio servers start (the narrowed sandbox
+// covers mcp), the run lists and calls servers started in it, on a manager of that narrowing
+// (runMCPManager), which lives while a run of the narrowing or what such a run left going can
+// call it (mcpScopeHold); the target's shared servers, which its own runs use, stay as its
+// settings start them and are not restarted by the message. An isolated target's run starts its
+// own in its worktree (run_mcp.go) and stops the ones it listed from once those started. Not covered: the MCP servers of the target's agent toolsets, and a
+// remote target, which runs on its own server, outside any sandbox of this one.
 
 // confineTarget is target narrowed by the caller's sandbox, then by the sandbox template the
 // call picked (chooseTargetSandbox); caller nil and choice nil leave it as it is.

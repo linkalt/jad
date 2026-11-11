@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
 	"jad/backend-go/internal/openaiapi"
 	"jad/backend-go/internal/responses"
 	"jad/backend-go/internal/sessionfs"
+	"jad/backend-go/internal/tools"
 )
 
 // modelShape is what of a model the request body carries: its name, the request defaults
@@ -245,6 +247,25 @@ type plannedFallback struct {
 type skippedFallback struct {
 	message string
 	args    []any
+}
+
+// runModelKeys are the API key variables (api_key_env) of the models that may answer a run of
+// config: its own model's and each model_fallback model's that loads, which planRunStreamer may
+// send a request to (T-009). A child process of the run's calls never gets them
+// (tools.ExecutionContext.ModelKeyEnvs). A fallback that does not load is no target, so its key
+// is not listed.
+func runModelKeys(config sessionfs.SessionConfig) []string {
+	keys := tools.JoinDeny(nil, []string{config.Model.APIKeyEnv})
+	if config.ModelFallback != nil {
+		for _, entry := range config.ModelFallback.Models {
+			fallback := config
+			fallback.ModelPath, fallback.ReasoningEffort = entry.ModelPath, entry.ReasoningEffort
+			if loaded, err := fallback.WithModel(); err == nil {
+				keys = tools.JoinDeny(keys, []string{loaded.Model.APIKeyEnv})
+			}
+		}
+	}
+	return slices.DeleteFunc(keys, func(key string) bool { return key == "" })
 }
 
 // planRunStreamer loads the session's model_fallback entries. The identity is empty when

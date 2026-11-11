@@ -24,7 +24,7 @@ func TestToolsFromListSortsByNameWhateverTheServerOrder(t *testing.T) {
 	current := &connection{maxDescriptionBytes: 1 << 16, maxSchemaBytes: 1 << 16}
 	encode := func(listing []*mcpSDK.Tool) []byte {
 		t.Helper()
-		loaded, err := manager.toolsFromList(server, current, listing)
+		loaded, err := manager.toolsFromList(server, current, listing, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func TestToolsFromListSortsByNameWhateverTheServerOrder(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatalf("the tools array follows the server's order:\n%s\n%s", first, second)
 	}
-	loaded, err := manager.toolsFromList(server, current, reversed)
+	loaded, err := manager.toolsFromList(server, current, reversed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -179,7 +179,7 @@ func TestTargetRunnerMarksTheDelegatedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reported bool
-	hook := targetRunner(nil, "dev/coder", "m", func(native.DelegatedWorktreeResult) { reported = true })
+	hook := targetRunner(nil, "dev/coder", "m", func(native.DelegatedWorktreeResult) { reported = true }, nil, nil, nil)
 	runner, err := hook(resolved.Runner)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestTargetRunnerMarksTheDelegatedRun(t *testing.T) {
 	withConfine := targetRunner(func(runner httpapi.RunSession) (httpapi.RunSession, error) {
 		confined = true
 		return runner, nil
-	}, "dev/coder", "m", nil)
+	}, "dev/coder", "m", nil, nil, nil, nil)
 	if runner, err = withConfine(resolved.Runner); err != nil || !confined || runner.(boundRunner).delegation == nil {
 		t.Fatalf("confined %v, err %v", confined, err)
 	}

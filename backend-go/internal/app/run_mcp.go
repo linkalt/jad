@@ -24,16 +24,14 @@ import (
 // with another run. A streamable HTTP server is not started: it is a remote endpoint with no
 // folder of its own, so the run keeps calling the connection the session has to it.
 func (r *Resolver) runMCPLoader(config sessionfs.SessionConfig) native.RunMCPLoader {
+	// The toolset server sets come from the derivation the owner's prepare uses for its toolset
+	// MCP servers (native.NewAgentToolConfigs), over the same config.
+	agentTools := native.NewAgentToolConfigs(config)
 	return func(ctx context.Context, request native.RunMCPRequest) (native.RunMCPServers, error) {
 		settings := config
 		if request.Key != "" {
-			found := false
-			for _, use := range toolsetMCPUses(config) {
-				if use.key == request.Key {
-					settings, found = use.config, true
-					break
-				}
-			}
+			view, found := agentTools.MCPView(request.Key)
+			settings = view.Config
 			if !found {
 				return native.RunMCPServers{}, fmt.Errorf("the MCP servers %q of the run's agent are not configured", request.Key)
 			}

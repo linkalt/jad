@@ -109,13 +109,17 @@ type NativeSubagentSettings struct {
 	// a hand-built struct, means no limit.
 	MaxBackgroundWriters int64
 	// MaxDepth is how many levels of runs may exist below the session: 1 lets only the
-	// session start children, 2 lets a child start a child of its own. Zero, only possible
-	// in a hand-built struct, means 1.
+	// session start children, 2 lets a child start a child of its own. A run that
+	// profile_message starts counts as one level below its caller (R6), so a sub-agent of a
+	// message target is counted from there, and a profile_message whose run would pass it is
+	// refused (RunMaxDepth, also when the subagent tool is not offered). Zero, only possible in a hand-built struct, means 1.
 	MaxDepth int64
 	// MaxRunsPerRoot is the most runs below one top-level run that may be going at once,
-	// and MaxRunsPerSession the most runs of one session (any depth) that a nested start
-	// may find going. Zero, only possible in a hand-built struct, means no limit. Neither
-	// is visible to the model.
+	// and MaxRunsPerSession the most runs one session executes (any depth) that a nested start
+	// may find going. Both count the process's one run tree (native.RunTree, T-007): sub-agent
+	// runs of every storage folder and profile_message runs, queued or running. A top-level run's
+	// MaxRunsPerRoot is its tree's ceiling, which a caller below may narrow. Zero, only possible
+	// in a hand-built struct, means no limit. Neither is visible to the model.
 	MaxRunsPerRoot    int64
 	MaxRunsPerSession int64
 	// PersistRuns writes a small manifest per run, so run ids and finished results
@@ -264,6 +268,37 @@ type NativeSubagentAgent struct {
 	// profile_message: such a child reaches no other session, so an enforcing sandbox that
 	// writes only scratch makes it a reader (SandboxReader). Not part of the fingerprint.
 	NoProfileMessage bool `json:"-"`
+}
+
+// RunMaxDepth is the max_depth every local start of a run of this config is checked on, a
+// sub-agent or a profile_message (R6): the section's max_depth, or its default when the config
+// has no tools.native.subagent section (s is nil). A profile that only sends messages sets it by
+// adding the section with "agents": {} (which needs tools.native.async) and may deny the subagent
+// tool in its tools block.
+func (s *NativeSubagentSettings) RunMaxDepth() int64 {
+	if s == nil {
+		return defaultNativeSubagentMaxDepth
+	}
+	return s.MaxDepth
+}
+
+// RunMaxRunsPerRoot and RunMaxRunsPerSession are the run caps of this config in the run tree
+// (T-007): the section's max_runs_per_root and max_runs_per_session, or their defaults when the
+// config has no tools.native.subagent section (s is nil). The root cap bounds every local start
+// from a run of this config, a sub-agent or a profile_message; the session cap bounds every run
+// this config's session executes: its own sub-agents and a profile_message run that targets it.
+func (s *NativeSubagentSettings) RunMaxRunsPerRoot() int64 {
+	if s == nil {
+		return defaultNativeSubagentMaxRunsPerRoot
+	}
+	return s.MaxRunsPerRoot
+}
+
+func (s *NativeSubagentSettings) RunMaxRunsPerSession() int64 {
+	if s == nil {
+		return defaultNativeSubagentMaxRunsPerSession
+	}
+	return s.MaxRunsPerSession
 }
 
 // Agent returns the configured agent with the given name.
@@ -490,6 +525,25 @@ func normalizeNativeSubagentStorageDir(fields map[string]json.RawMessage, cwd, t
 	return dir, err
 }
 
+// checkAgentDefinitionKeys refuses a key of one agent definition that the loader does not read:
+// the removed paths and read_only by name with their hint, any other unknown key with the list of
+// the known ones. Inline agents (tools.native.subagent.agents) and agent folders (agent.json) are
+// one definition and go through this one check; a folder drops its schema_version first.
+func checkAgentDefinitionKeys(keys []string, settingPath, section string) error {
+	for _, key := range keys {
+		if key == "paths" {
+			return configError("%s: %s.paths was removed; %s", settingPath, section, removedAgentPathsHint)
+		}
+		if key == "read_only" {
+			return configError("%s: %s.read_only was removed; %s", settingPath, section, removedAgentReadOnlyHint)
+		}
+		if !containsString(nativeSubagentAgentKeys, key) {
+			return unsupportedToolKey(settingPath+": "+section, key, nativeSubagentAgentKeys, "")
+		}
+	}
+	return nil
+}
+
 func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath, settingDir, cwd string) (NativeSubagentAgent, error) {
 	section := "tools.native.subagent.agents." + name
 	var fields map[string]json.RawMessage
@@ -500,16 +554,8 @@ func normalizeNativeSubagentAgent(name string, raw json.RawMessage, settingPath,
 	if err != nil {
 		return NativeSubagentAgent{}, configError("%s: %s must be an object", settingPath, section)
 	}
-	for _, key := range keys {
-		if key == "paths" {
-			return NativeSubagentAgent{}, configError("%s: %s.paths was removed; %s", settingPath, section, removedAgentPathsHint)
-		}
-		if key == "read_only" {
-			return NativeSubagentAgent{}, configError("%s: %s.read_only was removed; %s", settingPath, section, removedAgentReadOnlyHint)
-		}
-		if !containsString(nativeSubagentAgentKeys, key) {
-			return NativeSubagentAgent{}, unsupportedToolKey(settingPath+": "+section, key, nativeSubagentAgentKeys, "")
-		}
+	if err := checkAgentDefinitionKeys(keys, settingPath, section); err != nil {
+		return NativeSubagentAgent{}, err
 	}
 	return buildNativeSubagentAgent(name, fields, subagentSource{path: settingPath, section: section, modelBase: settingDir, documentBase: cwd}, "", "")
 }

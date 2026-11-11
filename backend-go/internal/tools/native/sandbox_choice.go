@@ -117,8 +117,9 @@ func (s *subagentTool) callSandboxName(arguments map[string]any) string {
 	return ""
 }
 
-// chooseSandbox is agent for a call that runs in sandbox name: the agent with its catalog for
-// that environment (choiceCatalogs). An empty name keeps the agent as it is.
+// chooseSandbox is agent for a call that runs in sandbox name: the agent narrowed to that
+// environment, whose catalog childCatalog builds for the choice. An empty name keeps the agent
+// as it is.
 func (s *subagentTool) chooseSandbox(agent subagentAgent, name string) (subagentAgent, *sandboxProblem) {
 	if name == "" {
 		return agent, nil
@@ -138,52 +139,19 @@ func (s *subagentTool) chooseSandbox(agent subagentAgent, name string) (subagent
 	if choice.Isolation.Mode == sessionfs.SandboxIsolationWorktree && !config.Isolated() && agent.mcpWrites() {
 		return agent, &sandboxProblem{message: fmt.Sprintf("Sandbox %s sets isolation.mode worktree, but agent %s changes files only through MCP tools, which cannot be moved into a worktree, so it cannot run in one", choice.Name, agent.config.Name)}
 	}
-	return s.choiceAgent(agent, config, name), nil
+	return s.choiceAgent(agent, config), nil
 }
 
-// choiceAgent is agent running with config, the agent narrowed by sandbox choice name: the
-// exec and tool_smith descriptions tell the chosen environment, and an agent the choice put in
-// a worktree reads how git works there. The catalogs are built on the first call that picks
-// the choice and kept until the agent's own are rebuilt (bindMCP), so a choice nobody makes
-// costs nothing (D23).
-func (s *subagentTool) choiceAgent(agent subagentAgent, config sessionfs.NativeSubagentAgent, name string) subagentAgent {
+// choiceAgent is agent running with config, the agent narrowed by a sandbox choice. Its catalogs
+// are the agent's own set (childCatalog), keyed by the choice's name: the exec and tool_smith
+// descriptions tell the chosen environment, and an agent the choice put in a worktree reads how
+// git works there. They are built on the first call that picks the choice and kept until the
+// agent's inputs change (bindMCP), so a choice nobody makes costs nothing (D23).
+func (s *subagentTool) choiceAgent(agent subagentAgent, config sessionfs.NativeSubagentAgent) subagentAgent {
 	variant := agent
 	variant.config = config
 	variant.background = backgroundSafe(s.settings, variant, s.async)
-	if agent.catalog == nil {
-		return variant
-	}
-	key := agent.config.Name + "\x00" + name
-	s.choiceMu.Lock()
-	defer s.choiceMu.Unlock()
-	if cached, found := s.choiceCatalogs[key]; found && cached.from == agent.catalog {
-		variant.catalog, variant.leaf = cached.catalog, cached.leaf
-		return variant
-	}
-	variant.nativeTools = describeAgentSandbox(agent.nativeTools, config.Sandbox, agent.descriptions)
-	if config.Isolated() {
-		variant.nativeTools = describeAgentIsolation(variant.nativeTools)
-	}
-	s.mu.RLock()
-	err := s.buildCatalogs(&variant)
-	s.mu.RUnlock()
-	if err != nil {
-		// The agent's own catalogs were built from the same tools, so this does not happen;
-		// the run then reads the agent's descriptions rather than not starting.
-		variant.catalog, variant.leaf = agent.catalog, agent.leaf
-		return variant
-	}
-	if s.choiceCatalogs == nil {
-		s.choiceCatalogs = make(map[string]choiceCatalogs)
-	}
-	s.choiceCatalogs[key] = choiceCatalogs{from: agent.catalog, catalog: variant.catalog, leaf: variant.leaf}
 	return variant
-}
-
-// choiceCatalogs are an agent's catalogs for one sandbox choice; from is the agent's own
-// catalog they were made for, so a rebuilt agent rebuilds them.
-type choiceCatalogs struct {
-	from, catalog, leaf *tools.Catalog
 }
 
 // sandboxText is the line an async summary carries for a run started in a sandbox choice.

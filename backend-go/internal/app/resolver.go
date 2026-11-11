@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,6 +59,18 @@ type Resolver struct {
 	remoteRuns *remoteRunIndex
 	// profileQueues holds the profile_message calls waiting for a busy target profile.
 	profileQueues profileQueueSet
+	// runTree is the one run tree of the process (T-007): every sub-agent manager admits into it
+	// (finishSubagentBuild) and every local profile_message run joins it (profileMessagePlan.Start),
+	// so max_runs_per_root and max_runs_per_session count both kinds of run across managers.
+	runTree native.RunTree
+	// lineageSeq hands out the lineage keys of the runs profile_message starts (profileMessageRun).
+	lineageSeq atomic.Uint64
+	// runStops are the persistent runs going now, for the stop that reaches one while a call of
+	// it can still start work (liveRunStops).
+	runStops liveRunStops
+	// runnerReturned, when set (a test), is called with the run context of each persistent run
+	// once its runner returned, before the run ends (endRunStop).
+	runnerReturned func(context.Context)
 	// runMCPSeq numbers the managers of isolated runs' own MCP servers (runMCPLoader).
 	runMCPSeq atomic.Uint64
 	// compactProfile replaces compactTarget in tests.
@@ -93,6 +104,13 @@ type Resolver struct {
 	asyncBuilds   map[string]chan struct{}
 	openAsyncHost func(string, asyncmgr.Config, *slog.Logger) (*native.AsyncHost, error)
 	mcpManagers   map[string]*mcpclient.Manager
+	// mcpScopeRefs counts the holds of each manager of a narrowing (mcpScopeHold); guarded by mu.
+	mcpScopeRefs map[*mcpclient.Manager]int
+	// mcpDrains are the holds waiting for their run's lineage to drain (releaseMCPScopeAfter).
+	mcpDrains mcpScopeDrains
+	// nodeDrains are the ended message runs' tree nodes waiting for their lineage to drain
+	// (releaseNodeAfter).
+	nodeDrains    runNodeDrains
 	taskStores    map[string]*native.TaskStore
 	recordsStores map[string]*native.RecordsStore
 	// storeSessions lists the session files that use each task and records store,
@@ -204,38 +222,95 @@ func (r *Resolver) subagentManagerList() []*native.SubagentManager {
 }
 
 // CancelSessionChildren asks everything a session started that outlives its runs (the
-// session's handles of every kind: processes and sub-agent runs) to stop, and reports how
+// session's handles of every kind: processes and sub-agent runs, and, through their lineage,
+// the work its chains left going in other profiles and sessions) to stop, and reports how
 // many were still going. The HTTP layer calls it when the user stops the session. It does
 // not wait. A normal end of a run or a compaction never comes here.
 func (r *Resolver) CancelSessionChildren(reference, profile string) int {
 	owner := sessionKey(reference, profile)
+	// First, so that a run of the owner the user stopped that is still going reaches, once it
+	// ends, what its calls start after the fan-out below has looked (liveRunStops).
+	r.runStops.note(func(o string) bool { return o == owner }, reasonUserStop)
 	cancelled := 0
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.CancelOwner(owner, reasonUserStop)
 	}
-	return cancelled + r.cancelSubagentOwner(owner, reasonUserStop)
+	cancelled += r.cancelSubagentOwner(owner, reasonUserStop)
+	return cancelled + r.cancelDescendants(owner, reasonUserStop)
 }
 
 // ResetSessionChildren is CancelSessionChildren for a reset: the session's unread
 // completion signals are dropped too, because the history that gave them meaning is gone.
 func (r *Resolver) ResetSessionChildren(reference, profile string) int {
 	owner := sessionKey(reference, profile)
+	r.runStops.note(func(o string) bool { return o == owner }, reasonSessionReset)
 	cancelled := 0
 	for _, manager := range r.asyncManagers() {
 		cancelled += manager.ResetOwner(owner, reasonSessionReset)
 	}
-	return cancelled + r.cancelSubagentOwner(owner, reasonSessionReset)
+	cancelled += r.cancelSubagentOwner(owner, reasonSessionReset)
+	// The work the session's chains left in other profiles is stopped, not reset: its own
+	// profile's history is not gone, so its handles keep their records and signals.
+	return cancelled + r.cancelDescendants(owner, reasonSessionReset)
+}
+
+// cancelDescendants is cancelLineage for one key: a session key (the work a profile's chains
+// left in other profiles), a run's lineage key (a sub-agent run's or a persistent run's,
+// native.NewRunLineageKey) or the key of a run profile_message started.
+func (r *Resolver) cancelDescendants(key, reason string) int {
+	return r.cancelLineage(func(k string) bool { return k == key }, reason)
+}
+
+// deleteDescendants is cancelDescendants for a session delete that reaches work after its fan-out
+// (CancelAllSessionChildren) looked, with the same end: handles owned under session (every profile
+// of the deleted session) are stopped and their records removed (asyncmgr DeleteLineage), handles
+// of other owners and sub-agent runs that are not handles are only stopped, so the records of
+// other sessions, also on a storage they share, stay. It does not wait.
+func (r *Resolver) deleteDescendants(key, session, reason string) int {
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return 0
+	}
+	match := func(k string) bool { return k == key }
+	cancelled := 0
+	for _, manager := range r.asyncManagers() {
+		cancelled += manager.DeleteLineage(match, session, reason)
+	}
+	for _, manager := range r.subagentManagerList() {
+		cancelled += manager.CancelUnmanagedLineage(match, reason)
+	}
+	return cancelled
+}
+
+// cancelLineage asks every live handle and sub-agent run whose lineage has a key that match
+// accepts to stop, in every async and sub-agent manager of the resolver (the work may be in
+// another session's storage), and reports how many it asked. Owners are not looked at: the
+// owner fan-out of the caller reaches its own work. Each stop is a cancel made outside every
+// lock; it does not wait. A closed resolver has nothing left to reach.
+func (r *Resolver) cancelLineage(match func(key string) bool, reason string) int {
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return 0
+	}
+	cancelled := 0
+	for _, manager := range r.asyncManagers() {
+		cancelled += manager.CancelLineage(match, reason)
+	}
+	for _, manager := range r.subagentManagerList() {
+		cancelled += manager.CancelUnmanagedLineage(match, reason)
+	}
+	return cancelled
 }
 
 // BackgroundWriters implements httpapi.SessionWriters: how many sub-agent runs of the session
-// can change files and are going as handles, in every sub-agent manager of the resolver.
+// can change files and are going as handles, in every sub-agent manager of the resolver (their
+// places are counted in the one run tree, finishSubagentBuild).
 func (r *Resolver) BackgroundWriters(reference, profile string) int {
-	owner := sessionKey(reference, profile)
-	count := 0
-	for _, manager := range r.subagentManagerList() {
-		count += manager.BackgroundWriters(owner)
-	}
-	return count
+	return r.runTree.Writers(sessionKey(reference, profile))
 }
 
 // cancelSubagentOwner reaches the sub-agent runs that are not async handles (a session
@@ -484,12 +559,12 @@ type preparedRun struct {
 // servers), resolves the credential and returns the shared runner. The steps and
 // their order follow the TypeScript run: model, then tools, then the client.
 // The caller holds shared.runMu, which also guards shared.runners.
-func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settings sessionfs.SessionConfig) (preparedRun, error) {
+func (r *Resolver) prepareRun(ctx context.Context, shared *sharedSession, settings sessionfs.SessionConfig, mcpScope *mcpScopeHold) (preparedRun, error) {
 	config, err := settings.WithModel()
 	if err != nil {
 		return preparedRun{}, err
 	}
-	toolCatalog, taskStore, recordsStore, err := r.buildToolCatalog(ctx, config)
+	toolCatalog, taskStore, recordsStore, err := r.buildToolCatalog(ctx, config, mcpScope)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -627,7 +702,7 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 	if err != nil {
 		return httpapi.SessionTools{}, mapSessionError(err)
 	}
-	registered, _, _, err := r.buildRegisteredCatalog(ctx, config)
+	registered, _, _, err := r.buildRegisteredCatalog(ctx, config, nil)
 	if err != nil {
 		return httpapi.SessionTools{}, err
 	}
@@ -640,8 +715,8 @@ func (r *Resolver) ListTools(ctx context.Context, reference, profile string) (ht
 
 // buildToolCatalog is the catalog the profile's model sees: every registered tool, narrowed
 // by the profile's tools.allow when it has one.
-func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
-	registered, taskStore, recordsStore, err := r.buildRegisteredCatalog(ctx, config)
+func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.SessionConfig, mcpScope *mcpScopeHold) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
+	registered, taskStore, recordsStore, err := r.buildRegisteredCatalog(ctx, config, mcpScope)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -654,82 +729,67 @@ func (r *Resolver) buildToolCatalog(ctx context.Context, config sessionfs.Sessio
 	return toolCatalog, taskStore, recordsStore, nil
 }
 
-// buildRegisteredCatalog builds every tool the session registers (native, then MCP).
-func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
-	taskStore := r.sharedTaskStore(config)
-	recordsStore := r.sharedRecordsStore(config)
-	subagentMCP := native.NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
-	// One lazy set per prepare, passed to both the native pass (extension tools) and the MCP pass
-	// below. Nil when the profile has no tools.lazy.
-	lazy := openLazySet(config)
-	nativeCatalog, err := native.BuildCatalogWithAsync(config, r.mutationLock, taskStore, recordsStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
-	mcpManager, err := r.sharedMCPManager(config)
+// buildRegisteredCatalog builds every tool the session registers (native, then MCP). mcpScope is
+// nil for a run in the profile's own sandbox, else the run's hold of the manager of its narrowed
+// MCP sandbox (runMCPManager).
+func (r *Resolver) buildRegisteredCatalog(ctx context.Context, config sessionfs.SessionConfig, mcpScope *mcpScopeHold) (*tools.Catalog, *native.TaskStore, *native.RecordsStore, error) {
+	parts, taskStore, recordsStore, err := r.acquireCatalogParts(ctx, config, mcpScope)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// A server whose file enables sampling is answered with this run's model.
-	mcpManager.SetSampler(r.mcpSampler(config))
-	mcpManager.SetCommandWrapper(mcpSandboxWrapper(config))
-	// A run in a worktree of its own calls these servers' tools on servers of its own.
-	mcpManager.SetRouteKey("")
-	mcpTools, err := mcpManager.LoadTools(ctx, config.MCPServers, config.WorkingDir)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
-	// The parent's copy is gated (its lazy tools only) and hooked. The subagent's children get the
-	// raw list: each child's copy, a session tool or a toolset's, is gated with the same set and then
-	// hooked by the subagent tool (bindMCP, GateFor): a session copy with the owner's hooks, a
-	// toolset's copy with its own profile's hooks.
-	lazy.Bind(mcpTools)
-	parentMCPTools := native.WithToolEventHooksAll(native.GateLazyTools(mcpTools, lazy), config.Hooks, config.Model.APIKeyEnv)
-	mcpCatalog, err := tools.NewCatalog(parentMCPTools)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
-	toolsetMCP, err := r.loadAgentToolsetMCP(ctx, config)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	// A child gates its MCP tools with the owning profile's set and gets the owner's load_tool when
-	// the owner enables it (with or without lazy tools, as the owner's own model does). Both come
-	// from the owner's config, so a child lists, describes and runs the owner's lazy tools.
-	var childLoadTool *tools.Tool
-	if config.NativeLoadTool != nil {
-		tool, err := native.ChildLoadTool(config, lazy)
-		if err != nil {
-			return nil, nil, nil, mapSessionError(err)
-		}
-		childLoadTool = &tool
-	}
-	if err := subagentMCP.SetLazy(lazy, childLoadTool); err != nil {
-		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
-	}
-	// A run of a sub-agent in a worktree of its own starts the stdio MCP servers there (run_mcp.go).
-	subagentMCP.SetRunMCP(r.runMCPLoader(config))
-	// The subagent tool was built with the native catalog, before the MCP tools existed.
-	if err := subagentMCP.BindToolsets(mcpTools, toolsetMCP); err != nil {
-		return nil, nil, nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)})
-	}
-	// The agent list names which agents change files, which depends on the MCP tools just bound.
-	nativeCatalog, err = subagentMCP.Redescribe(nativeCatalog)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
-	registered, err := tools.MergeCatalogs(nativeCatalog, mcpCatalog)
-	if err != nil {
-		return nil, nil, nil, mapSessionError(err)
-	}
-	if err := checkHookMatches(config, registered.Definitions(), func(message string) {
+	registered, err := assembleRegisteredCatalog(config, parts, func(message string) {
 		if r.logger != nil {
 			r.logger.Warn(message, "profile", config.Profile)
 		}
-	}); err != nil {
-		return nil, nil, nil, mapSessionError(err)
+	})
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	return registered, taskStore, recordsStore, nil
+}
+
+// acquireCatalogParts takes from the resolver and the outside world what the registered catalog
+// is assembled from, in this order: the shared task and records stores, the native catalog (with
+// the subagent manager and async resources it registers with), the profile's MCP manager (the
+// shared one, or the narrowing's for mcpScope) with its wrapper and route key set and its servers
+// started and listed, then each agent toolset's manager and servers. Every side effect of a
+// catalog build is here; assembleRegisteredCatalog has none.
+func (r *Resolver) acquireCatalogParts(ctx context.Context, config sessionfs.SessionConfig, mcpScope *mcpScopeHold) (catalogParts, *native.TaskStore, *native.RecordsStore, error) {
+	taskStore := r.sharedTaskStore(config)
+	recordsStore := r.sharedRecordsStore(config)
+	// Its children's catalogs are built by assembleRegisteredCatalog, once, from every part.
+	subagentMCP := native.NewAssembledSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
+	// One lazy set per prepare, passed to both the native pass (extension tools) and the MCP pass
+	// below. Nil when the profile has no tools.lazy.
+	lazy := openLazySet(config)
+	sections, err := native.BuildCatalogSections(config, r.mutationLock, taskStore, recordsStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
+	if err != nil {
+		return catalogParts{}, nil, nil, mapSessionError(err)
+	}
+	mcpManager, err := r.runMCPManager(config, mcpScope)
+	if err != nil {
+		return catalogParts{}, nil, nil, err
+	}
+	mcpManager.SetCommandWrapper(mcpSandboxWrapper(config))
+	// A run in a worktree of its own calls these servers' tools on servers of its own.
+	mcpManager.SetRouteKey("")
+	// A server whose file enables sampling is answered, during a call of these tools, with the
+	// model of this config: the run being prepared, or what a background child or script of it
+	// calls later. The manager is shared by the profile's runs and listings, so the sampler goes
+	// with the listed tools and is never set on the manager, where the last listing (another
+	// run, a model choice, a tool listing, a remote start) would answer for every run.
+	mcpTools, err := mcpManager.LoadToolsSampled(ctx, config.MCPServers, config.WorkingDir, r.mcpSampler(config))
+	if err != nil {
+		return catalogParts{}, nil, nil, mapSessionError(err)
+	}
+	toolsetMCP, err := r.loadAgentToolsetMCP(ctx, config)
+	if err != nil {
+		return catalogParts{}, nil, nil, err
+	}
+	return catalogParts{
+		sections: sections, subagentMCP: subagentMCP, lazy: lazy,
+		mcpTools: mcpTools, toolsetMCP: toolsetMCP, runMCP: r.runMCPLoader(config),
+	}, taskStore, recordsStore, nil
 }
 
 // AsyncHost implements native.AsyncResources: one async manager per tool storage folder,
@@ -783,6 +843,11 @@ func (r *Resolver) finishAsyncHost(key string, done chan struct{}, config native
 		close(done)
 	}()
 	host, err = r.openAsyncHost(key, config.Config, r.logger)
+	if host != nil {
+		// A handle's end may drain the lineage a narrowed run's MCP manager (mcpScopeHold) or an
+		// ended message run's tree node (releaseNodeAfter) waits for.
+		host.Manager().SetLineageEnd(r.lineageWorkEnded)
+	}
 	return nil, err
 }
 
@@ -863,6 +928,14 @@ func (r *Resolver) finishSubagentBuild(storageKey string, build *subagentBuild, 
 			manager.DeleteTranscriptsUnder(config.NativeSubagent.StorageDir)
 		}
 	}
+	// Before it is published, so its first start already counts in the process's run tree.
+	manager.SetRunTree(&r.runTree)
+	// A run stopped in this manager stops the work it started in other profiles, in whichever
+	// manager that work is (cancelLineage).
+	manager.SetStopCascade(func(key, reason string) { r.cancelDescendants(key, reason) })
+	// A run's end may drain the lineage a narrowed run's MCP manager (mcpScopeHold) or an ended
+	// message run's tree node (releaseNodeAfter) waits for.
+	manager.SetRunEnd(r.lineageWorkEnded)
 	return // published is set by the deferred function
 }
 
@@ -926,6 +999,20 @@ func (r *Resolver) sharedMCPManager(config sessionfs.SessionConfig) (*mcpclient.
 	return r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile)
 }
 
+// runMCPManager is the manager a run of config lists and calls its session's MCP servers on.
+// scope nil: the profile's shared manager (sharedMCPManager). Otherwise scope is the run's hold of
+// the manager of its narrowing (holdMCPScope): its stdio servers start in the sandbox the run's
+// profile_message caller narrowed, and the profile's shared servers, which its own runs and what
+// they left running use, are neither restarted nor rewrapped by it (D10, D20). The manager lives
+// while it is held; the last release closes it (mcpScopeHold), and a session delete or shutdown
+// closes it with the session's managers (releaseSessionChildren, Close).
+func (r *Resolver) runMCPManager(config sessionfs.SessionConfig, scope *mcpScopeHold) (*mcpclient.Manager, error) {
+	if scope == nil {
+		return r.sharedMCPManager(config)
+	}
+	return scope.manager, nil
+}
+
 // Resources implements native.ToolsetResources: the shared stores of a toolset that a
 // sub-agent names, keyed by that toolset's own storage directories.
 func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore, *native.RecordsStore) {
@@ -938,59 +1025,26 @@ func (r *Resolver) Resources(config sessionfs.SessionConfig) (*native.TaskStore,
 // sandbox like the session's own (U4): an agent whose own sandbox covers mcp gets servers of
 // its own in that sandbox; the other agents of a toolset share its servers in the toolset's.
 func (r *Resolver) loadAgentToolsetMCP(ctx context.Context, config sessionfs.SessionConfig) (map[string]native.ToolsetMCP, error) {
-	uses := toolsetMCPUses(config)
-	if len(uses) == 0 {
+	views := native.NewAgentToolConfigs(config).MCP
+	if len(views) == 0 {
 		return nil, nil
 	}
-	loaded := make(map[string]native.ToolsetMCP, len(uses))
-	for _, use := range uses {
-		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + use.key)
+	loaded := make(map[string]native.ToolsetMCP, len(views))
+	for _, view := range views {
+		manager, err := r.mcpManagerFor(filepath.Clean(config.SettingPath) + "\x00" + config.Profile + "\x00toolset\x00" + view.Key)
 		if err != nil {
 			return nil, err
 		}
-		manager.SetCommandWrapper(mcpSandboxWrapper(use.config))
-		manager.SetRouteKey(use.key)
-		mcpTools, err := manager.LoadTools(ctx, use.config.MCPServers, use.config.WorkingDir)
+		manager.SetCommandWrapper(mcpSandboxWrapper(view.Config))
+		manager.SetRouteKey(view.Key)
+		mcpTools, err := manager.LoadTools(ctx, view.Config.MCPServers, view.Config.WorkingDir)
 		if err != nil {
-			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, use.toolset, err)})
+			return nil, mapSessionError(&sessionfs.ConfigError{Message: fmt.Sprintf("%s: toolset %s: %v", config.SettingPath, view.Toolset, err)})
 		}
 		// Raw: the subagent tool gates each copy with the owner's lazy set, then hooks it with these hooks.
-		loaded[use.key] = native.ToolsetMCP{Tools: mcpTools, Hooks: use.config.Hooks}
+		loaded[view.Key] = native.ToolsetMCP{Tools: mcpTools, Hooks: view.Config.Hooks}
 	}
 	return loaded, nil
-}
-
-// toolsetMCPUse is one set of toolset MCP servers: its native.ToolsetMCPKey, the toolset, and
-// the toolset's settings with the sandbox its stdio servers start in.
-type toolsetMCPUse struct {
-	key, toolset string
-	config       sessionfs.SessionConfig
-}
-
-// toolsetMCPUses lists the toolset MCP server sets the agents of config use, by key: one per
-// toolset for the agents without a sandbox of their own that covers mcp, and one per agent with
-// one, in that agent's sandbox.
-func toolsetMCPUses(config sessionfs.SessionConfig) []toolsetMCPUse {
-	if len(config.AgentToolsets) == 0 || config.NativeSubagent == nil {
-		return nil
-	}
-	byKey := make(map[string]toolsetMCPUse)
-	for _, agent := range config.NativeSubagent.Agents {
-		key := native.ToolsetMCPKey(agent)
-		derived, exists := config.AgentToolsets[agent.ToolsetKey()]
-		if key == "" || !exists {
-			continue
-		}
-		if agent.Sandbox.Covers("mcp") {
-			derived.Sandbox = agent.Sandbox
-		}
-		byKey[key] = toolsetMCPUse{key: key, toolset: agent.ToolsetKey(), config: derived}
-	}
-	uses := make([]toolsetMCPUse, 0, len(byKey))
-	for _, key := range slices.Sorted(maps.Keys(byKey)) {
-		uses = append(uses, byKey[key])
-	}
-	return uses
 }
 
 func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
@@ -999,13 +1053,18 @@ func (r *Resolver) mcpManagerFor(key string) (*mcpclient.Manager, error) {
 	if r.closed {
 		return nil, &httpapi.StatusError{Code: http.StatusServiceUnavailable, Message: "server is shutting down"}
 	}
+	return r.mcpManagerForLocked(key), nil
+}
+
+// mcpManagerForLocked is mcpManagerFor with mu held and the resolver open.
+func (r *Resolver) mcpManagerForLocked(key string) *mcpclient.Manager {
 	if manager := r.mcpManagers[key]; manager != nil {
-		return manager, nil
+		return manager
 	}
 	manager := mcpclient.NewManager(r.environment)
 	manager.SetLogger(r.logger)
 	r.mcpManagers[key] = manager
-	return manager, nil
+	return manager
 }
 
 // sharedStore returns the transcript store cached for config, opening it when it is not

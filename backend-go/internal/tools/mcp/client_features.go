@@ -162,12 +162,26 @@ type SamplingRequest struct {
 	MaxOutputTokens int
 }
 
+// The refusals of a sampling request no run's model can answer. The text goes back to the
+// server as the error of its request.
+var (
+	errSamplingUnattributed = errors.New("this client cannot sample this request: it samples only for an input request in the result of a run's tool call, resource read or prompt get (protocol 2026-07-28); a sampling/createMessage the server sends on its own names no request of the client, so it is refused")
+	errSamplingWithoutCall  = errors.New("this client cannot sample right now: it samples only for a run's tool, resource or prompt call in progress on this connection, and none is")
+	errSamplingWithoutModel = errors.New("this client cannot sample right now: the call in progress has no model to sample with")
+)
+
+// errElicitationUnattributed refuses a question no request of the client asked for; the text goes
+// back to the server as the error of its request.
+var errElicitationUnattributed = errors.New("this client cannot show this question: it asks a run's user only for an input request in the result of that run's tool call, resource read or prompt get (protocol 2026-07-28); an elicitation/create the server sends on its own names no request of the client, so it is refused")
+
 // Sampler answers a sampling request with the session's model: the text and the model
 // that wrote it.
 type Sampler func(ctx context.Context, request SamplingRequest) (text, model string, err error)
 
-// SetSampler sets the function that answers the sampling requests of servers whose file
-// enables sampling; without one, such a request is refused.
+// SetSampler sets the function that answers the attributed sampling requests (sample) of
+// servers whose file enables sampling, unless the call the request belongs to came from a listing
+// with a sampler of its own (LoadToolsSampled); without either, such a request is refused. It
+// never answers a request a server sends on its own.
 func (m *Manager) SetSampler(sampler Sampler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -193,31 +207,44 @@ func (m *Manager) currentLogger() *slog.Logger {
 	return m.logger
 }
 
-// activeCall is the tool call a connection is running; a server's elicitation request
-// during it asks that call's user.
+// activeCall is the run's request (a tool call, or a resource or prompt tool's request) a
+// connection is running; a server's input request in its result (attributedCall) asks that call's
+// user for an elicitation, and is answered by sampler for a sampling when the tool was listed with
+// one (LoadToolsSampled).
 type activeCall struct {
 	request  tools.InteractionHandler
 	identity tools.InteractionIdentity
+	sampler  Sampler
 }
 
 // clientState is shared by a connection and the handlers of its client, which exist
 // before the connection does.
 type clientState struct {
 	mu        sync.Mutex
-	call      *activeCall
 	samplings int
 }
 
-func (s *clientState) setCall(call *activeCall) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.call = call
+// inlineRequest marks the context of a request the client sends (callTool, request): the run's
+// call it serves, nil for one no run made (the user's resource and prompt requests, a resubscribe).
+type inlineRequest struct{ call *activeCall }
+
+type inlineRequestKey struct{}
+
+func withInlineRequest(ctx context.Context, call *activeCall) context.Context {
+	return context.WithValue(ctx, inlineRequestKey{}, inlineRequest{call: call})
 }
 
-func (s *clientState) currentCall() *activeCall {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.call
+// attributedCall is the request of ours a server's sampling or elicitation request answers, when
+// the request provably belongs to it: on protocol 2026-07-28 a server asks through input requests in the
+// result of a call, resource read or prompt get (multi round-trip), and the SDK's client fulfils
+// them with the context of the request that got that result, which carries its inlineRequest. A
+// sampling/createMessage or elicitation/create the server sends on its own (older protocols, or a
+// server ignoring that rule; over stdio and HTTP alike) reaches the handler with the connection's context instead,
+// which carries none, whatever call is in progress: ok is false. The mark lives only in the
+// contexts of the client's own requests, which no server can set.
+func attributedCall(ctx context.Context) (call *activeCall, ok bool) {
+	request, ok := ctx.Value(inlineRequestKey{}).(inlineRequest)
+	return request.call, ok
 }
 
 // workspaceRoot is the file URI of the session's working directory.
@@ -272,32 +299,39 @@ func (m *Manager) featureClientOptions(options *mcpSDK.ClientOptions, serverID s
 	}
 	if features.Elicitation {
 		options.ElicitationHandler = func(ctx context.Context, request *mcpSDK.ElicitRequest) (*mcpSDK.ElicitResult, error) {
-			return elicit(ctx, serverID, features, state, request)
+			return elicit(ctx, serverID, features, request)
 		}
 	}
 }
 
 // sample answers one sampling request with the session's model, within the server's
-// request budget per connection and its output token cap. Only text is passed on.
+// request budget per connection and its output token cap. Only text is passed on. It answers
+// only a request attributed to a request of ours (attributedCall); one the server sent on its own
+// is refused whatever call is in progress, since nothing in it says which run's model and
+// credential it may use. The model is the sampler of the run's call the request belongs to when
+// its tool was listed with one, else the manager's (an isolated run's own servers). An attributed
+// request with neither is refused too: no run made the request (the user's resource or prompt
+// request), or a call of a listing with no sampler (an agent toolset's servers). A refused request
+// does not count against the budget and reaches no model.
 func (m *Manager) sample(ctx context.Context, serverID string, features clientFeatures, state *clientState, request *mcpSDK.CreateMessageRequest) (*mcpSDK.CreateMessageResult, error) {
+	call, attributed := attributedCall(ctx)
+	if !attributed {
+		return nil, errSamplingUnattributed
+	}
 	sampler := m.currentSampler()
+	if call != nil && call.sampler != nil {
+		sampler = call.sampler
+	}
 	if sampler == nil {
-		return nil, errors.New("this client cannot sample right now")
+		if call == nil {
+			return nil, errSamplingWithoutCall
+		}
+		return nil, errSamplingWithoutModel
 	}
 	if request == nil || request.Params == nil || len(request.Params.Messages) == 0 {
 		return nil, errors.New("sampling/createMessage needs messages")
 	}
-	state.mu.Lock()
-	if state.samplings >= features.SamplingMaxCalls {
-		state.mu.Unlock()
-		return nil, fmt.Errorf("the client allows at most %d sampling requests per connection (sampling.max_requests)", features.SamplingMaxCalls)
-	}
-	state.samplings++
-	state.mu.Unlock()
-	sampling := SamplingRequest{Server: serverID, SystemPrompt: request.Params.SystemPrompt, MaxOutputTokens: features.SamplingMaxTokens}
-	if requested := int(request.Params.MaxTokens); requested > 0 && requested < sampling.MaxOutputTokens {
-		sampling.MaxOutputTokens = requested
-	}
+	messages := make([]SamplingMessage, 0, len(request.Params.Messages))
 	for _, message := range request.Params.Messages {
 		if message == nil {
 			continue
@@ -306,7 +340,18 @@ func (m *Manager) sample(ctx context.Context, serverID string, features clientFe
 		if !ok {
 			return nil, errors.New("this client samples text messages only")
 		}
-		sampling.Messages = append(sampling.Messages, SamplingMessage{Role: string(message.Role), Text: text.Text})
+		messages = append(messages, SamplingMessage{Role: string(message.Role), Text: text.Text})
+	}
+	state.mu.Lock()
+	if state.samplings >= features.SamplingMaxCalls {
+		state.mu.Unlock()
+		return nil, fmt.Errorf("the client allows at most %d sampling requests per connection (sampling.max_requests)", features.SamplingMaxCalls)
+	}
+	state.samplings++
+	state.mu.Unlock()
+	sampling := SamplingRequest{Server: serverID, SystemPrompt: request.Params.SystemPrompt, Messages: messages, MaxOutputTokens: features.SamplingMaxTokens}
+	if requested := int(request.Params.MaxTokens); requested > 0 && requested < sampling.MaxOutputTokens {
+		sampling.MaxOutputTokens = requested
 	}
 	answer, model, err := sampler(ctx, sampling)
 	if err != nil {
@@ -322,11 +367,16 @@ type elicitationDraft struct {
 	Content map[string]any `json:"content"`
 }
 
-// elicit asks the user of the tool call the connection is running. Approving the draft
-// accepts with its content, declining declines, and anything else (no call, no way to
-// ask, a timeout) cancels.
-func elicit(ctx context.Context, serverID string, features clientFeatures, state *clientState, request *mcpSDK.ElicitRequest) (*mcpSDK.ElicitResult, error) {
-	call := state.currentCall()
+// elicit asks the user of the run's call the request belongs to. Like sample, it answers only a
+// request attributed to a request of ours (attributedCall): one the server sent on its own is
+// refused with an error whatever call is in progress, since nothing in it says which run's user
+// may see it. Approving the draft accepts with its content, declining declines, and anything else
+// (an attributed request no run made, no way to ask, a timeout) cancels.
+func elicit(ctx context.Context, serverID string, features clientFeatures, request *mcpSDK.ElicitRequest) (*mcpSDK.ElicitResult, error) {
+	call, attributed := attributedCall(ctx)
+	if !attributed {
+		return nil, errElicitationUnattributed
+	}
 	if call == nil || call.request == nil || request == nil || request.Params == nil {
 		return &mcpSDK.ElicitResult{Action: "cancel"}, nil
 	}

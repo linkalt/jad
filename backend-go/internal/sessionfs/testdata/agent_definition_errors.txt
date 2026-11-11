@@ -1,0 +1,21 @@
+== paths
+inline: <dir>/setting.json: tools.native.subagent.agents.paths.paths was removed; it narrowed the agent's write and edit, which were removed; exec cannot be confined by paths, so run the agent in a worktree (isolation) or a container instead; delete the key
+folder: <dir>/agents/paths/agent.json: agent.paths was removed; it narrowed the agent's write and edit, which were removed; exec cannot be confined by paths, so run the agent in a worktree (isolation) or a container instead; delete the key
+== read_only
+inline: <dir>/setting.json: tools.native.subagent.agents.read_only.read_only was removed; protection now comes only from isolation; remove the key, and set isolation to "worktree" if this child must not write the workspace
+folder: <dir>/agents/read_only/agent.json: agent.read_only was removed; protection now comes only from isolation; remove the key, and set isolation to "worktree" if this child must not write the workspace
+== unknown
+inline: <dir>/setting.json: tools.native.subagent.agents.unknown.descripton is not supported; did you mean description?
+folder: <dir>/agents/unknown/agent.json: agent.descripton is not supported; did you mean description?
+== unknown_before_paths
+inline: <dir>/setting.json: tools.native.subagent.agents.unknown_before_paths.zzz is not supported; supported keys are auto_compaction, compaction_trigger_tokens, description, instructions, isolation, max_run_tokens, max_tool_rounds, model, prompt_documents, sandbox, state_context, timeout_ms, tools, toolset
+folder: <dir>/agents/unknown_before_paths/agent.json: agent.zzz is not supported; supported keys are auto_compaction, compaction_trigger_tokens, description, instructions, isolation, max_run_tokens, max_tool_rounds, model, prompt_documents, sandbox, state_context, timeout_ms, tools, toolset
+== read_only_before_unknown
+inline: <dir>/setting.json: tools.native.subagent.agents.read_only_before_unknown.read_only was removed; protection now comes only from isolation; remove the key, and set isolation to "worktree" if this child must not write the workspace
+folder: <dir>/agents/read_only_before_unknown/agent.json: agent.read_only was removed; protection now comes only from isolation; remove the key, and set isolation to "worktree" if this child must not write the workspace
+== schema_version_then_unknown
+inline: <dir>/setting.json: tools.native.subagent.agents.schema_version_then_unknown.schema_version is not supported; supported keys are auto_compaction, compaction_trigger_tokens, description, instructions, isolation, max_run_tokens, max_tool_rounds, model, prompt_documents, sandbox, state_context, timeout_ms, tools, toolset
+folder: <dir>/agents/schema_version_then_unknown/agent.json: agent.zzz is not supported; supported keys are auto_compaction, compaction_trigger_tokens, description, instructions, isolation, max_run_tokens, max_tool_rounds, model, prompt_documents, sandbox, state_context, timeout_ms, tools, toolset
+== schema_version_only
+inline: <dir>/setting.json: tools.native.subagent.agents.schema_version_only.schema_version is not supported; supported keys are auto_compaction, compaction_trigger_tokens, description, instructions, isolation, max_run_tokens, max_tool_rounds, model, prompt_documents, sandbox, state_context, timeout_ms, tools, toolset
+folder: ok

@@ -43,26 +43,6 @@ var loadToolInputSchema = json.RawMessage(`{
   "additionalProperties":false
 }`)
 
-// ChildLoadTool builds the load_tool a subagent child gets: the manifest definition, the set of
-// the owning profile and that profile's hooks, the same as the parent's load_tool in
-// BuildCatalogWithAsync. A child catalog holds it only when its agent lists load_tool.
-func ChildLoadTool(config sessionfs.SessionConfig, lazy *tools.LazySet) (tools.Tool, error) {
-	definitions, err := loadDefinitions(config.ToolDefinitionPaths)
-	if err != nil {
-		return tools.Tool{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
-	}
-	definition, err := requireNativeDefinition(config, definitions, "load_tool", loadToolID, loadToolInputSchema)
-	if err != nil {
-		return tools.Tool{}, err
-	}
-	tool, err := NewLoadToolTool(lazy, int(config.ProfileTools.LazyLoadMax))
-	if err != nil {
-		return tools.Tool{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
-	}
-	tool.Definition = definition
-	return WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv), nil
-}
-
 // NewLoadToolTool builds load_tool, the runner for a session's lazy tools. A lazy tool is not in
 // the model's tools array, so the array never changes with its use. With no names and no run it
 // lists the lazy tools as "name — summary" lines. With names it describes the lazy tools they

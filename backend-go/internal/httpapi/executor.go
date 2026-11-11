@@ -68,6 +68,8 @@ func (h *Handler) executeRun(run *activeRun, runner RunSession, input json.RawMe
 	toolExecution := tools.ExecutionContext{}
 	run.mu.Lock()
 	toolExecution.RemoteHops = run.hops
+	toolExecution.ChainDepth = run.depth
+	toolExecution.RunNode = run.runNode
 	run.mu.Unlock()
 	if run.canRequestInteraction() && run.interactions != nil {
 		toolExecution.RequestInteraction = run.interactions.Request

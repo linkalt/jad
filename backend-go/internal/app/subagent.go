@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"jad/backend-go/internal/session"
 	"jad/backend-go/internal/sessionfs"
@@ -40,126 +38,64 @@ func (r *Resolver) subagentLauncherFor(config sessionfs.SessionConfig) native.Su
 	return subagentLauncher{resolver: r, parent: config}
 }
 
-// Run starts one child with a fresh transcript and returns its final answer. The
-// child is an ordinary session.Runner run: its own store, its own model client and
-// the catalog the tool chose, with the question channel and the change listener of the call
-// that started it (request.Execution). It takes no checkpoint of its own: the calling run's
-// checkpoint is taken before a call that may change files and covers what the child writes, and
-// at every depth: the tool judges a child that may nest by the agents it can reach, so the call at
-// the top takes it for a grandchild's writes too. It compacts its own transcript when the agent's trigger is reached, and sees the session's newest
-// state-context block when the agent asks for it.
+// Run starts one child with a fresh transcript and returns its final answer. It is the
+// subagent tool's adapter onto Resolver.StartRun (design section 3.4, phase R2): it turns the
+// request into an ephemeral RunSpec over the calling session's configuration, and the result back
+// into the tool's. The manager that calls it keeps the slot, the timeout, the worktree, the
+// run's MCP servers, the panic boundary and the run's end; StartRun runs in its goroutine.
 func (l subagentLauncher) Run(ctx context.Context, request native.SubagentRequest) (native.SubagentResult, error) {
-	config, err := l.childConfig(request)
+	spec, err := ephemeralRunSpec(l.parent, request)
 	if err != nil {
 		return native.SubagentResult{}, err
 	}
-	apiKey, err := l.resolver.providerAPIKey(config)
-	if err != nil {
-		return native.SubagentResult{}, err
-	}
-	store, dir, err := l.openStore(config, request)
-	if err != nil {
-		return native.SubagentResult{}, err
-	}
-	if request.OnTranscript != nil {
-		request.OnTranscript(dir)
-	}
-	streamer, _ := l.resolver.runStreamer(config, apiKey)
-	runner, err := session.NewRunner(store, streamer, session.ModelSettings{
-		Model:       config.Model.Name,
-		Request:     config.Model.Request,
-		HostedTools: config.Model.HostedTools,
-		PromptRole:  config.Model.PromptRole,
-		PromptText:  config.Model.PromptText,
-		// The children of one agent share a key: they share the agent's prompt and tools.
-		PromptCacheKey: promptCacheKey(config.Model, l.parent.MessagesPath+"\x00"+request.Agent.Name),
-	})
-	if err != nil {
-		return native.SubagentResult{}, fmt.Errorf("create sub-agent runner: %w", err)
-	}
-	input, err := json.Marshal(request.Task)
-	if err != nil {
-		return native.SubagentResult{}, fmt.Errorf("encode sub-agent task: %w", err)
-	}
-
-	stateContext, err := l.stateContextFor(request.Agent)
-	if err != nil {
-		return native.SubagentResult{}, err
-	}
-	// The child's spend adds into the calling run's meter, so the caller's max_run_cost_usd
-	// and budget count it (the child's own context hangs off the sub-agent manager).
-	// Its subagent_stop reports, and those of its own children, go to the calling run's
-	// stream.
-	var onReport func(session.HookReport)
-	if request.CallerValues != nil {
-		if callerMeter := session.CostMeterFrom(request.CallerValues); callerMeter != nil && session.CostMeterFrom(ctx) == nil {
-			ctx = session.WithCostMeter(ctx, callerMeter)
-		}
-		if onReport = session.HookReporterFrom(request.CallerValues); onReport != nil && session.HookReporterFrom(ctx) == nil {
-			ctx = session.WithHookReporter(ctx, onReport)
-		}
-	}
-	ctx, sweepChildren := native.WithChildGroups(ctx)
-	defer sweepChildren()
-	var rounds, tokens atomic.Int64
-	// lastText is the newest assistant text of any round. A child that is cut off has
-	// no final answer, but what it wrote last is the best partial work it has.
-	var lastText atomic.Value
-	result, runErr := runner.Run(ctx, input, session.RunOptions{
-		ToolCatalog:          request.Tools,
-		ImageResizer:         newImageResizer(config.ImageResize),
-		ImageStore:           newImageStore(config.ImageStore),
-		ToolExecution:        request.Execution,
-		MaxToolRounds:        int(request.Agent.MaxToolRounds),
-		MaxRunTokens:         request.Agent.MaxRunTokens,
-		MaxParallelToolCalls: int(l.parent.MaxParallelToolCalls),
-		ToolCallScheduling:   l.parent.ToolCallScheduling,
-		LeafBudget:           l.resolver.leafBudget,
-		StateContext:         stateContext,
-		AutomaticCompaction:  l.compactionFor(request.Agent),
-		CompactHistory:       compactWhileWorking(store),
-		OnResponseCommitted: func(event json.RawMessage, _ transcript.CommitResult) {
-			rounds.Add(1)
-			tokens.Add(session.ResponseTokens(event))
-			if text := native.SubagentAnswerText(event); strings.TrimSpace(text) != "" {
-				lastText.Store(text)
-			}
-		},
-	})
-	outcome := native.SubagentResult{Rounds: int(rounds.Load()), Tokens: tokens.Load()}
-	if runErr != nil {
-		outcome.Text, _ = lastText.Load().(string)
-	} else {
-		outcome.Text = native.SubagentAnswerText(result.Event)
-	}
-	// A background child may end after the caller's last round, which would have recorded
-	// its spend in the caller's budget.
-	if callerMeter := session.CostMeterFrom(ctx); callerMeter != nil {
-		if err := callerMeter.RecordUnrecordedSpend(time.Now()); err != nil && l.resolver.logger != nil {
-			l.resolver.logger.Warn("record a sub-agent's spend in the budget", "agent", request.Agent.Name, "error", err)
-		}
-	}
-	l.subagentStopHook(ctx, request, outcome, runErr, onReport)
-	return outcome, runErr
+	handle, err := l.resolver.StartRun(ctx, spec)
+	result := handle.Result()
+	return native.SubagentResult{Text: result.Text, Rounds: result.Rounds, Tokens: result.Tokens}, err
 }
 
-// subagentStopHook reports the end of one child run to the parent session's subagent_stop
-// commands. Like run_end, it runs on a context the stop cannot cancel, so a child that was
+// ephemeralRunSpec is the RunSpec of one subagent request: the agent over the calling session's
+// configuration as its template, the task as its input, and every other field of the request
+// as it is. Encoding a string cannot fail, so moving the encoding ahead of the store (the
+// launcher encoded after it) changes nothing visible.
+func ephemeralRunSpec(parent sessionfs.SessionConfig, request native.SubagentRequest) (RunSpec, error) {
+	input, err := json.Marshal(request.Task)
+	if err != nil {
+		return RunSpec{}, fmt.Errorf("encode sub-agent task: %w", err)
+	}
+	return RunSpec{
+		Kind:         RunEphemeral,
+		Template:     RunTemplate{Base: parent, Agent: request.Agent},
+		Input:        input,
+		Caller:       request.Caller,
+		Seed:         request.Seed,
+		CallID:       request.CallID,
+		Tools:        request.Tools,
+		Execution:    request.Execution,
+		CallerValues: request.CallerValues,
+		OnTranscript: request.OnTranscript,
+	}, nil
+}
+
+// subagentStopHook reports the end of one ephemeral run to the calling session's
+// subagent_stop commands. Like run_end, it runs on a context the stop cannot cancel, so a child that was
 // stopped or timed out still reports. Its reports go to the server log and to onReport, the
 // calling run's reporter; a background child that ends after that run reaches its log only,
 // since the ended run's stream has no reader left.
-func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.SubagentRequest, outcome native.SubagentResult, runErr error, onReport func(session.HookReport)) {
-	hooks := l.parent.Hooks
+func (r *Resolver) subagentStopHook(ctx context.Context, spec RunSpec, outcome RunResult, runErr error, onReport func(session.HookReport)) {
+	hooks := spec.Template.Base.Hooks
 	if !hooks.Enabled || len(hooks.SubagentStop) == 0 {
 		return
 	}
 	event := native.RunEvent{
 		Event:  native.HookEventSubagentStop,
-		Agent:  request.Agent.Name,
-		CallID: request.CallID,
+		Agent:  spec.Template.Agent.Name,
+		CallID: spec.CallID,
 		Rounds: outcome.Rounds,
 		Tokens: outcome.Tokens,
 		Answer: outcome.Text,
+		// The caller's commands, for the end of a run whose model may not be the caller's: they hide
+		// that model's key too (T-009).
+		ModelKeyEnvs: spec.Execution.ModelKeyEnvs,
 	}
 	switch {
 	case runErr == nil:
@@ -169,15 +105,15 @@ func (l subagentLauncher) subagentStopHook(ctx context.Context, request native.S
 	default:
 		event.Outcome, event.Error = native.RunOutcomeError, runErr.Error()
 	}
-	reference, _, _ := strings.Cut(request.Execution.SessionKey, "\x00")
-	fireSessionHook(context.WithoutCancel(ctx), l.resolver.logger, reference, l.parent, event, onReport)
+	reference, _, _ := strings.Cut(spec.Execution.SessionKey, "\x00")
+	fireSessionHook(context.WithoutCancel(ctx), r.logger, reference, spec.Template.Base, event, onReport)
 }
 
 // compactionFor is the automatic compaction of one child. The agent's own trigger and
 // switch win; what it leaves out comes from the session's compaction settings, so a
 // cheap model can compact at a different size than the master.
-func (l subagentLauncher) compactionFor(agent sessionfs.NativeSubagentAgent) *session.AutomaticCompactionSettings {
-	compaction := l.parent.Compaction
+func compactionFor(base sessionfs.SessionConfig, agent sessionfs.NativeSubagentAgent) *session.AutomaticCompactionSettings {
+	compaction := base.Compaction
 	enabled := compaction.AutoEnabled
 	if agent.CompactionTriggerTokens > 0 {
 		enabled = true
@@ -212,16 +148,16 @@ func compactWhileWorking(store *transcript.TurnStore) func(transcript.Compaction
 // stateContextFor returns the session's newest stored state-context block for an agent
 // that asks for it, placed before the child's history so it is sent in every request,
 // compaction or not. A child has no stores of its own, so it never collects a block.
-func (l subagentLauncher) stateContextFor(agent sessionfs.NativeSubagentAgent) ([]session.StateContextPrompt, error) {
+func (r *Resolver) stateContextFor(base sessionfs.SessionConfig, agent sessionfs.NativeSubagentAgent) ([]session.StateContextPrompt, error) {
 	if !agent.StateContext {
 		return nil, nil
 	}
-	shared, release, err := l.resolver.sharedStore(l.parent)
+	shared, release, err := r.sharedStore(base)
 	if err != nil {
 		return nil, fmt.Errorf("read the session state context: %w", err)
 	}
 	defer release()
-	entries, err := boundRunner{resolver: l.resolver, shared: shared, config: l.parent}.stateContextEntries()
+	entries, err := boundRunner{resolver: r, shared: shared, config: base}.stateContextEntries()
 	if err != nil {
 		return nil, err
 	}
@@ -232,26 +168,29 @@ func (l subagentLauncher) stateContextFor(agent sessionfs.NativeSubagentAgent) (
 	return []session.StateContextPrompt{{Role: newest.Role, Text: newest.Text}}, nil
 }
 
-// childConfig is the parent's configuration with the agent's model and instructions.
-func (l subagentLauncher) childConfig(request native.SubagentRequest) (sessionfs.SessionConfig, error) {
-	config := l.parent
-	if request.Agent.ModelPath != "" {
-		config.ModelPath = request.Agent.ModelPath
-		config.ReasoningEffort = request.Agent.ReasoningEffort
+// childConfig is the template's base (the calling session's configuration) with the agent's
+// model and instructions. It stays the run's configuration: the design's section 3.2 order is
+// not built, because a toolset agent's run and its tools read four fields with different values
+// (agent_config_fields_test.go; DECISIONS.md, "Unified agent runs: completion assessment").
+func childConfig(template RunTemplate) (sessionfs.SessionConfig, error) {
+	config := template.Base
+	if template.Agent.ModelPath != "" {
+		config.ModelPath = template.Agent.ModelPath
+		config.ReasoningEffort = template.Agent.ReasoningEffort
 	}
 	// The parent's prompt is not the child's: it gets its own instructions and
 	// documents, or none.
-	config.Model.PromptText = request.Agent.PromptText
+	config.Model.PromptText = template.Agent.PromptText
 	loaded, err := config.WithModel()
 	if err != nil {
-		return sessionfs.SessionConfig{}, fmt.Errorf("load the model of agent %s: %w", request.Agent.Name, err)
+		return sessionfs.SessionConfig{}, fmt.Errorf("load the model of agent %s: %w", template.Agent.Name, err)
 	}
 	return loaded, nil
 }
 
-// openStore creates the child's transcript under the agent storage directory, in a
+// openEphemeralStore creates the child's transcript under the agent storage directory, in a
 // directory of its own so two children never share history.
-func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request native.SubagentRequest) (*transcript.TurnStore, string, error) {
+func (r *Resolver) openEphemeralStore(config sessionfs.SessionConfig, spec RunSpec) (*transcript.TurnStore, string, error) {
 	if config.NativeSubagent == nil {
 		return nil, "", errors.New("tools.native.subagent is not configured")
 	}
@@ -259,7 +198,7 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, "", fmt.Errorf("create sub-agent directory name: %w", err)
 	}
-	name := unsafeDirectoryCharacters.ReplaceAllString(request.CallID, "_")
+	name := unsafeDirectoryCharacters.ReplaceAllString(spec.CallID, "_")
 	if name == "" {
 		name = "call"
 	}
@@ -269,8 +208,8 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 	}
 	// A resumed run starts from a copy of its source transcript. The copy is made into this
 	// run's own folder before the journal opens it, and the source is only read.
-	if request.Seed != "" {
-		if err := copyFileExclusive(request.Seed, filepath.Join(directory, "messages.jsonl")); err != nil {
+	if spec.Seed != "" {
+		if err := copyFileExclusive(spec.Seed, filepath.Join(directory, "messages.jsonl")); err != nil {
 			return nil, "", fmt.Errorf("copy the transcript of the resumed run: %w", err)
 		}
 	}
@@ -280,7 +219,7 @@ func (l subagentLauncher) openStore(config sessionfs.SessionConfig, request nati
 	}
 	store, err := transcript.NewTurnStore(journal, filepath.Join(directory, "staging"), transcript.TurnStoreOptions{
 		CompactionCachePath: filepath.Join(directory, "compaction-cache.json"),
-		Logger:              l.resolver.logger,
+		Logger:              r.logger,
 		MaxItemBytes:        config.Persistence.MaxItemBytes,
 		ResponseMetadata:    transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
 	})

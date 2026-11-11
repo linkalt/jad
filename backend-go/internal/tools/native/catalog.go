@@ -80,8 +80,33 @@ func BuildCatalogWithMessenger(config sessionfs.SessionConfig, locks *PathLocks,
 // BuildCatalogWithAsync is BuildCatalogWithMessenger plus the resolver that shares one
 // async host per tool storage folder. Without it the async tool opens a host of its own.
 func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (*tools.Catalog, error) {
+	sections, err := buildCatalogSections(config, locks, taskStore, recordsStore, launcher, mcp, subagentManager, toolsets, messenger, asyncResources, lazy)
+	if err != nil {
+		return nil, err
+	}
+	return sections.Compose()
+}
+
+// BuildCatalogSections is BuildCatalogWithAsync for a build that composes the owner's catalog
+// itself, after it adds the MCP tools and redescribes the subagent tool (the resolver's assembly):
+// the native sections, not yet composed, with no MCP section. They are checked as a catalog here,
+// so a native error is reported where BuildCatalogWithAsync reports it.
+func BuildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (CatalogSections, error) {
+	sections, err := buildCatalogSections(config, locks, taskStore, recordsStore, launcher, mcp, subagentManager, toolsets, messenger, asyncResources, lazy)
+	if err != nil {
+		return CatalogSections{}, err
+	}
+	if _, err := sections.Compose(); err != nil {
+		return CatalogSections{}, err
+	}
+	return sections, nil
+}
+
+// buildCatalogSections builds the owner's native sections: its native and extension tools, the
+// subagent tool, profile_message and load_tool.
+func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, taskStore *TaskStore, recordsStore *RecordsStore, launcher SubagentLauncher, mcp *SubagentMCP, subagentManager *SubagentManager, toolsets ToolsetResources, messenger ProfileMessenger, asyncResources AsyncResources, lazy *tools.LazySet) (CatalogSections, error) {
 	if config.NativeLSP == nil && config.NativeExec == nil && config.NativeReadImage == nil && config.NativeTask == nil && config.NativeCodeContext == nil && config.NativeRecords == nil && config.ExtensionWebSearch == nil && config.NativeRequestDraft == nil && config.NativeSkill == nil && config.ExtensionDecideSystemone == nil && config.NativeSubagent == nil && config.NativeProfileMessage == nil && config.NativeToolSmith == nil && config.NativeTranscript == nil && config.NativeTranscripts == nil && config.NativeProfile == nil && config.NativeLoadTool == nil && config.NativeAsync == nil {
-		return tools.NewCatalog(nil)
+		return CatalogSections{}, nil
 	}
 	if locks == nil {
 		locks = NewPathLocks()
@@ -91,27 +116,28 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		var err error
 		asyncHost, err = asyncHostFor(asyncHostSource{dir: config.StoragePaths.ToolStorage, cfg: config.NativeAsync.Config}, asyncResources)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.async: %v", config.SettingPath, err)}
 		}
 	}
 	loaded, definitions, toolSmithNested, err := buildNativeTools(config, locks, taskStore, recordsStore, asyncHost, lazy)
 	if err != nil {
-		return nil, err
+		return CatalogSections{}, err
 	}
+	var sections CatalogSections
 	// transcript is read-only, so it is built before the subagent tool and an agent can list it.
 	if config.NativeTranscript != nil {
 		definition, err := requireNativeDefinition(config, definitions, "transcript", transcriptToolID, transcriptInputSchema)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		remotes, _, err := remoteDirectory(config, "transcript", config.NativeTranscript.Remotes, messenger)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		tool, err := NewTranscriptToolWithRemotes(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager, remotes)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
@@ -119,17 +145,17 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 	if config.NativeTranscripts != nil {
 		definition, err := requireNativeDefinition(config, definitions, "transcripts", transcriptsToolID, transcriptsInputSchema)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		sessions, _ := messenger.(TranscriptSessions)
 		remotes, _, err := remoteDirectory(config, "transcripts", config.NativeTranscripts.Remotes, messenger)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		tool, err := NewTranscriptsToolWithRemotes(*config.NativeTranscripts, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager, remotes)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
@@ -137,17 +163,17 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 	if config.NativeProfile != nil {
 		definition, err := requireNativeDefinition(config, definitions, "profile", profileToolID, profileInputSchema)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		actions, _ := messenger.(ProfileActions)
 		remotes, remoteNames, err := remoteDirectory(config, "profile", config.NativeProfile.Remotes, messenger)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		tool, err := NewProfileToolWithRemotes(*config.NativeProfile, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, actions, remoteNames, remotes)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
@@ -158,19 +184,19 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 	if config.NativeProfileMessage != nil && messenger != nil {
 		definition, err := requireOptionalPropertiesDefinition(config, definitions, "profile_message", profileMessageToolID, profileMessageInputSchema, profileMessageModelProperty, profileMessageSandboxProperty)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
 		remotes, remoteNames, err := remoteDirectory(config, "profile_message", config.NativeProfileMessage.Remotes, messenger)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 {
-			return nil, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
+			return CatalogSections{}, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
-		tool, err := NewProfileMessageToolWithRemotes(*config.NativeProfileMessage, targets, messenger, asyncHost, remotes)
+		tool, err := newProfileMessageTool(*config.NativeProfileMessage, config.NativeSubagent, targets, messenger, asyncHost, remotes)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
 		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
 		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
@@ -180,13 +206,13 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 	if config.NativeSubagent != nil {
 		definition, err := requireOptionalPropertiesDefinition(config, definitions, "subagent", subagentToolID, subagentInputSchema, subagentModelProperty, subagentSandboxProperty)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		subagentSettings := *config.NativeSubagent
 		subagentSettings.DenyTools = config.ProfileTools.Deny
 		agentToolsets, err := buildAgentToolsets(config, locks, toolsets, asyncHost)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		childPool := loaded
 		if profileMessageTool != nil {
@@ -194,7 +220,7 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		}
 		subagentRemotes, _, err := remoteDirectory(config, "subagent", subagentSettings.Remotes, messenger)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		// A caller without MCP wiring still gets the nested hooks, so the handle is never nil here.
 		if mcp == nil {
@@ -202,38 +228,40 @@ func BuildCatalogWithAsync(config sessionfs.SessionConfig, locks *PathLocks, tas
 		}
 		tool, err := newSubagentToolDescribed(subagentSettings, childPool, sandboxBaseDescriptions(definitions), agentToolsets, launcher, mcp, subagentManager, asyncHost, subagentRemotes)
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		// The agent list is part of the description the model sees, so it is kept on top
 		// of the manifest's text and not replaced by it. The tool's own description is the code's
 		// text plus the list, whose markers depend on which agents may run in the background.
 		tool.Definition.Description = definition.Description + strings.TrimPrefix(tool.Definition.Description, subagentDescription)
-		loaded = append(loaded, WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv))
+		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
+		sections.Subagent = &hooked
 	}
-	if profileMessageTool != nil {
-		loaded = append(loaded, *profileMessageTool)
-	}
-	// load_tool is last, after the subagent tool, so it is not in the child pool: a child gets it only
-	// through SetLazy, from the owner, so it runs the owner's lazy tools. It lists the lazy tools bound in lazy, which is nil or
-	// empty when the profile has none; it then lists nothing and runs nothing.
+	sections.ProfileMessage = profileMessageTool
+	// load_tool is built after the subagent tool, so it is not in the child pool: a child gets this
+	// same tool from the owner (AssembleChildren, or SetLazy), so it runs the owner's lazy tools. It
+	// lists the lazy tools bound in lazy, which is nil or empty when the profile has none; it then
+	// lists nothing and runs nothing.
 	if config.NativeLoadTool != nil {
 		definition, err := requireNativeDefinition(config, definitions, "load_tool", loadToolID, loadToolInputSchema)
 		if err != nil {
-			return nil, err
+			return CatalogSections{}, err
 		}
 		tool, err := NewLoadToolTool(lazy, int(config.ProfileTools.LazyLoadMax))
 		if err != nil {
-			return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
+			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
 		tool.Definition = definition
 		tool = WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
-		loaded = append(loaded, tool)
+		sections.LoadTool = &tool
 	}
-	// The late tools were appended after buildNativeTools bound the early list, so the script bridge is bound
-	// again with the whole list: the same gated, hooked copies the model sees. tool_smith itself is excluded
-	// by name (NativeToolSmithExcludedTools), so the rebind cannot reach it and recurse.
-	toolSmithNested.Bind(loaded, config.ProfileTools)
-	return tools.NewCatalog(loaded)
+	sections.Native = loaded
+	// The late tools were added after buildNativeTools bound the early list, so the script bridge is
+	// bound again with every native section: the same gated, hooked copies the model sees.
+	// tool_smith itself is excluded by name (NativeToolSmithExcludedTools), so the rebind cannot
+	// reach it and recurse.
+	toolSmithNested.Bind(sections.Tools(), config.ProfileTools)
+	return sections, nil
 }
 
 // gateLazy returns the lazy gate of tool when the set has bound it and not yet gated it, and
@@ -243,16 +271,6 @@ func gateLazy(tool tools.Tool, lazy *tools.LazySet) tools.Tool {
 		return tool
 	}
 	gated, _ := lazy.Gate(tool)
-	return gated
-}
-
-// GateLazyTools gates the lazy tools of a list with the set, before the event hooks wrap them.
-// Each tool is gated at most once; a tool the set did not bind is returned unchanged.
-func GateLazyTools(list []tools.Tool, lazy *tools.LazySet) []tools.Tool {
-	gated := make([]tools.Tool, len(list))
-	for index, tool := range list {
-		gated[index] = gateLazy(tool, lazy)
-	}
 	return gated
 }
 
@@ -266,20 +284,14 @@ type ToolsetResources interface {
 // buildAgentToolsets builds the native tools of every toolset a sub-agent names. The
 // tools are not part of the catalog the parent's model sees.
 func buildAgentToolsets(config sessionfs.SessionConfig, locks *PathLocks, resources ToolsetResources, asyncHost *AsyncHost) (map[string]subagentToolset, error) {
-	if len(config.AgentToolsets) == 0 {
+	configs := NewAgentToolConfigs(config).Native
+	if len(configs) == 0 {
 		return nil, nil
 	}
-	built := make(map[string]subagentToolset, len(config.AgentToolsets))
-	for _, id := range slices.Sorted(maps.Keys(config.AgentToolsets)) {
-		derived := config.AgentToolsets[id]
-		// The toolset was loaded before the model file was read, so it has no model. Its
-		// bash, exec and process hide the running model's key from a child's environment
-		// the way the session's do.
-		derived.Model = config.Model
-		// A toolset shares the session's async host; without one it has no async tool.
-		if asyncHost == nil {
-			derived.NativeAsync = nil
-		}
+	built := make(map[string]subagentToolset, len(configs))
+	for _, id := range slices.Sorted(maps.Keys(configs)) {
+		// Finished for this owner run (model, async) by NewAgentToolConfigs.
+		derived := configs[id]
 		var taskStore *TaskStore
 		var recordsStore *RecordsStore
 		if resources != nil {

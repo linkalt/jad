@@ -111,7 +111,7 @@ var remoteOnThisHost = func(entry remote.Entry) bool { return entry.SameHost() }
 // tool, or inline when the call cannot collect a handle later.
 func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task string, arguments map[string]any, execution tools.ExecutionContext) (string, error) {
 	name, _, _ := remote.Split(reference)
-	if s.depthExceeded(execution.AgentDepth) {
+	if s.depthExceeded(execution.RunDepth()) {
 		return depthExceededError(callID), nil
 	}
 	if len(s.remotes.names) == 0 || s.remotes.directory == nil {
@@ -165,7 +165,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			return tools.ExecutionError(callID, tools.StatusError, "spawn_failed", "The run id could not be created"), nil
 		}
 		id = "rs_" + hex.EncodeToString(random)
-		if err := s.async.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindRemoteSubagent, Label: handleLabel(target.String() + ": " + oneLine(task))}); err != nil {
+		if err := s.async.registerProfileMessage(id, asyncmgr.Registration{ID: id, Owner: owner, Kind: asyncKindRemoteSubagent, Label: handleLabel(target.String() + ": " + oneLine(task)), Lineage: RunLineageOf(ctx)}); err != nil {
 			return tools.ExecutionError(callID, tools.StatusError, registerErrorCode(err), err.Error()), nil
 		}
 	}
@@ -173,8 +173,8 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	// it back when the run ends or when no run starts. A top-level start is not nested, so it
 	// takes none.
 	var reservation *remoteReservation
-	if execution.AgentDepth > 0 {
-		reservation, err = s.manager.reserveRemote(execution.RootRun, execution.SessionKey, int(s.settings.MaxRunsPerRoot), int(s.settings.MaxRunsPerSession), execution.AgentDepth, int(s.settings.MaxDepth))
+	if admission := s.admissionFor(execution); admission.nested() {
+		reservation, err = s.manager.reserveRemote(admission)
 		if err != nil {
 			if handled {
 				s.async.abandonProfileMessage(id)
@@ -332,6 +332,9 @@ func withResume(arguments map[string]any, id string) map[string]any {
 func refuseRemoteCap(callID string, err error) string {
 	if errors.Is(err, errSubagentDepth) {
 		return depthExceededError(callID)
+	}
+	if errors.Is(err, ErrRunTreeParentGone) {
+		return tools.ExecutionError(callID, tools.StatusError, "subagent_unavailable", err.Error())
 	}
 	return tools.ExecutionError(callID, tools.StatusError, "subagent_limit_reached", err.Error())
 }

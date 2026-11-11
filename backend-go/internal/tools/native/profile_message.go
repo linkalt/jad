@@ -112,6 +112,10 @@ var ErrProfileNoAnswer = errors.New("profile finished without an answer")
 // already in the chain of messages that led to the caller, or the caller itself.
 var ErrProfileCycle = errors.New("profile message would form a cycle")
 
+// errProfileDepthExceeded refuses a message whose run would pass max_depth. The tool raises it
+// itself, after the messenger's checks, so a cycle or a too long chain is still reported as such.
+var errProfileDepthExceeded = errors.New("profile message run would pass max_depth")
+
 // ErrProfileChainTooLong is returned by a ProfileMessenger when the message would make the
 // chain of profiles longer than tools.native.profile_message.max_chain.
 var ErrProfileChainTooLong = errors.New("profile message chain is too long")
@@ -130,20 +134,6 @@ func IsChildCall(ctx context.Context) bool {
 // WithProfileChainMax sets the longest chain the call in ctx may build.
 func WithProfileChainMax(ctx context.Context, limit int) context.Context {
 	return context.WithValue(ctx, profileChainMaxKey{}, limit)
-}
-
-type remoteHopsKey struct{}
-
-// WithRemoteHops carries the remote hop count of the call in ctx, so the run a message starts
-// inherits it.
-func WithRemoteHops(ctx context.Context, hops int) context.Context {
-	return context.WithValue(ctx, remoteHopsKey{}, hops)
-}
-
-// RemoteHopsOf is the remote hop count carried by ctx, zero when none.
-func RemoteHopsOf(ctx context.Context) int {
-	hops, _ := ctx.Value(remoteHopsKey{}).(int)
-	return hops
 }
 
 // WithChildCall marks ctx as the context of a call made by a sub-agent run.
@@ -185,6 +175,13 @@ type ProfileMessageRequest struct {
 	// MaxQueued is the most messages that may wait for one target; a message over it fails
 	// at once as busy. Zero queues nobody.
 	MaxQueued int
+	// MaxRunsPerRoot is the caller's max_runs_per_root (tools.native.subagent, its default
+	// without the section): a local message's run joins the caller's run tree (Caller.RunNode)
+	// under the lower of it and the tree's ceiling, and is refused with ErrRunTreeLimit beyond
+	// it, while it is queued as while it runs. Zero is no limit. The session cap is not the
+	// caller's: the run executes in the target's session, under the target's own
+	// max_runs_per_session (the messenger reads it from the target's settings).
+	MaxRunsPerRoot int
 	// Blocking says the calling run cannot go on until the message ends (or the call's
 	// block_ms passes), so a message that would wait for a profile that is itself blocked
 	// on the caller is refused as a cycle.
@@ -197,6 +194,10 @@ type ProfileMessageRequest struct {
 	// Sandbox is the sandbox template the call picked (sandbox_choice, resolved in the
 	// caller's session): it narrows the target's run further. Nil picks none.
 	Sandbox *sessionfs.SandboxChoice
+	// Caller is the calling run (design section 3.3, phase R1): the call's run scope, the
+	// remote caller, and the model and sandbox names the call gave. Nothing reads it yet; the
+	// fields above and the call's context values are what the messenger uses.
+	Caller tools.CallerContext
 }
 
 // ProfileSandboxError refuses a message to a profile whose own sandbox reaches more than the
@@ -326,11 +327,17 @@ func transcriptInformation(plan ProfileMessagePlan) []tools.Information {
 }
 
 type profileMessageTool struct {
-	settings  sessionfs.NativeProfileMessageSettings
-	targets   []string
-	messenger ProfileMessenger
-	host      *AsyncHost
-	remotes   remoteSettings
+	settings sessionfs.NativeProfileMessageSettings
+	// maxDepth is the calling config's max_depth (NativeSubagentSettings.RunMaxDepth): a message
+	// whose run would be deeper is refused before it is sent, local or remote.
+	maxDepth int
+	// maxPerRoot is the calling config's max_runs_per_root (RunMaxRunsPerRoot) a local message's
+	// run is admitted into the run tree with.
+	maxPerRoot int
+	targets    []string
+	messenger  ProfileMessenger
+	host       *AsyncHost
+	remotes    remoteSettings
 }
 
 // NewProfileMessageTool builds the profile_message tool over a messenger. targets are the
@@ -344,6 +351,13 @@ func NewProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, targ
 // session's tools.native.profile_message.remotes names are read from. A nil directory offers
 // no remote target.
 func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSettings, targets []string, messenger ProfileMessenger, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
+	return newProfileMessageTool(settings, nil, targets, messenger, host, remotes)
+}
+
+// newProfileMessageTool is NewProfileMessageToolWithRemotes under subagent, the
+// tools.native.subagent section of the config whose catalog holds the tool (nil: none, whose
+// defaults apply): its max_depth and run caps bound the runs the tool's messages start.
+func newProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, subagent *sessionfs.NativeSubagentSettings, targets []string, messenger ProfileMessenger, host *AsyncHost, remotes *remote.Directory) (tools.Tool, error) {
 	if messenger == nil {
 		return tools.Tool{}, errors.New("tools.native.profile_message needs a messenger")
 	}
@@ -368,7 +382,7 @@ func NewProfileMessageToolWithRemotes(settings sessionfs.NativeProfileMessageSet
 	if host != nil {
 		host.attachProfileMessage()
 	}
-	runtime := &profileMessageTool{settings: settings, targets: targets, messenger: messenger, host: host, remotes: remoteSettings{names: remoteNames, directory: remotes}}
+	runtime := &profileMessageTool{settings: settings, maxDepth: int(subagent.RunMaxDepth()), maxPerRoot: int(subagent.RunMaxRunsPerRoot()), targets: targets, messenger: messenger, host: host, remotes: remoteSettings{names: remoteNames, directory: remotes}}
 	return tools.Tool{
 		Definition: tools.Definition{
 			ID:          profileMessageToolID,
@@ -467,16 +481,18 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		QueueWait:      time.Duration(p.settings.BusyWaitMs) * time.Millisecond,
 		Timeout:        time.Duration(p.settings.TimeoutMs) * time.Millisecond,
 		MaxQueued:      p.settings.MaxQueued,
+		MaxRunsPerRoot: p.maxPerRoot,
 		Environment:    callerEnvironment(execution),
 		CallerPlace:    sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
 		Sandbox:        choice,
+		Caller:         profileMessageCaller(ctx, execution, model, sandboxName),
 	}
 	if !handled && p.settings.BusyWaitMs == 0 {
 		// Nobody can collect a queued message later, so a busy target fails at once unless
 		// busy_wait_ms says how long this call may hold its run.
 		request.MaxQueued = 0
 	}
-	callCtx := WithRemoteHops(WithProfileChainMax(ctx, p.settings.MaxChain), execution.RemoteHops)
+	callCtx := WithProfileChainMax(ctx, p.settings.MaxChain)
 	if execution.AgentDepth > 0 {
 		callCtx = WithChildCall(callCtx)
 	}
@@ -499,6 +515,11 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	}
 	if err != nil {
 		return p.renderFailure(callID, profile, err, transcriptInformation(plan)...), nil
+	}
+	if p.depthExceeded(execution) {
+		// Checked after Prepare, whose refusals (cycle, chain, same transcript, sandbox, model)
+		// keep their precedence, and before Start, so nothing is queued, reset or compacted.
+		return p.renderFailure(callID, profile, errProfileDepthExceeded), nil
 	}
 	if !handled {
 		return p.runInline(ctx, callID, profile, plan)
@@ -601,6 +622,12 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 		return "profile_no_answer", fmt.Sprintf("Profile %s finished without an answer", profile)
 	case errors.Is(err, ErrProfileChainTooLong):
 		return "profile_chain_too_long", fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)
+	case errors.Is(err, ErrRunTreeParentGone):
+		return "profile_unavailable", fmt.Sprintf("Profile %s cannot be messaged from here: %s", profile, err)
+	case errors.Is(err, ErrRunTreeLimit):
+		return "profile_limit_reached", fmt.Sprintf("Profile %s cannot be messaged from here: this run tree or the profile's session already has the most runs it may have going (tools.native.subagent.max_runs_per_root, max_runs_per_session); try again once some have ended", profile)
+	case errors.Is(err, errProfileDepthExceeded):
+		return "profile_depth_exceeded", fmt.Sprintf("Profile %s cannot be messaged from this depth (tools.native.subagent.max_depth)", profile)
 	case errors.Is(err, ErrProfileCycle):
 		return "profile_cycle", fmt.Sprintf("Profile %s cannot be messaged from here: it would form a cycle", profile)
 	case errors.Is(err, ErrProfileTimeout), errors.Is(err, context.DeadlineExceeded):
@@ -645,6 +672,15 @@ func profileBusyText(profile string, err error) string {
 	return text + "; try again later"
 }
 
+// profileMessageCaller is the CallerContext of a profile_message call (phase R1): the run scope
+// of the call, the remote caller the remote API marked, and the model and sandbox the call named.
+func profileMessageCaller(ctx context.Context, execution tools.ExecutionContext, model, sandboxName string) tools.CallerContext {
+	caller := execution.Caller()
+	caller.RemoteCaller = remoteCallerOf(ctx)
+	caller.ModelChoice, caller.SandboxChoice = model, sandboxName
+	return caller
+}
+
 // callerEnvironment is the environment a profile_message target is narrowed by: the calling
 // run's, in its plan-mode form for a call of a plan-mode run, so a caller that may not write
 // cannot have a target write for it.
@@ -654,4 +690,11 @@ func callerEnvironment(execution tools.ExecutionContext) *tools.Environment {
 		return environment
 	}
 	return &tools.Environment{Sandbox: environment.Sandbox.ForPlanMode()}
+}
+
+// depthExceeded reports whether the run a message from execution starts would pass max_depth: it
+// runs one level below the caller's RunDepth, by the one depth rule sub-agent starts use. A remote
+// target is checked the same way here; the remote server counts its own depth from 0.
+func (p *profileMessageTool) depthExceeded(execution tools.ExecutionContext) bool {
+	return depthExceeds(execution.RunDepth(), p.maxDepth)
 }

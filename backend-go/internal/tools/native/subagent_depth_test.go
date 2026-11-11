@@ -66,7 +66,11 @@ func TestNestedSubagentCopyIsNeverGated(t *testing.T) {
 	if err := mcp.SetLazy(set, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !mcp.tool.agents[0].catalog.Has("subagent") {
+	child, err := mcp.tool.childCatalog(mcp.tool.agents[0], "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.Has("subagent") {
 		t.Fatal("the child holds no nested subagent copy")
 	}
 	if mcp.tool.nestedSelf().Refused != nil {
