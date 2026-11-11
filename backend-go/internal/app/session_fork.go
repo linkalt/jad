@@ -26,7 +26,7 @@ import (
 // so the new session goes on from that point and the old one is untouched. The copy's
 // history block (the compaction backup) and the images its lines refer to come along;
 // caches are rebuilt by the new session (the usage baseline of a compacted source comes along,
-// see forkBaselineEntry), and tool storage (records, tasks, processes) and
+// see forkUsageBaseline), and tool storage (records, tasks, processes) and
 // checkpoints start empty.
 func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, request httpapi.ForkRequest) (httpapi.ForkResult, error) {
 	if ctx == nil {
@@ -103,12 +103,14 @@ func (r *Resolver) ForkProfile(ctx context.Context, reference, profile string, r
 }
 
 // forkPoint is how much of the source transcript a fork copies: the lines before byte end,
-// which hold turns turns. A zero forkPoint copies nothing. baseline is the entry of the
-// source's usage baseline the fork carries over (see forkBaselineEntry), or nil.
+// which hold turns turns. A zero forkPoint copies nothing.
 type forkPoint struct {
-	end      int64
-	turns    int
-	baseline *usageBaselineEntry
+	end   int64
+	turns int
+	// usage is what the fork carries of the source's usage baseline. generation names the source
+	// file this point was computed from: a copy of another file would carry the wrong usage.
+	usage      forkUsage
+	generation string
 }
 
 // forkPoint finds the end of the lines the fork keeps and how many turns they hold: all of
@@ -159,7 +161,7 @@ func (r *Resolver) forkPoint(ctx context.Context, config sessionfs.SessionConfig
 			}
 		}
 	}
-	return forkPoint{end: end, turns: turns, baseline: shared.forkBaselineEntry(config, end)}, nil
+	return forkPoint{end: end, turns: turns, usage: shared.forkUsageBaseline(config, end, index.usage.HistoryPartial), generation: index.generation}, nil
 }
 
 // messageTurnCursor finds the turn that holds a message of the live transcript, by
@@ -255,7 +257,7 @@ func (r *Resolver) writeForkFiles(ctx context.Context, target sessionfs.Location
 	var inherited *forkBaseline
 	baselinePath := sessionfs.UsageBaselinePath(config.UsageCachePath)
 	if baselinePath != "" && !sameFile(source.UsageCachePath, config.UsageCachePath) {
-		inherited = newForkBaseline(point.baseline)
+		inherited = newForkBaseline(point.usage)
 	}
 	result := httpapi.ForkResult{Session: target.Reference, Turns: point.turns}
 	images := map[string]struct{}{}
@@ -263,8 +265,14 @@ func (r *Resolver) writeForkFiles(ctx context.Context, target sessionfs.Location
 		*created = append(*created, baselinePath)
 	}
 	err = writeStreamAtomic(config.MessagesPath, func(out io.Writer) error {
+		if beforeForkCopy != nil {
+			beforeForkCopy()
+		}
+		if err := forkSourceUnchanged(source, point); err != nil {
+			return err
+		}
 		if err := r.copyForkLines(ctx, source, point, func(offset int64, line []byte) error {
-			inherited.reach(offset)
+			inherited.add(offset, line)
 			result.Bytes += int64(len(line)) + 1
 			for _, name := range imagestore.RefNames(line) {
 				images[name] = struct{}{}
@@ -275,12 +283,16 @@ func (r *Resolver) writeForkFiles(ctx context.Context, target sessionfs.Location
 			if _, err := out.Write([]byte{'\n'}); err != nil {
 				return err
 			}
-			inherited.add(line)
 			return nil
 		}); err != nil {
 			return err
 		}
-		_, err := inherited.store(config, r.logger)
+		// The point, and the usage it carries, were computed from one file: a source that was
+		// replaced since (a compaction in another process) is not the file that was copied.
+		if err := forkSourceUnchanged(source, point); err != nil {
+			return err
+		}
+		_, err := inherited.store(config, r.logger, point.end)
 		return err
 	})
 	if err != nil {
@@ -338,6 +350,22 @@ func copyStoredImages(from, to string, names []string) (int, error) {
 		copied++
 	}
 	return copied, nil
+}
+
+// beforeForkCopy is a test seam: it runs once the fork's point is computed and before its lines
+// are read.
+var beforeForkCopy func()
+
+// forkSourceUnchanged fails the fork (409) when the source transcript is no longer the file the
+// fork point was computed from. Appends keep the file; a rewrite or a reset replaces it.
+func forkSourceUnchanged(source sessionfs.SessionConfig, point forkPoint) error {
+	if point.generation == "" {
+		return nil
+	}
+	if stat, err := statFile(source.MessagesPath); err != nil || stat.generation() != point.generation {
+		return &httpapi.StatusError{Code: http.StatusConflict, Message: "the session transcript was replaced while the fork was prepared; fork again"}
+	}
+	return nil
 }
 
 // copyForkLines passes each transcript line of source before point.end to visit, read as a

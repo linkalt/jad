@@ -32,6 +32,15 @@ import (
 // about to replace. Until the rename the old file is current and its entry fits it; after the
 // rename the new file is current and the new entry fits it. A crash or an error between the
 // two steps therefore loses nothing.
+//
+// An entry's summary is cumulative, so it cannot be split to give the usage of a shorter prefix
+// of the bytes it covers; a fork that cuts inside them (usage_baseline_fork.go) needs a checkpoint
+// of its own. Two things provide one. A front compaction keeps a prefix of the file it replaces
+// and removes what followed, so every older entry that still fits the kept prefix stays beside the
+// new one: each is the exact usage at its own offset. And a front compaction says, in
+// PrefixExact, whether anything was ever removed from before the first byte it kept; when nothing
+// was, a scan of any prefix is that prefix's usage. A compaction that keeps only the preserved
+// response (the records after it are removed) writes neither: its bytes hold no turn start.
 
 const usageBaselineSchemaVersion = 1
 
@@ -43,6 +52,11 @@ type usageBaselineEntry struct {
 	ReplacesSHA256  string             `json:"replaces_sha256"`
 	Summary         webui.UsageSummary `json:"summary"`
 	LastResponseKey string             `json:"last_response_key,omitempty"`
+	// PrefixExact says that no record was ever removed from before the first byte the entry
+	// covers: whatever the rewrite removed followed those bytes (a front compaction), so the
+	// usage of a prefix of them is what a scan of that prefix counts. Absent means unknown, as in
+	// every entry written before the field existed.
+	PrefixExact bool `json:"prefix_exact,omitempty"`
 }
 
 // usageBaselineFile holds the entries newest first.
@@ -97,6 +111,16 @@ func (e usageBaselineEntry) matches(path string, size int64) bool {
 
 // matchUsageBaseline returns the newest baseline entry that matches the transcript.
 func (s *sharedSession) matchUsageBaseline(config sessionfs.SessionConfig, stat fileStat) (usageBaselineEntry, bool) {
+	entries := s.matchingUsageBaselines(config, stat, 1)
+	if len(entries) == 0 {
+		return usageBaselineEntry{}, false
+	}
+	return entries[0], true
+}
+
+// matchingUsageBaselines returns the baseline entries that match the transcript, newest first:
+// all of them, or the first limit when limit is positive.
+func (s *sharedSession) matchingUsageBaselines(config sessionfs.SessionConfig, stat fileStat, limit int) []usageBaselineEntry {
 	path := sessionfs.UsageBaselinePath(config.UsageCachePath)
 	file, err := readUsageBaselineFile(path)
 	if err != nil {
@@ -104,33 +128,78 @@ func (s *sharedSession) matchUsageBaseline(config sessionfs.SessionConfig, stat 
 		if !s.usageBaselineFailed.Swap(true) {
 			logging.Or(s.logger).Warn("usage baseline unreadable; usage totals may be incomplete", "path", path, "error", err)
 		}
-		return usageBaselineEntry{}, false
+		return nil
 	}
+	var matching []usageBaselineEntry
 	for _, entry := range file.Entries {
 		if entry.matches(config.MessagesPath, stat.Size) {
-			s.usageBaselineFailed.Store(false)
-			return entry, true
+			matching = append(matching, entry)
+			if limit > 0 && len(matching) == limit {
+				break
+			}
 		}
 	}
-	return usageBaselineEntry{}, false
+	if len(matching) > 0 {
+		s.usageBaselineFailed.Store(false)
+	}
+	return matching
 }
 
 // storeUsageBaseline durably records entry, keeping the newest existing entry that matches the
-// transcript at config.MessagesPath, which the rewrite has not replaced yet.
-func (s *sharedSession) storeUsageBaseline(config sessionfs.SessionConfig, entry usageBaselineEntry) error {
+// transcript at config.MessagesPath, which the rewrite has not replaced yet (a crash before the
+// rename must find it). keptPrefix says the rewrite publishes a prefix of that transcript (front
+// compaction): the entry then also keeps every older entry that fits the prefix, and says whether
+// nothing was removed from before it. historyPartial is the usage scan's own HistoryPartial.
+func (s *sharedSession) storeUsageBaseline(config sessionfs.SessionConfig, entry usageBaselineEntry, keptPrefix, historyPartial bool) error {
 	path := sessionfs.UsageBaselinePath(config.UsageCachePath)
-	file := usageBaselineFile{SchemaVersion: usageBaselineSchemaVersion, Entries: []usageBaselineEntry{entry}}
+	var previous []usageBaselineEntry
+	readable := false
 	existing, err := readUsageBaselineFile(path)
 	if err != nil {
 		// An unreadable baseline protects nothing that can still be recovered, and refusing to
 		// compact until someone deletes it would not bring those totals back.
 		logging.Or(s.logger).Warn("replacing an unreadable usage baseline", "path", path, "error", err)
 	} else if stat, statErr := statFile(config.MessagesPath); statErr == nil {
-		for _, previous := range existing.Entries {
-			if previous.matches(config.MessagesPath, stat.Size) {
-				file.Entries = append(file.Entries, previous)
-				break
+		readable = true
+		for _, candidate := range existing.Entries {
+			if candidate.matches(config.MessagesPath, stat.Size) {
+				previous = append(previous, candidate)
 			}
+		}
+	}
+	if keptPrefix {
+		// The kept bytes must be a prefix of the file being replaced, or the older entries
+		// describe other bytes.
+		if hash, hashErr := transcript.HashFileRange(config.MessagesPath, 0, entry.Offset); hashErr != nil || hash != entry.SHA256 {
+			keptPrefix = false
+		}
+	}
+	if keptPrefix {
+		switch {
+		case !readable:
+		case len(previous) == 0:
+			// Nothing stands for removed history: either none was removed, or the scan says it
+			// is unknown.
+			entry.PrefixExact = !historyPartial
+		default:
+			entry.PrefixExact = previous[0].PrefixExact
+		}
+	}
+	file := usageBaselineFile{SchemaVersion: usageBaselineSchemaVersion, Entries: []usageBaselineEntry{entry}}
+	if len(previous) > 0 {
+		file.Entries = append(file.Entries, previous[0])
+	}
+	if keptPrefix {
+		offsets := map[int64]struct{}{entry.Offset: {}}
+		for _, kept := range file.Entries {
+			offsets[kept.Offset] = struct{}{}
+		}
+		for _, candidate := range previous[min(1, len(previous)):] {
+			if _, seen := offsets[candidate.Offset]; seen || candidate.Offset > entry.Offset {
+				continue
+			}
+			offsets[candidate.Offset] = struct{}{}
+			file.Entries = append(file.Entries, candidate)
 		}
 	}
 	encoded, err := json.Marshal(file)
@@ -142,15 +211,21 @@ func (s *sharedSession) storeUsageBaseline(config sessionfs.SessionConfig, entry
 }
 
 // usageBaselineHook returns the hook that stores the baseline for a rewrite which starts from
-// the usage in before, and records the replacement it saw in *seen. It returns nil when the
-// session has no usage cache path, and with it no baseline.
-func (s *sharedSession) usageBaselineHook(config sessionfs.SessionConfig, before transcriptIndex, seen *transcript.Replacement) func(transcript.Replacement) error {
+// the usage in before, and records the replacement it saw in *seen. keptPrefix says the rewrite
+// publishes a prefix of the transcript (front compaction). It returns nil when the session has no
+// usage cache path, and with it no baseline.
+func (s *sharedSession) usageBaselineHook(config sessionfs.SessionConfig, before transcriptIndex, seen *transcript.Replacement, keptPrefix bool) func(transcript.Replacement) error {
 	if sessionfs.UsageBaselinePath(config.UsageCachePath) == "" {
 		return nil
 	}
 	return func(replacement transcript.Replacement) error {
 		if replacement.PreviousSize != before.through {
-			return errUsageBaselineStale
+			// The scan stops at the last record, so blank lines after it are bytes it did not
+			// count and could not have: they hold no usage. Anything else is a record the scan
+			// has not seen.
+			if replacement.PreviousSize < before.through || !onlyNewlines(config.MessagesPath, before.through, replacement.PreviousSize) {
+				return errUsageBaselineStale
+			}
 		}
 		if *seen == replacement {
 			// Asked again right before the rename about the same replacement: already stored.
@@ -169,6 +244,31 @@ func (s *sharedSession) usageBaselineHook(config sessionfs.SessionConfig, before
 			ReplacesSHA256:  replaced,
 			Summary:         resetLatestResponseUsage(before.usage),
 			LastResponseKey: before.lastResponseKey,
-		})
+		}, keptPrefix, before.usage.HistoryPartial)
 	}
+}
+
+// onlyNewlines reports whether bytes [from, to) of the file at path are all newlines: empty lines,
+// which the transcript readers skip.
+func onlyNewlines(path string, from, to int64) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	buffer := make([]byte, 4096)
+	for from < to {
+		chunk := buffer[:min(int64(len(buffer)), to-from)]
+		n, err := file.ReadAt(chunk, from)
+		if n == 0 && err != nil {
+			return false
+		}
+		for _, b := range chunk[:n] {
+			if b != '\n' {
+				return false
+			}
+		}
+		from += int64(n)
+	}
+	return true
 }

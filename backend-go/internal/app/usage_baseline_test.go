@@ -241,7 +241,7 @@ func TestFailedPublishAfterTheBaselineIsStoredDoesNotDoubleCount(t *testing.T) {
 
 			before := b.scan(t)
 			var seen transcript.Replacement
-			store := b.shared.usageBaselineHook(b.config, before, &seen)
+			store := b.shared.usageBaselineHook(b.config, before, &seen, false)
 			options := baselineCompaction
 			calls := 0
 			options.BeforePublish = func(replacement transcript.Replacement) error {
@@ -301,7 +301,7 @@ func TestRewriteRefusesWhenTheTranscriptGrewAfterTheUsageScan(t *testing.T) {
 	b := newBaselineSession(t, 4)
 	b.scan(t)
 	grown := false
-	err := b.shared.rewritePreservingUsage(b.config, "test", func(before func(transcript.Replacement) error) (bool, error) {
+	err := b.shared.rewritePreservingUsage(b.config, "test", false, func(before func(transcript.Replacement) error) (bool, error) {
 		if !grown {
 			grown = true
 			b.appendRaw(t, baselineTurns(5, 1))

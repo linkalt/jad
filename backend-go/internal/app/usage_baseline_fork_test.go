@@ -301,12 +301,22 @@ func TestForkOfAFrontCompactedSessionCarriesTheEntryOnlyWhenItKeepsTheCoveredPre
 			wantResponses(t, "fork of exactly the covered prefix", f.usageOf(reference, profile), 4)
 
 			// Inside the covered prefix: the removed turns 3 and 4 came after this cut, and are not
-			// carried; the fork counts turn 1 only.
+			// carried; the fork counts turn 1 only. Nothing was removed from before the kept bytes
+			// (the entry says so), so that is exact, and the fork's baseline file records it: an
+			// exact marker, which keeps the history from being called partial once the cache is
+			// gone.
 			reference, profile, state := f.fork(target, "inside", `,"message_id":"`+ids[1]+`","keep_turn":false`)
 			wantResponses(t, "fork inside the covered prefix", f.usageOf(reference, profile), 1)
-			if _, err := os.Stat(filepath.Join(state, "staging", "usage-cache.json.baseline")); !os.IsNotExist(err) {
-				t.Fatalf("a fork inside the covered prefix got a baseline: %v", err)
+			forkEntries := f.baselineAt(state)
+			if len(forkEntries) != 1 || forkEntries[0].Offset != 0 || !forkEntries[0].PrefixExact || forkEntries[0].Summary.HistoryPartial {
+				t.Fatalf("fork inside the covered prefix: baseline %+v, want one exact marker", forkEntries)
 			}
+			if err := os.Remove(filepath.Join(state, "staging", "usage-cache.json")); err != nil {
+				t.Fatal(err)
+			}
+			wantResponses(t, "fork inside the covered prefix, no cache", f.usageOf(reference, profile), 1)
+			f.run(reference, profile, "turn 3")
+			wantResponses(t, "fork inside the covered prefix after the next message", f.usageOf(reference, profile), 2)
 		})
 	}
 }
@@ -394,9 +404,9 @@ func TestForkIgnoresAndReplacesAStaleTargetBaseline(t *testing.T) {
 	}
 }
 
-// A source that never had a baseline forks as before: the copied records are counted, nothing is
-// written, and a source compacted before baselines existed (cache lost, no baseline) forks to the
-// same partial totals it shows itself.
+// A source that never had a baseline forks as before: the copied records are counted and nothing
+// is written. A source compacted before baselines existed (cache lost, no baseline) forks to the
+// same partial totals it shows itself, and the fork's baseline file keeps the flag.
 func TestForkOfASourceWithoutABaselineIsUnchanged(t *testing.T) {
 	for _, target := range forkTargets {
 		t.Run(target.name, func(t *testing.T) {
@@ -429,8 +439,24 @@ func TestForkOfASourceWithoutABaselineIsUnchanged(t *testing.T) {
 			if !usage.HistoryPartial || usage.CompletedResponses != source.CompletedResponses {
 				t.Fatalf("fork of a source without a baseline = %+v, want the source's %+v", usage, source)
 			}
-			if _, err := os.Stat(filepath.Join(state, "staging", "usage-cache.json.baseline")); !os.IsNotExist(err) {
-				t.Fatalf("a fork of a source without a baseline got one: %v", err)
+			// The fork says in its own baseline file that it is partial, so the flag does not
+			// depend on its cache or on the history block that came with it.
+			forkEntries := f.baselineAt(state)
+			if len(forkEntries) != 1 || forkEntries[0].Offset != 0 || !forkEntries[0].Summary.HistoryPartial {
+				t.Fatalf("fork of a partial source: baseline %+v, want one partial marker", forkEntries)
+			}
+			for _, path := range []string{filepath.Join(state, "staging", "usage-cache.json"), filepath.Join(state, "messages.backup.jsonl")} {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+			usage = f.usageOf(reference, profile)
+			if !usage.HistoryPartial || usage.CompletedResponses != source.CompletedResponses {
+				t.Fatalf("fork of a partial source without its cache or history block = %+v, want partial with the source's %d responses", usage, source.CompletedResponses)
+			}
+			f.run(reference, profile, "turn 5")
+			if usage := f.usageOf(reference, profile); !usage.HistoryPartial || usage.CompletedResponses != source.CompletedResponses+1 {
+				t.Fatalf("fork of a partial source after the next message = %+v", usage)
 			}
 		})
 	}
@@ -560,36 +586,52 @@ func TestForkWithConcurrentReaders(t *testing.T) {
 }
 
 // The fork writes each source line and a newline, so a blank line in the covered prefix is not
-// copied and the fork's bytes are no longer the ones the entry's hash covers. Such a fork does not
-// get the entry (it would fit nothing) and counts the records it copied.
-func TestForkWhoseCopyDiffersFromTheCoveredBytesCarriesNoEntry(t *testing.T) {
-	f := newForkUsageFixture(t)
-	f.runs("local:demo", "dev/coder", 1, 2)
-	file, err := os.OpenFile(filepath.Join(f.stateDir("demo", "dev/coder"), "messages.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+// copied and the fork's bytes are no longer the ones the entry's hash covers. The fork proves the
+// source bytes its entry covers (blank lines are the only bytes it can reconstruct), and binds the
+// entry to its own bytes: the totals are the source's, the fork's offset and hash are the fork's.
+func TestForkWhoseCopyDiffersFromTheCoveredBytesCarriesTheEntryBoundToItsBytes(t *testing.T) {
+	for _, target := range forkTargets {
+		t.Run(target.name, func(t *testing.T) {
+			f := newForkUsageFixture(t)
+			f.runs("local:demo", "dev/coder", 1, 2)
+			appendToTranscript(t, filepath.Join(f.stateDir("demo", "dev/coder"), "messages.jsonl"), "\n")
+			f.runs("local:demo", "dev/coder", 3, 4)
+			ids := f.userIDs("local:demo", "dev/coder")
+			if status, out := f.post("local:demo", "dev/coder", "/front-compact", `{"message_id":"`+ids[2]+`"}`); status != http.StatusOK {
+				t.Fatalf("front-compact: %d %s", status, out)
+			}
+			f.run("local:demo", "dev/coder", "turn 5")
+			wantResponses(t, "source", f.usageOf("local:demo", "dev/coder"), 5)
+			entries := f.baseline("demo", "dev/coder")
+			if len(entries) != 1 || entries[0].Offset <= 0 {
+				t.Fatalf("source baseline = %+v", entries)
+			}
+
+			reference, profile, state := f.fork(target, "blank", "")
+			wantResponses(t, "fork", f.usageOf(reference, profile), 5)
+			forkEntries := f.baselineAt(state)
+			if len(forkEntries) != 1 || forkEntries[0].Summary.CompletedResponses != 4 || forkEntries[0].Offset != entries[0].Offset-1 {
+				t.Fatalf("fork baseline = %+v, want the 4-response entry at the source's offset %d less the dropped blank line", forkEntries, entries[0].Offset)
+			}
+			// The entry fits the fork's bytes, so the cache can go and the next message adds on.
+			if err := os.Remove(filepath.Join(state, "staging", "usage-cache.json")); err != nil {
+				t.Fatal(err)
+			}
+			wantResponses(t, "fork, no cache", f.usageOf(reference, profile), 5)
+			f.run(reference, profile, "turn 6")
+			wantResponses(t, "fork after the next message", f.usageOf(reference, profile), 6)
+		})
+	}
+}
+
+func appendToTranscript(t *testing.T, path, text string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteString("\n"); err != nil {
+	defer file.Close()
+	if _, err := file.WriteString(text); err != nil {
 		t.Fatal(err)
-	}
-	file.Close()
-	f.runs("local:demo", "dev/coder", 3, 4)
-	ids := f.userIDs("local:demo", "dev/coder")
-	if status, out := f.post("local:demo", "dev/coder", "/front-compact", `{"message_id":"`+ids[2]+`"}`); status != http.StatusOK {
-		t.Fatalf("front-compact: %d %s", status, out)
-	}
-	f.run("local:demo", "dev/coder", "turn 5")
-	wantResponses(t, "source", f.usageOf("local:demo", "dev/coder"), 5)
-	if entries := f.baseline("demo", "dev/coder"); len(entries) != 1 || entries[0].Offset <= 0 {
-		t.Fatalf("source baseline = %+v", entries)
-	}
-
-	reference, profile, state := f.fork(forkTargets[0], "blank", "")
-	usage := f.usageOf(reference, profile)
-	if usage.CompletedResponses != 3 || usage.HistoryPartial {
-		t.Fatalf("fork usage = %+v, want the 3 copied responses", usage)
-	}
-	if _, err := os.Stat(filepath.Join(state, "staging", "usage-cache.json.baseline")); !os.IsNotExist(err) {
-		t.Fatalf("a fork whose bytes differ from the covered ones got the entry: %v", err)
 	}
 }

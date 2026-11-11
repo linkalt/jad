@@ -23,7 +23,7 @@ var afterRewritePublished func()
 // shortcut: until it is back, readers continue from the baseline.
 func (s *sharedSession) compactPreservingUsage(config sessionfs.SessionConfig, options transcript.CompactionOptions) (transcript.CompactionResult, error) {
 	var result transcript.CompactionResult
-	err := s.rewritePreservingUsage(config, "compaction", func(before func(transcript.Replacement) error) (bool, error) {
+	err := s.rewritePreservingUsage(config, "compaction", false, func(before func(transcript.Replacement) error) (bool, error) {
 		options.BeforePublish = before
 		var err error
 		result, err = s.store.CompactHistory(options)
@@ -37,7 +37,7 @@ func (s *sharedSession) compactPreservingUsage(config sessionfs.SessionConfig, o
 // token counts reset to 0, instead of being rebuilt from the kept messages.
 func (s *sharedSession) frontCompactPreservingUsage(config sessionfs.SessionConfig, messageID, deleteMode string) (transcript.FrontCompactionResult, error) {
 	var result transcript.FrontCompactionResult
-	err := s.rewritePreservingUsage(config, "front compaction", func(before func(transcript.Replacement) error) (bool, error) {
+	err := s.rewritePreservingUsage(config, "front compaction", true, func(before func(transcript.Replacement) error) (bool, error) {
 		var err error
 		result, err = s.store.FrontCompactFromMessageWith(messageID, deleteMode, before)
 		return err == nil, err
@@ -47,16 +47,17 @@ func (s *sharedSession) frontCompactPreservingUsage(config sessionfs.SessionConf
 
 // rewritePreservingUsage runs rewrite, a transcript rewrite that calls the hook it is given
 // right before it publishes, so that the totals of the records the rewrite removes stay in the
-// usage baseline. rewrite reports whether it replaced the transcript. A failure to store the
+// usage baseline. keptPrefix says the rewrite publishes a prefix of the transcript (front
+// compaction). rewrite reports whether it replaced the transcript. A failure to store the
 // baseline fails the rewrite before the transcript changes: the baseline cannot be rebuilt, so
 // a rewrite without it would lose those totals for good.
-func (s *sharedSession) rewritePreservingUsage(config sessionfs.SessionConfig, what string, rewrite func(before func(transcript.Replacement) error) (bool, error)) error {
+func (s *sharedSession) rewritePreservingUsage(config sessionfs.SessionConfig, what string, keptPrefix bool, rewrite func(before func(transcript.Replacement) error) (bool, error)) error {
 	before, err := scanTranscriptIndex(s, config)
 	if err != nil {
 		return fmt.Errorf("read usage before %s: %w", what, err)
 	}
 	var published transcript.Replacement
-	replaced, err := rewrite(s.usageBaselineHook(config, before, &published))
+	replaced, err := rewrite(s.usageBaselineHook(config, before, &published, keptPrefix))
 	if err != nil || !replaced {
 		return err
 	}
