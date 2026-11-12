@@ -63,7 +63,8 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	if selected == "" {
 		if judged.all.Len() == 0 {
-			return SessionConfig{}, configError("%s: scope.profiles matches no profile, so there is no profile to run", sessionPath)
+			// Files left out for their names are the likely reason, so they are named.
+			return SessionConfig{}, configError("%s: scope.profiles matches no profile, so there is no profile to run%s", sessionPath, judged.skippedProfilesNote())
 		}
 		// No profile passes: the error is the one the first profile gets, which is what a load
 		// that named no profile reported before profiles were left out.
@@ -458,6 +459,13 @@ func (c *layoutCompose) warn(format string, args ...any) {
 	}
 }
 
+// warnSkipped warns about each file of a scanned catalog that was left out for its name.
+func (c *layoutCompose) warnSkipped(scanned *catalog.Catalog) {
+	for _, note := range skippedFileNotes(c.sessionPath, scanned) {
+		c.warn("%s", note)
+	}
+}
+
 // compose builds the legacy-shaped setting for the selected profile. The returned map
 // holds the file of each model ID the profile may use. Non-empty toolsets replace the
 // profile's own toolsets, which is how the toolsets an agent names are read.
@@ -671,6 +679,7 @@ func (c *layoutCompose) addToolsets(setting map[string]json.RawMessage, ids []st
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}
+	c.warnSkipped(toolsets)
 	loaded := make([]loadedToolset, 0, len(ids))
 	for _, id := range ids {
 		entry, err := toolsets.Lookup(id)
@@ -801,6 +810,7 @@ func (c *layoutCompose) mcpServers(toolset layoutToolsetFile, toolsetPath string
 	if err != nil {
 		return nil, configError("%s: %v", toolsetPath, err)
 	}
+	c.warnSkipped(available)
 	servers := make([]map[string]any, 0, len(keys))
 	ids := make(map[string]string, len(keys))
 	for _, key := range keys {

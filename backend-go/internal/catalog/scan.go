@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -34,8 +35,10 @@ func ValidateIdentifier(text string) error {
 
 // Scan reads <dir>/<category>/<name>.json for one kind. A missing dir is an
 // empty catalog. Entries that start with '.' and files that are not .json
-// are ignored. A .json file directly in dir or a bad name is a load error
-// naming the path. The same name may appear in several categories; that is
+// are ignored. A .json file directly in dir, a category folder whose name is not
+// an identifier and a file whose name is not one are left out of the catalog and
+// listed by Catalog.Skipped, so one stray file does not fail the kind; no reference
+// can name them. The same name may appear in several categories; that is
 // how one program gets different settings (see Catalog.Unique).
 func Scan(kind, dir string) (*Catalog, error) {
 	return ScanObserved(kind, dir, nil)
@@ -55,6 +58,7 @@ func ScanObserved(kind, dir string, observe func(folder string)) (*Catalog, erro
 		return nil, fmt.Errorf("%s catalog %s: %w", kind, dir, err)
 	}
 	var entries []Entry
+	var skipped []Skipped
 	for _, item := range categories {
 		if strings.HasPrefix(item.Name(), ".") {
 			continue
@@ -62,35 +66,41 @@ func ScanObserved(kind, dir string, observe func(folder string)) (*Catalog, erro
 		path := filepath.Join(dir, item.Name())
 		if !isDir(path) {
 			if strings.HasSuffix(item.Name(), fileExtension) {
-				return nil, fmt.Errorf("%s catalog: %s must live in a category folder, for example %s",
-					kind, path, filepath.Join(dir, "<category>", item.Name()))
+				skipped = append(skipped, Skipped{Path: path, Reason: fmt.Sprintf("must live in a category folder, for example %s",
+					filepath.Join(dir, "<category>", item.Name()))})
 			}
 			continue
 		}
 		if err := ValidateIdentifier(item.Name()); err != nil {
-			return nil, fmt.Errorf("%s catalog: category folder %s: %w", kind, path, err)
+			skipped = append(skipped, Skipped{Path: path, Reason: fmt.Sprintf("category folder name %s", err)})
+			continue
 		}
 		if observe != nil {
 			observe(path)
 		}
-		found, err := scanCategory(kind, item.Name(), path)
+		found, bad, err := scanCategory(kind, item.Name(), path)
 		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, found...)
+		skipped = append(skipped, bad...)
 	}
-	return newCatalog(kind, entries), nil
+	result := newCatalog(kind, entries)
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Path < skipped[j].Path })
+	result.skipped = skipped
+	return result, nil
 }
 
-func scanCategory(kind, category, dir string) ([]Entry, error) {
+func scanCategory(kind, category, dir string) ([]Entry, []Skipped, error) {
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil // the folder was removed after the category list was read
+		return nil, nil, nil // the folder was removed after the category list was read
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s catalog %s: %w", kind, dir, err)
+		return nil, nil, fmt.Errorf("%s catalog %s: %w", kind, dir, err)
 	}
 	var entries []Entry
+	var skipped []Skipped
 	for _, file := range files {
 		fileName := file.Name()
 		if strings.HasPrefix(fileName, ".") || !strings.HasSuffix(fileName, fileExtension) {
@@ -102,11 +112,12 @@ func scanCategory(kind, category, dir string) ([]Entry, error) {
 		}
 		name := strings.TrimSuffix(fileName, fileExtension)
 		if err := ValidateIdentifier(name); err != nil {
-			return nil, fmt.Errorf("%s catalog: file %s: name %w", kind, path, err)
+			skipped = append(skipped, Skipped{Path: path, Reason: fmt.Sprintf("name %s", err)})
+			continue
 		}
 		entries = append(entries, Entry{Name: name, Category: category, Path: path})
 	}
-	return entries, nil
+	return entries, skipped, nil
 }
 
 // isDir follows symlinks, so a linked category folder works.

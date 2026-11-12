@@ -29,7 +29,24 @@ type Catalog struct {
 	kind    string
 	entries []Entry
 	index   map[string]int
+	// skipped are the files and folders the scan left out for their names; only a scan sets it.
+	skipped []Skipped
 }
+
+// Skipped is a file or category folder a scan left out because its name is not an identifier
+// (or a .json lies outside a category folder). It is in no catalog, so no reference can name it
+// and nothing can use it; the scan reports it here instead of failing every other entry.
+type Skipped struct {
+	Path   string
+	Reason string
+}
+
+// String is the path and why it was left out.
+func (s Skipped) String() string { return s.Path + ": " + s.Reason }
+
+// Skipped returns what the scan left out for its name, ordered by path. A catalog made by
+// Narrow or Without reports none: ask the scanned one.
+func (c *Catalog) Skipped() []Skipped { return append([]Skipped(nil), c.skipped...) }
 
 func newCatalog(kind string, entries []Entry) *Catalog {
 	sort.Slice(entries, func(i, j int) bool {

@@ -14,6 +14,7 @@ type listedSession struct {
 	ID           string           `json:"id"`
 	Turns        int64            `json:"turns"`
 	ProfileTurns map[string]int64 `json:"profile_turns"`
+	Profiles     []string         `json:"profiles"`
 }
 
 func (f *layoutFixture) listSessions(t *testing.T, ifNoneMatch string) (int, string, []listedSession) {

@@ -55,6 +55,11 @@ type scopeJudgement struct {
 	verdicts    map[string]*profileVerdict
 	// models is every model in the catalog.
 	models *catalog.Catalog
+	// scanNotes are the warnings for the profile and model files the scans left out for their
+	// names (see skippedFileNotes).
+	scanNotes []string
+	// skippedProfiles are the profile files and folders the scan left out for their names.
+	skippedProfiles []catalog.Skipped
 }
 
 // leftOut returns the IDs of the profiles that fail, in scope order.
@@ -74,18 +79,20 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 	if scans == nil {
 		scans = NewCatalogScans()
 	}
-	all, err := scans.Scan("profile", layout.Profiles)
+	scanned, err := scans.Scan("profile", layout.Profiles)
 	if err != nil {
 		return scopeJudgement{}, configError("%s: %v", sessionPath, err)
 	}
-	if all, err = all.Narrow(session.Scope.Profiles); err != nil {
+	all, err := scanned.Narrow(session.Scope.Profiles)
+	if err != nil {
 		return scopeJudgement{}, configError("%s: scope.profiles: %v", sessionPath, err)
 	}
 	models, err := scans.Scan("model", layout.Models)
 	if err != nil {
 		return scopeJudgement{}, configError("%s: %v", sessionPath, err)
 	}
-	judgement := scopeJudgement{all: all, usable: all, verdicts: make(map[string]*profileVerdict, all.Len()), models: models}
+	judgement := scopeJudgement{all: all, usable: all, verdicts: make(map[string]*profileVerdict, all.Len()), models: models, skippedProfiles: scanned.Skipped(),
+		scanNotes: append(skippedFileNotes(sessionPath, scanned), skippedFileNotes(sessionPath, models)...)}
 	var toolsets *catalog.Catalog
 	var toolsetsErr error
 	for _, entry := range all.Entries() {
@@ -332,7 +339,7 @@ func modelFileProblem(path string) error {
 // skippedNotes returns one warning per profile left out of the session. A profile that
 // would have been the default says which one is.
 func (j scopeJudgement) skippedNotes(sessionPath, wouldBeDefault, defaultID string) []string {
-	var notes []string
+	notes := append([]string(nil), j.scanNotes...)
 	for _, id := range j.leftOut() {
 		note := fmt.Sprintf("%s: profile %s left out: %v", sessionPath, id, j.verdicts[id].err)
 		if j.verdicts[id].toolsets {
@@ -344,4 +351,29 @@ func (j scopeJudgement) skippedNotes(sessionPath, wouldBeDefault, defaultID stri
 		notes = append(notes, note)
 	}
 	return notes
+}
+
+// skippedFileNotes returns one warning per file or folder the scan of c left out for its name
+// (catalog.Skipped), naming the path and the rule it broke. Such a file is in no catalog, so no
+// profile, model or toolset reference can name it and nothing runs it; the warning is how its
+// owner learns why it does not show up, and renaming it brings it back at the next read.
+func skippedFileNotes(sessionPath string, c *catalog.Catalog) []string {
+	var notes []string
+	for _, skipped := range c.Skipped() {
+		notes = append(notes, fmt.Sprintf("%s: %s file %s left out: %s", sessionPath, c.Kind(), skipped.Path, skipped.Reason))
+	}
+	return notes
+}
+
+// skippedProfilesNote names the profile files the scan left out for their names, for an error that
+// says there is no profile to run; empty when there are none.
+func (j scopeJudgement) skippedProfilesNote() string {
+	if len(j.skippedProfiles) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, skipped := range j.skippedProfiles {
+		parts = append(parts, skipped.String())
+	}
+	return " (left out for its name: " + strings.Join(parts, "; ") + ")"
 }

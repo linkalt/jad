@@ -97,19 +97,93 @@ func TestLookupExplainsWhatWentWrong(t *testing.T) {
 	}
 }
 
-func TestScanRejectsAFileOutsideACategory(t *testing.T) {
-	dir := layout(t, "loose.json")
-	_, err := Scan("tools", dir)
-	if err == nil || !strings.Contains(err.Error(), "must live in a category folder") {
-		t.Fatalf("err = %v", err)
+func TestScanSkipsAFileOutsideACategory(t *testing.T) {
+	dir := layout(t, "loose.json", "a/ok.json")
+	c := mustScan(t, dir)
+	if got := c.IDs(); !reflect.DeepEqual(got, []string{"a/ok"}) {
+		t.Fatalf("ids = %v, want only a/ok", got)
+	}
+	skipped := c.Skipped()
+	if len(skipped) != 1 || skipped[0].Path != filepath.Join(dir, "loose.json") || !strings.Contains(skipped[0].Reason, "must live in a category folder") {
+		t.Fatalf("skipped = %v", skipped)
 	}
 }
 
-func TestScanRejectsBadNames(t *testing.T) {
-	for _, file := range []string{"a/has space.json", "a/colon:x.json", "a/star*.json", "bad cat/x.json", "a/-lead.json"} {
-		if _, err := Scan("model", layout(t, file)); err == nil {
-			t.Errorf("%q: want error", file)
+// A name that is not an identifier leaves that one file (or category folder) out, with its path
+// and the rule it broke; every other entry of the kind is still scanned.
+func TestScanSkipsBadNamesAndKeepsTheRest(t *testing.T) {
+	files := []string{"a/has space.json", "a/file (1).json", "a/colon:x.json", "a/star*.json", "bad cat/x.json", "a/-lead.json", "a/_lead.json", "a/good.json", "b/ünï.json", "ok/fine.json"}
+	dir := layout(t, files...)
+	c := mustScan(t, dir)
+	if got, want := c.IDs(), []string{"a/good", "ok/fine"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	var paths []string
+	for _, skipped := range c.Skipped() {
+		paths = append(paths, strings.TrimPrefix(skipped.Path, dir+string(filepath.Separator)))
+		if skipped.Reason == "" || !strings.Contains(skipped.String(), skipped.Path) {
+			t.Errorf("skipped %+v has no usable reason", skipped)
 		}
+	}
+	want := []string{"a/-lead.json", "a/_lead.json", "a/colon:x.json", "a/file (1).json", "a/has space.json", "a/star*.json", "b/ünï.json", "bad cat"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("skipped paths = %q, want %q", paths, want)
+	}
+}
+
+// A skipped name cannot be named by any reference: it is not a valid identifier, so a lookup or
+// a selector fails on the shape, and the valid sibling of a similar name is not mistaken for it.
+func TestASkippedNameCannotBeReferenced(t *testing.T) {
+	c := mustScan(t, layout(t, "a/file (1).json", "a/file.json"))
+	if _, err := c.Lookup("a/file (1)"); err == nil || !strings.Contains(err.Error(), "must be written <category>/<name>") {
+		t.Errorf("Lookup of a skipped name: err = %v", err)
+	}
+	if _, err := ParseSelector("a/file (1)"); err == nil {
+		t.Error("a selector for a skipped name must be refused")
+	}
+	if _, ok := c.Get("a/file (1)"); ok {
+		t.Error("a skipped name is in the catalog")
+	}
+	if got := c.IDs(); !reflect.DeepEqual(got, []string{"a/file"}) {
+		t.Errorf("ids = %v", got)
+	}
+}
+
+// What was skipped reappears once it is renamed: a scan is a fresh read of the folders.
+func TestARenamedFileIsScannedAgain(t *testing.T) {
+	dir := layout(t, "a/file (1).json")
+	if c := mustScan(t, dir); c.Len() != 0 || len(c.Skipped()) != 1 {
+		t.Fatalf("before the rename: ids = %v, skipped = %v", c.IDs(), c.Skipped())
+	}
+	if err := os.Rename(filepath.Join(dir, "a", "file (1).json"), filepath.Join(dir, "a", "file-1.json")); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustScan(t, dir); !reflect.DeepEqual(c.IDs(), []string{"a/file-1"}) || len(c.Skipped()) != 0 {
+		t.Fatalf("after the rename: ids = %v, skipped = %v", c.IDs(), c.Skipped())
+	}
+}
+
+// Files that are not configuration are ignored as before, with no report.
+func TestScanIgnoresFilesThatAreNotConfiguration(t *testing.T) {
+	dir := layout(t, "a/ok.json", ".hidden/x.json", "a/.dot.json", "a/notes.txt", "README.md")
+	if err := os.MkdirAll(filepath.Join(dir, "a", "folder.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := mustScan(t, dir)
+	if !reflect.DeepEqual(c.IDs(), []string{"a/ok"}) || len(c.Skipped()) != 0 {
+		t.Fatalf("ids = %v, skipped = %v", c.IDs(), c.Skipped())
+	}
+}
+
+// ScanObserved lists the category folders it reads, so a caller's cache sees a rename inside them.
+func TestScanObservedStillSeesTheFoldersAroundASkippedName(t *testing.T) {
+	dir := layout(t, "a/file (1).json", "bad cat/x.json")
+	var seen []string
+	if _, err := ScanObserved("model", dir, func(folder string) { seen = append(seen, filepath.Base(folder)) }); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seen, []string{filepath.Base(dir), "a"}) {
+		t.Fatalf("observed %v", seen)
 	}
 }
 

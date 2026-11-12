@@ -158,6 +158,12 @@ func (r *CheckReport) checkCatalog(layout Layout, roots []Root, kind CatalogKind
 		r.add(string(kind), "", err)
 		return
 	}
+	// A name the loader leaves out is reported on its own, as the loader's warning words it, and
+	// the files around it are still checked.
+	for _, skipped := range entries.Skipped() {
+		r.Checked++
+		r.add(string(kind), skipped.Path, fmt.Errorf("%s catalog: file %s left out: %s", kind, skipped.Path, skipped.Reason))
+	}
 	for _, entry := range entries.Entries() {
 		r.Checked++
 		data, err := readRegularFile(entry.Path, maxInternalJSONFileBytes)
