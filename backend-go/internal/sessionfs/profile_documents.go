@@ -389,6 +389,9 @@ type appliedChange struct {
 // document it names), then every touched folder is synced. A failure undoes what was published;
 // the returned error says whether that finished.
 func publishProfileEdit(workspace, profile string, steps []documentStep, profilePath string, candidate, current []byte, before os.FileInfo, profileChanged bool) error {
+	// A session load that reads while the files change, or what an undo leaves, reads again
+	// (decider 3c.3b).
+	defer profilePublishes.begin(profilePath)()
 	var applied []appliedChange
 	var folders []string
 	fail := func(err error) error {

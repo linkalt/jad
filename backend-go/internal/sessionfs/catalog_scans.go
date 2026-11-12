@@ -36,6 +36,9 @@ type scanMemo struct {
 	// ownFiles holds the own model and toolset files a trial load reads in place of the disk,
 	// by kind, profile and ID; nil contents is a file the edit deletes (decider 3c C3).
 	ownFiles map[*ownFileKind]map[string]map[string]*[]byte
+	// since is the self-edit publish generation when the memo was made, before it read
+	// anything: a load that reuses what the memo read checks against it (decider 3c.3b).
+	since uint64
 }
 
 // templateFolder is a listed sandbox template folder: the files its listing left out for their
@@ -63,7 +66,20 @@ type scanResult struct {
 
 // NewCatalogScans returns an empty memo.
 func NewCatalogScans() *CatalogScans {
-	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck), templates: make(map[string]templateFolder)}}
+	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck), templates: make(map[string]templateFolder), since: profilePublishes.now()}}
+}
+
+// trial reports a memo of an edit's trial load, which reads the candidate in place of the disk.
+func (s *CatalogScans) trial() bool {
+	return s.memo.overlay != nil || s.memo.ownFiles != nil
+}
+
+// afresh is a view with an empty memo that records like s, for a load that reads again
+// because what s's memo holds may be of two revisions of a profile.
+func (s *CatalogScans) afresh() *CatalogScans {
+	fresh := NewCatalogScans()
+	fresh.recording = s.recording
+	return fresh
 }
 
 // newTrialScans is a memo whose loads read contents in place of the profile file at path.

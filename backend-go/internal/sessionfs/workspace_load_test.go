@@ -12,7 +12,7 @@ import (
 // wsFixture is a home with the global folder G = <home>/.jad and workspaces beside it.
 type wsFixture struct{ base, home, global string }
 
-func newWSFixture(t *testing.T) wsFixture {
+func newWSFixture(t testing.TB) wsFixture {
 	t.Helper()
 	base := t.TempDir()
 	f := wsFixture{base: base, home: filepath.Join(base, "home")}
@@ -21,7 +21,7 @@ func newWSFixture(t *testing.T) wsFixture {
 	return f
 }
 
-func wsPut(t *testing.T, path, text string) {
+func wsPut(t testing.TB, path, text string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func wsPut(t *testing.T, path, text string) {
 }
 
 // workspace makes base/<name> a workspace with workspace.json, profile dev/coder and session s1.
-func (f wsFixture) workspace(t *testing.T, name, workspaceJSON string) string {
+func (f wsFixture) workspace(t testing.TB, name, workspaceJSON string) string {
 	t.Helper()
 	dir := filepath.Join(f.base, name)
 	wsPut(t, filepath.Join(dir, ".jad", "workspace.json"), workspaceJSON)
@@ -50,7 +50,7 @@ func (f wsFixture) load(cwd string) (Config, error) {
 	return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{"HOME": f.home}})
 }
 
-func wsMustLoad(t *testing.T, f wsFixture, cwd string) Config {
+func wsMustLoad(t testing.TB, f wsFixture, cwd string) Config {
 	t.Helper()
 	config, err := f.load(cwd)
 	if err != nil {

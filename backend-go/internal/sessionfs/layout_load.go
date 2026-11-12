@@ -27,7 +27,46 @@ func LoadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	return loadLayoutSessionSettings(location, layout, requestedProfile, requestedModel, nil)
 }
 
+// loadLayoutSessionSettings loads the session from files of one revision of each profile it
+// judges (decider 3c.3b): a self-edit publishes a profile's own files and its profile file one
+// rename at a time, so a load that read some of them before a publish and some after reads
+// again, once the publish ended, from a new memo; after profileLoadAttempts loads it fails with
+// a ConflictError rather than return a config of two revisions. Every own file a load reads (the
+// profile file, own models, own toolsets and the own documents of the selected profile) is read
+// inside one loadLayoutSessionOnce. A trial load is not checked: it reads its own profile from
+// the candidate under the writer's lock before the writer publishes.
 func loadLayoutSessionSettings(location Location, layout Layout, requestedProfile, requestedModel string, scans *CatalogScans) (SessionConfig, error) {
+	if scans == nil {
+		scans = NewCatalogScans()
+	}
+	if layout.Workspace == "" || scans.trial() {
+		// v1 has no self-edit, so nothing publishes.
+		return loadLayoutSessionOnce(location, layout, requestedProfile, requestedModel, scans, nil)
+	}
+	view := scans
+	for attempt := 1; ; attempt++ {
+		var read []string
+		config, err := loadLayoutSessionOnce(location, layout, requestedProfile, requestedModel, view, &read)
+		changed, running := profilePublishes.unsettled(view.memo.since, read)
+		if len(changed) == 0 {
+			if view != scans && scans.recording {
+				scans.add(view.stamp().files)
+			}
+			return config, err
+		}
+		if attempt == profileLoadAttempts {
+			return SessionConfig{}, &ConflictError{Message: fmt.Sprintf("%s: the profile file %s is being edited; try again", location.File, strings.Join(changed, ", "))}
+		}
+		for _, done := range running {
+			<-done
+		}
+		view = scans.afresh()
+	}
+}
+
+// loadLayoutSessionOnce is one load of loadLayoutSessionSettings; read gets the profile files
+// it judged.
+func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, requestedModel string, scans *CatalogScans, read *[]string) (SessionConfig, error) {
 	sessionPath := location.File
 	var session layoutSessionFile
 	scans.noteFile(sessionPath)
@@ -53,6 +92,11 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	judged, err := judgeScope(layout, location, session, sessionPath, scans)
 	if err != nil {
 		return SessionConfig{}, err
+	}
+	if read != nil {
+		for _, entry := range judged.all.Entries() {
+			*read = append(*read, entry.Path)
+		}
 	}
 	// The default is the first profile whose file passes: a profile left out is warned
 	// about, and a profile the caller names must pass itself.

@@ -405,7 +405,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
    `profile_self_edit`, the D3 path limits. 3a (the profile file, history, revert, the level) is
    built (section 13); 3b (own documents) is built (section 14); 3c.1 (hand-written own models)
    is built (section 17); 3c.2 (self-edit of own models) is built (sections 18 to 20); 3c.3
-   (own toolsets, written by hand and through `edit`) is built (section 21).
+   (own toolsets, written by hand and through `edit`) is built (section 21); 3c.3b (a load reads
+   one revision of each profile) is built (section 22).
 4. **Migration command.**
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
@@ -743,9 +744,11 @@ Decider phase 3b D1 to D7: a profile writes its own documents through the `profi
   exclusive link or a rename that refuses a changed file), then the profile file, then deletes
   (only of the file the check saw), then an fsync of every touched folder. A failure after
   publishing began undoes what was published newest first and returns an error naming the
-  history entry and whether the undo finished. Not crash-atomic across files: a run starting
-  between the steps can see new documents with the old profile file; a running run is never
-  affected (S7: prompt documents are read when the run's settings load).
+  history entry and whether the undo finished. Not crash-atomic across files: a crash or a
+  failed undo between the steps can leave new documents with the old profile file; a running
+  run is never affected (S7: prompt documents are read when the run's settings load). Since
+  3c.3b a session load that runs between the steps of this process's publish reads again
+  instead of seeing the mix (section 22).
 - **D7, revert:** restores exactly what the entry touched: the profile file when it changed
   and each document to its old bytes or to absent. Each touched document must now be at the
   entry's new revision or already at its old one (left alone, which covers a partly published
@@ -1069,15 +1072,53 @@ already allow.
   based on the file (a global delete checks every served workspace, as for models); MCP and
   sandbox guards need nothing, since an own toolset adds no server or sandbox.
 - **Limits:**
-  - **One load, several files:** the own toolset files are read with the session load, without
-    the profile file's lock (loads also run under writers' locks: the trial, the catalog
-    validation). A load that runs while an edit publishes can read some own files of the new
-    revision and some of the old; publish order (own files, then the profile file, then deletes)
-    means it sees either the old profile file with new toolsets, each of which passed the full
-    rules, or a deleted file missing, which fails closed. A running run is never affected.
+  - **One load, several files:** closed by 3c.3b (section 22): a load that runs while an edit
+    publishes reads again once the publish ended, without taking the profile file's lock.
   - **Stricter than C1:** no own toolset key opens anything under `full`; a need for one is a
     decider question.
   - **Deletion guard over served workspaces only:** a base used by an own toolset of a workspace
     this server does not serve is not counted; that own toolset fails closed at its next load.
   - **A new own tools folder is not stamped when it is missing:** like own models, a list cached
     before the first own toolset exists notices it through the profile file's change.
+
+## 22. Phase 3c.3b as built: a session load reads one revision of each profile
+
+Decider 3c.3b. A self-edit publishes a profile's own files (documents, models, toolsets), then
+its profile file, then its deletes, one rename at a time. A session load that ran in between
+could pair the old profile file with new own files, a combination no trial judged. A lock in the
+load could deadlock (the trial and the catalog checks load under a writer's lock), so the load
+checks instead:
+
+- **Publish counter:** `publishTracker` (one per process) raises a generation when a publish of a
+  profile file begins and again when it ends, after the last rename or after the undo
+  (`publishProfileEdit`, under the profile file's lock). Each profile file keeps the generation
+  of its last change and, while a publish runs, a channel closed when it ends.
+- **One wrapper:** every own file a load reads (each judged profile's file, own models and own
+  toolsets, and the selected profile's own documents) is read inside one
+  `loadLayoutSessionOnce`. `loadLayoutSessionSettings` notes the generation when its memo is
+  made, before anything is read (a memo shared across loads of a request is made earlier still),
+  and after the load asks whether any profile it judged has a publish running or one that began
+  or ended since. If so it waits for the running publishes, then loads again from a new memo
+  (the old one may hold files of the old revision); after three loads
+  (`profileLoadAttempts`) it fails with a `ConflictError` "the profile file ... is being edited;
+  try again" and never returns a config of two revisions. A load's error is retried the same
+  way, since a mix can be its cause. A recording view gets the stamps of the load it returns.
+- **Exempt:** v1 (no self-edit, nothing publishes) and a trial load: it reads its own profile
+  from the candidate under the writer's lock before the writer publishes, so its own counter is
+  never raised, and a retry from a new memo would lose its overlay. The catalog checks run under
+  a writer's lock do not go through the session load. A load waits only for a publish that is
+  running, and a publish waits for no load, so the wait cannot deadlock.
+- **Cost:** `BenchmarkLoadWorkspaceSessionConfig` (one own model and one own toolset, each
+  based on a global one) takes about 2.2 ms and 7150 allocations per settings load, with or
+  without the check (the check adds about 4 allocations); the v1
+  `BenchmarkLoadSessionConfig` is unchanged at about 224 µs.
+- **Limits:**
+  - **One process:** like the profile file's lock, the counter sees the publishes of this
+    process only; a hand edit or another process is not seen.
+  - **After the load:** `WithModel` (in `LoadSessionConfig`) and the run-start copy
+    (`PinOwnModels`, section 20) read own model files again after the checked load; an edit in
+    between pairs the loaded profile file with a newer own model, which the `based_on` check or a
+    missing file catches only in part (the 3c.2b gap, unchanged).
+  - **Trial loads:** a trial is not checked, so a publish of another profile in the session's
+    scope during the trial can make that profile's verdict in the trial one of two revisions;
+    the edited profile is read from the candidate.
