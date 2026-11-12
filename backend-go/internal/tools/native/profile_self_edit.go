@@ -74,13 +74,18 @@ func (t *profileTool) selfChange(ctx context.Context, action, path string, argum
 			return t.fail(execution, tools.StatusInvalidInput, "invalid_documents", problem)
 		}
 		request.Documents = documents
-		models, problem := modelArguments(execution.RawArguments, arguments["models"])
+		models, problem := ownFileArguments(execution.RawArguments, arguments["models"], "models", "own model")
 		if problem != "" {
 			return t.fail(execution, tools.StatusInvalidInput, "invalid_models", problem)
 		}
 		request.Models = models
-		if len(request.Contents) == 0 && len(documents) == 0 && len(models) == 0 {
-			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents (the whole new profile file as a JSON object), documents, models, or any of them")
+		toolsets, problem := ownFileArguments(execution.RawArguments, arguments["toolsets"], "toolsets", "own toolset")
+		if problem != "" {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_toolsets", problem)
+		}
+		request.Toolsets = toolsets
+		if len(request.Contents) == 0 && len(documents) == 0 && len(models) == 0 && len(toolsets) == 0 {
+			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents (the whole new profile file as a JSON object), documents, models, toolsets, or any of them")
 		}
 	} else {
 		request.HistoryID = stringArgument(arguments, "history_id")
@@ -140,26 +145,28 @@ func documentArguments(value any) ([]sessionfs.ProfileDocumentChange, string) {
 	return changes, ""
 }
 
-// modelArguments are the own model changes of an edit's models argument (absent: none), or why
-// they are not valid. A content object keeps the key order the model wrote when the raw
-// arguments say the same as the parsed ones (rawArgument's rule).
-func modelArguments(raw json.RawMessage, value any) ([]sessionfs.ProfileDocumentChange, string) {
+// ownFileArguments are the own model or toolset changes of an edit's models or toolsets
+// argument (name; absent: none), or why they are not valid; what names one file (own model, own
+// toolset). A content object keeps the key order the model wrote when the raw arguments say the
+// same as the parsed ones (rawArgument's rule).
+func ownFileArguments(raw json.RawMessage, value any, name, what string) ([]sessionfs.ProfileDocumentChange, string) {
 	if value == nil {
 		return nil, ""
 	}
 	items, ok := value.([]any)
 	if !ok || len(items) == 0 {
-		return nil, "models must be a non-empty array of {id, content or delete, if_match}"
+		return nil, name + " must be a non-empty array of {id, content or delete, if_match}"
 	}
-	var rawItems struct {
-		Models []map[string]json.RawMessage `json:"models"`
-	}
-	if len(raw) > 0 && json.Unmarshal(raw, &rawItems) != nil {
-		rawItems.Models = nil
+	var rawArguments map[string]json.RawMessage
+	var rawItems []map[string]json.RawMessage
+	if len(raw) > 0 && json.Unmarshal(raw, &rawArguments) == nil {
+		if json.Unmarshal(rawArguments[name], &rawItems) != nil {
+			rawItems = nil
+		}
 	}
 	changes := make([]sessionfs.ProfileDocumentChange, 0, len(items))
 	for index, item := range items {
-		at := "models[" + strconv.Itoa(index) + "]"
+		at := name + "[" + strconv.Itoa(index) + "]"
 		fields, ok := item.(map[string]any)
 		if !ok {
 			return nil, at + " must be an object"
@@ -180,13 +187,13 @@ func modelArguments(raw json.RawMessage, value any) ([]sessionfs.ProfileDocument
 		case id == "":
 			return nil, at + " needs an id (<category>/<name>)"
 		case hasMatch && !matchOK, hasDelete && !deleteOK, hasContent && !contentOK:
-			return nil, at + ": content is the own model file as a JSON object, if_match a string, delete a boolean"
+			return nil, at + ": content is the " + what + " file as a JSON object, if_match a string, delete a boolean"
 		case hasContent == remove:
 			return nil, at + " " + id + ": give content to create or replace it, or delete: true to delete it"
 		}
 		change := sessionfs.ProfileDocumentChange{Path: id, Delete: remove, IfMatch: ifMatch}
 		if hasContent {
-			change.Content = rawItemObject(rawItems.Models, index, content)
+			change.Content = rawItemObject(rawItems, index, content)
 			if change.Content == nil {
 				return nil, at + " " + id + ": content could not be encoded"
 			}

@@ -33,9 +33,9 @@ type scanMemo struct {
 	// overlay holds the contents a trial load reads in place of a profile file on disk, by
 	// cleaned path (profile edit, decider S4): the candidate is judged before it is written.
 	overlay map[string][]byte
-	// ownModels holds the own model files a trial load reads in place of the disk, by profile
-	// and model ID; nil contents is a file the edit deletes (decider 3c C3).
-	ownModels map[string]map[string]*[]byte
+	// ownFiles holds the own model and toolset files a trial load reads in place of the disk,
+	// by kind, profile and ID; nil contents is a file the edit deletes (decider 3c C3).
+	ownFiles map[*ownFileKind]map[string]map[string]*[]byte
 }
 
 // templateFolder is a listed sandbox template folder: the files its listing left out for their
@@ -76,17 +76,29 @@ func newTrialScans(path string, contents []byte) *CatalogScans {
 // ownModelOverlay is the trial's own model files of profile, by model ID (nil contents: the
 // edit deletes it); nil outside a trial.
 func (s *CatalogScans) ownModelOverlay(profile string) map[string]*[]byte {
+	return s.ownFileOverlay(ownModelKind, profile)
+}
+
+// ownFileOverlay is the trial's own files of kind of profile, by ID; nil outside a trial.
+func (s *CatalogScans) ownFileOverlay(kind *ownFileKind, profile string) map[string]*[]byte {
 	if s == nil {
 		return nil
 	}
-	return s.memo.ownModels[profile]
+	return s.memo.ownFiles[kind][profile]
 }
 
-// overlayOwnModels makes the trial read the own model files of steps in place of the disk.
-func (s *CatalogScans) overlayOwnModels(profile string, steps []documentStep) {
+// overlayOwnFiles makes the trial read the own model and toolset files of steps in place of
+// the disk.
+func (s *CatalogScans) overlayOwnFiles(profile string, steps []documentStep) {
+	for _, kind := range []*ownFileKind{ownModelKind, ownToolsetKind} {
+		s.overlayOwnKind(kind, profile, steps)
+	}
+}
+
+func (s *CatalogScans) overlayOwnKind(kind *ownFileKind, profile string, steps []documentStep) {
 	files := map[string]*[]byte{}
 	for _, step := range steps {
-		if step.kind != ownModelKind {
+		if step.kind != kind {
 			continue
 		}
 		var contents *[]byte
@@ -96,7 +108,10 @@ func (s *CatalogScans) overlayOwnModels(profile string, steps []documentStep) {
 		files[step.record.Path] = contents
 	}
 	if len(files) > 0 {
-		s.memo.ownModels = map[string]map[string]*[]byte{profile: files}
+		if s.memo.ownFiles == nil {
+			s.memo.ownFiles = map[*ownFileKind]map[string]map[string]*[]byte{}
+		}
+		s.memo.ownFiles[kind] = map[string]map[string]*[]byte{profile: files}
 	}
 }
 

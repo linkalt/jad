@@ -36,6 +36,9 @@ const (
 	maxNativeTaskMaxBatchOps     int64 = 200
 )
 
+// nativeTaskKeys are the keys of tools.native.task.
+var nativeTaskKeys = []string{"max_tasks", "list_limit", "max_list_limit", "max_title_chars", "max_tags", "max_tag_chars", "max_documents", "max_document_chars", "max_storage_bytes", "max_list_bytes", "max_batch_ops", "storage_dir", "statecontext"}
+
 var defaultNativeTaskStateStatuses = []string{"in-progress", "done"}
 var defaultNativeTaskDetailStatuses = []string{"in-progress"}
 var allowedNativeTaskStatuses = map[string]struct{}{
@@ -95,9 +98,7 @@ func normalizeNativeTaskSettings(setting map[string]json.RawMessage, settingPath
 		if key == "storage_path" {
 			return nil, configError("%s: tools.native.task.storage_path was removed; use storage_dir", settingPath)
 		}
-		switch key {
-		case "max_tasks", "list_limit", "max_list_limit", "max_title_chars", "max_tags", "max_tag_chars", "max_documents", "max_document_chars", "max_storage_bytes", "max_list_bytes", "max_batch_ops", "storage_dir", "statecontext":
-		default:
+		if !containsString(nativeTaskKeys, key) {
 			return nil, configError("%s: tools.native.task.%s is not supported", settingPath, key)
 		}
 	}

@@ -1,0 +1,975 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "profile-toolset.schema.json",
+  "title": "Jad profile's own toolset (workspace layout)",
+  "description": "W/.jad/profile-own/<category>/<name>/tools/<toolset category>/<toolset name>.json: a toolset only that profile uses, named in its toolset list as profile:<toolset category>/<toolset name> (docs/design_workspace_layout.md section 21). It is not a whole toolset file (toolset.schema.json): it names a shared toolset with its scope, the tools and MCP servers of it the profile leaves out, and the few tuning keys of its tools it changes. The hooks, the MCP connections and every path, command, environment, endpoint, credential and limit of the tools always come from the base, so an edit of the base reaches it; an own toolset adds no tool, server or hook. A profile that names a file failing these rules, or whose base is missing or does not compose, is left out of the session with a warning. Sub-agents, other profiles, profile_message callers and the catalog routes never see it. An unknown key is refused.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "based_on": {
+      "type": "string",
+      "pattern": "^(global|workspace):[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "The shared toolset this one is based on, with its scope: global:<category>/<name> or workspace:<category>/<name>. Never another own toolset (profile:)."
+    },
+    "omit": {
+      "type": "object",
+      "description": "What of the base this toolset leaves out: native and extension tools by name, MCP servers by the key the base's mcp object names them with. Each must be in the base. The base's hooks always apply.",
+      "properties": {
+        "native": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "extension": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "mcp": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "set": {
+      "type": "object",
+      "description": "Per native and extension tool of the base (not one it omits), the tuning keys this toolset changes, merged into the base's settings of that tool key by key; the tool's own rules judge the result, its ranges included. Every key not listed is refused, at every profile_self_edit level, also under full; a tool the base does not have cannot be set.",
+      "properties": {
+        "native": {
+          "type": "object",
+          "properties": {
+            "async": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.async; every other key is refused. Refused by name: keep_finished, latest_scan_max_bytes, latest_total_bytes, max_block_ms, max_handles, max_handles_total, max_wait_ms, retention_days, unread_max, unread_ttl_days: it is a limit on what the tool may start, keep or store, which only the user changes. index_flush_ms, peer_check_ms, sse_max_ids, stop_wait_ms: it tunes how the engine runs the tool, not what the profile's runs see.",
+              "properties": {
+                "default_block_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "default_wait_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "latest_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "latest_lines": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "latest_value_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_default_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "response_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "status_summary_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "summary_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "wait_max_signals": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "code_context": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.code_context; every other key is refused. Refused by name: max_entries, max_scan_tasks, max_storage_bytes: it is a limit on what the tool may start, keep or store, which only the user changes. paths, storage_dir: it names a file or folder the tool reads or writes.",
+              "properties": {
+                "default_priority": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_batch_items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_description_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_file_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_find_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_output_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_range_lines": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "relocate": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "exec": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.exec; every other key is refused. Refused by name: env, env_deny, env_file: it changes the environment or the secrets a command gets. max_timeout_ms, standby_max, standby_pool: it is a limit on what the tool may start, keep or store, which only the user changes. login_shell, runners, shell: it names a command, interpreter, runner or server the tool starts. functions_dir, paths, spill, stderr, stdout: it names a file or folder the tool reads or writes. drain_after_exit_ms, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, standby_idle_ms: it tunes how the engine runs the tool, not what the profile's runs see.",
+              "properties": {
+                "arg_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "code_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "default_lang": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "function_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "input_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "line_aware": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_header_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_files": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_line_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "result_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "stdin_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "strip_ansi": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "load_tool": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.load_tool; every other key is refused.",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "lsp": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.lsp; every other key is refused. Refused by name: servers: it names a command, interpreter, runner or server the tool starts. paths: it names a file or folder the tool reads or writes. idle_shutdown_ms: it tunes how the engine runs the tool, not what the profile's runs see.",
+              "properties": {
+                "diagnostics_wait_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_file_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "request_timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "profile": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.profile; every other key is refused. Refused by name: allow_children, allow_other_profiles, allow_other_sessions, allow_remote, remotes: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types).",
+              "properties": {
+                "max_entries": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "scan_max_entries": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "profile_message": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.profile_message; every other key is refused. Refused by name: context_trigger, deny_profiles, model_choice, remotes, sandbox_choice, sessions: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). max_chain, max_queued_per_profile: it is a limit on what the tool may start, keep or store, which only the user changes.",
+              "properties": {
+                "busy_wait_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "default_block_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "result_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "read_image": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.read_image; every other key is refused. Refused by name: paths: it names a file or folder the tool reads or writes.",
+              "properties": {
+                "max_image_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "records": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.records; every other key is refused. Refused by name: allowed_types, statecontext: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). max_cursors, max_record_bytes, max_records_per_type, max_total_bytes, max_total_records, max_types: it is a limit on what the tool may start, keep or store, which only the user changes. storage_dir: it names a file or folder the tool reads or writes.",
+              "properties": {
+                "cursor_ttl_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_cursor_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_filter_depth": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_filter_fields": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_json_depth": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_list_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_list_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_query_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_scan_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_scan_records": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "request_draft": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.request_draft; every other key is refused. Refused by name: headless_auto_accept_timeout_ms: it decides when a draft is accepted without the user. max_timeout_ms: it is a limit on what the tool may start, keep or store, which only the user changes.",
+              "properties": {
+                "extend_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_draft_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_draft_depth": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_title_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "skill": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.skill; every other key is refused.",
+              "properties": {
+                "max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "subagent": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.subagent; every other key is refused. Refused by name: agents, background_writers, deny_agents, model_choice, remotes, sandbox_choice, statecontext: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). delete_transcripts, keep_finished, max_background_writers, max_concurrent, max_depth, max_queued, max_runs_per_root, max_runs_per_session, persist_runs: it is a limit on what the tool may start, keep or store, which only the user changes. agents_dir, agents_dir_missing_ok, agents_dir_override, storage_dir, worktree: it names a file or folder the tool reads or writes.",
+              "properties": {
+                "changed_files_max": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "default_block_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "remote_timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "result_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "task": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.task; every other key is refused. Refused by name: statecontext: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). max_storage_bytes, max_tasks: it is a limit on what the tool may start, keep or store, which only the user changes. storage_dir: it names a file or folder the tool reads or writes.",
+              "properties": {
+                "list_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_batch_ops": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_document_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_documents": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_list_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_list_limit": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_tag_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_tags": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_title_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "tool_smith": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.tool_smith; every other key is refused. Refused by name: env, env_deny, env_file: it changes the environment or the secrets a command gets. tools: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). max_nested_calls, max_parallel_calls, max_timeout_ms, standby_max, standby_pool: it is a limit on what the tool may start, keep or store, which only the user changes. interpreter, login_shell, shell: it names a command, interpreter, runner or server the tool starts. functions_dir, paths, spill, stderr, stdout: it names a file or folder the tool reads or writes. drain_after_exit_ms, kill_children_on_run_end, kill_deadline_ms, kill_grace_ms, kill_process_group, standby_idle_ms: it tunes how the engine runs the tool, not what the profile's runs see.",
+              "properties": {
+                "code_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "function_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_header_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_files": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "list_max_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_line_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "nested_request_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "nested_result_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "result_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "stdin_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "strip_ansi": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "transcript": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.transcript; every other key is refused. Refused by name: allow_children, allow_other_profiles, allow_other_reasoning, allow_other_sessions, allow_path, allow_remote, remotes: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). index_cache_entries: it tunes how the engine runs the tool, not what the profile's runs see.",
+              "properties": {
+                "line_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_detail_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_list_entries": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "preview_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "response_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "scan_max_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "suggest_max": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "value_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "transcripts": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's native.transcripts; every other key is refused. Refused by name: allow_children, allow_other_profiles, allow_other_sessions, allow_remote, remotes: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types).",
+              "properties": {
+                "max_entries": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "scan_max_entries": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "extension": {
+          "type": "object",
+          "properties": {
+            "decide_systemone": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's extension.decide_systemone; every other key is refused. Refused by name: api_key_env, base_url, model, path: the endpoint, the credential, the provider and the model come from the base toolset.",
+              "properties": {
+                "max_input_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_questions": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_response_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "web_search": {
+              "type": "object",
+              "description": "Tuning keys merged into the base's extension.web_search; every other key is refused. Refused by name: allowed_domains, blocked_domains: it changes what the tool can reach (other sessions, profiles, remotes, agents, tools, domains or types). api_key_env, base_url, provider, user_agent: the endpoint, the credential, the provider and the model come from the base toolset.",
+              "properties": {
+                "default_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_query_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_response_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_results": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "max_snippet_chars": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "timeout_ms": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "based_on"
+  ],
+  "additionalProperties": false
+}

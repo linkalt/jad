@@ -17,6 +17,7 @@ type fakeProfileActions struct {
 	calls     []string
 	documents []sessionfs.ProfileDocumentChange
 	models    []sessionfs.ProfileDocumentChange
+	toolsets  []sessionfs.ProfileDocumentChange
 	failErr   error
 }
 
@@ -44,6 +45,7 @@ func (f *fakeProfileActions) EditProfile(_ context.Context, ownerKey string, req
 	f.calls = append(f.calls, request.Action+" "+strings.ReplaceAll(ownerKey, "\x00", " ")+" "+request.IfMatch+" "+request.HistoryID+" "+string(request.Contents))
 	f.documents = append(f.documents, request.Documents...)
 	f.models = append(f.models, request.Models...)
+	f.toolsets = append(f.toolsets, request.Toolsets...)
 	return sessionfs.ProfileEditResult{Profile: "own", Action: request.Action}, f.failErr
 }
 

@@ -153,6 +153,12 @@ type ProfileConfig struct {
 	ModelsDir   string            `json:"models_dir,omitempty"`
 	Models      []ProfileDocument `json:"models,omitempty"`
 	ModelsError string            `json:"models_error,omitempty"`
+	// ToolsetsDir is the own toolsets folder ({profile_own}/tools) edit writes, and Toolsets the
+	// own toolset files there by ID with their revisions (phase 3c.3); ToolsetsError says why
+	// they could not be listed.
+	ToolsetsDir   string            `json:"toolsets_dir,omitempty"`
+	Toolsets      []ProfileDocument `json:"toolsets,omitempty"`
+	ToolsetsError string            `json:"toolsets_error,omitempty"`
 }
 
 // ProfileRun is what the profile tool knows of the run that asks for its config.
@@ -231,6 +237,10 @@ func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, err
 		view.ModelsDir = filepath.Join(config.ProfileOwnDir, profileModelsFolder)
 		if view.Models, err = listProfileDocuments(config.ProfileOwnDir, config.Profile, ownModelKind); err != nil {
 			view.Models, view.ModelsError = nil, err.Error()
+		}
+		view.ToolsetsDir = filepath.Join(config.ProfileOwnDir, profileToolsetsFolder)
+		if view.Toolsets, err = listProfileDocuments(config.ProfileOwnDir, config.Profile, ownToolsetKind); err != nil {
+			view.Toolsets, view.ToolsetsError = nil, err.Error()
 		}
 	}
 	return view, nil

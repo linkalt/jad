@@ -404,8 +404,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
    `profile_self_edit`, the D3 path limits. 3a (the profile file, history, revert, the level) is
    built (section 13); 3b (own documents) is built (section 14); 3c.1 (hand-written own models)
-   is built (section 17); 3c.2 (self-edit of own models) is built (sections 18 and 19); 3c.3
-   (own toolsets) is not.
+   is built (section 17); 3c.2 (self-edit of own models) is built (sections 18 to 20); 3c.3
+   (own toolsets, written by hand and through `edit`) is built (section 21).
 4. **Migration command.**
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
@@ -821,7 +821,7 @@ history.
 ## 17. Phase 3c.1 as built: a profile's own models
 
 Decider 3c C1, C2 and C4, stage 1: own models written by hand. Self-edit of them (3c.2) and own
-toolsets (3c.3) are not built.
+toolsets (3c.3) followed (sections 19 and 21).
 
 - **File and format:** `W/.jad/profile-own/<cat>/<name>/models/<model cat>/<model name>.json`
   (schema `sample/schemes/profile-model.schema.json`) holds `schema_version`, `based_on` (a
@@ -1002,3 +1002,82 @@ Decider 3c.2b: a run never uses an own model edited after it started.
 - **Shared ID added later:** when a shared model is added with an own model's ID, the bare ID is
   ambiguous for that profile and its load leaves the profile out (T-018); deleting the own model
   through `profile edit` (or naming it with `profile:`) repairs it.
+
+## 21. Phase 3c.3 as built: a profile's own toolsets
+
+Decider 3c C1 to C4 for toolsets, with the 3c.2b run rule. An own toolset is a file based on a
+shared one, written by hand or through `edit`; it never holds anything the base's owner did not
+already allow.
+
+- **File and format:** `W/.jad/profile-own/<cat>/<name>/tools/<toolset cat>/<toolset name>.json`
+  (`profile-toolset.schema.json`) with `schema_version`, `based_on` (`global:<id>` or
+  `workspace:<id>`, never `profile:`), `omit` and `set`. Every other key is refused.
+- **What it may change:**
+  - `omit.native`, `omit.extension`, `omit.mcp`: names of the base to leave out (narrowing).
+  - `set.native.<tool>`, `set.extension.<tool>`: the tuning keys of a tool the base has, merged
+    into the base's settings of that tool key by key; the tool's own rules judge the result, its
+    ranges included. A value is a string, number or boolean, never null.
+- **What it never changes, at every `profile_self_edit` level, also under `full`, and in files
+  written by hand:** the hooks, the MCP connections (only `omit`), and every tool key that names a
+  path, a command, an environment or secret, an endpoint, credential, provider or model, what a
+  tool can reach (other sessions, profiles, remotes, agents, tools, domains), a limit on what a
+  tool may start, keep or store, or how the engine runs it. `ownToolsetTools` classifies every key
+  of every native and extension tool (tuning, or refused with its reason);
+  `TestOwnToolsetTableClassifiesEveryToolKey` fails when a tool or key is added and not
+  classified. This is stricter than decider C1, which allowed hooks, `env_file`, `cwd`, command
+  definitions and ceiling keys under `full`: those stay in the profile file's settings, where
+  `full` already allows hooks, `env_file` and `cwd`; tool limits and paths are the user's. An own
+  toolset adds no tool, server or hook.
+- **Base paths:** a global base has its relative paths made absolute from G first
+  (`absoluteGlobalToolsetPaths`), a workspace base keeps reading them from `W/.jad`, so the own
+  file's place changes nothing; it cannot set a path of its own.
+- **Scope and visibility:** the profile's toolset list takes `profile:<id>` (schema and loader);
+  `Layout.profileToolsets` is the shared toolset catalog plus the profile's own as the `profile`
+  scope, used for that profile's own toolset list only (load, `judgeScope`, the composition
+  check, the default's tool-setting check, the catalog route's profile validation). Agent toolset
+  lists read the shared catalog only and refuse `profile:` by name; another profile's
+  `profile:` names its own (empty) scope; the catalog routes never serve own toolsets. A bare
+  ID that a hand-written own toolset shares with a shared one is ambiguous for that profile only
+  (it is left out); self-edit refuses such an ID.
+- **Bad files:** a file that breaks the rules, whose base is missing or that does not compose
+  leaves the profile out of the session with a warning, and selecting it fails with an error
+  marked `OwnToolsetError` (so is a composition error of a toolset list holding an own toolset).
+  A load passes over a name the own toolset omits or sets that its base no longer has (an edit of
+  the base dropped it); nothing is added. An edit's trial and `jad check` refuse such a name.
+- **Self-edit:** `edit` takes `toolsets: [{id, content | delete, if_match}]` beside `contents`,
+  `documents` and `models`; one call is one revision under the profile file's lock, with the
+  same checks, publish order, rollback and revert as own models (`ownToolsetKind`). Before the
+  trial each written toolset must pass the file rules and take an ID no shared toolset has; the
+  trial overlays the written own toolsets, the profile's load applies those it names, and each
+  written one must compose strictly with its base and pass the toolset rules
+  (`validateLayoutToolset`) whether the profile names it yet or not. History entries are version
+  4 with `toolsets`; version 3, 2 and 3a entries still read and revert. `config` lists the own
+  toolsets with their revisions (`toolsets_dir`, `toolsets`).
+- **Other profiles:** an own toolset error (load, compact, reset, info) reaches a caller of
+  another profile only as "profile X: one of its own toolsets could not be loaded"
+  (`otherProfileError`; `mapSessionError` keeps the mark). A `profile_message` to a profile whose
+  own toolset fails is refused before any run with the tool's generic "Profile X failed".
+- **Runs:** a run's tools, servers and hooks come from the settings its session load composed; no
+  path reads a toolset file again while the run goes (traced: the run keeps its loaded config,
+  sub-agents use the toolsets prepared at load, the MCP servers start from it). An edit applies
+  from the next run (`TestARunKeepsTheOwnToolsetItStartedWith`).
+- **Guards:** own toolset files are under `profile-own`, so they are in the checkpoint exclusion
+  (`SelfEditPaths`), read-only to the profile's own sandboxed exec and hidden from other profiles
+  under bwrap (`TestProfileSandboxKeepsTheOwnToolsetsReadOnlyAndPrivate`). An own toolset sets no
+  write target; the write targets of the composed config are judged at load as before
+  (`checkWriteTargets`). The toolset deletion guard counts a profile one of whose own toolsets is
+  based on the file (a global delete checks every served workspace, as for models); MCP and
+  sandbox guards need nothing, since an own toolset adds no server or sandbox.
+- **Limits:**
+  - **One load, several files:** the own toolset files are read with the session load, without
+    the profile file's lock (loads also run under writers' locks: the trial, the catalog
+    validation). A load that runs while an edit publishes can read some own files of the new
+    revision and some of the old; publish order (own files, then the profile file, then deletes)
+    means it sees either the old profile file with new toolsets, each of which passed the full
+    rules, or a deleted file missing, which fails closed. A running run is never affected.
+  - **Stricter than C1:** no own toolset key opens anything under `full`; a need for one is a
+    decider question.
+  - **Deletion guard over served workspaces only:** a base used by an own toolset of a workspace
+    this server does not serve is not counted; that own toolset fails closed at its next load.
+  - **A new own tools folder is not stamped when it is missing:** like own models, a list cached
+    before the first own toolset exists notices it through the profile file's change.

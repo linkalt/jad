@@ -84,6 +84,9 @@ type NativeRecordsSettings struct {
 	AllowedTypes  []string
 }
 
+// nativeRecordsKeys are the keys of tools.native.records.
+var nativeRecordsKeys = []string{"storage_dir", "statecontext", "max_types", "max_records_per_type", "max_total_records", "max_record_bytes", "max_total_bytes", "list_limit", "max_list_limit", "max_list_bytes", "max_scan_records", "max_scan_bytes", "max_filter_fields", "max_filter_depth", "max_json_depth", "max_cursors", "cursor_ttl_ms", "max_cursor_bytes", "max_query_bytes", "allowed_types"}
+
 func normalizeNativeRecordsSettings(setting map[string]json.RawMessage, settingPath, cwd, toolStorageDir string) (*NativeRecordsSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
@@ -108,9 +111,7 @@ func normalizeNativeRecordsSettings(setting map[string]json.RawMessage, settingP
 		if key == "storage_path" {
 			return nil, configError("%s: tools.native.records.storage_path was removed; use storage_dir", settingPath)
 		}
-		switch key {
-		case "storage_dir", "statecontext", "max_types", "max_records_per_type", "max_total_records", "max_record_bytes", "max_total_bytes", "list_limit", "max_list_limit", "max_list_bytes", "max_scan_records", "max_scan_bytes", "max_filter_fields", "max_filter_depth", "max_json_depth", "max_cursors", "cursor_ttl_ms", "max_cursor_bytes", "max_query_bytes", "allowed_types":
-		default:
+		if !containsString(nativeRecordsKeys, key) {
 			return nil, configError("%s: tools.native.records.%s is not supported", settingPath, key)
 		}
 	}

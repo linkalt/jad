@@ -219,3 +219,54 @@ func TestProfileSelfEditModelsArgument(t *testing.T) {
 		t.Fatalf("a refused model change reached the port: %v", actions.calls)
 	}
 }
+
+// toolsets reach the port like models: ID, the content object as the model wrote it, delete
+// and if_match; a malformed item is refused before the port, and the S2 refusals hold.
+func TestProfileSelfEditToolsetsArgument(t *testing.T) {
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	only := `{"action":"edit","if_match":"r1","models":[{"id":"openai/fast","content":{"based_on":"global:openai/default"}}],"toolsets":[{"id":"coding/lean","content":{"set":{"native":{"exec":{"timeout_ms":2}}},"based_on":"global:coding/full"}},{"id":"coding/old","delete":true,"if_match":"r2"}]}`
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(only), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(context.Background(), parsed, tools.ExecutionContext{SessionKey: listCaller, CallID: "call_1", RawArguments: json.RawMessage(only)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions.toolsets) != 2 || string(actions.toolsets[0].Content) != `{"set":{"native":{"exec":{"timeout_ms":2}}},"based_on":"global:coding/full"}` || actions.toolsets[0].Path != "coding/lean" ||
+		!actions.toolsets[1].Delete || actions.toolsets[1].IfMatch != "r2" || len(actions.models) != 1 || string(actions.models[0].Content) != `{"based_on":"global:openai/default"}` || len(actions.calls) != 1 {
+		t.Fatalf("toolsets = %+v, models %+v, calls %q", actions.toolsets, actions.models, actions.calls)
+	}
+	actions.calls, actions.toolsets, actions.models = nil, nil, nil
+	own := tools.ExecutionContext{SessionKey: listCaller}
+	for name, arguments := range map[string]string{
+		"not an array":       `"toolsets":{"id":"a/b"}`,
+		"empty":              `"toolsets":[]`,
+		"no id":              `"toolsets":[{"content":{}}]`,
+		"content and delete": `"toolsets":[{"id":"a/b","content":{},"delete":true}]`,
+		"content a string":   `"toolsets":[{"id":"a/b","content":"{}"}]`,
+		"unknown key":        `"toolsets":[{"id":"a/b","content":{},"path":"x"}]`,
+	} {
+		if out := callTranscripts(t, tool, `{"action":"edit","if_match":"r1",`+arguments+`}`, own); !strings.Contains(out, "invalid") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	toolsets := `{"action":"edit","if_match":"r1","toolsets":[{"id":"a/b","content":{"based_on":"global:coding/full"}}]}`
+	for name, execution := range map[string]tools.ExecutionContext{
+		"sub-agent":   {SessionKey: listCaller, AgentDepth: 1},
+		"plan mode":   {SessionKey: listCaller, PlanMode: true},
+		"started run": {SessionKey: listCaller, ChainDepth: 1, RunNode: "n"},
+		"remote hop":  {SessionKey: listCaller, RemoteHops: 1},
+		"no caller":   {},
+	} {
+		if out := callTranscripts(t, tool, toolsets, execution); !strings.Contains(out, "denied") && !strings.Contains(out, "unknown") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	if out := callTranscripts(t, tool, `{"action":"edit","path":"profile:dev/other","if_match":"r1","toolsets":[{"id":"a/b","content":{}}]}`, own); !strings.Contains(out, "profile_self_only") {
+		t.Errorf("another profile: %s", out)
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a refused toolset change reached the port: %v", actions.calls)
+	}
+}

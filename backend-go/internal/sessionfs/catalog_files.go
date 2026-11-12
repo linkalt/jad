@@ -435,12 +435,13 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 		return err
 	}
 	if len(profile.Toolset) > 0 {
-		toolsets, err := layout.ScanToolsets(nil)
+		// Its own toolsets are looked up beside the shared ones (phase 3c.3).
+		toolsets, err := layout.profileToolsets(nil, layout.profileIDOf(path))
 		if err != nil {
 			return configError("%s: %v", path, err)
 		}
 		for _, id := range profile.Toolset {
-			if _, err := toolsets.Lookup(id); err != nil {
+			if _, err := toolsets.catalog.Lookup(id); err != nil {
 				return configError("%s: toolset: %v", path, err)
 			}
 		}
@@ -573,7 +574,7 @@ func catalogUsers(layout Layout, roots []Root, kind CatalogKind, id, path string
 	case CatalogModels:
 		return modelUsers(layout, id, path)
 	case CatalogToolsets:
-		return toolsetUsers(layout, id)
+		return toolsetUsers(layout, id, path)
 	case CatalogSandboxes:
 		return sandboxUsers(layout, roots, id)
 	case CatalogMCP:

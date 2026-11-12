@@ -95,8 +95,6 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 	}
 	judgement := scopeJudgement{all: all, usable: all, verdicts: make(map[string]*profileVerdict, all.Len()), models: models, skippedProfiles: scanned.Skipped(),
 		scanNotes: append(skippedFileNotes(sessionPath, scanned), skippedFileNotes(sessionPath, models)...)}
-	var toolsets *catalog.Catalog
-	var toolsetsErr error
 	for _, entry := range all.Entries() {
 		scans.noteFile(entry.Path)
 		verdict := &profileVerdict{entry: entry}
@@ -123,12 +121,9 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 			continue
 		}
 		verdict.file, verdict.listed = file, narrowed
-		if len(file.Toolset) > 0 && toolsets == nil && toolsetsErr == nil {
-			toolsets, toolsetsErr = layout.ScanToolsets(scans)
-		}
-		verdict.err = checkProfileToolsets(scans, entry.Path, file, toolsets, toolsetsErr)
+		verdict.err = checkProfileToolsets(layout, scans, entry.ID(), entry.Path, file)
 		if verdict.err == nil {
-			verdict.err = checkToolsetComposition(layout, session, sessionPath, entry.Path, file, scans)
+			verdict.err = checkToolsetComposition(layout, session, sessionPath, entry.ID(), entry.Path, file, scans)
 			verdict.composition = verdict.err != nil
 		}
 		if verdict.err == nil {
@@ -170,7 +165,7 @@ func (j *scopeJudgement) judgeDefaultToolsetSettings(layout Layout, location Loc
 			return
 		}
 		verdict := j.verdicts[id]
-		if !toolsetsAddNativeSettings(j.toolsetPaths(verdict.file, scans, layout)) {
+		if !toolsetsAddNativeSettings(j.toolsetFiles(verdict.entry.ID(), verdict.file, scans, layout)) {
 			return
 		}
 		attempt := func(withoutToolsets bool) error {
@@ -193,50 +188,60 @@ func (j *scopeJudgement) judgeDefaultToolsetSettings(layout Layout, location Loc
 	}
 }
 
-// toolsetPaths returns the files of the toolsets the profile names, empty when they cannot be
-// found (a profile whose toolset is missing was already left out).
-func (j *scopeJudgement) toolsetPaths(file layoutProfileFile, scans *CatalogScans, layout Layout) []string {
+// toolsetFiles returns the toolsets the profile names as its load applies them (an own toolset
+// composed with its base), leaving out those that cannot be read (a profile whose toolset is
+// missing was already left out).
+func (j *scopeJudgement) toolsetFiles(profile string, file layoutProfileFile, scans *CatalogScans, layout Layout) []layoutToolsetFile {
 	if len(file.Toolset) == 0 {
 		return nil
 	}
-	toolsets, err := layout.ScanToolsets(scans)
+	own, err := layout.profileToolsets(scans, profile)
 	if err != nil {
 		return nil
 	}
-	var paths []string
+	var toolsets []layoutToolsetFile
 	for _, id := range file.Toolset {
-		if found, err := toolsets.Lookup(id); err == nil {
-			paths = append(paths, found.Path)
+		if found, err := own.catalog.Lookup(id); err == nil {
+			if toolset, err := own.toolset(found.Path); err == nil {
+				toolsets = append(toolsets, toolset)
+			}
 		}
 	}
-	return paths
+	return toolsets
 }
 
-// toolsetsAddNativeSettings reports whether any of the toolset files gives native or extension
-// tool settings, the only ones whose rules a toolset can fail beyond what composing found.
-func toolsetsAddNativeSettings(paths []string) bool {
-	for _, path := range paths {
-		var toolset layoutToolsetFile
-		if readLayoutFile(path, &toolset) == nil && (len(toolset.Native) > 0 || len(toolset.Extension) > 0) {
+// toolsetsAddNativeSettings reports whether any of the toolsets gives native or extension tool
+// settings, the only ones whose rules a toolset can fail beyond what composing found.
+func toolsetsAddNativeSettings(toolsets []layoutToolsetFile) bool {
+	for _, toolset := range toolsets {
+		if len(toolset.Native) > 0 || len(toolset.Extension) > 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// checkProfileToolsets requires each toolset the profile names to exist and to parse. What the
-// toolset asks for (its tools, hooks and servers) is checked when the profile is composed.
-func checkProfileToolsets(scans *CatalogScans, profilePath string, file layoutProfileFile, toolsets *catalog.Catalog, scanErr error) error {
+// checkProfileToolsets requires each toolset the profile names to exist and to parse, an own
+// one (phase 3c.3) to compose with its base. What the toolset asks for (its tools, hooks and
+// servers) is checked when the profile is composed.
+func checkProfileToolsets(layout Layout, scans *CatalogScans, profile, profilePath string, file layoutProfileFile) error {
 	if len(file.Toolset) == 0 {
 		return nil
 	}
-	if scanErr != nil {
-		return configError("%s: %v", profilePath, scanErr)
+	own, err := layout.profileToolsets(scans, profile)
+	if err != nil {
+		return configError("%s: %v", profilePath, err)
 	}
 	for _, id := range file.Toolset {
-		found, err := toolsets.Lookup(id)
+		found, err := own.catalog.Lookup(id)
 		if err != nil {
 			return configError("%s: toolset: %v", profilePath, err)
+		}
+		if own.own(found.Path) {
+			if err := scans.check("own toolset", found.Path, own.problem); err != nil {
+				return keepOwnToolsetMark(err, configError("%s: toolset %s: %v", profilePath, id, err))
+			}
+			continue
 		}
 		if err := scans.check("toolset", found.Path, parseToolsetFile); err != nil {
 			return err
@@ -269,13 +274,13 @@ func badModelsOf(scans *CatalogScans, listed *catalog.Catalog, own ownModels) []
 // settings) are not. A native tool setting of a toolset is judged only for the profile that
 // would be the default (judgeDefaultToolsetSettings); for another profile it fails the load
 // of that profile when it is selected.
-func checkToolsetComposition(layout Layout, session layoutSessionFile, sessionPath, profilePath string, file layoutProfileFile, scans *CatalogScans) error {
+func checkToolsetComposition(layout Layout, session layoutSessionFile, sessionPath, profileID, profilePath string, file layoutProfileFile, scans *CatalogScans) error {
 	if len(file.Toolset) == 0 {
 		return nil
 	}
 	setting := mergeSettings(mergeSettings(layout.Defaults, mergeSettings(nil, session.Settings)), file.Settings)
 	scratch := &layoutCompose{layout: layout, sessionPath: sessionPath, scans: scans}
-	return scratch.addToolsets(setting, file.Toolset, profilePath, setting["env_file"])
+	return scratch.addToolsets(setting, file.Toolset, profilePath, setting["env_file"], profileID)
 }
 
 // bad returns the error of a listed model whose file fails the model rules.

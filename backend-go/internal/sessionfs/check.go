@@ -130,6 +130,7 @@ func CheckLayout(roots []Root, validateServer ServerFileValidator) (CheckReport,
 		report.checkCatalog(*layout, roots, kind, validateServer)
 	}
 	report.checkOwnModels(*layout)
+	report.checkOwnToolsets(*layout, roots)
 	report.checkSandboxFolder(layout.Sandbox)
 	report.checkSessions(roots)
 	return report, nil
@@ -275,6 +276,40 @@ func (r *CheckReport) checkOwnModels(layout Layout) {
 			r.Checked++
 			if err := own.problem(path); err != nil {
 				r.add("own model", profile.ID()+" profile:"+own.ids[path], err)
+			}
+		}
+	}
+}
+
+// checkOwnToolsets is checkOwnModels for the own toolsets (phase 3c.3): a name or folder the
+// scan skips, a file that fails the own toolset rules, a base that is missing, and a composed
+// toolset that does not compose or fails the toolset rules, whether a profile names it yet or not.
+func (r *CheckReport) checkOwnToolsets(layout Layout, roots []Root) {
+	if layout.Workspace == "" || layout.Profiles == "" {
+		return
+	}
+	profiles, err := catalog.Scan(string(CatalogProfiles), layout.Profiles)
+	if err != nil {
+		return
+	}
+	scans := NewCatalogScans()
+	for _, profile := range profiles.Entries() {
+		own, err := layout.profileToolsets(scans, profile.ID())
+		if err != nil {
+			r.add("own toolset", profile.ID(), err)
+			continue
+		}
+		for _, note := range own.notes {
+			r.add("own toolset", profile.ID(), errors.New(note))
+		}
+		for _, path := range slices.Sorted(maps.Keys(own.ids)) {
+			r.Checked++
+			toolset, err := own.strictToolset(path)
+			if err == nil {
+				err = validateLayoutToolset(layout, roots, path, toolset)
+			}
+			if err != nil {
+				r.add("own toolset", profile.ID()+" profile:"+own.ids[path], err)
 			}
 		}
 	}

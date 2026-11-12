@@ -136,7 +136,7 @@ func TestToolsetUsersCountsEveryToolsetOfAProfileList(t *testing.T) {
 	fixture := layouttest.Write(t, profileSpec([]string{"a/one", "b/two"}))
 	layout := Layout{Profiles: filepath.Join(fixture.Root, "profiles")}
 	for id, want := range map[string]int{"a/one": 1, "b/two": 1, "c/none": 0} {
-		users, err := toolsetUsers(layout, id)
+		users, err := toolsetUsers(layout, id, "")
 		if err != nil {
 			t.Fatal(err)
 		}

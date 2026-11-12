@@ -31,6 +31,9 @@ type NativeRequestDraftSettings struct {
 	MaxTitleChars               int64
 }
 
+// nativeRequestDraftKeys are the keys of tools.native.request_draft.
+var nativeRequestDraftKeys = []string{"timeout_ms", "headless_auto_accept_timeout_ms", "max_timeout_ms", "extend_ms", "max_draft_bytes", "max_draft_depth", "max_title_chars"}
+
 func normalizeNativeRequestDraftSettings(setting map[string]json.RawMessage, settingPath string) (*NativeRequestDraftSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
@@ -52,9 +55,7 @@ func normalizeNativeRequestDraftSettings(setting map[string]json.RawMessage, set
 		return nil, err
 	}
 	for key := range fields {
-		switch key {
-		case "timeout_ms", "headless_auto_accept_timeout_ms", "max_timeout_ms", "extend_ms", "max_draft_bytes", "max_draft_depth", "max_title_chars":
-		default:
+		if !containsString(nativeRequestDraftKeys, key) {
 			return nil, configError("%s: tools.native.request_draft.%s is not supported", settingPath, key)
 		}
 	}

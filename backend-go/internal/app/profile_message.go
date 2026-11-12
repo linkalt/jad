@@ -283,14 +283,20 @@ func ownModelRefusal(model string) error {
 // otherProfileError is err as a caller of profile may read it. An error about one of profile's
 // own model files names a file under profile-own and why it fails, which the sandbox hides
 // from every other profile, so a caller of another profile gets only that the selected model
-// could not be loaded (decider 3c.2a); the profile itself, its session and the server log keep
-// the whole text. Every other error is returned as it is.
+// could not be loaded (decider 3c.2a), or that one of its own toolsets could not (3c.3); the
+// profile itself, its session and the server log keep the whole text. Every other error is
+// returned as it is.
 func otherProfileError(ownerKey, profile string, err error) error {
-	if err == nil || !sessionfs.IsOwnModelError(err) {
+	model, toolset := sessionfs.IsOwnModelError(err), sessionfs.IsOwnToolsetError(err)
+	if err == nil || !model && !toolset {
 		return err
 	}
 	if _, caller, _ := strings.Cut(ownerKey, "\x00"); caller == profile {
 		return err
+	}
+	if !model {
+		// The same for one of its own toolset files (phase 3c.3).
+		return fmt.Errorf("profile %s: one of its own toolsets could not be loaded", profile)
 	}
 	return fmt.Errorf("profile %s: its selected model could not be loaded", profile)
 }

@@ -111,20 +111,27 @@ type ownFileKind struct {
 var (
 	ownDocumentKind = &ownFileKind{folder: profileDocumentsFolder, argument: "documents", limit: maxPromptDocumentBytes, parts: documentParts}
 	ownModelKind    = &ownFileKind{folder: profileModelsFolder, argument: "models", suffix: ".json", limit: maxInternalJSONFileBytes, parts: ownModelParts}
+	ownToolsetKind  = &ownFileKind{folder: profileToolsetsFolder, argument: "toolsets", suffix: ".json", limit: maxInternalJSONFileBytes, parts: ownToolsetParts}
 )
 
 // ownModelParts checks an own model ID (<category>/<name>, both catalog identifiers) and
 // gives its file's segments below the models folder.
-func ownModelParts(id string) ([]string, error) {
+func ownModelParts(id string) ([]string, error) { return ownCatalogParts("own model", id) }
+
+// ownToolsetParts is ownModelParts for an own toolset (phase 3c.3).
+func ownToolsetParts(id string) ([]string, error) { return ownCatalogParts("own toolset", id) }
+
+// ownCatalogParts checks the ID of an own catalog file (what: own model, own toolset).
+func ownCatalogParts(what, id string) ([]string, error) {
 	category, name, found := strings.Cut(id, "/")
 	if !found {
-		return nil, errors.New("an own model is named <category>/<name>")
+		return nil, fmt.Errorf("an %s is named <category>/<name>", what)
 	}
 	if err := catalog.ValidateIdentifier(category); err != nil {
-		return nil, fmt.Errorf("an own model's category %w", err)
+		return nil, fmt.Errorf("an %s's category %w", what, err)
 	}
 	if err := catalog.ValidateIdentifier(name); err != nil {
-		return nil, fmt.Errorf("an own model's name %w", err)
+		return nil, fmt.Errorf("an %s's name %w", what, err)
 	}
 	return []string{category, name + ".json"}, nil
 }
@@ -518,9 +525,9 @@ func listProfileDocuments(own, profile string, kind *ownFileKind) ([]ProfileDocu
 			return err
 		}
 		name := filepath.ToSlash(relative)
-		if kind == ownModelKind {
-			id, isJSON := strings.CutSuffix(name, ".json")
-			if parts, err := ownModelParts(id); !isJSON || err != nil || filepath.Join(parts...) != relative {
+		if kind.suffix != "" {
+			id, isJSON := strings.CutSuffix(name, kind.suffix)
+			if parts, err := kind.parts(id); !isJSON || err != nil || filepath.Join(parts...) != relative {
 				return nil
 			}
 			name = id

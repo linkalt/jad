@@ -551,6 +551,56 @@ func TestProfileSandboxKeepsTheOwnModelsReadOnlyAndPrivate(t *testing.T) {
 	}
 }
 
+// The run's own toolsets folder is read-only to its own exec and hidden from another profile's;
+// the loader still composes the own toolset from it (3c.3).
+func TestProfileSandboxKeepsTheOwnToolsetsReadOnlyAndPrivate(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{workspace}","{tmp}"`)
+	useOwnTempDir(t)
+	writeWorkspaceFile(t, filepath.Join(f.home, ".jad", "tools", "coding", "full.json"), `{"schema_version":1,"native":{"async":{},"skill":{}}}`)
+	host := filepath.Join(f.a, ".jad", "profile-own", "dev", "coder", "tools", "coding", "lean.json")
+	const ownToolset = `{"based_on":"global:coding/full","omit":{"native":["skill"]}}`
+	writeWorkspaceFile(t, host, ownToolset)
+	writeWorkspaceFile(t, filepath.Join(f.a, ".jad", "profiles", "dev", "coder.json"), `{"models":["openai/default"],"toolset":"profile:coding/lean","settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.a, Environment: map[string]string{"HOME": f.home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionSettings(location, "dev/coder", "")
+	if err != nil || config.NativeAsync == nil || config.NativeSkill != nil {
+		t.Fatalf("own toolset: async %v skill %v, %v", config.NativeAsync, config.NativeSkill, err)
+	}
+	toolsets := ".jad/profile-own/dev/coder/tools"
+	command := profileAttempt("read", `grep -q skill `+toolsets+`/coding/lean.json`) +
+		profileAttempt("create", `echo x > `+toolsets+`/coding/new.json`) +
+		profileAttempt("change", `echo x > `+toolsets+`/coding/lean.json`) +
+		profileAttempt("remove", `rm -f `+toolsets+`/coding/lean.json && test ! -e `+toolsets+`/coding/lean.json`) +
+		profileAttempt("folder", `mkdir `+toolsets+`/local`) +
+		profileAttempt("replace", `mv `+toolsets+` .jad/profile-own/dev/coder/old`)
+	wantProfileOutput(t, "own run", f.run(t, command, tools.ExecutionContext{}, config.Sandbox), "read=yes", "create=no", "change=no", "remove=no", "folder=no", "replace=no")
+	if got, err := os.ReadFile(host); err != nil || string(got) != ownToolset {
+		t.Fatalf("the own toolset changed on the host: %q, %v", got, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(host)); len(entries) != 1 {
+		t.Fatalf("the own toolsets folder holds %d files", len(entries))
+	}
+
+	other := filepath.Join(f.a, ".jad", "profiles", "dev", "other.json")
+	writeWorkspaceFile(t, other, `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	otherConfig, err := sessionfs.LoadSessionSettings(location, "dev/other", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "other profile", f.run(t, profileAttempt("read", `cat `+toolsets+`/coding/lean.json`)+profileAttempt("write", `echo x > `+toolsets+`/coding/planted.json`), tools.ExecutionContext{}, otherConfig.Sandbox), "read=no", "write=no")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(host), "planted.json")); err == nil {
+		t.Fatal("another profile planted an own toolset")
+	}
+}
+
 // A writable path a profile lists into a profile-own folder (its own documents, another
 // profile's, the profile-own root, through .. or a link, or the whole W/.jad) opens nothing: the
 // fixed read-only and hidden rules are bound after it and win (3b.1).

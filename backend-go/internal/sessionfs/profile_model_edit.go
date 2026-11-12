@@ -14,13 +14,14 @@ import (
 // ownModelSet table); the endpoint, the credential and the billed model always come from the
 // base, at every profile_self_edit level.
 
-// indentedOwnModels checks that each model an edit gives is a JSON object and writes it with
-// two spaces of indent and a final newline, so the file and its revision do not depend on how
-// the tool call spelled it.
-func indentedOwnModels(changes []ProfileDocumentChange) ([]ProfileDocumentChange, error) {
+// indentedOwnFiles checks that each own model or toolset an edit gives is a JSON object and
+// writes it with two spaces of indent and a final newline, so the file and its revision do not
+// depend on how the tool call spelled it.
+func indentedOwnFiles(kind *ownFileKind, changes []ProfileDocumentChange) ([]ProfileDocumentChange, error) {
 	if len(changes) == 0 {
 		return nil, nil
 	}
+	what := strings.TrimSuffix(kind.argument, "s")
 	indented := make([]ProfileDocumentChange, len(changes))
 	for index, change := range changes {
 		indented[index] = change
@@ -30,11 +31,11 @@ func indentedOwnModels(changes []ProfileDocumentChange) ([]ProfileDocumentChange
 		trimmed := bytes.TrimSpace(change.Content)
 		var fields map[string]json.RawMessage
 		if !jsonKindIs(trimmed, "object") || json.Unmarshal(trimmed, &fields) != nil {
-			return nil, &ClientError{Message: fmt.Sprintf("models[%d] %s: content must be the own model file as a JSON object", index, change.Path)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s: content must be the own %s file as a JSON object", kind.argument, index, change.Path, what)}
 		}
 		var out bytes.Buffer
 		if err := json.Indent(&out, trimmed, "", "  "); err != nil {
-			return nil, &ClientError{Message: fmt.Sprintf("models[%d] %s: %v", index, change.Path, err)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s: %v", kind.argument, index, change.Path, err)}
 		}
 		out.WriteByte('\n')
 		indented[index].Content = out.Bytes()

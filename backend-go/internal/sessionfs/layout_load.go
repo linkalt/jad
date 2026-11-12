@@ -600,9 +600,12 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 	if len(c.layout.ToolDefinitionPaths) > 0 {
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
+	// owner is the profile whose own toolsets the list may name: the profile's own list only,
+	// never an agent's (decider 3c C2).
+	owner := ""
 	if len(toolsets) == 0 {
 		if !c.withoutToolsets {
-			toolsets = profile.Toolset
+			toolsets, owner = profile.Toolset, selected.ID()
 		}
 	} else {
 		// Only the tools of this toolset are used. The state-context providers read the
@@ -610,7 +613,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 		delete(setting, "statecontext")
 	}
 	if len(toolsets) > 0 {
-		if err := c.addToolsets(setting, toolsets, selected.Path, defaultEnvFile); err != nil {
+		if err := c.addToolsets(setting, toolsets, selected.Path, defaultEnvFile, owner); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -778,26 +781,41 @@ type loadedToolset struct {
 
 // addToolsets puts the native settings, MCP servers and hooks of the toolsets into the
 // setting. Each toolset is "<category>/<name>" under tools/; the first listed wins a clash.
-func (c *layoutCompose) addToolsets(setting map[string]json.RawMessage, ids []string, profilePath string, defaultEnvFile json.RawMessage) error {
-	toolsets, err := c.layout.ScanToolsets(c.scans)
+// owner is the profile whose own toolsets (profile:<id>) the list may name, composed with their
+// bases (phase 3c.3); "" for a list that names shared toolsets only.
+func (c *layoutCompose) addToolsets(setting map[string]json.RawMessage, ids []string, profilePath string, defaultEnvFile json.RawMessage, owner string) error {
+	own, err := c.layout.profileToolsets(c.scans, owner)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}
-	c.warnSkipped(toolsets)
+	c.warnSkipped(own.shared)
+	for _, note := range own.notes {
+		c.warn("%s", note)
+	}
 	loaded := make([]loadedToolset, 0, len(ids))
+	anyOwn := false
 	for _, id := range ids {
-		entry, err := toolsets.Lookup(id)
+		entry, err := own.catalog.Lookup(id)
 		if err != nil {
 			return configError("%s: toolset: %v", profilePath, err)
 		}
-		var toolset layoutToolsetFile
 		c.scans.noteFile(entry.Path)
-		if err := readLayoutFile(entry.Path, &toolset); err != nil {
+		toolset, err := own.toolset(entry.Path)
+		if err != nil && own.own(entry.Path) {
+			return keepOwnToolsetMark(err, configError("%s: toolset %s: %v", profilePath, id, err))
+		}
+		if err != nil {
 			return err
 		}
+		anyOwn = anyOwn || own.own(entry.Path)
 		loaded = append(loaded, loadedToolset{id: id, path: entry.Path, toolset: toolset})
 	}
-	return c.applyToolsets(setting, loaded, defaultEnvFile)
+	err = c.applyToolsets(setting, loaded, defaultEnvFile)
+	if anyOwn {
+		// The error may name an own toolset file (hooks given twice, a missing MCP server).
+		return ownToolsetError(err)
+	}
+	return err
 }
 
 // applyToolset puts one decoded toolset into the setting; path names its file in errors.

@@ -117,6 +117,11 @@ var ownModelSet = ownKeyRule{kind: "object", keys: map[string]ownKeyRule{
 
 // check applies the rule to the value at (a dotted name such as set.request.store).
 func (r ownKeyRule) check(path, at string, raw json.RawMessage) error {
+	return r.checkAs("own model", path, at, raw)
+}
+
+// checkAs is check for a rule of what (own model, own toolset), which the errors name.
+func (r ownKeyRule) checkAs(what, path, at string, raw json.RawMessage) error {
 	value := bytes.TrimSpace(raw)
 	if !jsonKindIs(value, r.kind) {
 		return configError("%s: %s must be a JSON %s", path, at, r.kind)
@@ -131,16 +136,16 @@ func (r ownKeyRule) check(path, at string, raw json.RawMessage) error {
 	for _, key := range slices.Sorted(maps.Keys(fields)) {
 		name := at + "." + key
 		if reason, refused := r.refused[key]; refused {
-			return configError("%s: %s cannot be changed by a profile's own model: %s", path, name, reason)
+			return configError("%s: %s cannot be changed by a profile's %s: %s", path, name, what, reason)
 		}
 		inner, allowed := r.keys[key]
 		if !allowed && r.values != nil {
 			inner, allowed = *r.values, true
 		}
 		if !allowed {
-			return configError("%s: %s is not one a profile's own model may change (allowed: %s)", path, name, strings.Join(slices.Sorted(maps.Keys(r.keys)), ", "))
+			return configError("%s: %s is not one a profile's %s may change (allowed: %s)", path, name, what, strings.Join(slices.Sorted(maps.Keys(r.keys)), ", "))
 		}
-		if err := inner.check(path, name, fields[key]); err != nil {
+		if err := inner.checkAs(what, path, name, fields[key]); err != nil {
 			return err
 		}
 	}
@@ -161,6 +166,8 @@ func jsonKindIs(value []byte, kind string) bool {
 		return value[0] == '['
 	case "boolean":
 		return string(value) == "true" || string(value) == "false"
+	case "scalar":
+		return jsonKindIs(value, "string") || jsonKindIs(value, "number") || jsonKindIs(value, "boolean")
 	case "number", "integer":
 		// json.Number also takes a quoted number; a number is never a string here.
 		var number json.Number
@@ -400,11 +407,17 @@ func resolveOwnModel(path string, shared *catalog.Catalog, trial *[]byte) (Model
 // ownModelsFolder is where the profile's own models folder is, below the real W/.jad, whether
 // it exists or not (ownFolder walks it).
 func ownModelsFolder(workspace, profile string) (string, error) {
+	return ownKindFolder(workspace, profile, profileModelsFolder)
+}
+
+// ownKindFolder is where the folder of the profile's own files of one kind is, below the real
+// W/.jad, whether it exists or not.
+func ownKindFolder(workspace, profile, folder string) (string, error) {
 	jad, err := filepath.EvalSymlinks(filepath.Join(workspace, ".jad"))
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(jad, profileOwnFolder, filepath.FromSlash(profile), profileModelsFolder), nil
+	return filepath.Join(jad, profileOwnFolder, filepath.FromSlash(profile), folder), nil
 }
 
 // own reports whether path is one of the profile's own model files.

@@ -88,7 +88,7 @@ func TestProfileEditWritesOwnModelsInOneChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.Version != 3 || entry.Previous != "" || len(entry.Documents) != 0 || len(entry.Models) != 1 || string(entry.Models[0].Previous) != string(written) {
+	if entry.Version != profileHistoryVersion || entry.Previous != "" || len(entry.Documents) != 0 || len(entry.Models) != 1 || string(entry.Models[0].Previous) != string(written) {
 		t.Fatalf("entry = %+v", entry)
 	}
 	history, err := ReadProfileHistory(e.location, "dev/coder", 0)
@@ -322,7 +322,7 @@ func TestTrialScansReadOwnModelCandidates(t *testing.T) {
 	wsPut(t, e.ownModel("openai/old"), `{"based_on":"global:openai/default"}`)
 	created := text(`{"based_on":"global:openai/default","set":{"efforts":["trial"]}}`)
 	scans := newTrialScans(e.file, nil)
-	scans.overlayOwnModels("dev/coder", []documentStep{{kind: ownModelKind, record: ProfileDocumentRecord{Path: "openai/new"}, content: created}, {kind: ownModelKind, record: ProfileDocumentRecord{Path: "openai/old"}, delete: true}})
+	scans.overlayOwnFiles("dev/coder", []documentStep{{kind: ownModelKind, record: ProfileDocumentRecord{Path: "openai/new"}, content: created}, {kind: ownModelKind, record: ProfileDocumentRecord{Path: "openai/old"}, delete: true}})
 	own, err := e.location.Root.Layout.profileModels(scans, "dev/coder")
 	if err != nil {
 		t.Fatal(err)
