@@ -192,6 +192,21 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 	return narrowed, nil
 }
 
+// With returns the catalog with entry added, or in place of the entry with its ID. The
+// catalog keeps what the scan left out and the ambiguous IDs, so a trial load can put a
+// candidate file into a scanned catalog without losing the scan's notes.
+func (c *Catalog) With(entry Entry) *Catalog {
+	kept := make([]Entry, 0, len(c.entries)+1)
+	for _, current := range c.entries {
+		if current.ID() != entry.ID() {
+			kept = append(kept, current)
+		}
+	}
+	with := newCatalog(c.kind, append(kept, entry))
+	with.ambiguous, with.skipped = c.ambiguous, c.skipped
+	return with
+}
+
 // Without returns the catalog minus the entry with this ID.
 func (c *Catalog) Without(id string) *Catalog {
 	kept := make([]Entry, 0, len(c.entries))

@@ -147,6 +147,12 @@ type ProfileConfig struct {
 	DocumentsDir   string            `json:"documents_dir,omitempty"`
 	Documents      []ProfileDocument `json:"documents,omitempty"`
 	DocumentsError string            `json:"documents_error,omitempty"`
+	// ModelsDir is the own models folder ({profile_own}/models) edit writes, and Models the own
+	// model files it holds, by ID (profile:<ID> picks one) with each revision, the if_match of
+	// a change (workspace layout only); ModelsError says why they could not be listed.
+	ModelsDir   string            `json:"models_dir,omitempty"`
+	Models      []ProfileDocument `json:"models,omitempty"`
+	ModelsError string            `json:"models_error,omitempty"`
 }
 
 // ProfileRun is what the profile tool knows of the run that asks for its config.
@@ -219,8 +225,12 @@ func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, err
 	}
 	if config.ProfileOwnDir != "" {
 		view.DocumentsDir = filepath.Join(config.ProfileOwnDir, profileDocumentsFolder)
-		if view.Documents, err = listProfileDocuments(config.ProfileOwnDir, config.Profile); err != nil {
+		if view.Documents, err = listProfileDocuments(config.ProfileOwnDir, config.Profile, ownDocumentKind); err != nil {
 			view.Documents, view.DocumentsError = nil, err.Error()
+		}
+		view.ModelsDir = filepath.Join(config.ProfileOwnDir, profileModelsFolder)
+		if view.Models, err = listProfileDocuments(config.ProfileOwnDir, config.Profile, ownModelKind); err != nil {
+			view.Models, view.ModelsError = nil, err.Error()
 		}
 	}
 	return view, nil

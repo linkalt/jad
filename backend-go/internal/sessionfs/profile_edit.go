@@ -41,8 +41,12 @@ type ProfileEditRequest struct {
 	// Contents is the whole new profile file (edit); empty leaves the file as it is.
 	Contents json.RawMessage
 	// Documents are the own documents an edit creates, replaces or deletes in the same
-	// revision (decider 3b D1); an edit gives Contents, Documents or both.
+	// revision (decider 3b D1).
 	Documents []ProfileDocumentChange
+	// Models are the own model files an edit creates, replaces or deletes in the same revision
+	// (decider 3c C3): Path is the model ID (<category>/<name>), Content the own model file as
+	// a JSON object. An edit gives Contents, Documents, Models or any of them.
+	Models []ProfileDocumentChange
 	// HistoryID names the history entry whose stored file a revert restores.
 	HistoryID string
 	// IfMatch is the revision the caller read (profile config); required.
@@ -69,17 +73,22 @@ type ProfileEditResult struct {
 	Revision    string   `json:"revision"`
 	ChangedKeys []string `json:"changed_keys,omitempty"`
 	// Documents are the own documents the change created, replaced or deleted.
-	Documents  []ProfileDocumentRecord `json:"documents,omitempty"`
+	Documents []ProfileDocumentRecord `json:"documents,omitempty"`
+	// Models are the own model files the change created, replaced or deleted, by ID.
+	Models     []ProfileDocumentRecord `json:"models,omitempty"`
 	HistoryID  string                  `json:"history_id,omitempty"`
 	RevertedTo string                  `json:"reverted_to,omitempty"`
 	SelfEdit   string                  `json:"profile_self_edit"`
 	Note       string                  `json:"note"`
 }
 
-// profileHistoryVersion is the version of the history entries written now: 2 adds the
-// documents and leaves Previous out when the profile file did not change. 3a entries have no
-// version and always hold Previous.
-const profileHistoryVersion = 2
+// profileHistoryVersion is the version of the history entries written now: 2 (3b) adds the
+// documents and leaves Previous out when the profile file did not change, 3 (3c.2) adds the own
+// model files. 3a entries have no version and always hold Previous; every version is read.
+const profileHistoryVersion = 3
+
+// profileHistoryFilesVersion is the first version whose entries may hold only own files.
+const profileHistoryFilesVersion = 2
 
 // ProfileHistoryEntry is one change in a profile's history: the file as it was before the
 // change (Previous, left out of listings; only when the file changed), the documents it touched
@@ -99,6 +108,8 @@ type ProfileHistoryEntry struct {
 	Previous    string           `json:"previous,omitempty"`
 	// Documents are the own documents the change touched (version 2).
 	Documents []ProfileDocumentRecord `json:"documents,omitempty"`
+	// Models are the own model files the change touched, by ID (version 3).
+	Models []ProfileDocumentRecord `json:"models,omitempty"`
 }
 
 // ProfileHistory is a page of a profile's history, newest first.
@@ -178,19 +189,22 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 	}
 	result := ProfileEditResult{Profile: loaded.Profile, Action: request.Action, File: path, OldRevision: revision, Revision: revision, SelfEdit: level}
 	candidate := current
-	changes := request.Documents
+	changes, modelChanges := request.Documents, request.Models
 	if request.Action == ProfileEditActionEdit {
-		if len(request.Contents) == 0 && len(changes) == 0 {
-			return ProfileEditResult{}, &ClientError{Message: "edit needs contents (the whole new profile file), documents, or both"}
+		if len(request.Contents) == 0 && len(changes) == 0 && len(modelChanges) == 0 {
+			return ProfileEditResult{}, &ClientError{Message: "edit needs contents (the whole new profile file), documents, models, or any of them"}
 		}
 		if len(request.Contents) > 0 {
 			if candidate, err = editedProfileFile(current, request.Contents); err != nil {
 				return ProfileEditResult{}, err
 			}
 		}
+		if modelChanges, err = indentedOwnModels(modelChanges); err != nil {
+			return ProfileEditResult{}, err
+		}
 	} else {
-		if len(changes) > 0 {
-			return ProfileEditResult{}, &ClientError{Message: "revert restores what a history entry touched; it takes no documents"}
+		if len(changes) > 0 || len(modelChanges) > 0 {
+			return ProfileEditResult{}, &ClientError{Message: "revert restores what a history entry touched; it takes no documents and no models"}
 		}
 		entry, err := readHistoryEntry(layout.Workspace, loaded.Profile, request.HistoryID)
 		if err != nil {
@@ -199,15 +213,26 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 		if entry.Previous != "" {
 			candidate = []byte(entry.Previous)
 		}
-		if changes, err = revertDocumentChanges(layout, loaded.Profile, entry); err != nil {
+		if changes, err = revertDocumentChanges(layout, loaded.Profile, ownDocumentKind, entry, entry.Documents); err != nil {
+			return ProfileEditResult{}, err
+		}
+		if modelChanges, err = revertDocumentChanges(layout, loaded.Profile, ownModelKind, entry, entry.Models); err != nil {
 			return ProfileEditResult{}, err
 		}
 		result.RevertedTo = entry.ID
 	}
-	steps, err := prepareDocumentSteps(layout, loaded.Profile, changes)
+	steps, err := prepareDocumentSteps(layout, loaded.Profile, ownDocumentKind, changes)
 	if err != nil {
 		return ProfileEditResult{}, err
 	}
+	modelSteps, err := prepareDocumentSteps(layout, loaded.Profile, ownModelKind, modelChanges)
+	if err != nil {
+		return ProfileEditResult{}, err
+	}
+	if err := checkOwnModelSteps(layout, modelSteps); err != nil {
+		return ProfileEditResult{}, err
+	}
+	steps = append(steps, modelSteps...)
 	profileChanged := !bytes.Equal(candidate, current)
 	if !profileChanged && len(steps) == 0 {
 		result.Note = "nothing changed"
@@ -228,7 +253,12 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 	overlay := newDocumentOverlay(steps)
 	trialLocation := location
 	trialLocation.documents = overlay
-	trial, err := loadLayoutSessionSettings(trialLocation, layout, loaded.Profile, "", newTrialScans(path, candidate))
+	trialScans := newTrialScans(path, candidate)
+	trialScans.overlayOwnModels(loaded.Profile, steps)
+	trial, err := loadLayoutSessionSettings(trialLocation, layout, loaded.Profile, "", trialScans)
+	if err == nil {
+		err = judgeTrialModels(layout, trialScans, loaded, trial, steps)
+	}
 	if err != nil {
 		return ProfileEditResult{}, &ClientError{Message: "the change does not load, so it was not made: " + err.Error()}
 	}
@@ -242,9 +272,14 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 		entry.Previous = string(current)
 	}
 	for _, step := range steps {
-		entry.Documents = append(entry.Documents, step.record)
 		listed := step.record
 		listed.Previous = nil
+		if step.kind == ownModelKind {
+			entry.Models = append(entry.Models, step.record)
+			result.Models = append(result.Models, listed)
+			continue
+		}
+		entry.Documents = append(entry.Documents, step.record)
 		result.Documents = append(result.Documents, listed)
 	}
 	// The history entry is on disk before the change is published: if publishing fails, the
@@ -287,6 +322,9 @@ func ReadProfileHistory(location Location, profile string, limit int) (ProfileHi
 		entry.Previous = ""
 		for index := range entry.Documents {
 			entry.Documents[index].Previous = nil
+		}
+		for index := range entry.Models {
+			entry.Models[index].Previous = nil
 		}
 		history.Entries = append(history.Entries, entry)
 	}
@@ -478,10 +516,11 @@ func readHistoryEntry(workspace, profile, id string) (ProfileHistoryEntry, error
 const maxHistoryEntryBytes = 8 * maxInternalJSONFileBytes
 
 // complete reports whether an entry holds what a revert needs: the profile file as it was
-// (always in a 3a entry, a valid JSON file), or, from version 2, the documents it touched.
+// (always in a 3a entry, a valid JSON file), or, from version 2, the own files it touched
+// (documents; from version 3 own models too).
 func (e ProfileHistoryEntry) complete() bool {
 	if e.Previous == "" {
-		return e.Version >= profileHistoryVersion && len(e.Documents) > 0
+		return e.Version >= profileHistoryFilesVersion && len(e.Documents)+len(e.Models) > 0
 	}
 	return json.Valid([]byte(e.Previous))
 }

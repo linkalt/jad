@@ -404,7 +404,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
    `profile_self_edit`, the D3 path limits. 3a (the profile file, history, revert, the level) is
    built (section 13); 3b (own documents) is built (section 14); 3c.1 (hand-written own models)
-   is built (section 17); 3c.2 (self-edit of own models) and 3c.3 (own toolsets) are not.
+   is built (section 17); 3c.2 (self-edit of own models) is built (sections 18 and 19); 3c.3
+   (own toolsets) is not.
 4. **Migration command.**
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
@@ -887,7 +888,7 @@ toolsets (3c.3) are not built.
   cannot read it.
 - **Limits:** load warnings name own model files and reasons; they go to the server log only.
   An error about an own model file is kept from other profiles since 3c.2a (section 18).
-  `jad check` does not check own model files (3c.2).
+  `jad check` checks own model files since 3c.2 (section 19).
 
 ## 18. Phase 3c.2a as built: own model errors and other profiles
 
@@ -920,3 +921,47 @@ that text either (decider 3c.2a).
   its session listing (`model_fault`), and the server log.
 - **Not redacted:** what the target's model writes in its answer. A target that reads its own
   files can repeat them; that is the target's choice, not an error path.
+
+## 19. Phase 3c.2 as built: self-edit of a profile's own models
+
+Decider 3c C3 with the 3c.1b key table: `edit` writes the profile's own model files through
+the same pipeline as the profile file and the documents (sections 13 and 14).
+
+- **Argument:** `models: [{id, content | delete, if_match}]`. `id` is `<category>/<name>`
+  (catalog identifiers, so no `/`, `..` or leading dot); `content` is the own model file as a
+  JSON object, written with two spaces of indent and a final newline. `if_match` follows the
+  document rule: required to replace or delete, left out to create. The profile file's
+  `if_match` is required for every edit. `config` lists `models_dir` and `models` (ID, size,
+  revision).
+- **Where:** only `{profile_own}/models/<category>/<name>.json`, walked from the real `W/.jad`
+  with links refused (the document walk, now one `ownFileKind` table for documents and models),
+  folders made 0700, an existing target a regular file, each file and all of one edit at most
+  4 MiB.
+- **Rules, the same at `on` and `full`:**
+  - the own model file rules of section 17 (`ownModelKeys`, `schema_version`, `based_on` with
+    `global:` or `workspace:`, `set` through `ownModelSet`), checked before the trial;
+  - an ID no global or workspace model has (decider C2: self-edit never makes a clash; a
+    hand-written clash keeps the prefix rules);
+  - `off` refuses every edit.
+- **Trial:** the trial memo also overlays own model files by profile and ID: a created file is
+  added to the profile's own catalog, a deleted one removed, and a written one is read from
+  memory (`ModelBase.trial`), so the whole selected-profile load judges the candidate. After
+  the load:
+  - each own model the change writes must be usable: its base found, the composed model passing
+    the model rules (`ownModels.problem`);
+  - the model a run of the profile would use must load with its effort (`ModelFault`, else
+    `WithModel`). A fault that is the same before the change does not block it, so a profile
+    whose base an admin broke can still change other things or repair it.
+- **History and revert:** history entries are version 3 and hold the touched own models
+  (`models`, with old bytes), beside `documents` and `previous`. Version 2 (3b) and 3a entries
+  are still read and reverted. Revert restores each own model under the "old or new revision"
+  rule and passes the same rules and trial. An older build does not read version 3 entries
+  that hold only own models (T-016 rule: no downgrade).
+- **Publish and lock:** the profile file's lock, the history entry first, writes, profile file,
+  deletes, folder sync, and undo on failure, as in 3b. A deleted own model is removed after the
+  profile file, so the old profile never loses a model it offers.
+- **Not new write targets:** own model files are under `profile-own`, which is already in
+  `SelfEditPaths` (checkpoints leave it alone, section 16) and closed to configured writers
+  (section 15) and to sandboxed exec (read-only for the own run, hidden from others).
+- **`jad check`:** reports, for each profile of the workspace, each own model file its load
+  leaves out (skipped name, rule, base, composition), with the loader's reason.

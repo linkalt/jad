@@ -74,8 +74,13 @@ func (t *profileTool) selfChange(ctx context.Context, action, path string, argum
 			return t.fail(execution, tools.StatusInvalidInput, "invalid_documents", problem)
 		}
 		request.Documents = documents
-		if len(request.Contents) == 0 && len(documents) == 0 {
-			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents (the whole new profile file as a JSON object), documents, or both")
+		models, problem := modelArguments(execution.RawArguments, arguments["models"])
+		if problem != "" {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_models", problem)
+		}
+		request.Models = models
+		if len(request.Contents) == 0 && len(documents) == 0 && len(models) == 0 {
+			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents (the whole new profile file as a JSON object), documents, models, or any of them")
 		}
 	} else {
 		request.HistoryID = stringArgument(arguments, "history_id")
@@ -133,6 +138,78 @@ func documentArguments(value any) ([]sessionfs.ProfileDocumentChange, string) {
 		changes = append(changes, change)
 	}
 	return changes, ""
+}
+
+// modelArguments are the own model changes of an edit's models argument (absent: none), or why
+// they are not valid. A content object keeps the key order the model wrote when the raw
+// arguments say the same as the parsed ones (rawArgument's rule).
+func modelArguments(raw json.RawMessage, value any) ([]sessionfs.ProfileDocumentChange, string) {
+	if value == nil {
+		return nil, ""
+	}
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil, "models must be a non-empty array of {id, content or delete, if_match}"
+	}
+	var rawItems struct {
+		Models []map[string]json.RawMessage `json:"models"`
+	}
+	if len(raw) > 0 && json.Unmarshal(raw, &rawItems) != nil {
+		rawItems.Models = nil
+	}
+	changes := make([]sessionfs.ProfileDocumentChange, 0, len(items))
+	for index, item := range items {
+		at := "models[" + strconv.Itoa(index) + "]"
+		fields, ok := item.(map[string]any)
+		if !ok {
+			return nil, at + " must be an object"
+		}
+		for key := range fields {
+			if key != "id" && key != "content" && key != "delete" && key != "if_match" {
+				return nil, at + " has an unknown key " + key
+			}
+		}
+		id, _ := fields["id"].(string)
+		ifMatch, matchOK := fields["if_match"].(string)
+		remove, deleteOK := fields["delete"].(bool)
+		content, contentOK := fields["content"].(map[string]any)
+		_, hasContent := fields["content"]
+		_, hasDelete := fields["delete"]
+		_, hasMatch := fields["if_match"]
+		switch {
+		case id == "":
+			return nil, at + " needs an id (<category>/<name>)"
+		case hasMatch && !matchOK, hasDelete && !deleteOK, hasContent && !contentOK:
+			return nil, at + ": content is the own model file as a JSON object, if_match a string, delete a boolean"
+		case hasContent == remove:
+			return nil, at + " " + id + ": give content to create or replace it, or delete: true to delete it"
+		}
+		change := sessionfs.ProfileDocumentChange{Path: id, Delete: remove, IfMatch: ifMatch}
+		if hasContent {
+			change.Content = rawItemObject(rawItems.Models, index, content)
+			if change.Content == nil {
+				return nil, at + " " + id + ": content could not be encoded"
+			}
+		}
+		changes = append(changes, change)
+	}
+	return changes, ""
+}
+
+// rawItemObject is the content object of item index as the model wrote it when it says what
+// the parsed value says, else the parsed value encoded; nil when that fails.
+func rawItemObject(raw []map[string]json.RawMessage, index int, value map[string]any) []byte {
+	if index < len(raw) {
+		var decoded any
+		if text, found := raw[index]["content"]; found && json.Unmarshal(text, &decoded) == nil && reflect.DeepEqual(decoded, any(value)) {
+			return text
+		}
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // rawArgument is the JSON object of one argument as the model wrote it, so the keys of a

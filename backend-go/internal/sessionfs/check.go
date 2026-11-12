@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -127,6 +129,7 @@ func CheckLayout(roots []Root, validateServer ServerFileValidator) (CheckReport,
 	for _, kind := range []CatalogKind{CatalogModels, CatalogMCP, CatalogToolsets, CatalogProfiles} {
 		report.checkCatalog(*layout, roots, kind, validateServer)
 	}
+	report.checkOwnModels(*layout)
 	report.checkSandboxFolder(layout.Sandbox)
 	report.checkSessions(roots)
 	return report, nil
@@ -241,6 +244,38 @@ func (r *CheckReport) addLeftOutByComposition(id string, location Location) {
 	for _, profile := range judged.leftOut() {
 		if verdict := judged.verdicts[profile]; verdict.composition {
 			r.add("session", fmt.Sprintf("%s (profile %s)", id, profile), verdict.err)
+		}
+	}
+}
+
+// checkOwnModels reports, in the workspace layout, each own model file of each profile that the
+// profile's load leaves out (decider 3c.1 item 5, 3c.2): a name or folder the scan skips, a
+// file that fails the own model rules, a base that is missing or fails, and a composed model
+// that fails the model rules. A load only warns about these in the server log, and a session
+// whose selected model is one of them fails only when it runs.
+func (r *CheckReport) checkOwnModels(layout Layout) {
+	if layout.Workspace == "" || layout.Profiles == "" {
+		return
+	}
+	profiles, err := catalog.Scan(string(CatalogProfiles), layout.Profiles)
+	if err != nil {
+		return // checkCatalog reports the profiles folder
+	}
+	scans := NewCatalogScans()
+	for _, profile := range profiles.Entries() {
+		own, err := layout.profileModels(scans, profile.ID())
+		if err != nil {
+			r.add("own model", profile.ID(), err)
+			continue
+		}
+		for _, note := range own.notes {
+			r.add("own model", profile.ID(), errors.New(note))
+		}
+		for _, path := range slices.Sorted(maps.Keys(own.ids)) {
+			r.Checked++
+			if err := own.problem(path); err != nil {
+				r.add("own model", profile.ID()+" profile:"+own.ids[path], err)
+			}
 		}
 	}
 }

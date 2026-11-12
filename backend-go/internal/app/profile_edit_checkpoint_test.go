@@ -15,8 +15,8 @@ import (
 
 // A checkpoint restore leaves what profile self-edit owns (3b.2): restoring a checkpoint taken
 // before a self-edit puts the workspace's own files back, while the edited profile file, the
-// edited document and the history stay as the edit left them, and the profile tool's revert
-// still undoes the edit.
+// edited document, the edited own model (3c.2) and the history stay as the edit left them, and
+// the profile tool's revert still undoes the edit.
 func TestCheckpointRestoreLeavesWhatProfileSelfEditOwns(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -66,8 +66,11 @@ func TestCheckpointRestoreLeavesWhatProfileSelfEditOwns(t *testing.T) {
 		}
 		return result
 	}
-	edit(sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionEdit, Documents: []sessionfs.ProfileDocumentChange{{Path: "notes.md", Content: []byte("n0\n")}}})
+	edit(sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionEdit, Documents: []sessionfs.ProfileDocumentChange{{Path: "notes.md", Content: []byte("n0\n")}},
+		Models: []sessionfs.ProfileDocumentChange{{Path: "openai/fast", Content: []byte(`{"based_on":"global:openai/default","set":{"request":{"temperature":0.1}}}`)}}})
 	document := filepath.Join(w, ".jad", "profile-own", "dev", "coder", "documents", "notes.md")
+	model := filepath.Join(w, ".jad", "profile-own", "dev", "coder", "models", "openai", "fast.json")
+	modelBefore := readFile(t, model)
 	history := filepath.Join(w, ".jad", "profile-own", "dev", "coder", "history")
 
 	id := service.Begin(ctx, "turn-1", 1)
@@ -78,9 +81,10 @@ func TestCheckpointRestoreLeavesWhatProfileSelfEditOwns(t *testing.T) {
 	sum := sessionfs.CatalogETag([]byte("n0\n"))
 	changed := edit(sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionEdit,
 		Contents:  json.RawMessage(`{"models":["openai/default"],"settings":{"max_tool_rounds":7}}`),
-		Documents: []sessionfs.ProfileDocumentChange{{Path: "notes.md", Content: []byte("n1\n"), IfMatch: sum}}})
+		Documents: []sessionfs.ProfileDocumentChange{{Path: "notes.md", Content: []byte("n1\n"), IfMatch: sum}},
+		Models:    []sessionfs.ProfileDocumentChange{{Path: "openai/fast", Content: []byte(`{"based_on":"global:openai/default","set":{"request":{"temperature":0.9}}}`), IfMatch: sessionfs.CatalogETag([]byte(modelBefore))}}})
 	service.Finish(id)
-	profileAfter, documentAfter, entriesAfter := readFile(t, file), readFile(t, document), listNames(t, history)
+	profileAfter, documentAfter, modelAfter, entriesAfter := readFile(t, file), readFile(t, document), readFile(t, model), listNames(t, history)
 
 	for _, mode := range []string{checkpoint.ModeSafe, checkpoint.ModeFull} {
 		writeWorkspaceTestFile(t, filepath.Join(w, "a.txt"), "a1\n")
@@ -91,12 +95,12 @@ func TestCheckpointRestoreLeavesWhatProfileSelfEditOwns(t *testing.T) {
 		if got := readFile(t, filepath.Join(w, "a.txt")); got != "a0\n" {
 			t.Fatalf("%s restore left a.txt %q: %+v", mode, got, result)
 		}
-		if readFile(t, file) != profileAfter || readFile(t, document) != documentAfter || !slices.Equal(listNames(t, history), entriesAfter) {
+		if readFile(t, file) != profileAfter || readFile(t, document) != documentAfter || readFile(t, model) != modelAfter || !slices.Equal(listNames(t, history), entriesAfter) {
 			t.Fatalf("%s restore changed what self-edit owns: %+v", mode, result)
 		}
 	}
 	reverted := edit(sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionRevert, HistoryID: changed.HistoryID})
-	if reverted.RevertedTo != changed.HistoryID || readFile(t, document) != "n0\n" {
+	if reverted.RevertedTo != changed.HistoryID || readFile(t, document) != "n0\n" || readFile(t, model) != modelBefore {
 		t.Fatalf("revert after the restores: %+v, document %q", reverted, readFile(t, document))
 	}
 }

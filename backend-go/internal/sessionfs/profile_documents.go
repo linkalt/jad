@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"jad/backend-go/internal/catalog"
 )
 
 // A profile's own prompt documents (docs/design_workspace_layout.md §13, decider phase 3b D1 to
@@ -57,8 +59,10 @@ type ProfileDocumentRecord struct {
 // it becomes.
 type documentStep struct {
 	record ProfileDocumentRecord
-	// parts are the path's segments below the documents folder; lexical is the path as the
-	// load names it ({profile_own}/documents/...), path where it was found ("" when absent).
+	// kind is the folder the file is in: documents or models.
+	kind *ownFileKind
+	// parts are the path's segments below the kind's folder; lexical is the path as the load
+	// names it ({profile_own}/<folder>/...), path where it was found ("" when absent).
 	parts   []string
 	lexical string
 	path    string
@@ -89,65 +93,102 @@ func documentParts(path string) ([]string, error) {
 	return parts, nil
 }
 
-// documentFolder is the folder of a document below documents, walked (and with create made
+// ownFileKind is a folder of the profile's own that edit writes file by file: its documents
+// (3b) and its own models (3c.2). Both share the checks, the lock, the trial, the history and
+// the publish order; they differ in the folder, the names and the size limit.
+type ownFileKind struct {
+	// folder is the folder below {profile_own}; argument the edit argument that names the
+	// files (documents, models).
+	folder, argument string
+	// suffix is left out of a file's name (an own model is named by its ID, without .json).
+	suffix string
+	// limit caps each file and all files of the kind in one edit.
+	limit int
+	// parts turns the name an edit gives into the path's segments below folder.
+	parts func(name string) ([]string, error)
+}
+
+var (
+	ownDocumentKind = &ownFileKind{folder: profileDocumentsFolder, argument: "documents", limit: maxPromptDocumentBytes, parts: documentParts}
+	ownModelKind    = &ownFileKind{folder: profileModelsFolder, argument: "models", suffix: ".json", limit: maxInternalJSONFileBytes, parts: ownModelParts}
+)
+
+// ownModelParts checks an own model ID (<category>/<name>, both catalog identifiers) and
+// gives its file's segments below the models folder.
+func ownModelParts(id string) ([]string, error) {
+	category, name, found := strings.Cut(id, "/")
+	if !found {
+		return nil, errors.New("an own model is named <category>/<name>")
+	}
+	if err := catalog.ValidateIdentifier(category); err != nil {
+		return nil, fmt.Errorf("an own model's category %w", err)
+	}
+	if err := catalog.ValidateIdentifier(name); err != nil {
+		return nil, fmt.Errorf("an own model's name %w", err)
+	}
+	return []string{category, name + ".json"}, nil
+}
+
+// folderOf is the folder of a file below the kind's folder, walked (and with create made
 // 0700) from the real W/.jad down, refusing a link or a file on the way; "" when it does not
 // exist and create is false.
-func documentFolder(workspace, profile string, parts []string, create bool) (string, error) {
-	folders := append([]string{profileDocumentsFolder}, parts[:len(parts)-1]...)
+func (k *ownFileKind) folderOf(workspace, profile string, parts []string, create bool) (string, error) {
+	folders := append([]string{k.folder}, parts[:len(parts)-1]...)
 	return ownFolder(workspace, profile, folders, create)
 }
 
-// prepareDocumentSteps checks every document change under the profile's lock, before anything
-// is written (D2, D3): the path, the size (each document and all of them at most
-// maxPromptDocumentBytes), that each existing target is a regular file reached without a link,
-// and each precondition. Unchanged documents are left out.
-func prepareDocumentSteps(layout Layout, profile string, changes []ProfileDocumentChange) ([]documentStep, error) {
+// prepareDocumentSteps checks every change of one kind (documents or own models) under the
+// profile's lock, before anything is written (D2, D3): the name, the size (each file and all of
+// them at most the kind's limit), that each existing target is a regular file reached without a
+// link, and each precondition. Unchanged files are left out.
+func prepareDocumentSteps(layout Layout, profile string, kind *ownFileKind, changes []ProfileDocumentChange) ([]documentStep, error) {
 	if len(changes) == 0 {
 		return nil, nil
 	}
-	root := filepath.Join(layout.ProfileOwnDir(profile), profileDocumentsFolder)
+	root := filepath.Join(layout.ProfileOwnDir(profile), kind.folder)
+	argument := kind.argument
 	var steps []documentStep
 	var conflicts []string
 	seen := make(map[string]bool, len(changes))
 	total := 0
 	for index, change := range changes {
-		parts, err := documentParts(change.Path)
+		parts, err := kind.parts(change.Path)
 		if err != nil {
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %q: %v", index, change.Path, err)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %q: %v", argument, index, change.Path, err)}
 		}
-		relative := strings.Join(parts, "/")
+		relative := strings.TrimSuffix(strings.Join(parts, "/"), kind.suffix)
 		if seen[relative] {
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d]: %s is given twice", index, relative)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d]: %s is given twice", argument, index, relative)}
 		}
 		seen[relative] = true
 		if change.Delete && change.Content != nil {
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s: give content or delete, not both", index, relative)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s: give content or delete, not both", argument, index, relative)}
 		}
 		if !change.Delete {
-			if len(change.Content) > maxPromptDocumentBytes {
-				return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s is larger than %d bytes", index, relative, maxPromptDocumentBytes)}
+			if len(change.Content) > kind.limit {
+				return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s is larger than %d bytes", argument, index, relative, kind.limit)}
 			}
 			total += len(change.Content)
 		}
-		step := documentStep{parts: parts, lexical: filepath.Join(append([]string{root}, parts...)...), content: change.Content, delete: change.Delete}
+		step := documentStep{kind: kind, parts: parts, lexical: filepath.Join(append([]string{root}, parts...)...), content: change.Content, delete: change.Delete}
 		if !within(step.lexical, root) {
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s is not in {profile_own}/documents", index, relative)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s is not in {profile_own}/%s", argument, index, relative, kind.folder)}
 		}
 		step.record.Path = relative
-		folder, err := documentFolder(layout.Workspace, profile, parts, false)
+		folder, err := kind.folderOf(layout.Workspace, profile, parts, false)
 		if err != nil {
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s: %v", index, relative, err)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s: %v", argument, index, relative, err)}
 		}
 		if folder != "" {
 			path := filepath.Join(folder, parts[len(parts)-1])
 			info, err := os.Lstat(path)
 			switch {
 			case err == nil && !info.Mode().IsRegular():
-				return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s is a link or not a regular file; it is not changed through it", index, relative)}
+				return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s is a link or not a regular file; it is not changed through it", argument, index, relative)}
 			case err == nil:
-				old, err := readRegularFile(path, maxPromptDocumentBytes)
+				old, err := readRegularFile(path, int64(kind.limit))
 				if err != nil {
-					return nil, fmt.Errorf("documents[%d] %s: %w", index, relative, err)
+					return nil, fmt.Errorf("%s[%d] %s: %w", argument, index, relative, err)
 				}
 				step.path, step.info = path, info
 				step.record.OldRevision, step.record.Previous = CatalogETag(old), old
@@ -158,7 +199,7 @@ func prepareDocumentSteps(layout Layout, profile string, changes []ProfileDocume
 		ifMatch := strings.TrimSpace(change.IfMatch)
 		switch exists := step.path != ""; {
 		case !exists && change.Delete && ifMatch == "":
-			return nil, &ClientError{Message: fmt.Sprintf("documents[%d] %s does not exist: nothing to delete", index, relative)}
+			return nil, &ClientError{Message: fmt.Sprintf("%s[%d] %s does not exist: nothing to delete", argument, index, relative)}
 		case exists && ifMatch == "":
 			conflicts = append(conflicts, relative+" exists: give the revision config shows as its if_match")
 			continue
@@ -183,30 +224,30 @@ func prepareDocumentSteps(layout Layout, profile string, changes []ProfileDocume
 		steps = append(steps, step)
 	}
 	if len(conflicts) > 0 {
-		return nil, &CatalogError{Kind: CatalogPreconditionFailed, Message: "documents changed or are not as given; read them again with config: " + strings.Join(conflicts, "; ")}
+		return nil, &CatalogError{Kind: CatalogPreconditionFailed, Message: argument + " changed or are not as given; read them again with config: " + strings.Join(conflicts, "; ")}
 	}
-	if total > maxPromptDocumentBytes {
-		return nil, &ClientError{Message: fmt.Sprintf("the documents of one edit are larger than %d bytes together; split the edit", maxPromptDocumentBytes)}
+	if total > kind.limit {
+		return nil, &ClientError{Message: fmt.Sprintf("the %s of one edit are larger than %d bytes together; split the edit", argument, kind.limit)}
 	}
 	return steps, nil
 }
 
-// revertDocumentChanges are the document changes that restore what entry touched (D7): each
-// document must now be as the entry left it (its new revision) or already as it was before (its
+// revertDocumentChanges are the changes of one kind that restore what entry touched (D7, records
+// are the entry's documents or models): each file must now be as the entry left it (its new revision) or already as it was before (its
 // old revision, left alone); any other state is a conflict, so nothing changed later is
 // overwritten.
-func revertDocumentChanges(layout Layout, profile string, entry ProfileHistoryEntry) ([]ProfileDocumentChange, error) {
+func revertDocumentChanges(layout Layout, profile string, kind *ownFileKind, entry ProfileHistoryEntry, records []ProfileDocumentRecord) ([]ProfileDocumentChange, error) {
 	var changes []ProfileDocumentChange
 	var conflicts []string
-	for _, document := range entry.Documents {
-		parts, err := documentParts(document.Path)
+	for _, document := range records {
+		parts, err := kind.parts(document.Path)
 		if err != nil {
 			return nil, fmt.Errorf("history entry %s is damaged: %v", entry.ID, err)
 		}
 		if document.OldRevision != "" && CatalogETag(document.Previous) != document.OldRevision {
 			return nil, fmt.Errorf("history entry %s is damaged: %s does not hold its old revision", entry.ID, document.Path)
 		}
-		folder, err := documentFolder(layout.Workspace, profile, parts, false)
+		folder, err := kind.folderOf(layout.Workspace, profile, parts, false)
 		if err != nil {
 			return nil, &ClientError{Message: fmt.Sprintf("%s: %v", document.Path, err)}
 		}
@@ -217,7 +258,7 @@ func revertDocumentChanges(layout Layout, profile string, entry ProfileHistoryEn
 				if !info.Mode().IsRegular() {
 					return nil, &ClientError{Message: fmt.Sprintf("%s is a link or not a regular file; it is not changed through it", document.Path)}
 				}
-				contents, err := readRegularFile(path, maxPromptDocumentBytes)
+				contents, err := readRegularFile(path, int64(kind.limit))
 				if err != nil {
 					return nil, fmt.Errorf("%s: %w", document.Path, err)
 				}
@@ -241,7 +282,7 @@ func revertDocumentChanges(layout Layout, profile string, entry ProfileHistoryEn
 		changes = append(changes, change)
 	}
 	if len(conflicts) > 0 {
-		return nil, &ConflictError{Message: fmt.Sprintf("these documents changed after history entry %s, so it is not reverted (revert the newer entries first): %s", entry.ID, strings.Join(conflicts, ", "))}
+		return nil, &ConflictError{Message: fmt.Sprintf("these %s changed after history entry %s, so it is not reverted (revert the newer entries first): %s", kind.argument, entry.ID, strings.Join(conflicts, ", "))}
 	}
 	return changes, nil
 }
@@ -362,7 +403,7 @@ func publishProfileEdit(workspace, profile string, steps []documentStep, profile
 		if step.delete {
 			continue
 		}
-		folder, err := documentFolder(workspace, profile, step.parts, true)
+		folder, err := step.kind.folderOf(workspace, profile, step.parts, true)
 		if err != nil {
 			return fail(err)
 		}
@@ -451,15 +492,16 @@ func rollbackChanges(applied []appliedChange) error {
 	return errors.Join(errs...)
 }
 
-// listProfileDocuments lists the own documents of the profile whose own folder is own
-// (W/.jad/profile-own/<category>/<name>): the regular files below its documents folder
-// reached without a link, with their sizes and revisions, for config.
-func listProfileDocuments(own, profile string) ([]ProfileDocument, error) {
+// listProfileDocuments lists the own files of kind of the profile whose own folder is own
+// (W/.jad/profile-own/<category>/<name>): the regular files below the kind's folder reached
+// without a link, with their sizes and revisions, for config. A document is named by its path
+// below documents, an own model by its ID (<category>/<name>; other files are not listed).
+func listProfileDocuments(own, profile string, kind *ownFileKind) ([]ProfileDocument, error) {
 	workspace := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(own))))
 	if filepath.Join(workspace, ".jad", profileOwnFolder, filepath.FromSlash(profile)) != filepath.Clean(own) {
 		return nil, fmt.Errorf("%s is not the own folder of %s", own, profile)
 	}
-	folder, err := ownFolder(workspace, profile, []string{profileDocumentsFolder}, false)
+	folder, err := ownFolder(workspace, profile, []string{kind.folder}, false)
 	if err != nil || folder == "" {
 		return []ProfileDocument{}, err
 	}
@@ -475,11 +517,19 @@ func listProfileDocuments(own, profile string) ([]ProfileDocument, error) {
 		if err != nil {
 			return err
 		}
-		contents, err := readRegularFile(path, maxPromptDocumentBytes)
+		name := filepath.ToSlash(relative)
+		if kind == ownModelKind {
+			id, isJSON := strings.CutSuffix(name, ".json")
+			if parts, err := ownModelParts(id); !isJSON || err != nil || filepath.Join(parts...) != relative {
+				return nil
+			}
+			name = id
+		}
+		contents, err := readRegularFile(path, int64(kind.limit))
 		if err != nil {
 			return err
 		}
-		documents = append(documents, ProfileDocument{Path: filepath.ToSlash(relative), Size: int64(len(contents)), Revision: CatalogETag(contents)})
+		documents = append(documents, ProfileDocument{Path: name, Size: int64(len(contents)), Revision: CatalogETag(contents)})
 		return nil
 	})
 	return documents, err

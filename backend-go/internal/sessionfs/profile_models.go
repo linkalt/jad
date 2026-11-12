@@ -27,6 +27,10 @@ type ModelBase struct {
 	BasedOn string
 	// Path is the base's model file.
 	Path string
+	// trial is the own file's contents a trial load of an edit reads in place of the file
+	// (nil: the file is read), so a candidate own model is judged before it is written; an
+	// empty candidate is judged as empty, never as the file on disk.
+	trial *[]byte
 }
 
 // ownModelKeys are the keys of an own model file.
@@ -229,7 +233,13 @@ func readOwnModelFile(path string) (ownModelFile, error) {
 // ownModelFields are the model fields of the own model at path: the base's file with the
 // own set applied. The own file must still name the base it named when the session loaded.
 func ownModelFields(path string, base ModelBase) (map[string]json.RawMessage, error) {
-	file, err := readOwnModelFile(path)
+	var file ownModelFile
+	var err error
+	if base.trial != nil {
+		file, err = parseOwnModel(path, *base.trial)
+	} else {
+		file, err = readOwnModelFile(path)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +310,13 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 	if l.Workspace == "" || l.ProfileOwnDir(id) == "" {
 		return own, nil
 	}
+	overlay := scans.ownModelOverlay(id)
 	dir, err := ownFolder(l.Workspace, id, []string{profileModelsFolder}, false)
+	if err == nil && dir == "" && len(overlay) > 0 {
+		// A trial of an edit that makes the first own model: the folder is made when the edit
+		// is published, where the walk from the real W/.jad would make it.
+		dir, err = ownModelsFolder(l.Workspace, id)
+	}
 	if err != nil {
 		own.notes = append(own.notes, fmt.Sprintf("profile %s: its own models are left out: %v", id, err))
 		return own, nil
@@ -316,6 +332,14 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 	for _, skipped := range scanned.Skipped() {
 		own.notes = append(own.notes, fmt.Sprintf("profile %s: own model left out: %s", id, skipped))
 	}
+	for _, modelID := range slices.Sorted(maps.Keys(overlay)) {
+		if overlay[modelID] == nil {
+			scanned = scanned.Without(modelID)
+			continue
+		}
+		category, name, _ := strings.Cut(modelID, "/")
+		scanned = scanned.With(catalog.Entry{Category: category, Name: name, Path: filepath.Join(dir, category, name+".json")})
+	}
 	if scanned.Len() == 0 {
 		return own, nil
 	}
@@ -323,7 +347,7 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 	for _, entry := range scanned.Entries() {
 		own.ids[entry.Path] = entry.ID()
 		scans.noteFile(entry.Path)
-		base, err := resolveOwnModel(entry.Path, shared)
+		base, err := resolveOwnModel(entry.Path, shared, overlay[entry.ID()])
 		if err != nil {
 			own.faults[entry.Path] = ownModelError(err)
 			continue
@@ -341,11 +365,19 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 }
 
 // resolveOwnModel reads the own model file at path and finds its base among the shared models.
-func resolveOwnModel(path string, shared *catalog.Catalog) (ModelBase, error) {
-	if info, err := os.Lstat(filepath.Dir(path)); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return ModelBase{}, configError("%s: its category folder is a link or not a folder", path)
+// A trial passes the candidate contents (trial, nil otherwise): they are judged in place of the
+// file, whose category folder an edit checks (and makes) when it publishes.
+func resolveOwnModel(path string, shared *catalog.Catalog, trial *[]byte) (ModelBase, error) {
+	var file ownModelFile
+	var err error
+	if trial != nil {
+		file, err = parseOwnModel(path, *trial)
+	} else {
+		if info, err := os.Lstat(filepath.Dir(path)); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ModelBase{}, configError("%s: its category folder is a link or not a folder", path)
+		}
+		file, err = readOwnModelFile(path)
 	}
-	file, err := readOwnModelFile(path)
 	if err != nil {
 		return ModelBase{}, err
 	}
@@ -353,7 +385,17 @@ func resolveOwnModel(path string, shared *catalog.Catalog) (ModelBase, error) {
 	if err != nil {
 		return ModelBase{}, configError("%s: based_on: %v", path, err)
 	}
-	return ModelBase{BasedOn: file.BasedOn, Path: base.Path}, nil
+	return ModelBase{BasedOn: file.BasedOn, Path: base.Path, trial: trial}, nil
+}
+
+// ownModelsFolder is where the profile's own models folder is, below the real W/.jad, whether
+// it exists or not (ownFolder walks it).
+func ownModelsFolder(workspace, profile string) (string, error) {
+	jad, err := filepath.EvalSymlinks(filepath.Join(workspace, ".jad"))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(jad, profileOwnFolder, filepath.FromSlash(profile), profileModelsFolder), nil
 }
 
 // own reports whether path is one of the profile's own model files.

@@ -1,6 +1,8 @@
 package native
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -157,5 +159,63 @@ func TestProfileSelfEditDocumentsArgument(t *testing.T) {
 	}
 	if len(actions.calls) != 0 {
 		t.Fatalf("a refused document change reached the port: %v", actions.calls)
+	}
+}
+
+// models reach the port with their ID, the content object as the model wrote it (its key
+// order kept from the raw arguments), delete and if_match; a malformed item is refused before
+// the port, and the S2 refusals hold for them.
+func TestProfileSelfEditModelsArgument(t *testing.T) {
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	only := `{"action":"edit","if_match":"r1","models":[{"id":"openai/fast","content":{"set":{"request":{"temperature":0.2}},"based_on":"global:openai/default"}},{"id":"openai/old","delete":true,"if_match":"r2"}]}`
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(only), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(context.Background(), parsed, tools.ExecutionContext{SessionKey: listCaller, CallID: "call_1", RawArguments: json.RawMessage(only)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions.models) != 2 || string(actions.models[0].Content) != `{"set":{"request":{"temperature":0.2}},"based_on":"global:openai/default"}` || actions.models[0].Path != "openai/fast" ||
+		!actions.models[1].Delete || actions.models[1].Content != nil || actions.models[1].IfMatch != "r2" || len(actions.calls) != 1 {
+		t.Fatalf("models = %+v, calls %q", actions.models, actions.calls)
+	}
+	// Without raw arguments the parsed object is encoded.
+	actions.calls, actions.models = nil, nil
+	own := tools.ExecutionContext{SessionKey: listCaller}
+	if out := callTranscripts(t, tool, `{"action":"edit","if_match":"r1","models":[{"id":"openai/fast","content":{"based_on":"global:openai/default"}}]}`, own); !strings.Contains(out, `"action": "edit"`) || len(actions.models) != 1 || string(actions.models[0].Content) != `{"based_on":"global:openai/default"}` {
+		t.Fatalf("encoded = %s, %+v", out, actions.models)
+	}
+	actions.calls, actions.models = nil, nil
+	for name, arguments := range map[string]string{
+		"not an array":       `"models":{"id":"a/b"}`,
+		"empty":              `"models":[]`,
+		"no id":              `"models":[{"content":{}}]`,
+		"content and delete": `"models":[{"id":"a/b","content":{},"delete":true}]`,
+		"neither":            `"models":[{"id":"a/b"}]`,
+		"content a string":   `"models":[{"id":"a/b","content":"{}"}]`,
+		"unknown key":        `"models":[{"id":"a/b","content":{},"path":"x"}]`,
+	} {
+		if out := callTranscripts(t, tool, `{"action":"edit","if_match":"r1",`+arguments+`}`, own); !strings.Contains(out, "invalid") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	models := `{"action":"edit","if_match":"r1","models":[{"id":"a/b","content":{"based_on":"global:openai/default"}}]}`
+	for name, execution := range map[string]tools.ExecutionContext{
+		"sub-agent":   {SessionKey: listCaller, AgentDepth: 1},
+		"plan mode":   {SessionKey: listCaller, PlanMode: true},
+		"started run": {SessionKey: listCaller, ChainDepth: 1, RunNode: "n"},
+		"remote hop":  {SessionKey: listCaller, RemoteHops: 1},
+		"no caller":   {},
+	} {
+		if out := callTranscripts(t, tool, models, execution); !strings.Contains(out, "denied") && !strings.Contains(out, "unknown") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	if out := callTranscripts(t, tool, `{"action":"edit","path":"profile:dev/other","if_match":"r1","models":[{"id":"a/b","content":{}}]}`, own); !strings.Contains(out, "profile_self_only") {
+		t.Errorf("another profile: %s", out)
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a refused model change reached the port: %v", actions.calls)
 	}
 }
