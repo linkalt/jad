@@ -81,3 +81,34 @@ func TestChildConfigNamesTheAgentWhenItsModelCannotLoad(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// An agent that names one of the profile's own model files by its path runs it as a whole
+// model, so it fails: the own model is never composed for a sub-agent (decider 3c C2). The
+// caller's own selection of it still composes.
+func TestChildConfigNeverComposesAnOwnModelForAnAgent(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.json")
+	own := filepath.Join(dir, "own.json")
+	for path, text := range map[string]string{
+		base: `{"provider":"openai","model":"base-model","api_key_env":"FIXTURE_KEY"}`,
+		own:  `{"based_on":"global:openai/default","set":{"name":"Own"}}`,
+	} {
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent := sessionfs.SessionConfig{ModelPath: own, WorkspaceLayout: true, ModelBases: map[string]sessionfs.ModelBase{own: {BasedOn: "global:openai/default", Path: base}}}
+	if _, err := parent.WithModel(); err != nil {
+		t.Fatalf("the caller's own model: %v", err)
+	}
+	_, err := childConfig(RunTemplate{Base: parent, Agent: sessionfs.NativeSubagentAgent{Name: "a", ModelPath: own}})
+	if err == nil || !strings.Contains(err.Error(), "based_on") {
+		t.Fatalf("agent naming the own file = %v", err)
+	}
+	if _, inherits := childConfig(RunTemplate{Base: parent, Agent: sessionfs.NativeSubagentAgent{Name: "b"}}); inherits != nil {
+		t.Fatalf("agent inheriting the run's own model = %v", inherits)
+	}
+	if !parent.OwnModel(own) {
+		t.Fatal("childConfig changed the caller's own models")
+	}
+}

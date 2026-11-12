@@ -344,9 +344,10 @@ func (v *profileVerdict) selectionFault(requested string) error {
 	return configError("%s: no model it lists can be used: %s", v.entry.Path, strings.Join(reasons, "; "))
 }
 
-// modelFileProblem is nil when the file at path passes the model rules.
-func modelFileProblem(path string) error {
-	_, err := loadModel(path, "", "")
+// modelFileProblem is nil when the file at path passes the model rules of the layout
+// (workspace: the workspace layout, loadWholeModel).
+func modelFileProblem(path string, workspace bool) error {
+	_, err := loadWholeModel(path, workspace, "", "")
 	return err
 }
 

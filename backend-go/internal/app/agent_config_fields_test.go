@@ -45,7 +45,7 @@ var agentConfigFields = map[string]agentConfigField{
 	"ProfileOwnDir": fieldCallerOnly, "ProfileDataDir": fieldCallerOnly, "SettingSources": fieldCallerOnly, "ProfileSelfEdit": fieldCallerOnly,
 	// SelfEditPaths is read by the run's checkpoint (checkpoint.ForSession), not by the tools.
 	"RemotesDir": fieldCallerOnly, "Warnings": fieldCallerOnly, "SelfEditPaths": fieldCallerOnly,
-	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelBases": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
+	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelBases": fieldCallerOnly, "WorkspaceLayout": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
 
 	// Tool surface.
 	"NativeExec": fieldToolSurface, "NativeReadImage": fieldToolSurface, "NativeLSP": fieldToolSurface,

@@ -107,6 +107,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.SettingSources = sources
 	config.ProfileOwnDir, config.ProfileDataDir = layout.ProfileOwnDir(entry.ID()), layout.ProfileDataDir(entry.ID())
 	if layout.Workspace != "" {
+		config.WorkspaceLayout = true
 		config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
 		config.SelfEditPaths = layout.selfEditPaths()
 	}
@@ -177,7 +178,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		// Only the effort is checked: a model file that fails the model rules is reported by
 		// the run that uses it, not by every load of the session.
-		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, config.ReasoningEffort); err != nil {
+		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, config.WorkspaceLayout, config.ReasoningEffort); err != nil {
 			return SessionConfig{}, err
 		}
 	}

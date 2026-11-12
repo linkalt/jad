@@ -825,11 +825,26 @@ toolsets (3c.3) are not built.
 - **File and format:** `W/.jad/profile-own/<cat>/<name>/models/<model cat>/<model name>.json`
   (schema `sample/schemes/profile-model.schema.json`) holds `schema_version`, `based_on` (a
   shared model with its scope, `global:x/y` or `workspace:x/y`; never `profile:`) and `set`,
-  the keys it changes. A key of `set` replaces the base's value as a whole. Allowed:
-  `name`, `request`, `efforts`, `prompt_cache_key`. Refused by name, also under `full`:
-  `base_url`, `api_key_env`, `provider`, `api`, `model`, `anthropic`, `chat_completions`,
-  `auth_mode`, `oauth_auth_file`. Every other key (`pricing`, `hosted_tools`, keys added
-  later) is refused by the allow-list. Nothing of the endpoint is stored in `profile-own`: a
+  the keys it changes (3c.1b: one key table, `ownModelSet`, shared with 3c.2). `name`,
+  `efforts` and `prompt_cache_key` replace the base's value; `request`, `anthropic` and
+  `chat_completions` are merged into the base's object key by key, objects recursively, so a
+  key the own model does not name keeps the base's value (a base's `store: false` stays) and
+  none can be removed (null is refused). Nested allow-lists: `request` takes `reasoning`
+  (`effort`, `summary`), `max_output_tokens`, `temperature`, `top_p`, `parallel_tool_calls`,
+  `truncation` and `text` (`verbosity` only); `anthropic` takes `default_max_tokens`, `cache`
+  (`automatic`, `tools`, `system`, `history`, `ttl`) and `default_profile.effort_budget`;
+  `chat_completions` takes `request_timeout_ms` and `system_role`. Refused by name with the
+  reason, also under `full`: `base_url`, `api_key_env`, `provider`, `api`, `model`,
+  `auth_mode`, `oauth_auth_file`; in `request` the runner's keys, `service_tier` (price the
+  budget does not count), `store` and `background` (kept at the provider),
+  `previous_response_id`, `conversation`, `prompt` (other account content), `metadata`, `user`,
+  `safety_identifier` (attribution) and `prompt_cache_key`; in the adapter blocks `upstream`
+  (endpoint, auth header, beta, extra headers), `log` (could write the key into a log),
+  `models`, `extra_headers` and `extra_body` (also in `default_profile`). Every other key at
+  every level (`pricing`, `hosted_tools`, keys added later) is refused by the allow-lists, and
+  each value's JSON kind is checked; the composed model then passes the whole model rules
+  (the adapter block through `ParseEmbeddedConfig` or `ParseConfig`), and a base that fails
+  them is not repaired by a set. Shared model files keep their full freedom. Nothing of the endpoint is stored in `profile-own`: a
   run reads the base each time, so an edit of the base reaches the own model, and a
   `based_on` changed after the load fails the run until the session is loaded again.
 - **Loading:** the loader reads the own folder walked from the real `W/.jad` with every
@@ -837,9 +852,13 @@ toolsets (3c.3) are not built.
   or file is not used. An own file that fails (its rules, a refused key, a missing or
   failing base, a link) stays in the profile's catalog and fails like a model file that
   fails the model rules: it is left out of what the profile offers, with a warning in that
-  profile's load only. A model file that sets `based_on` and is read as a whole model (a
-  shared model, a sub-agent's model path, an own file reached any other way) is a load
-  error, so an own file never runs without its base.
+  profile's load only. In the workspace layout a model file that sets `based_on` and is
+  read as a whole model (a shared model, a sub-agent's model path, an own file reached any
+  other way) is a load error, so an own file never runs without its base; a sub-agent that
+  names an own file by its path runs it whole (`SessionConfig.WithAgentModel` drops it from
+  the bases), so it fails. v1 ignores a stray `based_on`, as before phase 3c
+  (`SessionConfig.WorkspaceLayout`; the sub-agent call's effort check reads under the v1 rule
+  and the run's model load applies the layout's).
 - **Scopes:** `profile` is a third scope prefix (`catalog.ScopePrefixes`). The shared catalogs
   take only the global and workspace folders; a third folder is an error (the old clamp
   named it `workspace`). Each profile is judged with its own catalog, the shared models with
@@ -847,7 +866,9 @@ toolsets (3c.3) are not built.
   `model_fallback`, the model-default route and the catalog route's profile check. An own ID
   that is also a shared ID is ambiguous in that profile only and needs a prefix; other
   profiles still see the shared one. The offered list keeps bare IDs, as for a
-  prefix-picked shared model; the listing marks an own model with `scope: "profile"`.
+  prefix-picked shared model; the listing marks an own model with `scope: "profile"`, and the
+  model drawer shows a "profile" label beside its ID. A profile that offers `profile:x` and
+  `global:x` together is refused (`Narrow`), so within a profile a bare ID names one model.
 - **Visibility:** sub-agents (a `profile:` model or toolset is refused by name, the model
   choice offers shared models only), another profile, a `profile_message` caller naming a
   model (refused when the target would run its own model) and the catalog routes do not see
@@ -864,6 +885,7 @@ toolsets (3c.3) are not built.
   ID clashes, fallback and sub-agent refusals, deletion guard, schema agreement, listing,
   and a bwrap run whose own exec cannot write `profile-own/.../models` while another profile
   cannot read it.
-- **Not decided here:** the `anthropic` and `chat_completions` blocks hold tuning a profile
-  could want (`default_max_tokens`, `cache`, thinking budgets; `request_timeout_ms`,
-  `system_role`, `extra_body`); they stay refused as a whole (decider stop condition, reported).
+- **Limits:** load warnings name own model files and reasons; they go to the server log only.
+  A run error of a profile whose own model fails (its model fault) names that file and can
+  reach a `profile_message` caller of another profile, as any model fault can (not traced); no secret is in it,
+  since an own model cannot hold one. `jad check` does not check own model files (3c.2).

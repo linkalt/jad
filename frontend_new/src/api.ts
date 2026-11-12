@@ -538,6 +538,7 @@ export function parseModelOptions(raw: unknown): ModelOption[] | undefined {
       ...(typeof entry.provider === 'string' ? {provider: entry.provider} : {}),
       ...(efforts === undefined ? {} : {efforts}),
       ...(typeof entry.default_effort === 'string' ? {defaultEffort: entry.default_effort} : {}),
+      ...(entry.scope === 'profile' ? {scope: 'profile' as const} : {}),
     });
   }
   return options;

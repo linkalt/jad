@@ -17,6 +17,14 @@ test('maps a valid model_options array to camelCase options', () => {
   );
 });
 
+test('a profile scope marks the running profile’s own model; any other scope is dropped', () => {
+  assert.deepEqual(parseModelOptions([{id: 'openai/fast', scope: 'profile'}, {id: 'openai/default', scope: 'global'}, {id: 'x', scope: 7}]), [
+    {id: 'openai/fast', scope: 'profile'},
+    {id: 'openai/default'},
+    {id: 'x'},
+  ]);
+});
+
 test('an absent or malformed model_options is undefined and never throws', () => {
   for (const raw of [undefined, null, 'x', 42, {id: 'a'}, true]) {
     assert.equal(parseModelOptions(raw), undefined);

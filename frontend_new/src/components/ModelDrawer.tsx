@@ -173,6 +173,12 @@ export function ModelDrawer({
                     >
                       <Text type="label" maxLines={1}>{row.option.id}</Text>
                     </HStack>
+                    {/* An own model may share its id and name with a shared one: say where it comes from. */}
+                    {row.option.scope === 'profile' ? (
+                      <Text type="supporting" color="secondary" data-model-scope="profile">
+                        profile
+                      </Text>
+                    ) : null}
                   </HStack>
                   <HStack align="center" width={PROVIDER_COLUMN_WIDTH}>
                     <Text

@@ -175,8 +175,7 @@ func (r *Resolver) stateContextFor(base sessionfs.SessionConfig, agent sessionfs
 func childConfig(template RunTemplate) (sessionfs.SessionConfig, error) {
 	config := template.Base
 	if template.Agent.ModelPath != "" {
-		config.ModelPath = template.Agent.ModelPath
-		config.ReasoningEffort = template.Agent.ReasoningEffort
+		config = config.WithAgentModel(template.Agent.ModelPath, template.Agent.ReasoningEffort)
 	}
 	// The parent's prompt is not the child's: it gets its own instructions and
 	// documents, or none.

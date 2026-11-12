@@ -159,6 +159,9 @@ type SessionConfig struct {
 	// (loadModelOf). Every other model path, a sub-agent's too, is read as a whole model, and
 	// an own file read that way fails. nil without own models.
 	ModelBases map[string]ModelBase
+	// WorkspaceLayout is set for a session of the workspace layout (v2). There a model file read
+	// as a whole model may not set based_on; v1 ignores the key (loadWholeModel).
+	WorkspaceLayout bool
 	// ModelFault is why the model this load would run cannot be used, and then ModelPath is
 	// empty (a copy that is given another ModelPath, a sub-agent's or a fallback's, is not
 	// affected): the profile's explicit model_default, or the model the caller requested, fails
@@ -759,7 +762,7 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 	if c.ModelPath == "" && c.ModelFault != nil {
 		return SessionConfig{}, c.ModelFault
 	}
-	model, err := loadModelOf(c.ModelPath, c.ModelBases, c.Model.PromptRole, c.Model.PromptText)
+	model, err := loadModelOf(c.ModelPath, c.ModelBases, c.WorkspaceLayout, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
 		return SessionConfig{}, err
 	}

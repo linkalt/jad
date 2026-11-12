@@ -111,3 +111,14 @@ test('the running model is marked by a box around its id alone', () => {
 test('the model id carries no hover tooltip', () => {
   assert.ok(!/tooltip=/.test(drawer), 'the tooltip floated over the row above the id');
 });
+
+test('an own model carries a profile label beside its id', () => {
+  const row = drawer.slice(drawer.indexOf('rows.map(row => {'), drawer.indexOf('</VStack>', drawer.indexOf('rows.map(row => {')));
+  const idColumn = row.slice(row.indexOf('ID_COLUMN_WIDTH'), row.indexOf('PROVIDER_COLUMN_WIDTH'));
+  assert.match(
+    idColumn,
+    /\{row\.option\.scope === 'profile' \? \(\s*<Text type="supporting" color="secondary" data-model-scope="profile">\s*profile\s*<\/Text>\s*\) : null\}/,
+    'the label sits in the id column, only for scope profile',
+  );
+  assert.ok(!/<Badge/.test(drawer), 'a badge is for counts only');
+});

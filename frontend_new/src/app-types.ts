@@ -30,6 +30,8 @@ export interface ModelOption {
   provider?: string;
   efforts?: string[];
   defaultEffort?: string;
+  /** `profile` for one of the running profile's own models; absent for a shared one. */
+  scope?: 'profile';
 }
 
 export interface Session {

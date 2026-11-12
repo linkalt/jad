@@ -17,12 +17,123 @@
     },
     "set": {
       "type": "object",
-      "description": "The model keys this model changes; each replaces the base's value as a whole (model.schema.json describes them). Only tuning keys may be set. base_url, api_key_env, provider, api, model, anthropic, chat_completions, auth_mode and oauth_auth_file are refused, also under profile_self_edit full; so is every key not listed here, pricing and hosted_tools included.",
+      "description": "The model keys this model changes. name, efforts and prompt_cache_key replace the base's value; request, anthropic and chat_completions are merged into the base's object key by key, objects recursively, so a key not named keeps the base's value and none can be removed. base_url, api_key_env, provider, api, model, auth_mode and oauth_auth_file are refused, also under profile_self_edit full; so is every key not listed here, pricing and hosted_tools included.",
       "properties": {
-        "name": {"type": "string"},
-        "request": {"type": "object"},
-        "efforts": {"type": "array", "items": {"type": "string"}},
-        "prompt_cache_key": {"enum": ["off", "session"]}
+        "name": {
+          "type": "string"
+        },
+        "request": {
+          "type": "object",
+          "description": "Merged into the base's request key by key; a key not named keeps the base's value. Refused by name: model, input, instructions, stream and tools (the runner sets them), service_tier (changes the price the budget does not count), store and background (keep data at the provider), previous_response_id, conversation and prompt (pull in other account content), metadata, user and safety_identifier (change attribution) and prompt_cache_key (use the top-level key).",
+          "properties": {
+            "reasoning": {
+              "type": "object",
+              "properties": {
+                "effort": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "max_output_tokens": {
+              "type": "integer"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "parallel_tool_calls": {
+              "type": "boolean"
+            },
+            "truncation": {
+              "type": "string"
+            },
+            "text": {
+              "type": "object",
+              "properties": {
+                "verbosity": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prompt_cache_key": {
+          "enum": [
+            "off",
+            "session"
+          ]
+        },
+        "anthropic": {
+          "type": "object",
+          "description": "Merged into the base's anthropic block (api anthropic_messages). upstream, log, models, extra_headers and extra_body are refused.",
+          "properties": {
+            "default_max_tokens": {
+              "type": "integer"
+            },
+            "cache": {
+              "type": "object",
+              "properties": {
+                "automatic": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "boolean"
+                },
+                "system": {
+                  "type": "boolean"
+                },
+                "history": {
+                  "type": "boolean"
+                },
+                "ttl": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "default_profile": {
+              "type": "object",
+              "description": "Only effort_budget; extra_body is refused.",
+              "properties": {
+                "effort_budget": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "chat_completions": {
+          "type": "object",
+          "description": "Merged into the base's chat_completions block (api chat_completions). extra_headers, extra_body and log are refused.",
+          "properties": {
+            "request_timeout_ms": {
+              "type": "integer"
+            },
+            "system_role": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }

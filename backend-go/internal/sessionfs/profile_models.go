@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -31,14 +32,144 @@ type ModelBase struct {
 // ownModelKeys are the keys of an own model file.
 var ownModelKeys = []string{"schema_version", "based_on", "set"}
 
-// ownModelSetKeys are the model keys an own model may set (decider 3c C1): tuning that does
-// not change where requests go, which key is sent or which model is billed. Each replaces the
-// base's value as a whole. Every other key is refused, keys added to model files later too.
-var ownModelSetKeys = []string{"name", "request", "efforts", "prompt_cache_key"}
+// The reasons a key of an own model's set is refused by name (decider 3c.1b).
+const (
+	refusedEndpoint    = "the endpoint, the credential and the billed model come from the base; put a model with its own endpoint in the workspace's models"
+	refusedRunner      = "the session runner sets it"
+	refusedPrice       = "it changes the price, which the budget caps do not count"
+	refusedStorage     = "it keeps data at the provider"
+	refusedAccount     = "it pulls other content of the provider account into the request"
+	refusedAttribution = "it changes whom the provider attributes the requests to"
+	refusedCacheKey    = "the top-level prompt_cache_key sets the key"
+	refusedHeaders     = "fixed header values could replace the credential or the account"
+	refusedBody        = "any field passes through to the provider, a routing or fallback model list too"
+	refusedUpstream    = "it holds the endpoint, the auth header, the beta flags and extra headers"
+	refusedLog         = "its headers and body bytes could write the key into a log file"
+	refusedModels      = "per-model profiles carry extra_body and match other models"
+)
 
-// ownModelRefusedKeys are refused by name, also under profile_self_edit full: the endpoint,
-// the credential, what decides them, and the adapters' blocks that are parsed with base_url.
-var ownModelRefusedKeys = []string{"base_url", "api_key_env", "provider", "api", "model", "anthropic", "chat_completions", "auth_mode", "oauth_auth_file"}
+// ownKeyRule is what one value of an own model's set may hold (decider 3c.1b): a JSON kind
+// and, for an object, the keys it allows (keys) or the rule of every value of a map (values).
+// refused names keys refused with their reason, before the allow-list. Every other key is
+// refused, keys added to model files later too. The set is merged into the base key by key,
+// objects recursively (mergeSettings), so a key the own model does not name keeps the base's
+// value and an own model cannot remove one.
+type ownKeyRule struct {
+	kind    string
+	keys    map[string]ownKeyRule
+	values  *ownKeyRule
+	refused map[string]string
+}
+
+var (
+	ownString  = ownKeyRule{kind: "string"}
+	ownNumber  = ownKeyRule{kind: "number"}
+	ownInteger = ownKeyRule{kind: "integer"}
+	ownBoolean = ownKeyRule{kind: "boolean"}
+)
+
+// ownModelSet is the rule of an own model's set: tuning that does not change where requests
+// go, which key is sent, which model is billed, what the provider keeps or whom it bills.
+// It is the one table 3c.2's self-edit checks too.
+var ownModelSet = ownKeyRule{kind: "object", keys: map[string]ownKeyRule{
+	"name":             ownString,
+	"efforts":          {kind: "array"},
+	"prompt_cache_key": ownString,
+	"request": {kind: "object", keys: map[string]ownKeyRule{
+		"reasoning":           {kind: "object", keys: map[string]ownKeyRule{"effort": ownString, "summary": ownString}},
+		"max_output_tokens":   ownInteger,
+		"temperature":         ownNumber,
+		"top_p":               ownNumber,
+		"parallel_tool_calls": ownBoolean,
+		"truncation":          ownString,
+		"text":                {kind: "object", keys: map[string]ownKeyRule{"verbosity": ownString}},
+	}, refused: map[string]string{
+		"model": refusedRunner, "input": refusedRunner, "instructions": refusedRunner, "stream": refusedRunner, "tools": refusedRunner,
+		"service_tier": refusedPrice,
+		"store":        refusedStorage, "background": refusedStorage,
+		"previous_response_id": refusedAccount, "conversation": refusedAccount, "prompt": refusedAccount,
+		"metadata": refusedAttribution, "user": refusedAttribution, "safety_identifier": refusedAttribution,
+		"prompt_cache_key": refusedCacheKey,
+	}},
+	"anthropic": {kind: "object", keys: map[string]ownKeyRule{
+		"default_max_tokens": ownInteger,
+		"cache": {kind: "object", keys: map[string]ownKeyRule{
+			"automatic": ownBoolean, "tools": ownBoolean, "system": ownBoolean, "history": ownBoolean, "ttl": ownString,
+		}},
+		"default_profile": {kind: "object", keys: map[string]ownKeyRule{
+			"effort_budget": {kind: "object", values: &ownInteger},
+		}, refused: map[string]string{"extra_body": refusedBody}},
+	}, refused: map[string]string{"upstream": refusedUpstream, "log": refusedLog, "models": refusedModels, "extra_headers": refusedHeaders, "extra_body": refusedBody}},
+	"chat_completions": {kind: "object", keys: map[string]ownKeyRule{
+		"request_timeout_ms": ownInteger,
+		"system_role":        ownString,
+	}, refused: map[string]string{"extra_headers": refusedHeaders, "extra_body": refusedBody, "log": refusedLog}},
+}, refused: map[string]string{
+	"base_url": refusedEndpoint, "api_key_env": refusedEndpoint, "provider": refusedEndpoint, "api": refusedEndpoint,
+	"model": refusedEndpoint, "auth_mode": refusedEndpoint, "oauth_auth_file": refusedEndpoint,
+}}
+
+// check applies the rule to the value at (a dotted name such as set.request.store).
+func (r ownKeyRule) check(path, at string, raw json.RawMessage) error {
+	value := bytes.TrimSpace(raw)
+	if !jsonKindIs(value, r.kind) {
+		return configError("%s: %s must be a JSON %s", path, at, r.kind)
+	}
+	if r.kind != "object" {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(value, &fields); err != nil {
+		return configError("%s: %s must be a JSON object", path, at)
+	}
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
+		name := at + "." + key
+		if reason, refused := r.refused[key]; refused {
+			return configError("%s: %s cannot be changed by a profile's own model: %s", path, name, reason)
+		}
+		inner, allowed := r.keys[key]
+		if !allowed && r.values != nil {
+			inner, allowed = *r.values, true
+		}
+		if !allowed {
+			return configError("%s: %s is not one a profile's own model may change (allowed: %s)", path, name, strings.Join(slices.Sorted(maps.Keys(r.keys)), ", "))
+		}
+		if err := inner.check(path, name, fields[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// jsonKindIs reports whether the trimmed JSON value is of kind; null is no kind.
+func jsonKindIs(value []byte, kind string) bool {
+	if len(value) == 0 {
+		return false
+	}
+	switch kind {
+	case "string":
+		return value[0] == '"'
+	case "object":
+		return value[0] == '{'
+	case "array":
+		return value[0] == '['
+	case "boolean":
+		return string(value) == "true" || string(value) == "false"
+	case "number", "integer":
+		// json.Number also takes a quoted number; a number is never a string here.
+		var number json.Number
+		if value[0] == '"' || json.Unmarshal(value, &number) != nil {
+			return false
+		}
+		if kind == "integer" {
+			_, err := number.Int64()
+			return err == nil
+		}
+		_, err := number.Float64()
+		return err == nil
+	}
+	return false
+}
 
 // ownModelFile is an own model file as read.
 type ownModelFile struct {
@@ -69,16 +200,11 @@ func parseOwnModel(path string, contents []byte) (ownModelFile, error) {
 		return ownModelFile{}, configError("%s: based_on %q must start with global: or workspace:; a profile's own model is based on a shared one, never on another own model", path, file.BasedOn)
 	}
 	if raw, ok := fields["set"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		if err := ownModelSet.check(path, "set", raw); err != nil {
+			return ownModelFile{}, err
+		}
 		if err := json.Unmarshal(raw, &file.Set); err != nil || file.Set == nil {
 			return ownModelFile{}, configError("%s: set must be a JSON object", path)
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(file.Set)) {
-		if slices.Contains(ownModelRefusedKeys, key) {
-			return ownModelFile{}, configError("%s: set.%s cannot be changed by a profile's own model: the endpoint, the credential and the billed model come from the base; put a model with its own endpoint in the workspace's models", path, key)
-		}
-		if !slices.Contains(ownModelSetKeys, key) {
-			return ownModelFile{}, configError("%s: set.%s is not one a profile's own model may change (allowed: %s)", path, key, strings.Join(ownModelSetKeys, ", "))
 		}
 	}
 	return file, nil
@@ -117,18 +243,23 @@ func ownModelFields(path string, base ModelBase) (map[string]json.RawMessage, er
 	if _, own := fields["based_on"]; own {
 		return nil, configError("%s: its base %s (%s) sets based_on, so it is not a whole model file", path, base.BasedOn, base.Path)
 	}
-	composed := maps.Clone(fields)
-	maps.Copy(composed, file.Set)
-	return composed, nil
+	if _, err := modelFromFields(fields, base.Path, "", ""); err != nil {
+		// A base that fails the model rules is not repaired by an own model's set.
+		return nil, configError("%s: its base %s: %v", path, base.BasedOn, err)
+	}
+	// The set is merged key by key, objects recursively: a request, anthropic or
+	// chat_completions key the own model does not name keeps the base's value (decider 3c.1b),
+	// so a base's store: false stays. The composed fields pass the whole model rules after.
+	return mergeSettings(fields, file.Set), nil
 }
 
 // loadModelOf is loadModel for a model that may be one of a profile's own: a file in bases is
 // composed from its base. A file outside bases is read as a whole model, so an own model file
-// reached by any other way fails (modelFromFields refuses based_on).
-func loadModelOf(path string, bases map[string]ModelBase, promptRole, promptText string) (Model, error) {
+// reached by any other way fails in the workspace layout (modelFromFields refuses based_on).
+func loadModelOf(path string, bases map[string]ModelBase, workspace bool, promptRole, promptText string) (Model, error) {
 	base, own := bases[path]
 	if !own {
-		return loadModel(path, promptRole, promptText)
+		return loadWholeModel(path, workspace, promptRole, promptText)
 	}
 	fields, err := ownModelFields(path, base)
 	if err != nil {
@@ -149,6 +280,9 @@ type ownModels struct {
 	ids map[string]string
 	// notes are warnings about own model files left out for their names or a link.
 	notes []string
+	// workspace is set in the workspace layout, where a model file read as a whole model may
+	// not set based_on (loadWholeModel).
+	workspace bool
 }
 
 // profileModels is the model catalog the profile id loads with: in the workspace layout the
@@ -161,7 +295,7 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 		return ownModels{}, err
 	}
 	shared := catalog.MergeScopes("model", scopes...)
-	own := ownModels{catalog: shared}
+	own := ownModels{catalog: shared, workspace: l.Workspace != ""}
 	if l.Workspace == "" || l.ProfileOwnDir(id) == "" {
 		return own, nil
 	}
@@ -235,7 +369,7 @@ func (o ownModels) problem(path string) error {
 	if err, failed := o.faults[path]; failed {
 		return err
 	}
-	_, err := loadModelOf(path, o.bases, "", "")
+	_, err := loadModelOf(path, o.bases, o.workspace, "", "")
 	return err
 }
 
@@ -245,17 +379,17 @@ func (o ownModels) check(scans *CatalogScans, path string) error {
 	if o.own(path) {
 		return scans.check("own model", path, o.problem)
 	}
-	return scans.check("model", path, modelFileProblem)
+	return scans.check("model", path, func(path string) error { return modelFileProblem(path, o.workspace) })
 }
 
 // effort refuses an effort the model at path does not offer; an empty effort is not checked.
 func (o ownModels) effort(path, effort string) error {
-	return checkModelEffortOf(path, o.bases, effort)
+	return checkModelEffortOf(path, o.bases, o.workspace, effort)
 }
 
 // effortOnly is effort for a model that may fail the model rules (checkModelEffortOnly).
 func (o ownModels) effortOnly(path, effort string) error {
-	return checkModelEffortOnlyOf(path, o.bases, effort)
+	return checkModelEffortOnlyOf(path, o.bases, o.workspace, effort)
 }
 
 // ownReference reports whether a model or toolset reference names a profile's own entry.
@@ -267,6 +401,19 @@ func ownReference(reference string) bool {
 func (c SessionConfig) OwnModel(path string) bool {
 	_, own := c.ModelBases[path]
 	return own
+}
+
+// WithAgentModel is the configuration with the model file a sub-agent names (its ID resolved
+// from the shared catalog, or a path) and its effort. That file is read as a whole model, never
+// composed as one of the profile's own (decider 3c C2): an own model file named by its path
+// fails like everywhere else outside the profile's own selection.
+func (c SessionConfig) WithAgentModel(path, effort string) SessionConfig {
+	if _, own := c.ModelBases[path]; own {
+		c.ModelBases = maps.Clone(c.ModelBases)
+		delete(c.ModelBases, path)
+	}
+	c.ModelPath, c.ReasoningEffort = path, effort
+	return c
 }
 
 // ModelFields are the fields of the model file at path as the session's runs read them: an
@@ -318,3 +465,19 @@ func (l Layout) profileIDOf(path string) string {
 
 // OwnModelScope is the scope name of a profile's own models, as a listing marks them.
 const OwnModelScope = catalog.ScopeProfile
+
+// loadWholeModel is loadModel under the layout's based_on rule (decider 3c.1b): the workspace
+// layout refuses based_on in a file read as a whole model, so an own model file reached another
+// way never runs without its base; v1, which has no own models, ignores the key as it ignored
+// it before phase 3c.
+func loadWholeModel(path string, workspace bool, promptRole, promptText string) (Model, error) {
+	if workspace {
+		return loadModel(path, promptRole, promptText)
+	}
+	fields, err := readSessionObject(path)
+	if err != nil {
+		return Model{}, err
+	}
+	delete(fields, "based_on")
+	return modelFromFields(fields, path, promptRole, promptText)
+}

@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -118,7 +119,7 @@ func TestOwnModelThatFailsIsLeftOutWithAWarning(t *testing.T) {
 		"bad tuning value":         `{"based_on":"global:openai/default","set":{"efforts":"high"}}`,
 		"bad schema":               `{"schema_version":2,"based_on":"global:openai/default"}`,
 	}
-	for _, refused := range ownModelRefusedKeys {
+	for refused := range ownModelSet.refused {
 		cases["refused "+refused] = `{"based_on":"global:openai/default","set":{"` + refused + `":"x"}}`
 	}
 	for name, text := range cases {
@@ -229,8 +230,16 @@ func TestOwnModelAsFallbackButNotForASubAgent(t *testing.T) {
 	if err := resolveSubagentModels(settings, layout, "s1.json", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckModelEffort(o.own, "low"); err == nil || !strings.Contains(err.Error(), "based_on") {
-		t.Fatalf("a sub-agent's check of the own file = %v", err)
+	// The run of such a sub-agent (childConfig) reads the file without its base and fails; the
+	// session's own selection of it still composes.
+	coder := o.mustLoad(t, "dev/coder")
+	if _, err := coder.WithAgentModel(o.own, "").WithModel(); err == nil || !strings.Contains(err.Error(), "based_on") {
+		t.Fatalf("a sub-agent's run on the own file = %v", err)
+	}
+	own := coder
+	own.ModelPath = o.own
+	if _, err := own.WithModel(); err != nil || !coder.OwnModel(o.own) {
+		t.Fatalf("WithAgentModel changed the session's bases: %v", err)
 	}
 }
 
@@ -247,10 +256,42 @@ func TestSubAgentModelChoiceLeavesOutOwnModels(t *testing.T) {
 	}
 }
 
-// A shared model file that sets based_on is refused: only own model files take it.
+// In the workspace layout a shared model file that sets based_on is refused: only own model
+// files take it. v1 ignores the key, as it did before phase 3c (decider 3c.1b).
 func TestSharedModelFileCannotSetBasedOn(t *testing.T) {
-	if err := validateModelFile("/g/m.json", []byte(`{"provider":"openai","model":"m","based_on":"global:openai/default"}`)); err == nil || !strings.Contains(err.Error(), "based_on") {
-		t.Fatalf("shared file with based_on = %v", err)
+	stray := []byte(`{"provider":"openai","model":"m","based_on":"global:openai/default"}`)
+	if err := validateModelFile("/g/m.json", stray, true); err == nil || !strings.Contains(err.Error(), "based_on") {
+		t.Fatalf("workspace layout: shared file with based_on = %v", err)
+	}
+	if err := validateModelFile("/g/m.json", stray, false); err != nil {
+		t.Fatalf("v1: shared file with based_on = %v", err)
+	}
+
+	o := newOwnModelFixture(t, `{"models":["openai/default","openai/mini"]}`)
+	wsPut(t, filepath.Join(o.f.global, "models", "openai", "mini.json"), `{"provider":"openai","model":"m","api_key_env":"FIXTURE_KEY","based_on":"global:openai/default"}`)
+	config := o.mustLoad(t, "dev/coder")
+	if slices.Contains(config.Models, "openai/mini") || !slices.ContainsFunc(config.Warnings, func(w string) bool { return strings.Contains(w, "based_on") }) {
+		t.Fatalf("workspace layout: models %v, warnings %q", config.Models, config.Warnings)
+	}
+}
+
+// A v1 catalog-layout session loads and runs a model file that sets based_on (decider 3c.1b).
+func TestV1ModelFileIgnoresBasedOn(t *testing.T) {
+	config, root := rootFromSample(t)
+	editJSON(t, filepath.Join(root, "models", "openai", "gpt-deep.json"), func(m map[string]any) { m["based_on"] = "global:openai/gpt-fast" })
+	location, err := Resolve(config.Roots, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadSessionConfig(location, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorkspaceLayout || !slices.Contains(loaded.Models, "openai/gpt-deep") || !strings.HasSuffix(loaded.ModelPath, "gpt-deep.json") || loaded.Model.Name == "" {
+		t.Fatalf("v1 model with based_on: models %v, path %s, model %+v", loaded.Models, loaded.ModelPath, loaded.Model)
+	}
+	if err := checkModelEffortOnlyOf(loaded.ModelPath, nil, false, "nope"); err == nil {
+		t.Fatal("v1: the effort of a model with based_on is not checked")
 	}
 }
 
@@ -313,26 +354,14 @@ func TestOwnModelSchemaAgreesWithTheLoader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schema struct {
-		Properties map[string]struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		} `json:"properties"`
-	}
+	var schema ownSchemaNode
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	var top, set []string
-	for key := range schema.Properties {
-		top = append(top, key)
+	if top := slices.Sorted(maps.Keys(schema.Properties)); !slices.Equal(top, slices.Sorted(slices.Values(ownModelKeys))) {
+		t.Fatalf("schema keys %v, loader %v", top, ownModelKeys)
 	}
-	for key := range schema.Properties["set"].Properties {
-		set = append(set, key)
-	}
-	slices.Sort(top)
-	slices.Sort(set)
-	if !slices.Equal(top, slices.Sorted(slices.Values(ownModelKeys))) || !slices.Equal(set, slices.Sorted(slices.Values(ownModelSetKeys))) {
-		t.Fatalf("schema keys %v / %v, loader %v / %v", top, set, ownModelKeys, ownModelSetKeys)
-	}
+	compareOwnSchema(t, "set", schema.Properties["set"], ownModelSet)
 	compiled := compileSchema(t, "profile-model.schema.json")
 	if !schemaAccepts(t, compiled, ownFast) {
 		t.Error("a valid own model is refused")
@@ -341,5 +370,218 @@ func TestOwnModelSchemaAgreesWithTheLoader(t *testing.T) {
 		if schemaAccepts(t, compiled, refused) {
 			t.Errorf("%s is accepted", refused)
 		}
+	}
+}
+
+// ownSchemaNode is the part of profile-model.schema.json the loader is compared with.
+type ownSchemaNode struct {
+	Type                 string                   `json:"type"`
+	Properties           map[string]ownSchemaNode `json:"properties"`
+	AdditionalProperties json.RawMessage          `json:"additionalProperties"`
+	Enum                 []json.RawMessage        `json:"enum"`
+}
+
+// compareOwnSchema checks that the schema at name allows the keys the rule allows, closes the
+// object the same way and gives each leaf the rule's kind.
+func compareOwnSchema(t *testing.T, name string, node ownSchemaNode, rule ownKeyRule) {
+	t.Helper()
+	switch {
+	case rule.kind == "string" && node.Enum != nil:
+	case node.Type != rule.kind:
+		t.Errorf("%s: schema type %q, loader %q", name, node.Type, rule.kind)
+	}
+	if rule.kind != "object" {
+		return
+	}
+	if rule.values != nil {
+		var values ownSchemaNode
+		if err := json.Unmarshal(node.AdditionalProperties, &values); err != nil || values.Type != rule.values.kind {
+			t.Errorf("%s: schema values %s, loader %q", name, node.AdditionalProperties, rule.values.kind)
+		}
+		return
+	}
+	if string(node.AdditionalProperties) != "false" {
+		t.Errorf("%s: the schema does not refuse other keys", name)
+	}
+	if keys := slices.Sorted(maps.Keys(node.Properties)); !slices.Equal(keys, slices.Sorted(maps.Keys(rule.keys))) {
+		t.Errorf("%s: schema keys %v, loader %v", name, keys, slices.Sorted(maps.Keys(rule.keys)))
+	}
+	for key, inner := range rule.keys {
+		if child, found := node.Properties[key]; found {
+			compareOwnSchema(t, name+"."+key, child, inner)
+		}
+	}
+}
+
+// ownComposed loads dev/coder with its own model openai/fast set to text over the base text and
+// returns the composed model; err is the warning when the own model is left out.
+func ownComposed(t *testing.T, base, own string) (Model, string) {
+	t.Helper()
+	o := newOwnModelFixture(t, `{"models":["openai/default","profile:openai/fast"],"model_default":"profile:openai/fast"}`)
+	wsPut(t, o.base, base)
+	wsPut(t, o.own, own)
+	config := o.mustLoad(t, "dev/coder")
+	if !slices.Contains(config.Models, "openai/fast") {
+		for _, w := range config.Warnings {
+			if strings.Contains(w, "fast") {
+				return Model{}, w
+			}
+		}
+		t.Fatalf("own model left out without a warning: %q", config.Warnings)
+	}
+	loaded, err := config.WithModel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loaded.Model, ""
+}
+
+func jsonObject(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("%s: %v", raw, err)
+	}
+	return value
+}
+
+// set.request is merged into the base's request key by key, nested objects too: a base's
+// store: false survives an own model that sets reasoning. Keys that change the price, keep
+// data at the provider, pull in account content or change attribution are refused, as is
+// every key not on the list (decider 3c.1b).
+func TestOwnModelRequestIsMergedIntoTheBase(t *testing.T) {
+	base := `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY","request":{"store":false,"reasoning":{"summary":"auto"},"text":{"format":{"type":"text"}},"temperature":1}}`
+	model, warning := ownComposed(t, base, `{"based_on":"global:openai/default","set":{"request":{"reasoning":{"effort":"low"},"text":{"verbosity":"low"},"temperature":0.2,"max_output_tokens":100,"top_p":0.9,"parallel_tool_calls":false,"truncation":"auto"}}}`)
+	if warning != "" {
+		t.Fatal(warning)
+	}
+	request := jsonObject(t, model.Request)
+	want := map[string]any{
+		"store":       false,
+		"reasoning":   map[string]any{"summary": "auto", "effort": "low"},
+		"text":        map[string]any{"format": map[string]any{"type": "text"}, "verbosity": "low"},
+		"temperature": 0.2, "max_output_tokens": float64(100), "top_p": 0.9, "parallel_tool_calls": false, "truncation": "auto",
+	}
+	if encoded, _ := json.Marshal(request); string(encoded) != func() string { e, _ := json.Marshal(want); return string(e) }() {
+		t.Fatalf("request = %s", encoded)
+	}
+
+	refused := map[string]string{
+		"service_tier":         `"priority"`,
+		"store":                `true`,
+		"background":           `true`,
+		"metadata":             `{"a":"b"}`,
+		"user":                 `"u"`,
+		"safety_identifier":    `"s"`,
+		"previous_response_id": `"resp_1"`,
+		"conversation":         `"conv_1"`,
+		"prompt":               `{"id":"pmpt_1"}`,
+		"prompt_cache_key":     `"k"`,
+		"model":                `"other"`,
+		"include":              `["reasoning.encrypted_content"]`,
+		"later_key":            `1`,
+		"text":                 `{"format":{"type":"json_object"}}`,
+		"reasoning":            `{"encrypted":true}`,
+		"temperature":          `null`,
+		"max_output_tokens":    `1.5`,
+		"top_p":                `"0.9"`,
+	}
+	for key, value := range refused {
+		t.Run(key+" "+value, func(t *testing.T) {
+			_, warning := ownComposed(t, base, `{"based_on":"global:openai/default","set":{"request":{"`+key+`":`+value+`}}}`)
+			if warning == "" || !strings.Contains(warning, "set.request."+key) {
+				t.Fatalf("set.request.%s = %s is not refused: %q", key, value, warning)
+			}
+			if byName := !slices.Contains([]string{"include", "later_key", "text", "reasoning", "temperature", "max_output_tokens", "top_p"}, key); byName != strings.Contains(warning, "cannot be changed by a profile's own model") {
+				t.Fatalf("set.request.%s: refused by name %v, warning %q", key, byName, warning)
+			}
+		})
+	}
+}
+
+// The adapter blocks take a few tuning keys, merged into the base's block; a key the own
+// model does not set stays as the base had it. What could replace the credential, pass any
+// field to the provider or write the key into a log is refused (decider 3c.1b).
+func TestOwnModelAdapterBlocksAreMergedIntoTheBase(t *testing.T) {
+	anthropicBase := `{"provider":"anthropic","api":"anthropic_messages","api_key_env":"FIXTURE_KEY","model":"claude-test","anthropic":{"upstream":{"auth_header":"x-api-key"},"default_max_tokens":1000,"cache":{"system":true,"history":true},"default_profile":{"thinking":"adaptive","effort_budget":{"low":2000,"high":8000}}}}`
+	model, warning := ownComposed(t, anthropicBase, `{"based_on":"global:openai/default","set":{"anthropic":{"default_max_tokens":2000,"cache":{"history":false,"ttl":"1h"},"default_profile":{"effort_budget":{"high":16000}}}}}`)
+	if warning != "" {
+		t.Fatal(warning)
+	}
+	block := jsonObject(t, model.Anthropic)
+	cache, _ := block["cache"].(map[string]any)
+	profile, _ := block["default_profile"].(map[string]any)
+	budget, _ := profile["effort_budget"].(map[string]any)
+	upstream, _ := block["upstream"].(map[string]any)
+	if block["default_max_tokens"] != float64(2000) || cache["system"] != true || cache["history"] != false || cache["ttl"] != "1h" ||
+		profile["thinking"] != "adaptive" || budget["low"] != float64(2000) || budget["high"] != float64(16000) || upstream["auth_header"] != "x-api-key" {
+		t.Fatalf("anthropic = %s", model.Anthropic)
+	}
+
+	chatBase := `{"provider":"ollama","api":"chat_completions","base_url":"http://127.0.0.1:11434/v1","api_key_env":"FIXTURE_KEY","model":"q","chat_completions":{"max_tokens_field":"max_tokens","system_role":"system","extra_headers":{"X-Team":"a"}}}`
+	model, warning = ownComposed(t, chatBase, `{"based_on":"global:openai/default","set":{"chat_completions":{"request_timeout_ms":60000,"system_role":"developer"}}}`)
+	if warning != "" {
+		t.Fatal(warning)
+	}
+	chat := jsonObject(t, model.ChatCompletions)
+	headers, _ := chat["extra_headers"].(map[string]any)
+	if chat["request_timeout_ms"] != float64(60000) || chat["system_role"] != "developer" || chat["max_tokens_field"] != "max_tokens" || headers["X-Team"] != "a" {
+		t.Fatalf("chat_completions = %s", model.ChatCompletions)
+	}
+
+	refused := map[string][2]string{
+		"anthropic.upstream.auth_header>anthropic.upstream": {anthropicBase, `{"anthropic":{"upstream":{"auth_header":"bearer"}}}`},
+		"anthropic.upstream.base_url>anthropic.upstream":    {anthropicBase, `{"anthropic":{"upstream":{"base_url":"https://evil.example"}}}`},
+		"anthropic.log.headers>anthropic.log":               {anthropicBase, `{"anthropic":{"log":{"headers":["x-api-key"]}}}`},
+		"anthropic.models":                                  {anthropicBase, `{"anthropic":{"models":[]}}`},
+		"anthropic.extra_headers":                           {anthropicBase, `{"anthropic":{"extra_headers":{"a":"b"}}}`},
+		"anthropic.default_profile.extra_body":              {anthropicBase, `{"anthropic":{"default_profile":{"extra_body":{"a":1}}}}`},
+		"anthropic.default_profile.thinking":                {anthropicBase, `{"anthropic":{"default_profile":{"thinking":"off"}}}`},
+		"anthropic.max_request_bytes":                       {anthropicBase, `{"anthropic":{"max_request_bytes":1}}`},
+		"anthropic.cache.later":                             {anthropicBase, `{"anthropic":{"cache":{"later":true}}}`},
+		"chat_completions.extra_headers":                    {chatBase, `{"chat_completions":{"extra_headers":{"Authorization":"Bearer x"}}}`},
+		"chat_completions.extra_body":                       {chatBase, `{"chat_completions":{"extra_body":{"models":["a","b"]}}}`},
+		"chat_completions.max_tokens_field":                 {chatBase, `{"chat_completions":{"max_tokens_field":"x"}}`},
+		"chat_completions.request_timeout_ms":               {chatBase, `{"chat_completions":{"request_timeout_ms":"slow"}}`},
+		"anthropic.default_profile.effort_budget.high":      {anthropicBase, `{"anthropic":{"default_profile":{"effort_budget":{"high":"many"}}}}`},
+	}
+	for name, test := range refused {
+		t.Run(name, func(t *testing.T) {
+			_, warning := ownComposed(t, test[0], `{"based_on":"global:openai/default","set":`+test[1]+`}`)
+			// name>at: the refusal names the key it is at; upstream and log are refused whole.
+			at := name
+			if _, parent, found := strings.Cut(name, ">"); found {
+				at = parent
+			}
+			if warning == "" || !strings.Contains(warning, "set."+at+" ") {
+				t.Fatalf("%s is not refused: %q", name, warning)
+			}
+			byName := strings.Contains(at, "upstream") || strings.Contains(at, "log") || strings.HasSuffix(at, "models") || strings.HasSuffix(at, "extra_headers") || strings.HasSuffix(at, "extra_body")
+			if byName != strings.Contains(warning, "cannot be changed by a profile's own model") {
+				t.Fatalf("%s: refused by name %v, warning %q", name, byName, warning)
+			}
+		})
+	}
+	// A block of another api is refused by the composed model's rules.
+	if _, warning := ownComposed(t, chatBase, `{"based_on":"global:openai/default","set":{"anthropic":{"default_max_tokens":1}}}`); !strings.Contains(warning, "anthropic needs api") {
+		t.Fatalf("anthropic block on a chat base = %q", warning)
+	}
+}
+
+// A profile that offers its own model and a shared one under the same name, each with its
+// scope, is refused: within a profile a bare ID names one model (decider 3c.1b).
+func TestOwnAndSharedModelOfOneNameAreNotBothOffered(t *testing.T) {
+	o := newOwnModelFixture(t, `{"models":["profile:openai/default","global:openai/default"]}`)
+	wsPut(t, filepath.Join(filepath.Dir(o.own), "default.json"), `{"based_on":"global:openai/default","set":{"name":"Mine"}}`)
+	if _, err := o.load(t, "dev/coder"); err == nil || !strings.Contains(err.Error(), "openai/default") {
+		t.Fatalf("own and shared openai/default together = %v", err)
+	}
+}
+
+// A base that fails the model rules is not repaired by an own model's set.
+func TestOwnModelDoesNotRepairAFailingBase(t *testing.T) {
+	_, warning := ownComposed(t, `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY","request":"not an object"}`, `{"based_on":"global:openai/default","set":{"request":{"temperature":0.2}}}`)
+	if !strings.Contains(warning, "its base global:openai/default") || !strings.Contains(warning, "request must be a JSON object") {
+		t.Fatalf("own model on a failing base = %q", warning)
 	}
 }
