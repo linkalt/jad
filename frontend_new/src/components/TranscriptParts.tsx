@@ -730,6 +730,7 @@ function ToolGroupRow({
   const listId = useId();
   return (
     <VStack gap={0} width="100%" xstyle={styles.groupedActivity}>
+      <div className="jad-group-header" style={{borderRadius: 'var(--radius-inner)'}}>
       <HStack gap={2} align="center" width="100%">
         <div
           {...stylex.props(styles.groupHeaderCall)}
@@ -763,6 +764,7 @@ function ToolGroupRow({
           </HStack>
         </div>
       </HStack>
+      </div>
       <div id={listId} hidden={!isExpanded}>
         {isExpanded && (
           <VStack gap={0} width="100%">

@@ -167,6 +167,9 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     assert.ok(button('tool-a').classList.contains('jad-activity-trigger'), 'the actual interactive row receives hover styling');
     assert.ok(!toggle().classList.contains('jad-activity-trigger'), 'the expand/count control has no hover background');
     assert.ok(!toggle().closest('.jad-activity-trigger'));
+    const header = document.querySelector('.jad-group-header');
+    assert.ok(header.contains(button('tool-a')) && header.contains(toggle()), 'one hover block wraps the first call and the control');
+    assert.equal(document.querySelectorAll('.jad-group-header').length, 1);
     const headerCall = document.querySelector('.jad-group-header-call');
     assert.equal(headerCall.getAttribute('data-status'), 'complete');
     assert.ok(headerCall.contains(button('tool-a')));
@@ -271,6 +274,10 @@ test('compiled activity CSS paints hover and press on the interactive row', asyn
   assert.match(compiled, /\.jad-activity-trigger:hover\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /\.jad-activity-trigger:active\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /box-shadow:inset/);
+  // One block over the whole header; the call's own paint is off inside it.
+  assert.match(compiled, /\.jad-group-header:has\(\.jad-activity-trigger:hover\)\{[^}]*background-color:var\(--color-overlay-hover\)/);
+  assert.match(compiled, /\.jad-group-header:has\(\.jad-activity-trigger:active\)\{[^}]*background-color:var\(--color-overlay-hover\)/);
+  assert.match(compiled, /\.jad-group-header \.jad-activity-trigger:hover[^{]*\{[^}]*background-color:(transparent|#0000)/);
   assert.match(compiled, /\.jad-group-header-call\[data-status=complete\] svg\{color:var\(--color-icon-purple\)\}/);
 });
 

@@ -43,5 +43,17 @@
 }
 .jad-activity-trigger:active { background-color: var(--color-overlay-hover); box-shadow: inset 0 0 0 var(--border-width) var(--color-overlay-pressed); }
 
+/*
+ * Hovering or pressing the first call of a group paints ONE block over the whole
+ * header (the call and the expand/count control); the call's own row paint is
+ * switched off there so nothing is drawn twice and no seam shows in the gap.
+ */
+.jad-group-header .jad-activity-trigger:hover,
+.jad-group-header .jad-activity-trigger:active { background-color: transparent; box-shadow: none; }
+@media (hover: hover) {
+  .jad-group-header:has(.jad-activity-trigger:hover) { background-color: var(--color-overlay-hover); box-shadow: inset 0 0 0 var(--border-width) var(--color-overlay-pressed); }
+}
+.jad-group-header:has(.jad-activity-trigger:active) { background-color: var(--color-overlay-hover); box-shadow: inset 0 0 0 var(--border-width) var(--color-overlay-pressed); }
+
 /* The status check at the start of a grouped call's header; the expand/count control has no hover background. */
 .jad-group-header-call[data-status='complete'] svg { color: var(--color-icon-purple); }

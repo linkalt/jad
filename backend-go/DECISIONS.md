@@ -4218,3 +4218,8 @@ The neutral theme makes `--color-icon-accent` monochrome, so grouped icons use `
 - The installed Astryx icon registry has no `checklist` glyph (grep of `Icon/` finds none), so the circled check is the closest match to the reported "checklist"; no other icon precedes the name. If the user means something else, the target is not in this component.
 - Colour rule unchanged: `.jad-group-header-call[data-status='complete'] svg`, so running (spinner) and error keep their own colours. New test `the real Astryx header call ...` asserts this on the real component and the real `index.css`; the earlier T-024 test used a synthetic probe svg, which is now documented as weaker than this one.
 - Still unverified: real-browser pixel rendering, `light-dark()` resolution, custom themes.
+
+## Tool group header: one continuous hover block (Go-repo frontend, T-025, 2026-10-09)
+
+Hovering or pressing the first call of a group paints one `--color-overlay-hover` block (with the existing inset outline) on a `.jad-group-header` wrapper around the call and the expand/count control, through `:has(.jad-activity-trigger:hover)`. Inside the wrapper the call's own hover paint is switched off, so nothing is drawn twice and the gap shows no seam. Hovering the expand/count control alone still paints nothing (T-024). Click and keyboard actions, ARIA and the icon colour are unchanged; the wrapper is a plain block div, so layout is unchanged.
+Verified: jsdom test that the wrapper contains both parts; compiled-CSS test (lightningcss) of the three rules; typecheck. NOT verified: `:hover`/`:has()` painting in a real browser (jsdom evaluates neither); the full frontend suite was not run (known unrelated `MEMORY_DESIGN.md` failure).
