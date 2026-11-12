@@ -46,7 +46,7 @@ export const COMMAND_TRIGGER_CHARACTER = '/';
  */
 export const BUILTIN_MENTION_FILES: readonly string[] = [
   'CLAUDE.md',
-  'MEMORY_DESIGN.md',
+  'RECORDS_DESIGN.md',
   'design_cursor.md',
   'design_bash.md',
   'design_edit.md',
