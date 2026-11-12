@@ -465,7 +465,7 @@
     },
     "catalogs": {
       "type": "object",
-      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call), and the sandbox folder <name>.json sandbox templates; there is no category level in either. Defaults: .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state, .jad/sandbox.",
+      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call), and the sandbox folder <name>.json sandbox templates; there is no category level in either. Defaults: the project's .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state and .jad/sandbox. For a setting in a .jad folder (<project>/.jad/setting.json, or $HOME/.jad/setting.json) a catalog that is not named here is read from that .jad folder itself, <.jad>/<catalog>. Older versions read it from <.jad>/.jad/<catalog>, so when that doubled folder exists it stays the root of every unnamed catalog and a warning (also printed by jad check) names it; nothing is moved, and naming the folders here is always exact.",
       "properties": {
         "profiles": {
           "type": "string",

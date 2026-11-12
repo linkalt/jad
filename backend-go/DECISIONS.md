@@ -4512,7 +4512,7 @@ Open gaps:
 - **Rewritten bytes:** a rewritten toolset's changed tool object is re-encoded with sorted keys (`absoluteGlobalToolsetPaths`), so it is not byte-identical apart from the path values; the plan records values, and 4b must write and verify the bytes.
 - **`global.json` conflicts fail safe:** an existing `global.json` whose relative path means the same file as v1's absolute one is still a conflict.
 - **Write-nothing is tested on the fixtures:** the before-and-after tree snapshot covers the planner's v1 loads in the tests; a loader path that creates folders for settings the fixtures do not use is not covered.
-- **v1 bug confirmed, not fixed (#287):** a setting in `W/.jad` without `catalogs` resolves its catalogs to `W/.jad/.jad/<catalog>` (reproduced with a scratch test, not committed). The planner follows what v1 reads. Fixing it changes v1, so it is the decider's call.
+- **v1 bug confirmed, not fixed (#287):** a setting in `W/.jad` without `catalogs` resolves its catalogs to `W/.jad/.jad/<catalog>` (reproduced with a scratch test, not committed). The planner follows what v1 reads. Fixing it changes v1, so it is the decider's call. (Fixed by T-035, see the section below.)
 
 ## Workspace layout v2: phase 4a.1, no paths tied to one workspace in G (T-028, Go, 2026-11-12)
 
@@ -4630,3 +4630,21 @@ Decider phase 5b ruling (design section 27).
 - **Open:** the catalog dialog's workspace choice does not list unavailable workspaces; the reason
   of an unavailable workspace is still only in the server log; the 422 above stays; `promote` and
   seatbelt runs are not built.
+
+## v1 default catalogs of a setting in a .jad folder no longer double the .jad folder (T-035, Go, 2026-11-13)
+
+**Defect.** `layoutCatalogDefaults` wrote the defaults as `.jad/<catalog>` and `layoutFromSetting` resolved them from the setting's folder. That is right for `<project>/setting.json` and wrong for the usual `<project>/.jad/setting.json` (and `$HOME/.jad/setting.json`): the default was `<.jad>/.jad/<catalog>`. Explicit `catalogs`, `session_roots`, `tool_storage_dir` (resolved from the cwd), v2 and the `no setting` start were never affected.
+
+**Rule (v1 only, decider T-035).** For a setting whose folder is named `.jad`, a catalog not named in `catalogs` is `<setting folder>/<catalog>`, unless `<setting folder>/.jad` is a directory (a link to one counts, as `os.Stat` follows it). Then that doubled folder is the legacy root: every unnamed catalog keeps resolving into it, all together, so one root is never split over the two places, and one warning names it. Nothing is moved, copied or created; a fresh setup's first write goes to `.jad/<catalog>` (tested with `WriteCatalogFile`). A `.jad/.jad` that is a file is not a legacy root. When it cannot be inspected the old defaults stay, with a warning. A setting in any other folder, a setting that names all seven catalogs, v2 (`workspace.json`) and the sample are unchanged.
+
+**Both places exist.** The legacy root wins; the warning adds `Both places hold <catalogs>: only the doubled folder is read`, listing only unnamed catalogs whose fixed folder exists. It never fails the start (users that work today keep working) and never prefers the new folder (their data would disappear from view). The warnings reach the server and CLI logs through `Config.Warnings` as before, the migration plan (`plan.Warnings`) and now `jad check`, which prints them as `warning: ...` lines before its summary; the exit code is unchanged.
+
+**Migration.** The planner loads the v1 setting through the same code, so a dry run plans from the legacy root when it exists (a copy into `W/.jad/<catalog>`) and from the fixed folders otherwise (profiles, state and a workspace's own models and tools in place, as for explicit catalogs). The decider's stop condition (the fixed v1 default on the same path v2 uses for a different format) did not apply: the folders are the same format and the planner already treats `source == destination` as in place for every catalog.
+
+**Behaviour change to know.** A v1 setting in `.jad` without a doubled folder now reads what is in `.jad/<catalog>` for the catalogs it does not name. A repository-shaped setting that names profiles, models, tools, mcp and state but not remotes or sandbox now reads `.jad/remotes` and `.jad/sandbox` instead of two folders that did not exist. Files someone placed there following the documentation start to be used.
+
+**Open gaps.**
+- A binary from before this change run against the same folders creates the doubled folder on its first default write; the next start of the fixed binary then takes it as the legacy root and stops reading `.jad/<catalog>` (the "both places" warning names it). Not prevented: it needs the person to stop using the old binary or to name the folders in `catalogs`.
+- The check is by directory name `.jad` of the setting's folder. A setting copied to another folder name gets `<project>/.jad/<catalog>` relative to that folder, as before.
+- Moving or merging the data stays the person's step; there is no command for it, and `promote` is still not built.
+- A migration apply from a legacy root is tested only in a temporary base (`TestApplyFromTheDoubledFolderCopiesAndLeavesItUntouched`: profiles and state copied byte for byte, the doubled folder unchanged, the result loads as v2). It was not run on real data, and the legacy models, tools and mcp go to G or stay workspace-private by the existing planner rules, with no extra check for the legacy case.

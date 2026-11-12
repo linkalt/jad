@@ -1282,7 +1282,7 @@ state is shared storage and passes, section 25).
   inode identity of a local filesystem.
 - Creating the lock files touches the v1 state folders (as any jad run does).
 - Not done: moving models or tools into G (they stay workspace-private when already in `W/.jad`;
-  a `promote` step is the person's decision), settings outside `W/.jad`, the `.jad/.jad` bug (T-029).
+  a `promote` step is the person's decision), settings outside `W/.jad`, the `.jad/.jad` bug (T-029; fixed for v1 by T-035, see DECISIONS.md).
 
 ## 25. Phase 4c as built: workspace tool definitions and shared storage
 

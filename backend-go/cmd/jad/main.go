@@ -79,11 +79,16 @@ func dispatchCommand(args []string, streams commandStreams) error {
 
 // runCheckCommand runs "jad check": it reads the root setting and every catalog and session
 // file as the server would, starts nothing but one trial run of each enabled sandbox, needs
-// no API token, and fails when a file is invalid or a sandbox does not start.
+// no API token, and fails when a file is invalid or a sandbox does not start. The warnings
+// of the root setting are printed first and never fail it.
 func runCheckCommand(stdout io.Writer) error {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
 		return fmt.Errorf("load server configuration: %w", err)
+	}
+	// The notices of the root setting load (the server logs them): they do not fail the check.
+	for _, warning := range loaded.Warnings {
+		fmt.Fprintf(stdout, "warning: %s\n", warning)
 	}
 	valid, err := app.CheckFiles(loaded.Roots, stdout)
 	if err != nil {

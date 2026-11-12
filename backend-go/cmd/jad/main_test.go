@@ -72,3 +72,26 @@ func TestCheckCommandFailsWithoutTheCatalogLayout(t *testing.T) {
 		t.Fatalf("error = %v, want the no-layout error", err)
 	}
 }
+
+// T-035: a setting in a .jad folder that still reads the doubled <.jad>/.jad defaults says so.
+func TestCheckCommandPrintsTheDoubledDefaultWarningAndStillPasses(t *testing.T) {
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".jad", ".jad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setting := filepath.Join(project, ".jad", "setting.json")
+	if err := os.WriteFile(setting, []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	t.Setenv("JAD_ROOT_SETTING_PATH", setting)
+	t.Setenv("JAD_SESSIONS_DIR", "")
+	var out bytes.Buffer
+	if err := runCommand([]string{"check"}, &out); err != nil {
+		t.Fatalf("a warning must not fail the check: %v\n%s", err, out.String())
+	}
+	text := out.String()
+	if !strings.HasPrefix(text, "warning: ") || !strings.Contains(text, filepath.Join(project, ".jad", ".jad")) || !strings.HasSuffix(text, " files, 0 problems\n") {
+		t.Fatalf("output = %q", text)
+	}
+}

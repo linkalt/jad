@@ -470,10 +470,11 @@ func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([
 		return nil, nil, fmt.Errorf("%s: session_roots must be an array", settingPath)
 	}
 	settingDir := filepath.Dir(settingPath)
-	layout, err := layoutFromSetting(setting, settingPath)
+	layout, layoutWarnings, err := layoutFromSetting(setting, settingPath)
 	if err != nil {
 		return nil, nil, err
 	}
+	warnings = append(warnings, layoutWarnings...)
 	roots := make([]Root, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
 	directories := make(map[string]struct{}, len(entries))
