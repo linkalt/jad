@@ -593,8 +593,8 @@ func (c *Catalog) resolveSingle(call json.RawMessage, fields map[string]json.Raw
 // target's name and arguments. found is false when the target is not in the catalog, is itself a
 // runner, or cannot be lazy.
 func (c *Catalog) rewriteTarget(fields map[string]json.RawMessage, target string, targetArguments map[string]any) (json.RawMessage, bool) {
-	resolved, found := c.byTarget(target)
-	if !found || resolved.Delegate != nil || resolved.DelegateRuns != nil || !CanBeLazy(resolved.Definition) {
+	resolved, found := c.lazyTarget(target)
+	if !found {
 		return nil, false
 	}
 	encoded, err := json.Marshal(targetArguments)
@@ -620,6 +620,29 @@ func (c *Catalog) rewriteTarget(fields map[string]json.RawMessage, target string
 		return nil, false
 	}
 	return call, true
+}
+
+// lazyTarget is the tool the judgments take a run of target for: byTarget's tool when it can be
+// lazy and is not a runner itself.
+func (c *Catalog) lazyTarget(target string) (Tool, bool) {
+	resolved, found := c.byTarget(target)
+	if !found || resolved.Delegate != nil || resolved.DelegateRuns != nil || !CanBeLazy(resolved.Definition) {
+		return Tool{}, false
+	}
+	return resolved, true
+}
+
+// LazyTarget is the definition of the tool every judgment of this catalog (state, files, plan
+// mode, leaf, image source, checkpoint) takes a run of target for, by provider name or by ID, or
+// false when the judgments take it for none and judge the run as the read-only runner. A runner
+// compares it with the tool it is about to execute and refuses a run the two lookups disagree on,
+// so a run is never executed as one tool and judged as another.
+func (c *Catalog) LazyTarget(target string) (Definition, bool) {
+	if c == nil {
+		return Definition{}, false
+	}
+	resolved, found := c.lazyTarget(target)
+	return resolved.Definition, found
 }
 
 // byTarget resolves a run target: the exact provider name first, then the definition ID.

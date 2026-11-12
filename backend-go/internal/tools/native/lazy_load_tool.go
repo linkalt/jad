@@ -260,7 +260,24 @@ func resolveLazyTarget(set *tools.LazySet, target string, execution tools.Execut
 	if execution.Dispatcher == nil || !execution.Dispatcher.Has(name) {
 		return "", tools.UnknownToolError(execution.CallID, name)
 	}
+	if judge, judged := execution.Dispatcher.(lazyTargetJudge); judged {
+		// The set found the tool to execute; the catalog's judgments find the tool they judge. A run
+		// executes only when both are the same tool.
+		definition := entries[0].Tool.Definition
+		found, ok := judge.LazyTarget(target)
+		if !ok || found.ID != definition.ID || found.Name != definition.Name || found.Source != definition.Source {
+			return "", tools.ExecutionError(execution.CallID, tools.StatusError, "lazy_target_mismatch",
+				fmt.Sprintf("%s was not run: the lazy set and the catalog do not identify the same tool for it, so its safety could not be judged", target),
+				tools.Information{Key: "tool", Value: target})
+		}
+	}
 	return name, ""
+}
+
+// lazyTargetJudge is a dispatcher that also judges runs: *tools.Catalog, whose LazyTarget is the
+// tool its judgments take a run target for.
+type lazyTargetJudge interface {
+	LazyTarget(target string) (tools.Definition, bool)
 }
 
 // listLazyTools lists every lazy tool, sorted by name, as "name — summary", and says how to describe
