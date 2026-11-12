@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,15 +44,26 @@ func (w *remoteWorkspaces) providerRuns() int {
 
 func startRemoteWorkspaces(t *testing.T, tokens string) *remoteWorkspaces {
 	t.Helper()
+	return startRemoteWorkspacesWith(t, tokens, nil)
+}
+
+// startRemoteWorkspacesWith is startRemoteWorkspaces with the part a test changes: loop, when
+// set, makes the server call itself (see remote_loop_test.go).
+func startRemoteWorkspacesWith(t *testing.T, tokens string, loop *remoteLoop) *remoteWorkspaces {
+	t.Helper()
 	w := &remoteWorkspaces{}
 	provider := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		raw, _ := io.ReadAll(r.Body)
 		w.mu.Lock()
 		w.runs++
 		w.mu.Unlock()
+		item := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`
+		if loop != nil {
+			item = loop.answer(raw, item)
+		}
 		rw.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range []string{
-			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
+			`{"type":"response.output_item.done","output_index":0,"item":` + item + `}`,
 			`{"type":"response.completed","response":{"id":"r1","status":"completed","model":"gpt-test","output":[]}}`,
 			"[DONE]",
 		} {
@@ -72,7 +84,12 @@ func startRemoteWorkspaces(t *testing.T, tokens string) *remoteWorkspaces {
 		put(filepath.Join(dir, ".jad", "profiles", "dev", "base.json"), `{"models":["openai/default"],"model_default":"openai/default"}`)
 	}
 	put(filepath.Join(w.b, ".jad", "sessions", "only-b.json"), `{"schema_version":1}`)
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: w.a, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOME": home, "FIXTURE_KEY": "key"}})
+	environment := map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOME": home, "FIXTURE_KEY": "key", "JAD_REMOTE_E2E": e2eToken}
+	var listener net.Listener
+	if loop != nil {
+		listener = loop.prepare(t, put, global, provider.URL, w.a, w.b)
+	}
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: w.a, Environment: environment})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +104,13 @@ func startRemoteWorkspaces(t *testing.T, tokens string) *remoteWorkspaces {
 	}
 	t.Cleanup(service.Close)
 	handlers := service.HandlersFor(config)
-	server := httptest.NewServer(handlers.Main)
+	server := httptest.NewUnstartedServer(handlers.Main)
+	if listener != nil {
+		// The server listens where the remote entry already points (it names its own address).
+		_ = server.Listener.Close()
+		server.Listener = listener
+	}
+	server.Start()
 	t.Cleanup(server.Close)
 	w.remoteServer = &remoteServer{config: config, service: service, url: server.URL, table: table, handlers: handlers, server: server}
 	return w

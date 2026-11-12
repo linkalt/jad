@@ -4678,15 +4678,55 @@ positions, so they are stable across restarts; the routes use the session string
 globs and `Resolve` (no file name before it is parsed); no golden file changed.
 
 **Open gaps.**
-- Transcript reads check the token against the canonical reference (`a:s1` when several workspaces
-  are served): a token with globs written for bare ids sends but cannot read there. Closing it needs
-  a rule for which form a glob is judged by.
+- (Closed by T-036b below.) Transcript reads checked the token against the canonical reference
+  only, so a token with globs written for bare ids sent but could not read.
 - No token-to-workspace limit and no workspace allow-list in the client entry (`Entry.Allows` is
   category/name). A remote entry pointing at its own server is an explicit way across workspaces.
 - The start workspace, when not listed in `global.json`, has an id derived from its folder name.
-- Loop through a remote entry that points at the same server is not run end to end (hop limit with
-  qualified sessions and full-reference chain nodes are tested separately).
+- (Closed by T-036b below.) The loop through a remote entry that points at the same server was not
+  run end to end.
 - v1 with several session roots: the remote routes take `<root>:<session>` and answer
   `ambiguous_session` for a bare id held by two roots.
 - The reader fix means remote transcripts work with several workspaces; no test existed for it
   before, and none runs it with a v1 multi-root server (v1 resolution is unchanged by construction).
+
+## Remote transcripts for bare-glob tokens, and the self-pointing loop (T-036b, Go, 2026-11-13)
+
+**Decision (decider, after T-036).** The token-glob rule of T-036 (a qualified session matches only
+globs whose session part is `*` or has a colon) is accepted and confirmed. The ambiguous-session
+change of v1 with several roots is accepted. Two items had to land: a token written for bare ids
+must read the transcript of a session it can start a run on, and the loop through a remote entry
+that points at the server itself must be run end to end.
+
+**Built.** `tokenProfiles` (`app/remote_transcripts.go`) judges a session by two names: the
+canonical reference and, for `<workspace>:<session>`, the bare id when `sessionfs.Resolve` of the bare
+id gives exactly that reference. Used for the profile globs (before the lookup as a filter, after it
+as the decision), for the agent globs of sub-agent runs and for the profile names of a failed read.
+An ambiguous bare id, another workspace's session, a resolution error, or a different reference
+leave only the canonical name: fail closed. `Resolve` is the lookup the start routes use, so a read
+reaches nothing a start could not. Details in `docs/design_workspace_layout.md` section 28.
+
+**Tests.** `remote_bare_token_test.go`: real server with two workspaces that both hold `s1`; a bare
+token reads nothing while the id is ambiguous (bare, `a:s1`, `b:s1`), reads a:s1 once b's file is
+gone and loses it when the file returns; a session only b holds is read bare and as `b:only-b`,
+never as `a:only-b`; the cursor of that read continues for the same token and not for another;
+sub-agent agent globs and candidate profiles; v1 with two session roots. `remote_loop_test.go`: the
+real loop (four profiles in two workspaces through `remote:self/...`) ends at `remote_hop_limit`
+with every profile asked exactly twice (call, result), none running a second time. Mutations
+checked: no bare name, no equality of the references, agent globs on the canonical name only, no
+bare name in the filter (cursor form), Candidates without the bare name, and `max_hops` raised so the
+loop would reach the busy profile: each fails a test.
+
+**Open gaps.**
+- The bare id is looked up once per read and once per sub-agent callback set (`MayAgent` keeps the
+  names it computed): a workspace that gains the id between the lookup and the read is seen by
+  the next read only. The read itself is of the session the first lookup resolved, which the token
+  could have started a run on at that moment.
+- The reference-equality guard in `sessionNames` cannot be reached through the HTTP routes (the
+  qualified lookup already fails for a session the workspace does not hold); it is tested on
+  `sessionNames` directly and exists for the window above.
+- In v1 with several session roots a bare-glob token could not read before T-036 either; it now
+  reads sessions whose bare id is unique. No v1 golden changed.
+- A remote entry that points at its own server remains an explicit way across workspaces; the loop
+  is stopped by `max_hops` (remote hops are not chain nodes), not by cycle detection.
+- Still not built: a token limited to workspaces, and a workspace allow-list in the client entry.

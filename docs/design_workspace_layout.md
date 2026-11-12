@@ -1522,15 +1522,32 @@ copied definition fail. The workspace wording is in the description the code app
 is now pinned by `TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas`.
 
 **Limits.**
-- Transcript tools re-check a token against the session's canonical reference (`a:s1` with several
-  workspaces): a token whose globs are written for bare ids sends and reads nothing there, because
-  its canonical form has a colon. Write `*` or `<workspace>:<session>` globs for such a server.
+- Transcript reads and token globs written for bare ids (T-036b). The transcript tools re-check a
+  token against the session's canonical reference (`a:s1` with several workspaces). A token whose
+  globs are written for bare ids could start a run there but not read its transcript, so the check
+  now tries two names: the canonical reference under the rule above, and the bare id, but only
+  while the bare id resolves (`sessionfs.Resolve`, the lookup a start request makes) to exactly
+  that session. A bare id that two workspaces hold, a session of another workspace and an error
+  all give no second name, so access fails closed; a second workspace that later holds the id
+  takes the access away again. The same two names apply to the agent globs of sub-agent runs
+  (`tokenProfiles.sessionNames`) and to the profile names offered when a read fails. A read can
+  therefore reach only a session the token could start a run on, never more: the one difference
+  from a start is that the session may be written as `a:s1` (as a cursor does) when the bare id
+  resolves to `a:s1`. In v1 with several session roots the same rule applies with the root id (a
+  bare token could not read there before either). Race: the lookup of the bare id and the read are
+  two steps; a workspace that gains the id between them is seen by the next read, not this one.
 - A workspace that is not listed in `global.json` (the start directory) gets an id derived from
   its folder name; list it with an `id` for a remote address that does not depend on the folder.
 - v1 with several session roots now also takes `<root>:<session>` on the remote routes and answers
   `ambiguous_session` for a bare id held by two roots (before: `no_session`).
 - Tests: `remote_workspace_test.go` (two workspaces that both hold `s1`, real server, real client
-  tool, remote transcripts, tokens, hop limit, local refusal), `remote/target_workspace_test.go`,
-  `remoteapi/hardening_test.go`. The loop across a remote entry that points at the same server is
-  not run end to end; its pieces are: the hop limit applies to qualified sessions, and chain keys
-  carry the workspace.
+  tool, remote transcripts, tokens, hop limit, local refusal), `remote_bare_token_test.go` (bare
+  globs: unique, ambiguous, other workspace, cursor, agents, v1 with two roots),
+  `remote_loop_test.go`, `remote/target_workspace_test.go`, `remoteapi/hardening_test.go`.
+- The loop through a remote entry that points at the server itself is run end to end
+  (`remote_loop_test.go`): four profiles of two workspaces message one another round through
+  `remote:self/...` (the entry's address is the server's own listener, taken before it starts);
+  the call that would come back to the first profile is refused with `remote_hop_limit` (max_hops
+  3) before it reaches that busy profile, every run ends, and no profile gets a second run. The
+  chain nodes of local messages are not involved: remote hops count hops only, so a cycle through
+  the server's own entry is stopped by max_hops, not by cycle detection.
