@@ -16,7 +16,7 @@ import (
 func (m profileMessenger) ProfileInfo(ctx context.Context, ownerKey, session, profile string) (*int64, error) {
 	config, err := m.profileConfig(ownerKey, session, profile)
 	if err != nil {
-		return nil, err
+		return nil, otherProfileError(ownerKey, strings.TrimSpace(profile), err)
 	}
 	shared, release, err := m.resolver.sharedStore(config)
 	if err != nil {
@@ -42,7 +42,7 @@ func (m profileMessenger) CompactProfile(ctx context.Context, ownerKey, session,
 		return err
 	}
 	_, err = m.resolver.CompactProfile(ctx, reference, name)
-	return err
+	return otherProfileError(ownerKey, name, err)
 }
 
 // ResetProfile implements native.ProfileActions through ResetProfile, which refuses while a run
@@ -52,7 +52,7 @@ func (m profileMessenger) ResetProfile(ctx context.Context, ownerKey, session, p
 	if err != nil {
 		return err
 	}
-	return m.resolver.ResetProfile(ctx, reference, name)
+	return otherProfileError(ownerKey, name, m.resolver.ResetProfile(ctx, reference, name))
 }
 
 // profileTarget resolves the session and profile a request names: an empty session is the

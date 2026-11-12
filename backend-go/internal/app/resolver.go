@@ -1276,13 +1276,18 @@ func mapSessionError(err error) error {
 		}
 		return &httpapi.StatusError{Code: status, Message: resolveErr.Message}
 	}
+	// An own model error keeps its mark through the status (otherProfileError reads it).
+	var cause error
+	if sessionfs.IsOwnModelError(err) {
+		cause = err
+	}
 	var clientErr *sessionfs.ClientError
 	if errors.As(err, &clientErr) {
-		return &httpapi.StatusError{Code: http.StatusBadRequest, Message: clientErr.Message}
+		return &httpapi.StatusError{Code: http.StatusBadRequest, Message: clientErr.Message, Cause: cause}
 	}
 	var configErr *sessionfs.ConfigError
 	if errors.As(err, &configErr) {
-		return &httpapi.StatusError{Code: http.StatusUnprocessableEntity, Message: configErr.Message}
+		return &httpapi.StatusError{Code: http.StatusUnprocessableEntity, Message: configErr.Message, Cause: cause}
 	}
 	return err
 }

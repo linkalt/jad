@@ -84,7 +84,7 @@ func checkModelEffortOf(modelPath string, bases map[string]ModelBase, workspace 
 		return err
 	}
 	_, err = model.withEffort(effort)
-	return err
+	return markOwnEffort(modelPath, bases, err)
 }
 
 // withEffort returns the model with request.reasoning.effort set to the chosen effort. The
@@ -142,5 +142,14 @@ func checkModelEffortOnlyOf(modelPath string, bases map[string]ModelBase, worksp
 		return nil
 	}
 	_, err = model.withEffort(effort)
+	return markOwnEffort(modelPath, bases, err)
+}
+
+// markOwnEffort marks an effort error of an own model (in bases): its text tells the efforts the
+// own file sets and its base's model name.
+func markOwnEffort(modelPath string, bases map[string]ModelBase, err error) error {
+	if _, own := bases[modelPath]; own {
+		return ownModelError(err)
+	}
 	return err
 }

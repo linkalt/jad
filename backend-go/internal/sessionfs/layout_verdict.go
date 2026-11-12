@@ -338,10 +338,16 @@ func (v *profileVerdict) selectionFault(requested string) error {
 		return nil
 	}
 	reasons := make([]string, 0, len(v.badModels))
+	own := false
 	for _, item := range v.badModels {
 		reasons = append(reasons, item.err.Error())
+		own = own || IsOwnModelError(item.err)
 	}
-	return configError("%s: no model it lists can be used: %s", v.entry.Path, strings.Join(reasons, "; "))
+	err := configError("%s: no model it lists can be used: %s", v.entry.Path, strings.Join(reasons, "; "))
+	if own {
+		return ownModelError(err)
+	}
+	return err
 }
 
 // modelFileProblem is nil when the file at path passes the model rules of the layout

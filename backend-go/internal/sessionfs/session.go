@@ -767,7 +767,7 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 		return SessionConfig{}, err
 	}
 	if model, err = model.withEffort(c.ReasoningEffort); err != nil {
-		return SessionConfig{}, err
+		return SessionConfig{}, markOwnEffort(c.ModelPath, c.ModelBases, err)
 	}
 	c.Model = model
 	return c, nil

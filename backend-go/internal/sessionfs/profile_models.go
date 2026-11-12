@@ -263,9 +263,10 @@ func loadModelOf(path string, bases map[string]ModelBase, workspace bool, prompt
 	}
 	fields, err := ownModelFields(path, base)
 	if err != nil {
-		return Model{}, err
+		return Model{}, ownModelError(err)
 	}
-	return modelFromFields(fields, path, promptRole, promptText)
+	model, err := modelFromFields(fields, path, promptRole, promptText)
+	return model, ownModelError(err)
 }
 
 // ownModels is the model catalog of one profile's load: the shared catalog with the
@@ -324,7 +325,7 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 		scans.noteFile(entry.Path)
 		base, err := resolveOwnModel(entry.Path, shared)
 		if err != nil {
-			own.faults[entry.Path] = err
+			own.faults[entry.Path] = ownModelError(err)
 			continue
 		}
 		scans.noteFile(base.Path)

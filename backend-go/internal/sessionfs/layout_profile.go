@@ -46,7 +46,7 @@ func checkProfileWith(path string, profile layoutProfileFile, allModels *catalog
 			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
 		}
 		if err := effortCheck(entry.Path, effort); err != nil {
-			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
+			return layoutProfileFile{}, nil, keepOwnModelMark(err, configError("%s: model_default: %v", path, err))
 		}
 		if id != entry.ID() {
 			// A scope prefix (workspace layout) picked the entry; in the narrowed models its

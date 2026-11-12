@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -91,6 +92,12 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		var status *httpapi.StatusError
 		if request.Model != "" && errors.As(err, &status) && (status.Code == http.StatusBadRequest || status.Code == http.StatusUnprocessableEntity) {
 			if _, plain := m.resolver.Resolve(ctx, targetReference, target, ""); plain == nil {
+				if sessionfs.IsOwnModelError(err) {
+					// Only an own model the call named fails this way (an effort it does not
+					// offer): it is refused as one, and its text, which tells what the own
+					// file sets, is not passed on (3c.2a).
+					return nil, ownModelRefusal(request.Model)
+				}
 				return nil, &native.ProfileModelError{Model: request.Model, Message: status.Message}
 			}
 		}
@@ -258,8 +265,32 @@ func (m profileMessenger) RemoteDirectory(dir string) *remote.Directory {
 // profile's own models (phase 3c): those are for the target's own choice. Without a named
 // model the target runs its own default, own or not.
 func refuseOwnModel(target sessionfs.SessionConfig, model string) error {
-	if model != "" && target.OwnModel(target.ModelPath) {
-		return &native.ProfileModelError{Model: model, Message: "it is one of that profile's own models, which another profile cannot choose"}
+	if model == "" {
+		return nil
+	}
+	// An own model the call named that cannot be used leaves no ModelPath, only its fault: it is
+	// refused the same way, before any run, rather than started to fail (3c.2a).
+	if target.OwnModel(target.ModelPath) || target.ModelPath == "" && sessionfs.IsOwnModelError(target.ModelFault) {
+		return ownModelRefusal(model)
 	}
 	return nil
+}
+
+func ownModelRefusal(model string) error {
+	return &native.ProfileModelError{Model: model, Message: "it is one of that profile's own models, which another profile cannot choose"}
+}
+
+// otherProfileError is err as a caller of profile may read it. An error about one of profile's
+// own model files names a file under profile-own and why it fails, which the sandbox hides
+// from every other profile, so a caller of another profile gets only that the selected model
+// could not be loaded (decider 3c.2a); the profile itself, its session and the server log keep
+// the whole text. Every other error is returned as it is.
+func otherProfileError(ownerKey, profile string, err error) error {
+	if err == nil || !sessionfs.IsOwnModelError(err) {
+		return err
+	}
+	if _, caller, _ := strings.Cut(ownerKey, "\x00"); caller == profile {
+		return err
+	}
+	return fmt.Errorf("profile %s: its selected model could not be loaded", profile)
 }

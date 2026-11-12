@@ -219,7 +219,7 @@ func resolveFallbackModels(settings *ModelFallbackSettings, own ownModels, sessi
 			continue
 		}
 		if err := own.effort(found.Path, effort); err != nil {
-			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
+			return keepOwnModelMark(err, configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err))
 		}
 		entry.ModelPath, entry.ReasoningEffort = found.Path, effort
 		kept = append(kept, entry)

@@ -106,9 +106,15 @@ type StatusError struct {
 	Message string
 	// RetryAfterSeconds, when positive, is sent as the Retry-After header.
 	RetryAfterSeconds int
+	// Cause, when set, is the error the status was made from, kept so that a caller can still
+	// tell its kind (an own model error, sessionfs.OwnModelError). It is never sent.
+	Cause error
 }
 
 func (e *StatusError) Error() string { return e.Message }
+
+// Unwrap returns Cause.
+func (e *StatusError) Unwrap() error { return e.Cause }
 
 // Handler implements the health and session-run HTTP/SSE routes.
 type Handler struct {

@@ -886,6 +886,37 @@ toolsets (3c.3) are not built.
   and a bwrap run whose own exec cannot write `profile-own/.../models` while another profile
   cannot read it.
 - **Limits:** load warnings name own model files and reasons; they go to the server log only.
-  A run error of a profile whose own model fails (its model fault) names that file and can
-  reach a `profile_message` caller of another profile, as any model fault can (not traced); no secret is in it,
-  since an own model cannot hold one. `jad check` does not check own model files (3c.2).
+  An error about an own model file is kept from other profiles since 3c.2a (section 18).
+  `jad check` does not check own model files (3c.2).
+
+## 18. Phase 3c.2a as built: own model errors and other profiles
+
+An error about one of a profile's own model files names a file under `profile-own` and why
+it fails. The sandbox hides `profile-own` from other profiles, so another profile may not read
+that text either (decider 3c.2a).
+
+- **Marked errors:** `sessionfs.OwnModelError` wraps such an error with its text whole, so a
+  `ConfigError` or `ClientError` is still one. It marks:
+  - an own file whose base cannot be resolved (`ownModels.faults`);
+  - a composition or model-rule failure of an own file (`loadModelOf`);
+  - an effort the own model does not offer (`markOwnEffort`, at load, in `WithModel`, for
+    `model_default` and `model_fallback`);
+  - "no model it lists can be used" when an own model is among them.
+
+  `mapSessionError` keeps the mark through `httpapi.StatusError.Cause`, which is never sent.
+- **Where other profiles meet them:**
+  - `profile_message`: a model the call names that is one of the target's own is refused
+    before any run with the existing own-model refusal, also when that model cannot be
+    loaded (it was started and failed) or does not offer the effort (its text, with the own
+    efforts and the base's model name, was passed on). A target whose own default cannot be
+    loaded fails its run; the caller reads the run's generic failure line
+    (`clientRunErrorMessage`), which never held the detail.
+  - `profile` tool `compact`, `reset`, `info` of another profile: an own model error becomes
+    "profile X: its selected model could not be loaded" (`otherProfileError`). Before,
+    `compact` passed the model fault's text, path and reason, to the caller.
+  - Remote callers: the remote API sends a generic line for every backend error, and a remote
+    run's failure is the generic run line. Nothing changed.
+- **Kept whole:** the profile's own calls (same profile ID, any session of the workspace),
+  its session listing (`model_fault`), and the server log.
+- **Not redacted:** what the target's model writes in its answer. A target that reads its own
+  files can repeat them; that is the target's choice, not an error path.
