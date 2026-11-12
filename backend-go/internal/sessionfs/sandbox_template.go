@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -85,7 +86,7 @@ func (t sandboxTemplates) readDescribed(name, where string) (map[string]json.Raw
 	t.scans.noteFile(path)
 	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, "", configError("%s: sandbox template %q is not in %s%s", where, name, t.dir, templateSuggestion(name, ListSandboxTemplates(t.dir)))
+		return nil, "", configError("%s: sandbox template %q is not in %s%s%s", where, name, t.dir, templateSuggestion(name, ListSandboxTemplates(t.dir)), sandboxSkippedNote(t.dir))
 	}
 	if err != nil {
 		return nil, "", configError("%s: could not be read: %v", path, err)
@@ -132,20 +133,48 @@ func parseSandboxTemplate(path string, contents []byte) (map[string]json.RawMess
 
 // ListSandboxTemplates are the template names in dir, sorted; a missing folder has none.
 func ListSandboxTemplates(dir string) []string {
+	names, _ := scanSandboxTemplates(dir)
+	return names
+}
+
+// scanSandboxTemplates reads the flat template folder: the names of its templates, sorted, and
+// the .json files left out because their name is not an identifier ("base (1).json", the copy a
+// file manager makes). Every file of this folder is meant to be a template, so such a file is a
+// misnamed template, not an unrelated file; it is never read, and a sandbox value naming it is
+// refused on the name as before. Hidden files, other suffixes and folders are ignored without a
+// word, as in the catalogs. A missing or unreadable folder has no templates.
+func scanSandboxTemplates(dir string) (names []string, skipped []catalog.Skipped) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var names []string
 	for _, entry := range entries {
 		name, ok := strings.CutSuffix(entry.Name(), SandboxTemplateFileSuffix)
-		if !ok || strings.HasPrefix(entry.Name(), ".") || entry.IsDir() || catalog.ValidateIdentifier(name) != nil {
+		if !ok || strings.HasPrefix(entry.Name(), ".") || entry.IsDir() {
+			continue
+		}
+		if err := catalog.ValidateIdentifier(name); err != nil {
+			skipped = append(skipped, catalog.Skipped{Path: filepath.Join(dir, entry.Name()), Reason: fmt.Sprintf("name %s", err)})
 			continue
 		}
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	return names
+	return names, skipped
+}
+
+// sandboxSkippedNote names the template files a folder holds under a name that cannot be used, for
+// the error of a template that is not there: the copy "base (1).json" is the likely reason.
+func sandboxSkippedNote(dir string) string {
+	_, skipped := scanSandboxTemplates(dir)
+	if len(skipped) == 0 {
+		return ""
+	}
+	names := make([]string, len(skipped))
+	for i, item := range skipped {
+		names[i] = filepath.Base(item.Path)
+	}
+	return "; files left out for their names (rename them): " + strings.Join(names, ", ")
 }
 
 func templateSuggestion(name string, names []string) string {

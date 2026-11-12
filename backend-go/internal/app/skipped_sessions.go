@@ -48,6 +48,16 @@ type warnedConfigs struct {
 
 // report logs the warnings of reference that its previous report did not carry.
 func (w *warnedConfigs) report(logger *slog.Logger, reference, profile string, warnings []string) {
+	w.reportWith(logger, reference, warnings, "session", reference, "profile", profile)
+}
+
+// reportRoot is report for the warnings of a session root, which belong to no session.
+func (w *warnedConfigs) reportRoot(logger *slog.Logger, rootID string, warnings []string) {
+	w.reportWith(logger, "root "+rootID, warnings, "root", rootID)
+}
+
+// reportWith is report with the attributes its log lines carry; key tells what is reported on.
+func (w *warnedConfigs) reportWith(logger *slog.Logger, key string, warnings []string, attrs ...any) {
 	if logger == nil {
 		return
 	}
@@ -59,16 +69,16 @@ func (w *warnedConfigs) report(logger *slog.Logger, reference, profile string, w
 	if w.seen == nil {
 		w.seen = make(map[string]map[string]struct{})
 	}
-	previous := w.seen[reference]
+	previous := w.seen[key]
 	if len(current) == 0 {
-		delete(w.seen, reference)
+		delete(w.seen, key)
 	} else {
-		w.seen[reference] = current
+		w.seen[key] = current
 	}
 	w.mu.Unlock()
 	for _, warning := range warnings {
 		if _, logged := previous[warning]; !logged {
-			logger.Warn(warning, "session", reference, "profile", profile)
+			logger.Warn(warning, attrs...)
 		}
 	}
 }

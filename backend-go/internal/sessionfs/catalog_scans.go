@@ -25,6 +25,15 @@ type scanMemo struct {
 	results map[scanKey]scanResult
 	// checks are the verdicts of single-file checks (see check), by kind and path.
 	checks map[scanKey]fileCheck
+	// templates are the sandbox template folders listed, by folder.
+	templates map[string]templateFolder
+}
+
+// templateFolder is a listed sandbox template folder: the files its listing left out for their
+// names, with the folder stamped just before the listing.
+type templateFolder struct {
+	skipped []catalog.Skipped
+	stamp   fileStamp
 }
 
 // fileCheck is the verdict of one file check with the stamp taken just before the file was
@@ -45,7 +54,7 @@ type scanResult struct {
 
 // NewCatalogScans returns an empty memo.
 func NewCatalogScans() *CatalogScans {
-	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck)}}
+	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck), templates: make(map[string]templateFolder)}}
 }
 
 // recorder is a view that shares the memo and records what its own load reads: a
@@ -76,6 +85,29 @@ func (s *CatalogScans) Scan(kind, dir string) (*catalog.Catalog, error) {
 		s.mu.Unlock()
 	}
 	return result.catalog, result.err
+}
+
+// skippedTemplates lists the sandbox template folder once per memo and returns the template
+// files it leaves out for their names. A recording view stamps the folder, so renaming such a
+// file (or adding one) changes the stamp of every load that listed the folder. A nil scans lists
+// every time.
+func (s *CatalogScans) skippedTemplates(dir string) []catalog.Skipped {
+	if s == nil {
+		_, skipped := scanSandboxTemplates(dir)
+		return skipped
+	}
+	s.memo.mu.Lock()
+	folder, seen := s.memo.templates[dir]
+	if !seen {
+		folder.stamp = statStamp(dir)
+		_, folder.skipped = scanSandboxTemplates(dir)
+		s.memo.templates[dir] = folder
+	}
+	s.memo.mu.Unlock()
+	if s.recording {
+		s.add([]fileStamp{folder.stamp})
+	}
+	return folder.skipped
 }
 
 // check runs a check of the file at path, once per kind and path for the life of the memo,

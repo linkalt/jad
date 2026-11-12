@@ -82,6 +82,7 @@ type Resolver struct {
 	logger       *slog.Logger
 	skipped      skippedSessions
 	warned       warnedConfigs
+	misnamed     sessionfs.MisnamedSessions
 	roots        []sessionfs.Root
 	environment  map[string]string
 	catalog      CatalogConfig

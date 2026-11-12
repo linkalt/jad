@@ -190,6 +190,10 @@ func (r *Resolver) ListSessions(ctx context.Context, ifNoneMatch string, runStat
 			}
 			return httpapi.CatalogResponse{}, fmt.Errorf("read session root %q: %w", root.ID, err)
 		}
+		if root.Layout != nil {
+			// A session file under a name no route accepts is not listed; the log says why.
+			r.warned.reportRoot(r.logger, root.ID, r.misnamed.Find(root, entries))
+		}
 		for _, entry := range entries {
 			id, ok := sessionfs.SessionFileID(entry)
 			if !ok {

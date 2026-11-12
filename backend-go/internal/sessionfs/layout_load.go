@@ -567,6 +567,13 @@ func (c *layoutCompose) composeSandbox(setting, sessionLayer, profileSettings ma
 		cwd = filepath.Clean(expandHome(strings.TrimSpace(cwd)))
 	}
 	c.templates = sandboxTemplates{dir: c.layout.SandboxTemplateDir(cwd), scans: c.scans}
+	if c.templates.dir != "" {
+		// A template file under a name that cannot be used is in no sandbox value's reach; the
+		// warning is how its owner learns why a template does not apply.
+		for _, skipped := range c.scans.skippedTemplates(c.templates.dir) {
+			c.warn("%s: sandbox template file %s left out: %s", c.sessionPath, skipped.Path, skipped.Reason)
+		}
+	}
 	composed, absent, err := composeSandboxLayers(layers, wheres, c.templates)
 	if err != nil {
 		return err

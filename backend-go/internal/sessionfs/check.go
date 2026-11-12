@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -28,6 +29,7 @@ type CheckReport struct {
 	Shares      []CheckedShares
 	seen        map[string]bool
 	seenSandbox map[string]bool
+	seenFolders map[string]bool
 }
 
 // CheckedSandbox is an enabled sandbox setting and a session that uses it.
@@ -124,6 +126,7 @@ func CheckLayout(roots []Root, validateServer ServerFileValidator) (CheckReport,
 	for _, kind := range []CatalogKind{CatalogModels, CatalogMCP, CatalogToolsets, CatalogProfiles} {
 		report.checkCatalog(*layout, roots, kind, validateServer)
 	}
+	report.checkSandboxFolder(layout.Sandbox)
 	report.checkSessions(roots)
 	return report, nil
 }
@@ -176,6 +179,43 @@ func (r *CheckReport) checkCatalog(layout Layout, roots []Root, kind CatalogKind
 	}
 }
 
+// checkSandboxFolder reports each file of a sandbox template folder that is left out for its name,
+// once per folder. A folder that is not given (catalogs.sandbox is {cwd}/<folder>) is checked per
+// session, with the session's cwd.
+func (r *CheckReport) checkSandboxFolder(dir string) {
+	if dir == "" || r.seenFolders[dir] {
+		return
+	}
+	if r.seenFolders == nil {
+		r.seenFolders = map[string]bool{}
+	}
+	r.seenFolders[dir] = true
+	_, skipped := scanSandboxTemplates(dir)
+	for _, item := range skipped {
+		r.Checked++
+		r.add("sandbox", item.Path, fmt.Errorf("sandbox catalog: file %s left out: %s", item.Path, item.Reason))
+	}
+}
+
+// checkMisnamedSessions reports each file of a session root that holds a session under a name no
+// session route accepts. Files that are not sessions are not reported.
+func (r *CheckReport) checkMisnamedSessions(roots []Root) {
+	var finder MisnamedSessions
+	for _, root := range roots {
+		if root.Layout == nil {
+			continue
+		}
+		entries, err := os.ReadDir(root.Directory)
+		if err != nil {
+			continue // listSessionFiles reports an unreadable root
+		}
+		for _, warning := range finder.Find(root, entries) {
+			r.Checked++
+			r.add("session", root.ID, errors.New(warning))
+		}
+	}
+}
+
 func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
 	if config.NativeProfileMessage == nil {
 		return
@@ -205,6 +245,7 @@ func (r *CheckReport) addLeftOutByComposition(id string, location Location) {
 }
 
 func (r *CheckReport) checkSessions(roots []Root) {
+	r.checkMisnamedSessions(roots)
 	files, _, err := listSessionFiles(roots, 0, func(location Location, err error) {
 		r.Checked++
 		r.add("session", location.Reference, err)
@@ -225,6 +266,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			r.add("session", file.ID, err)
 			continue
 		}
+		r.checkSandboxFolder(location.Root.Layout.SandboxTemplateDir(config.WorkingDir))
 		r.checkProfileMessage(file.ID, config)
 		r.addSandbox(file.ID, config)
 		r.addShares(file.ID, config)
