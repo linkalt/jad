@@ -73,6 +73,20 @@ func (m profileMessenger) profileTarget(ownerKey, session, profile string) (stri
 	return location.Reference, strings.TrimSpace(profile), nil
 }
 
+// ProfileConfig implements native.ProfileActions: the configuration of the caller's own
+// profile. The session and the profile are those of ownerKey, so no input can name another.
+func (m profileMessenger) ProfileConfig(_ context.Context, ownerKey string) (sessionfs.ProfileConfig, error) {
+	session, profile, found := strings.Cut(ownerKey, "\x00")
+	if !found || session == "" || profile == "" {
+		return sessionfs.ProfileConfig{}, errors.New("config needs the caller's session and profile")
+	}
+	config, err := m.profileConfig(ownerKey, session, profile)
+	if err != nil {
+		return sessionfs.ProfileConfig{}, err
+	}
+	return sessionfs.ReadProfileConfig(config)
+}
+
 // profileConfig loads the settings of a profile of a session for a read.
 func (m profileMessenger) profileConfig(ownerKey, session, profile string) (sessionfs.SessionConfig, error) {
 	reference, name, err := m.profileTarget(ownerKey, session, profile)

@@ -163,6 +163,13 @@ type SessionConfig struct {
 	ModelFault error
 	// ProfilePath is the selected profile's own file in a catalog-layout session; empty otherwise.
 	ProfilePath string
+	// ProfileOwnDir and ProfileDataDir are the selected profile's private folder and working
+	// data folder in the workspace layout (Layout.ProfileOwnDir, ProfileDataDir); empty in v1.
+	ProfileOwnDir  string
+	ProfileDataDir string
+	// SettingSources are the setting layers of a catalog-layout session and the settings they
+	// composed to, for the profile tool's config action; nil otherwise.
+	SettingSources *SettingSources
 	// ReasoningEffort is the effort chosen with "@<effort>" on the requested model; WithModel
 	// applies it to the model's request.
 	ReasoningEffort string
@@ -1188,12 +1195,11 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, pat
 	var paths []string
 	for index, document := range documents {
 		if workspace != "" {
-			if rest, found := strings.CutPrefix(document, workspacePlaceholder); found {
-				if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, string(filepath.Separator)) {
-					return "", "", nil, configError("%s: prompt_documents[%d]: %s may only be followed by a / and a path", path, index, workspacePlaceholder)
-				}
-				document = workspace + rest
+			expanded, _, err := cutPlaceholder(document, workspacePlaceholder, workspace)
+			if err != nil {
+				return "", "", nil, configError("%s: prompt_documents[%d]: %v", path, index, err)
 			}
+			document = expanded
 		}
 		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path, maxPromptDocumentBytes)
 		if err != nil {

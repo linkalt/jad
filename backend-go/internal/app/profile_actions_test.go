@@ -62,3 +62,30 @@ func TestProfileInfoReportsTheLastCompletedResponseOrNoUsage(t *testing.T) {
 		t.Fatalf("with usage: tokens = %v, err = %v; want 1234", tokens, err)
 	}
 }
+
+// ProfileConfig reads the profile the owner key names, and no other: the key is the only input.
+func TestProfileConfigReadsTheOwnersProfile(t *testing.T) {
+	loaded, _ := layoutConfig(t, catalogSpec(), map[string]string{})
+	resolver, err := NewResolver(loaded.Roots, map[string]string{}, CatalogConfig{SnapshotTurns: 24, MaxPageTurns: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := profileMessenger{resolver: resolver}
+	view, err := actions.ProfileConfig(context.Background(), "session-1\x00dev/coder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(view.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Profile != "dev/coder" || view.Revision != sessionfs.CatalogETag(contents) || len(view.Layers) == 0 {
+		t.Fatalf("view = %+v", view)
+	}
+	if _, err := actions.ProfileConfig(context.Background(), "session-1"); err == nil {
+		t.Fatal("an owner key without a profile was read")
+	}
+	if _, err := actions.ProfileConfig(context.Background(), "nope\x00dev/coder"); err == nil {
+		t.Fatal("an unknown session was read")
+	}
+}

@@ -106,6 +106,9 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 		if err == nil {
 			err = checkProfileCeilings(layout, session, entry.Path, file.Settings, scans)
 		}
+		if err == nil {
+			err = layout.judgePrivateDocuments(entry.ID(), entry.Path, file, session)
+		}
 		if err != nil {
 			verdict.err = err
 			judgement.usable = judgement.usable.Without(entry.ID())

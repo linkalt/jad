@@ -23,7 +23,7 @@ var profileInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "path":{"type":"string","minLength":1,"description":"What to act on. Omit it, or give self, for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."},
-    "action":{"type":"string","enum":["list","info","compact","reset"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile. reset is refused while a run of the profile is active; compact waits for a live run to end."},
+    "action":{"type":"string","enum":["list","info","compact","reset","config"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, and its private and data folders. compact and reset are refused to a sub-agent and to your own profile; config is refused to a sub-agent and to another profile. reset is refused while a run of the profile is active; compact waits for a live run to end."},
     "filters":{"type":"array","items":{"type":"string"},"description":"Only profiles whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. Only with action list."},
     "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration. Only with action list."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous list response stopped; use the cursor it gave. Only with action list."}
@@ -44,6 +44,9 @@ type ProfileActions interface {
 	CompactProfile(ctx context.Context, ownerKey, session, profile string) error
 	// ResetProfile resets the profile's transcript and history; it refuses while a run is active.
 	ResetProfile(ctx context.Context, ownerKey, session, profile string) error
+	// ProfileConfig describes the caller's own profile: the session and profile come from
+	// ownerKey only, never from the model's input.
+	ProfileConfig(ctx context.Context, ownerKey string) (sessionfs.ProfileConfig, error)
 }
 
 // profileNoUsage is what info prints when no response has completed.
@@ -109,7 +112,7 @@ func NewProfileToolWithRemotes(settings sessionfs.NativeProfileSettings, own Tra
 	}, nil
 }
 
-const profileDescription = "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it."
+const profileDescription = "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, or show your own profile's configuration (config)."
 
 func (t *profileTool) fail(execution tools.ExecutionContext, status tools.Status, code, summary string, information ...tools.Information) string {
 	return tools.ExecutionError(execution.CallID, status, code, summary, information...)
@@ -123,6 +126,9 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	}
 	if strings.HasPrefix(path, remote.Prefix) {
 		return t.executeRemote(ctx, action, path, execution)
+	}
+	if action == "config" {
+		return t.config(ctx, path, execution)
 	}
 	if action == "list" && path != "" && !strings.HasPrefix(path, "session:") {
 		// list takes a session (session:<id>) or nothing; a profile path lists one profile's info.
@@ -186,7 +192,42 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 		}
 		return "reset profile " + profile
 	}
-	return t.fail(execution, tools.StatusInvalidInput, "invalid_input", "action must be list, info, compact or reset")
+	return t.fail(execution, tools.StatusInvalidInput, "invalid_input", "action must be list, info, compact, reset or config")
+}
+
+// config shows the caller its own profile's configuration. Only the caller's own profile, from
+// its execution context, is ever read: another profile is refused whatever allow_other_profiles
+// says, and so is a sub-agent, whatever allow_children says. Plan mode does not refuse it: it
+// changes nothing.
+func (t *profileTool) config(ctx context.Context, path string, execution tools.ExecutionContext) string {
+	if execution.AgentDepth > 0 {
+		return t.fail(execution, tools.StatusForbidden, "profile_children_denied", "A sub-agent may not read a profile's config: config is for a profile's own runs")
+	}
+	callerSession, callerProfile, hasCaller := strings.Cut(execution.SessionKey, "\x00")
+	if !hasCaller || callerSession == "" || callerProfile == "" {
+		return t.fail(execution, tools.StatusForbidden, "profile_caller_unknown", "The caller's own profile is not known here: config needs a session and a profile")
+	}
+	if path != "" && path != "self" {
+		session, profile, ok := parseProfilePath(path)
+		if !ok {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_path", "path is not a form this tool accepts", tools.Information{Key: "valid", Value: "self"})
+		}
+		if profile != callerProfile || (session != "" && session != callerSession) {
+			return t.fail(execution, tools.StatusForbidden, "profile_config_self_only", "config shows only your own profile: omit path, or give self")
+		}
+	}
+	if t.actions == nil {
+		return t.fail(execution, tools.StatusError, "profile_unavailable", "Profiles are not available to this tool")
+	}
+	config, err := t.actions.ProfileConfig(ctx, execution.SessionKey)
+	if err != nil {
+		return t.fail(execution, tools.StatusError, "profile_config_failed", err.Error())
+	}
+	encoded, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return t.fail(execution, tools.StatusError, "profile_config_failed", err.Error())
+	}
+	return string(encoded)
 }
 
 // executeRemote reads the info of a profile on a remote JAD server, the only remote action. Compact

@@ -388,8 +388,9 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
      commands still find their setting as in v1 (they may read `W/.jad/setting.json` or
      `G/setting.json`); the catalog routes use the start workspace's layout (global models and
      tools, the start workspace's profiles).
-2. **Self-access:** `{profile_own}`, `{profile_data}`, the private-document check, reading own
-   config and state, `profile config`.
+2. **Self-access (section 12):** `{profile_own}`, `{profile_data}`, the private-document check,
+   reading own config and state, `profile config`. 2a (backend) built; 2b (sandbox) see
+   section 12.
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
    `profile_self_edit`, the D3 path limits.
 4. **Migration command.**
@@ -536,3 +537,43 @@ its own toolsets (phase 3). Tests: `sessionfs/workspace_scope_test.go`, `catalog
 `app/workspace_routes_test.go` (`/api/workspaces`, a scoped PUT lands in b, 404s, a fork in b
 writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlobalOnes`),
 `sessionfs/workspace_paths_test.go` (`TestCeilingComparesSandboxPathsCleaned`).
+
+## 12. Phase 2 as built
+
+**Commit 2a, backend only (no sandbox involved):**
+
+- `{profile_own}` (D1): a leading `{profile_own}` in a profile's `prompt_documents` is
+  `W/.jad/profile-own/<cat>/<name>` (`Layout.ProfileOwnDir`, expanded in
+  `layoutCompose.addProfileFields`, which knows the profile ID). It must be alone or followed by
+  `/`. v1 keeps the text as a path relative to the cwd, as with `{workspace}`.
+  `SessionConfig.ProfileOwnDir` and `ProfileDataDir` (`W/.jad/data/profiles/<cat>/<name>`) are set
+  in v2 only.
+- The private-document check (D1, P2): a prompt document that resolves after links into the
+  `.jad/profile-own/` of any known workspace (`Layout.ProfileOwnRoots`, served or skipped), and
+  not under `<real profile-own>/<cat>/<name>` of the profile itself, is a load error. The own
+  folder is taken by its name under the real `profile-own`, so an own folder linked to another
+  profile's does not make that one "own"; the same ID in another workspace is another profile.
+  `judgeScope` checks every profile's documents (a relative one from the cwd its layers give), so
+  an unselected profile is left out with a warning; the selected profile's load checks the
+  documents it actually read (its own, statecontext triggers', agents' and agent toolsets') and
+  fails naming the profile file. A missing file keeps today's error.
+- `profile config` (P3): new action of the native `profile` tool. The session and profile come
+  from the execution context's owner key only (`ProfileActions.ProfileConfig(ctx, ownerKey)`);
+  `path` may be omitted, `self` or the caller's own name; another profile is refused
+  (`profile_config_self_only`) whatever `allow_other_profiles` says, a sub-agent too
+  (`profile_children_denied`) whatever `allow_children` says. Plan mode does not refuse the
+  action; the `profile` tool is not `ReadOnly`, so a plan-mode run sees it only through a
+  `plan_mode.allow` entry, as before. It returns the profile file (contents, path, revision =
+  `CatalogETag` of the bytes shown), the effective settings (the `layoutSettingKeys` of the
+  composed setting, taken from the compose that runs), `set_by` per dotted leaf (an array is one
+  value) and the layer list (`built-in`, `global`, `workspace`, `session`, `profile` in v2;
+  `defaults`, `session`, `profile` in v1), and the own and data folders. `set_by` is computed by
+  mirroring `mergeSettings` (an object over an object merges, anything else replaces and drops
+  the earlier layers); a key whose composed value is not that merge (`sandbox`, composed with
+  templates and added lists; `hooks` a toolset adds) is one entry naming every layer that has
+  it, or `toolset`. A setting in neither list takes its built-in default. Not shown: `server`,
+  triggers of `global.json`, remotes and their tokens, `G/auth`, the contents of `env_file` (none
+  of them is a layer setting key; toolsets are not shown either).
+- Schema: `sample/tools/native/profile.json` changed with the Go schema. The gitignored local
+  copy `.jad/tools_defintion/native/profile.json` is not changed by the commit and must be
+  replaced by the sample (or regenerated), or the running jad refuses the `profile` tool.

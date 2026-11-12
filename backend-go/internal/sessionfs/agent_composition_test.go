@@ -55,7 +55,7 @@ func agentCompositionFixture(t *testing.T) Location {
 func TestAgentToolsetConfigDiffersFromTheCallersOnlyInToolsSelectionAndIdentity(t *testing.T) {
 	location := agentCompositionFixture(t)
 	tools := []string{"NativeExec", "NativeReadImage", "NativeAsync", "NativeSkill", "MCPServers", "Hooks", "StateContext", "NativeSubagent", "AgentToolsets"}
-	identity := []string{"Profile", "DefaultProfile", "Profiles", "ProfileNames", "ProfilePath", "RemotesDir"}
+	identity := []string{"Profile", "DefaultProfile", "Profiles", "ProfileNames", "ProfilePath", "RemotesDir", "SettingSources"}
 	for requested, selection := range map[string][]string{
 		"":                  {"ModelPath", "ModelPaths"},
 		"openai/cheap@high": {"ModelPath", "ModelPaths", "ReasoningEffort"},

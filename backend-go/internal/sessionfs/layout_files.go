@@ -58,6 +58,13 @@ type Layout struct {
 	SealedHelpers map[string]string
 	// Libraries are the content libraries of the workspace (global and own folders).
 	Libraries *Libraries
+	// DefaultLayers are the layers Defaults was merged from, in order (built-in, global,
+	// workspace), kept so profile config can say where each value comes from.
+	DefaultLayers []SettingLayer
+	// ProfileOwnRoots are the profile-own folders (<dir>/.jad/profile-own) of every known
+	// workspace, this one too, as written: a prompt document that resolves into one of them,
+	// after links, and not into the profile's own folder is a load error (design D1).
+	ProfileOwnRoots []string
 
 	// scope and scopeUsers are set by ScopedCatalogLayout for the catalog routes only.
 	scope      catalogScope

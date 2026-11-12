@@ -89,6 +89,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	sources := built.settingSources(judged.verdicts[entry.ID()].file.Settings, setting)
 	// A model that fails the model rules is not offered, so it cannot be loaded as the
 	// requested one; the session loads without a model and a run reports the file's error.
 	fault := judged.verdicts[entry.ID()].selectionFault(requestedModel)
@@ -100,6 +101,11 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err != nil {
 		return SessionConfig{}, err
 	}
+	if err := layout.checkPrivateDocuments(entry.ID(), entry.Path, config); err != nil {
+		return SessionConfig{}, err
+	}
+	config.SettingSources = sources
+	config.ProfileOwnDir, config.ProfileDataDir = layout.ProfileOwnDir(entry.ID()), layout.ProfileDataDir(entry.ID())
 	if err := built.finishSandbox(&config); err != nil {
 		return SessionConfig{}, err
 	}
@@ -478,6 +484,8 @@ type layoutCompose struct {
 	// withoutToolsets composes the profile as if it named no toolset, to tell a failure of the
 	// toolsets from one of the profile's own and the shared settings.
 	withoutToolsets bool
+	// sessionLayer is the session's settings with its top-level cwd; set by compose.
+	sessionLayer map[string]json.RawMessage
 }
 
 func (c *layoutCompose) warn(format string, args ...any) {
@@ -519,6 +527,7 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 			return nil, nil, err
 		}
 	}
+	c.sessionLayer = sessionLayer
 	setting := mergeSettings(mergeSettings(c.layout.Defaults, sessionLayer), profile.Settings)
 	if raw, set := setting["cwd"]; !set || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		// Falling back to the root folder would run tools inside .jad/.
@@ -565,7 +574,9 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 	for _, other := range c.profiles.Entries() {
 		entry := c.storageEntry(other, toolBase)
 		if other.ID() == selected.ID() {
-			c.addProfileFields(entry, other.ID(), profile, models)
+			if err := c.addProfileFields(entry, other.ID(), selected.Path, profile, models); err != nil {
+				return nil, nil, err
+			}
 			c.noteProfileName(other.ID(), profile)
 		} else {
 			c.noteProfileName(other.ID(), c.judged.verdicts[other.ID()].file)
@@ -676,7 +687,7 @@ func toolStorageBase(setting map[string]json.RawMessage) (string, error) {
 }
 
 // addProfileFields adds the fields only the selected profile needs.
-func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string, profile layoutProfileFile, models *catalog.Catalog) {
+func (c *layoutCompose) addProfileFields(entry map[string]any, profileID, profilePath string, profile layoutProfileFile, models *catalog.Catalog) error {
 	if ids := models.IDs(); len(ids) > 0 {
 		entry["models"] = ids
 		entry["model_default"] = ids[0]
@@ -693,11 +704,16 @@ func (c *layoutCompose) addProfileFields(entry map[string]any, profileID string,
 		entry["instructions"] = profile.Instructions
 	}
 	if len(profile.PromptDocuments) > 0 {
-		entry["prompt_documents"] = profile.PromptDocuments
+		documents, err := c.layout.expandProfileOwn(profile.PromptDocuments, profileID, profilePath)
+		if err != nil {
+			return err
+		}
+		entry["prompt_documents"] = documents
 	}
 	if len(profile.Tools) > 0 {
 		entry["tools"] = profile.Tools
 	}
+	return nil
 }
 
 // loadedToolset is one toolset file read for a compose: its ID, file and content.

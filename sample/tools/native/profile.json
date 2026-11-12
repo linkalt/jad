@@ -5,7 +5,7 @@
       "id": "native.profile",
       "source": "native",
       "name": "profile",
-      "description": "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it.",
+      "description": "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, or show your own profile's configuration (config).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -20,9 +20,10 @@
               "list",
               "info",
               "compact",
-              "reset"
+              "reset",
+              "config"
             ],
-            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. compact and reset are refused to a sub-agent and to your own profile. reset is refused while a run of the profile is active; compact waits for a live run to end."
+            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, and its private and data folders. compact and reset are refused to a sub-agent and to your own profile; config is refused to a sub-agent and to another profile. reset is refused while a run of the profile is active; compact waits for a live run to end."
           },
           "filters": {
             "type": "array",

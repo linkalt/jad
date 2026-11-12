@@ -173,9 +173,11 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 	// Every .jad folder of a known workspace, served or not, is hidden from the others, as
 	// written and with links resolved (a sandbox binds real paths).
 	jadFolders := make(map[string][]string, len(workspaces))
+	profileOwnRoots := make([]string, 0, len(workspaces))
 	for _, workspace := range workspaces {
 		jad := filepath.Join(workspace.Directory, ".jad")
 		jadFolders[workspace.ID] = appendNewStrings([]string{jad}, realPath(jad))
+		profileOwnRoots = appendNewStrings(profileOwnRoots, filepath.Join(jad, profileOwnFolder))
 	}
 	auth := appendNewStrings([]string{filepath.Join(global, "auth")}, filepath.Join(globalReal, "auth"))
 	roots := make([]Root, 0, len(specs))
@@ -186,6 +188,7 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 		}
 		layout.FixedHidePaths = slices.Clone(auth)
 		ownJad := filepath.Join(spec.dir, ".jad")
+		layout.ProfileOwnRoots = appendNewStrings(slices.Clone(profileOwnRoots), filepath.Join(ownJad, profileOwnFolder))
 		layout.SealedPaths = appendNewStrings(appendNewStrings([]string{global}, globalReal), appendNewStrings([]string{ownJad}, realPath(ownJad))...)
 		// The default functions_dir of each tool when the session works in W (cwd W/.jad/<dir>).
 		layout.SealedHelpers = map[string]string{"exec": filepath.Join(ownJad, "exec"), "tool_smith": filepath.Join(ownJad, "functions")}
@@ -527,7 +530,9 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 		return nil, err
 	}
 	layout := base
-	layout.Defaults = mergeSettings(mergeSettings(map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}, globalDefaults), own)
+	builtIn := map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}
+	layout.Defaults = mergeSettings(mergeSettings(builtIn, globalDefaults), own)
+	layout.DefaultLayers = []SettingLayer{{Name: SettingLayerBuiltIn, Values: builtIn}, {Name: SettingLayerGlobal, Values: globalDefaults}, {Name: SettingLayerWorkspace, Values: own}}
 	layout.Profiles = filepath.Join(jad, "profiles")
 	layout.State = filepath.Join(jad, "state")
 	layout.WorkspaceModels = filepath.Join(jad, "models")

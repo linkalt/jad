@@ -32,6 +32,11 @@ func (f *fakeProfileActions) ResetProfile(_ context.Context, _, session, profile
 	return f.failErr
 }
 
+func (f *fakeProfileActions) ProfileConfig(_ context.Context, ownerKey string) (sessionfs.ProfileConfig, error) {
+	f.calls = append(f.calls, "config "+strings.ReplaceAll(ownerKey, "\x00", " "))
+	return sessionfs.ProfileConfig{Profile: "own"}, f.failErr
+}
+
 func newProfileActionsTool(t *testing.T, settings sessionfs.NativeProfileSettings, actions ProfileActions) tools.Tool {
 	t.Helper()
 	tool, err := NewProfileTool(settings, TranscriptFiles{}, nil, actions)
@@ -318,5 +323,45 @@ func TestProfileChildrenSwitchRefusesARemoteInfoWhenOff(t *testing.T) {
 	out := callTranscripts(t, newProfileActionsTool(t, settings, &fakeProfileActions{}), `{"action":"info","path":"remote:peer/profile:main/review/reviewer"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1})
 	if !strings.Contains(out, "profile_children_denied") {
 		t.Fatalf("remote info from a sub-agent with allow_children off = %s", out)
+	}
+}
+
+// config reads only the caller's own profile: by no path, self or its own name, also in plan
+// mode; another profile and a sub-agent are refused before the port, whatever the gates say.
+func TestProfileConfigIsTheCallersOwnOnly(t *testing.T) {
+	settings := profileTestSettings()
+	settings.AllowOtherProfiles, settings.AllowOtherSessions, settings.AllowChildren = true, true, true
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, settings, actions)
+	for _, path := range []string{"", "self", "profile:dev/coder", "profile:demo/dev/coder"} {
+		arguments := `{"action":"config"`
+		if path != "" {
+			arguments += `,"path":"` + path + `"`
+		}
+		for _, plan := range []bool{false, true} {
+			out := callTranscripts(t, tool, arguments+`}`, tools.ExecutionContext{SessionKey: listCaller, PlanMode: plan})
+			if !strings.Contains(out, `"profile": "own"`) {
+				t.Fatalf("config of %q (plan %v) = %s", path, plan, out)
+			}
+		}
+	}
+	if want := "config demo dev/coder"; len(actions.calls) != 8 || actions.calls[0] != want {
+		t.Fatalf("calls = %v", actions.calls)
+	}
+	actions.calls = nil
+	for path, code := range map[string]string{"profile:dev/other": "profile_config_self_only", "profile:other/dev/coder": "profile_config_self_only", "session:demo": "invalid_path"} {
+		out := callTranscripts(t, tool, `{"action":"config","path":"`+path+`"}`, tools.ExecutionContext{SessionKey: listCaller})
+		if !strings.Contains(out, code) {
+			t.Fatalf("config of %s = %s", path, out)
+		}
+	}
+	if out := callTranscripts(t, tool, `{"action":"config"}`, tools.ExecutionContext{SessionKey: listCaller, AgentDepth: 1}); !strings.Contains(out, "profile_children_denied") {
+		t.Fatalf("config from a sub-agent = %s", out)
+	}
+	if out := callTranscripts(t, tool, `{"action":"config"}`, tools.ExecutionContext{}); !strings.Contains(out, "profile_caller_unknown") {
+		t.Fatalf("config without a caller = %s", out)
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a refused config reached the port: %v", actions.calls)
 	}
 }
