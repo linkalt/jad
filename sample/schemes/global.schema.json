@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "global.schema.json",
+  "title": "Jad global.json (workspace layout)",
+  "description": "The global setting of the workspace layout (docs/design_workspace_layout.md), G/global.json, where G is $HOME/.jad unless JAD_GLOBAL_DIR names another folder. It is read only when the server starts in a directory that has .jad/workspace.json and no root setting is named; a start without workspace.json never reads it and uses setting.json as before. Read once at start. Relative paths are relative to G. An unknown key is refused.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2,
+      "default": 2
+    },
+    "server": {
+      "$ref": "root-setting.schema.json#/properties/server"
+    },
+    "cli": {
+      "$ref": "root-setting.schema.json#/properties/cli"
+    },
+    "workspaces": {
+      "type": "array",
+      "description": "The other workspaces this server serves besides the one it starts in. A workspace is one exact directory with .jad/workspace.json. A listed workspace that is missing or whose workspace.json is broken is skipped with a warning. Two entries with the same id or directory, a relative path, and a workspace that is G's parent (or holds G, such as $HOME) are refused. A start directory that is not listed takes its folder name as id.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "description": "The workspace id, used in session references as <id>:<session>."
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(/|~)",
+            "description": "The workspace directory: absolute or starting with ~."
+          },
+          "label": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "required": ["id", "path"],
+        "additionalProperties": false
+      }
+    },
+    "catalogs": {
+      "type": "object",
+      "description": "Folders of the shared catalogs, relative to G. Defaults: models, tools, mcp, remotes, sandbox. Profiles, sessions and state belong to each workspace (W/.jad/profiles, W/.jad/sessions, W/.jad/state); a workspace's private models and tools are W/.jad/models and W/.jad/tools, and a name found in both the global and the workspace folder is an error naming both files.",
+      "properties": {
+        "models": {"type": "string", "pattern": "\\S"},
+        "tools": {"type": "string", "pattern": "\\S"},
+        "mcp": {"type": "string", "pattern": "\\S"},
+        "remotes": {"type": "string", "pattern": "\\S"},
+        "sandbox": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "As catalogs.sandbox of root-setting.schema.json, relative to G."
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "$ref": "setting.schema.json#/$defs/layout_settings",
+      "description": "Setting values every session of every workspace starts from, below the workspace's defaults. A relative env_file or cwd here is relative to G. In the workspace layout a profile may tighten, never loosen, the caps (max_run_tokens, max_run_cost_usd, max_run_duration_ms, budget caps) and an enabled sandbox these defaults set."
+    },
+    "libraries": {
+      "type": "object",
+      "description": "Only tool_definition_paths is read in the workspace layout so far; any other key is refused until the prompt library follows the workspace layout (T-028 phase 1b).",
+      "properties": {
+        "tool_definition_paths": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/tool_definition_paths"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -87,7 +87,7 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 	if err != nil {
 		return scopeJudgement{}, configError("%s: scope.profiles: %v", sessionPath, err)
 	}
-	models, err := scans.Scan("model", layout.Models)
+	models, err := layout.ScanModels(scans)
 	if err != nil {
 		return scopeJudgement{}, configError("%s: %v", sessionPath, err)
 	}
@@ -103,6 +103,9 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 		if err == nil {
 			err = checkUnselectedProfile(entry.Path, file)
 		}
+		if err == nil {
+			err = checkProfileCeilings(layout, session, entry.Path, file.Settings, scans)
+		}
 		if err != nil {
 			verdict.err = err
 			judgement.usable = judgement.usable.Without(entry.ID())
@@ -110,7 +113,7 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 		}
 		verdict.file, verdict.listed = file, narrowed
 		if len(file.Toolset) > 0 && toolsets == nil && toolsetsErr == nil {
-			toolsets, toolsetsErr = scans.Scan("toolset", layout.Tools)
+			toolsets, toolsetsErr = layout.ScanToolsets(scans)
 		}
 		verdict.err = checkProfileToolsets(scans, entry.Path, file, toolsets, toolsetsErr)
 		if verdict.err == nil {
@@ -185,7 +188,7 @@ func (j *scopeJudgement) toolsetPaths(file layoutProfileFile, scans *CatalogScan
 	if len(file.Toolset) == 0 {
 		return nil
 	}
-	toolsets, err := scans.Scan("toolset", layout.Tools)
+	toolsets, err := layout.ScanToolsets(scans)
 	if err != nil {
 		return nil
 	}

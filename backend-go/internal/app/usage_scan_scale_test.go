@@ -153,7 +153,7 @@ func TestScaleUsageScanWithAppenders(t *testing.T) {
 				}()
 			}
 			scanStart := time.Now()
-			profile, err := profileMessenger{resolver: resolver}.ProfileInfo(ctx, "demo", "dev/p00")
+			profile, err := profileMessenger{resolver: resolver}.ProfileInfo(ctx, "demo", "demo", "dev/p00")
 			scanTook := time.Since(scanStart)
 			stop.Store(true)
 			group.Wait()

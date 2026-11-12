@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"jad/backend-go/internal/catalog"
 )
 
 // ReadLayoutProfileInfo returns the profiles a catalog-layout session offers and its
@@ -100,7 +98,7 @@ func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability,
 	if err := readLayoutFile(entry.Path, &file); err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	models, err := catalog.Scan("model", layout.Models)
+	models, err := layout.ScanModels(nil)
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: %v", entry.Path, err)
 	}

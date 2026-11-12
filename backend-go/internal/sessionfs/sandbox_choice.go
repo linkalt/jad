@@ -94,6 +94,7 @@ func (c *layoutCompose) resolveSandboxChoices(names []string, readOnly []string,
 		choice := SandboxChoice{Name: name, Description: oneLineText(description), Isolation: own.Isolation}
 		if enabled {
 			own.ReadOnlyPaths = readOnly
+			c.addFixedHidePaths(own)
 			choice.Sandbox = own
 		}
 		choices = append(choices, choice)

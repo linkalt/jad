@@ -137,7 +137,7 @@ func (t *transcriptsTool) listSessions(ctx context.Context, request transcriptsR
 	callerSession, _, _ := strings.Cut(execution.SessionKey, "\x00")
 	var names []string
 	if t.sessions != nil && t.settings.AllowOtherSessions {
-		names = t.sessions.Sessions(ctx)
+		names = t.sessions.Sessions(ctx, execution.SessionKey)
 	}
 	if !t.settings.AllowOtherSessions || t.sessions == nil {
 		names = []string{callerSession}

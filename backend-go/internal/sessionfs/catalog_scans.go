@@ -63,6 +63,23 @@ func (s *CatalogScans) recorder() *CatalogScans {
 	return &CatalogScans{memo: s.memo, recording: true}
 }
 
+// scanScopes scans the folder of each scope ("" is no scope) and merges them; one folder is
+// Scan as it is.
+func (s *CatalogScans) scanScopes(kind string, dirs ...string) (*catalog.Catalog, error) {
+	scopes := make([]*catalog.Catalog, 0, len(dirs))
+	for index, dir := range dirs {
+		if dir == "" && index > 0 {
+			continue
+		}
+		scanned, err := s.Scan(kind, dir)
+		if err != nil {
+			return nil, err
+		}
+		scopes = append(scopes, scanned)
+	}
+	return catalog.Merge(kind, scopes...), nil
+}
+
 // Scan is catalog.Scan, remembered. Scan errors are remembered too, so every session of
 // one request sees the same directory state.
 func (s *CatalogScans) Scan(kind, dir string) (*catalog.Catalog, error) {

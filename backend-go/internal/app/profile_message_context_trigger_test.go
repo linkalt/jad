@@ -72,7 +72,7 @@ func sendWithTrigger(t *testing.T, f *layoutFixture, run uint64, text string, tr
 
 func targetConfig(t *testing.T, f *layoutFixture) sessionfs.SessionConfig {
 	t.Helper()
-	config, err := (profileMessenger{resolver: f.service.resolver}).profileConfig("local:demo", "review/reviewer")
+	config, err := (profileMessenger{resolver: f.service.resolver}).profileConfig("local:demo", "local:demo", "review/reviewer")
 	if err != nil {
 		t.Fatal(err)
 	}

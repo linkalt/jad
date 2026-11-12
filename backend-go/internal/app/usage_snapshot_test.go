@@ -23,7 +23,7 @@ func TestProfileInfoIsStableAcrossAnInodeReplacementWithTheSameBytes(t *testing.
 		t.Fatal(err)
 	}
 	actions := profileMessenger{resolver: resolver}
-	first, err := actions.ProfileInfo(context.Background(), "demo", "dev/p00")
+	first, err := actions.ProfileInfo(context.Background(), "demo", "demo", "dev/p00")
 	if err != nil || first == nil {
 		t.Fatalf("first scan: tokens = %v, err = %v", first, err)
 	}
@@ -43,7 +43,7 @@ func TestProfileInfoIsStableAcrossAnInodeReplacementWithTheSameBytes(t *testing.
 		t.Fatal(err)
 	}
 
-	second, err := actions.ProfileInfo(context.Background(), "demo", "dev/p00")
+	second, err := actions.ProfileInfo(context.Background(), "demo", "demo", "dev/p00")
 	if err != nil || second == nil || *second != *first {
 		t.Fatalf("after inode replacement: tokens = %v, err = %v; want %v", second, err, *first)
 	}

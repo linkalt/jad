@@ -34,15 +34,16 @@ var profileInputSchema = json.RawMessage(`{
 
 // ProfileActions is the port native.profile uses to read and change profiles. The resolver
 // implements it: info reads the profile's latest usage, compact and reset go through the same
-// maintenance the HTTP routes use. session is empty for the caller's own session.
+// maintenance the HTTP routes use. ownerKey is the session key of the calling run, so the
+// session is looked up as the caller sees it (in the workspace layout, only in its workspace).
 type ProfileActions interface {
 	// ProfileInfo returns the input tokens of the profile's last completed response, or nil
 	// when no response has completed (or none carried usage).
-	ProfileInfo(ctx context.Context, session, profile string) (*int64, error)
+	ProfileInfo(ctx context.Context, ownerKey, session, profile string) (*int64, error)
 	// CompactProfile compacts the profile's transcript now.
-	CompactProfile(ctx context.Context, session, profile string) error
+	CompactProfile(ctx context.Context, ownerKey, session, profile string) error
 	// ResetProfile resets the profile's transcript and history; it refuses while a run is active.
-	ResetProfile(ctx context.Context, session, profile string) error
+	ResetProfile(ctx context.Context, ownerKey, session, profile string) error
 }
 
 // profileNoUsage is what info prints when no response has completed.
@@ -175,12 +176,12 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	case "info":
 		return t.info(ctx, execution, session, profile)
 	case "compact":
-		if err := t.actions.CompactProfile(ctx, session, profile); err != nil {
+		if err := t.actions.CompactProfile(ctx, execution.SessionKey, session, profile); err != nil {
 			return t.fail(execution, tools.StatusError, "profile_compact_failed", err.Error())
 		}
 		return "compacted profile " + profile
 	case "reset":
-		if err := t.actions.ResetProfile(ctx, session, profile); err != nil {
+		if err := t.actions.ResetProfile(ctx, execution.SessionKey, session, profile); err != nil {
 			return t.fail(execution, tools.StatusError, "profile_reset_failed", err.Error())
 		}
 		return "reset profile " + profile
@@ -237,7 +238,7 @@ func (t *profileTool) info(ctx context.Context, execution tools.ExecutionContext
 			return t.fail(execution, tools.StatusForbidden, "profile_denied", "This profile's transcript is not readable by this tool: session_files.paths denies it")
 		}
 	}
-	tokens, err := t.actions.ProfileInfo(ctx, session, profile)
+	tokens, err := t.actions.ProfileInfo(ctx, execution.SessionKey, session, profile)
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "profile_info_failed", err.Error())
 	}

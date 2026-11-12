@@ -24,7 +24,7 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 	if profile == "" {
 		profile = callerProfile
 	}
-	location, err := sessionfs.Resolve(m.resolver.roots, session)
+	location, err := sessionfs.ResolveFrom(m.resolver.roots, callerSession, session)
 	if err != nil {
 		return native.TranscriptTarget{}, mapSessionError(err)
 	}
@@ -56,24 +56,22 @@ func (m profileMessenger) Candidates(ctx context.Context, ownerKey, session stri
 	if session == "" {
 		session = callerSession
 	}
-	if location, err := sessionfs.Resolve(m.resolver.roots, session); err == nil && location.UsesLayout() {
+	if location, err := sessionfs.ResolveFrom(m.resolver.roots, callerSession, session); err == nil && location.UsesLayout() {
 		if info, err := sessionfs.ReadLayoutProfileInfo(location); err == nil {
 			return info.Profiles, nil
 		}
 	}
-	files, _ := sessionfs.ListSessionFiles(m.resolver.roots)
-	for _, file := range files {
-		sessions = append(sessions, file.ID)
-	}
-	return nil, sessions
+	return nil, m.Sessions(ctx, ownerKey)
 }
 
-// Sessions implements native.TranscriptSessions: the references of the catalog sessions.
-func (m profileMessenger) Sessions(ctx context.Context) []string {
+// Sessions implements native.TranscriptSessions: the references of the catalog sessions the
+// caller may see (in the workspace layout, those of its own workspace).
+func (m profileMessenger) Sessions(ctx context.Context, ownerKey string) []string {
+	callerSession, _, _ := strings.Cut(ownerKey, "\x00")
 	files, _ := sessionfs.ListSessionFiles(m.resolver.roots)
 	sessions := make([]string, 0, len(files))
 	for _, file := range files {
 		sessions = append(sessions, file.ID)
 	}
-	return sessions
+	return sessionfs.VisibleFrom(m.resolver.roots, callerSession, sessions)
 }

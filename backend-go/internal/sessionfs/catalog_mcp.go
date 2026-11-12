@@ -1,13 +1,11 @@
 package sessionfs
 
-import (
-	"jad/backend-go/internal/catalog"
-)
+import ()
 
 // serverUsers lists the toolsets whose mcp object names the server file: they stop resolving
 // when the file is removed. A toolset file that cannot be read is not counted.
 func serverUsers(layout Layout, id string) ([]string, error) {
-	toolsets, err := catalog.Scan("toolset", layout.Tools)
+	toolsets, err := layout.ScanToolsets(nil)
 	if err != nil {
 		return nil, configError("%v", err)
 	}

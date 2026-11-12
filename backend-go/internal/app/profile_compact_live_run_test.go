@@ -18,7 +18,7 @@ func TestToolAndHTTPCompactWaitForALiveRunAlike(t *testing.T) {
 	f.awaitRunActive()
 	toolDone := make(chan error, 1)
 	go func() {
-		toolDone <- profileMessenger{resolver: f.service.resolver}.CompactProfile(context.Background(), "local:one", "dev/coder")
+		toolDone <- profileMessenger{resolver: f.service.resolver}.CompactProfile(context.Background(), "local:one", "local:one", "dev/coder")
 	}()
 	select {
 	case err := <-toolDone:

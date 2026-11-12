@@ -1,8 +1,10 @@
 # Workspace layout (T-028): global shared catalogs, workspace-private sessions, profiles and state
 
-Status: **phase 0 (design).** Nothing here is built yet. Mode v1 (today's single root
-setting) stays the default and is not changed by any phase. Section 9 lists the questions
-that are still open; phase 1 must not start before Q1, Q2, Q5, Q6 and Q7 are settled.
+Status: **phase 1a built** (v2 loading, scoped names, fixed hidden and read-only sandbox paths,
+cross-workspace tool limits, ordered ceilings; section 10). Phase 1b (prompt libraries,
+`/api/workspaces`, `scope` on catalog routes) and phases 2 to 5 are not built. Mode v1 (today's
+single root setting) stays the default and is not changed by any phase. jad/decider settled
+Q1 to Q7 (section 9).
 
 Sources: the user's request (T-028), the two designer reports (kept unchanged by the user in
 `design-layout-catalog.md`), the jad/decider decisions for T-028 (layout, and the prompt
@@ -62,9 +64,20 @@ section 3):
   `edit`, `apply_patch`, `grep`, `glob`, `bash` tools were removed (`removedNativeTools` in
   `sessionfs/tool_shape.go`); files are changed through `exec`, which runs in the sandbox when
   one is enabled. `environmentPolicy` mirrors hidden paths and read reach to the in-process
-  readers, but it does **not** add `ReadOnlyPaths` as deny rules. Whether a remaining in-process tool
-  (`records`, `task`, `code_context`, `tool_smith`, ...) can write to a path a model chooses was
-  not checked; phase 1 audits it.
+  readers, but it does **not** add `ReadOnlyPaths` as deny rules.
+- **In-process writer audit (phase 1, grep of every `os.WriteFile`, `Create`, `OpenFile`,
+  `Rename`, `MkdirAll`, `Remove*` outside tests in `internal/tools` and the other packages a
+  tool reaches).** No in-process writer takes a path from a model argument. They write to
+  engine-chosen folders, with model-given names checked against fixed patterns: `records`
+  (tool storage, type `^[a-z][a-z0-9_-]{0,63}$`, refs of a fixed file pattern, symlinked
+  folders refused), `task` and `code_context` (tool storage, task key
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`), `tool_smith` (a temporary work folder; function names
+  come from files of a configured library folder), exec spill and async results (tool storage
+  or temporary folders), sub-agent and worktree records (state and worktree folders), the
+  `profile` tool's `compact` and `reset` (the named profile's own transcript, through the
+  maintenance path). The catalog file writers (`sessionfs/catalog_files.go`, plugins) serve
+  the HTTP API and `jad plugin`, not a tool. So the stop condition is not hit and no deny-write
+  rule was added; the audit is by search, not a proof, and a new writer must keep to this.
 - **The `profile` native tool** has `list`, `info`, `compact`, `reset`.
 
 ## 3. Review of the decisions against the code
@@ -73,10 +86,8 @@ The decider's layout (section 4) is feasible on the current architecture. The re
 or added these points:
 
 1. **The in-process write guard is a smaller job than feared.** The decider's stop condition
-   ("in-process `write`/`edit` can't be guarded") does not apply: those tools no longer exist.
-   Phase 1 must still list every in-process writer (candidates: `records`, `task`,
-   `code_context`, `tool_smith`, `profile` reset, sub-agent stores) and check that none can be
-   pointed at a config path by a model argument, and add a test that pins this.
+   ("in-process `write`/`edit` can't be guarded") does not apply: those tools no longer exist,
+   and the phase 1 audit (section 2) found no in-process writer that takes a model-chosen path.
 2. **Nothing is enforced without a sandbox.** With `sandbox.enabled` false (the default) or on
    a platform without bwrap/seatbelt, `exec` runs as the user and can read every workspace and
    write every config file. "Private" then means separate storage and namespaces only. The UI
@@ -127,9 +138,14 @@ command can come later).
   is never trusted just because it exists. `jad workspace add|list|remove` edits the list and
   says a restart is needed.
 - A workspace is one exact directory: no search upward, no git-root detection.
-- Refused at start, naming the file: `W/.jad` equal to `G` (after symlinks), two workspaces with
-  the same id or the same directory, a listed path that is missing, an unknown key in
-  `workspace.json`.
+- Checks at start (Q2): refused, naming the file: a workspace whose tree holds `G` (`W/.jad`
+  equal to `G` after symlinks, or W is `$HOME`, `/home`, `/`), two workspaces with the same id
+  or directory, a relative `workspaces[].path`, a broken start `workspace.json` or one with an
+  unknown key, an unlisted start whose folder-name id is taken by a listed one. Skipped with a
+  warning (and kept as unavailable in `Config.Workspaces`): a listed workspace that is missing
+  or whose `workspace.json` is broken. Nested workspaces are allowed.
+- A named root setting (`LoadOptions.RootSettingPath` or `JAD_ROOT_SETTING_PATH`) keeps v1 even where
+  `workspace.json` exists.
 - The old `W/.jad/setting.json` is ignored in v2 with a warning. Rolling back is deleting
   `workspace.json`.
 
@@ -151,16 +167,36 @@ command can come later).
 
 - IDs stay `<category>/<name>`. An unscoped name works when it exists in one visible scope
   (profile, workspace, global). In more than one, it is an error listing the candidates;
-  `global:`, `workspace:`, `profile:` prefixes pick one. **No silent override.**
+  `global:`, `workspace:`, `profile:` prefixes pick one. **No silent override.** Built in phase
+  1a for models and toolsets (`catalog.Merge`): a name in both is left out of the offered list
+  with a warning and naming it is an error listing both files. The prefixes are not built yet
+  (selectors still refuse `:`), so today the fix is renaming one file.
 - The existing in-use guard refuses deleting an entry a reference still uses.
 - Settings layers, lowest first: built-in < global `defaults` < workspace `defaults` < session <
   profile, with `mergeSettings`.
-- **Ceiling keys** are not merged upward by a profile: sandbox, hooks, `env_file`, `cwd`,
-  `tool_storage_dir`, model endpoints and credential references, MCP and exec command
-  definitions, budgets, `max_run_*`. A profile value may not loosen them. What "loosen" means
-  per key is open (Q7).
-- Relative paths: see Q5. `env_file` in `workspace.json` resolves against `W/.jad`, in the
-  global setting against `G` (this replaces the v1 rule "relative to the root folder" for v2).
+- **Ordered ceiling keys** (Q7, built in phase 1a, `sessionfs/workspace_ceiling.go`), checked in
+  every v2 profile file against the global and workspace defaults and the session: a set
+  `max_run_tokens`, `max_run_cost_usd`, `max_run_duration_ms` and `budget` cap can only go
+  down; an enabled sandbox cannot be turned off or removed, cannot change backend, executable
+  or command, cover fewer tools, hide fewer paths, make more paths writable (also in plan mode)
+  or readable, turn the network on or allow more hosts. Paths are compared as written. An
+  unselected profile that loosens one is left out with a warning; a selected one fails.
+  Depth limits are toolset settings (`tools.native.subagent`), not profile settings, and are
+  not checked.
+- **Keys without an order** (hooks, `env_file`, `cwd`, `tool_storage_dir`, MCP and exec command
+  definitions) stay settable in profile files the user writes, as in v1. Under self-edit
+  (phase 3) they are refused under `on` and allowed under `full`; a hook or command a profile
+  adds under `full` is the same as running anything unsandboxed. Self-edit can never set or
+  change model endpoints or credential references (also not under `full`); a profile-scope
+  model may only reuse an endpoint and credential pair of a global or workspace model.
+- Relative paths (Q5): `catalogs`, `libraries` and `defaults.env_file` of the global setting
+  resolve from `G`, of `workspace.json` from `W/.jad`. `defaults.cwd` of `workspace.json`
+  resolves from `W` (a cwd inside `.jad` would run tools there), of the global setting from
+  `G`; without any cwd a session works in `W`. Everything cwd-relative today stays so
+  (`prompt_documents`, `agents_dir`, MCP config paths, `project_instructions`,
+  `tool_storage_dir`). Other relative paths in session, profile and toolset files resolve
+  from `G` (the root's `GlobalJadRoot`), as they did from the v1 setting folder, so shared
+  toolsets behave as before. `{workspace}` as a path placeholder is not built yet.
 - Plugins stay global; libraries see Q3.
 
 ### 4.5 Prompt documents (decider D1 to D3)
@@ -207,11 +243,23 @@ sandbox that hides other profiles' `profile-own/`, a profile can still read them
   live there too.
 - **Writable inside them** (existing inner-writable rule): tool storage, and the running
   profile's `{profile_data}` folder. Other profiles' data stays read-only.
-- **Hidden, not removable by a profile:** `G/auth` (a fixed hidden part beside `hide_paths`).
+- **Hidden, not removable by a profile (Q4, built in phase 1a):** `G/auth` and the `.jad/` of
+  every other listed workspace (skipped ones and nested ones included), as written and with
+  links resolved. `Layout.FixedHidePaths` is added after `hide_paths` is read, to the session
+  sandbox, the plan-mode sandbox, agent toolset sandboxes, agent sandboxes and sandbox
+  choices, so neither a profile nor a template can remove it. Only `.jad/` is hidden, not the
+  other workspaces' project files. A profile can still enable a sandbox of its own where the
+  defaults enable none; the fixed part applies to it too.
 - Own state and transcript readable; other profiles' state readable as today (the
   `transcript` tool), never writable.
-- In-process readers follow the same hidden set (`environmentPolicy`); phase 1 adds the
-  read-only list as deny-write rules for any in-process writer that takes a path.
+- In-process readers follow the same hidden set (`environmentPolicy`). No deny-write rules were
+  added: the audit (section 2) found no in-process writer that takes a model-chosen path.
+- Built in phase 1a: the read-only list adds `workspace.json`, `W/.jad/sessions`, `W/.jad/models`
+  and `W/.jad/tools` to the v1 list (global setting, session file, profiles, global models,
+  tools, mcp, remotes, state, sandbox templates). `profile-own/` and `{profile_data}` come with
+  phase 2.
+- seatbelt (macOS) is unverified: nothing here is claimed for it until it is tested on a Mac.
+- With no sandbox in the global or workspace defaults, a v2 start logs one warning.
 
 ### 4.7 Self-access and self-edit
 
@@ -250,7 +298,8 @@ the audit record and `off` are the mitigations.
 
 | Claim | Enforced by | Holds without a sandbox |
 |---|---|---|
-| Workspace Y does not list or load X's sessions | the loader (separate roots and state) | yes |
+| A session of Y keeps its state and catalogs apart from X's | the loader (separate roots and state) | yes |
+| A tool of Y (`transcript`, `transcripts`, `profile`, `profile_message`) does not reach X's sessions; X's session reads as not found | `sessionfs.ResolveFrom` (Q6) | yes, but `exec` and the in-process readers can still read X's files by path |
 | Same ids in two workspaces share no cache, lock or state | keys (4.3) | yes |
 | An ambiguous name never resolves silently | the loader | yes |
 | A profile cannot raise a ceiling key through the `profile` tool | the `profile` tool | yes, but without a sandbox `exec` can still rewrite the profile file |
@@ -259,9 +308,13 @@ the audit record and `off` are the mitigations.
 | A tool call cannot read another workspace or another profile's private files | hidden paths (Q4) | **no** |
 | `G/auth` unreadable to tool calls | fixed hidden path | **no** |
 
-Not covered at all: other processes of the same OS user, MCP stdio servers and hooks that
-are not started in a sandbox (unverified per server), and the local admin HTTP API, which an
-agent with network access can call to change config (true today; a separate hardening task).
+Not covered at all: other processes of the same OS user; children that the sandbox does not
+cover (by default it covers only `exec` and `tool_smith`: hooks, MCP stdio servers and the
+`lsp` servers run unsandboxed unless `sandbox.tools` lists them; HTTP MCP servers, plugins and
+extension tools are outside any sandbox); the transcript tool's `path:` form when
+`allow_path` is on and no sandbox hides the path; and the local admin HTTP API and UI, which
+see every workspace by design and which an agent with network access can call to change
+config (a separate hardening task; the phase 5 UI and the docs must say so).
 
 ## 7. Phases
 
@@ -270,10 +323,20 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
 `git diff --check`. Open gaps go into `backend-go/DECISIONS.md`.
 
 0. **Docs** (this file and the DECISIONS entry).
-1. **v2 loading:** mode selection, global and workspace scopes, workspace list, per-workspace
-   Layout and state, scoped names, ceiling keys, `{workspace}`, sandbox read-only and fixed
-   hidden paths, in-process writer audit, `/api/workspaces`, `scope` on catalog routes,
-   content library following the mode.
+1. **v2 loading.** Split in two commits:
+   - **1a (built):** writer audit, mode selection, `G/global.json` and `workspace.json`, workspace
+     list and Q2 checks, per-workspace Layout and state, scoped model and toolset names,
+     ordered ceilings (Q7), sandbox read-only and fixed hidden paths (Q4), cross-workspace
+     tool limits (Q6), schemas `sample/schemes/global.schema.json` and `workspace.schema.json`.
+   - **1b (not built):** prompt libraries following the mode (global `libraries` from
+     `global.json`, workspace `libraries` in `workspace.json` from `W/.jad`, visible only in that
+     workspace, a name in both an error; the HTTP library, the `skill` tool and commands),
+     `/api/workspaces` (from `Config.Workspaces`), `scope` on catalog routes, the `global:` and
+     `workspace:` prefixes, `{workspace}`. Until 1b, a v2 start refuses any `libraries` key of
+     `global.json` but `tool_definition_paths`, and the prompt library, the `skill` tool and
+     commands still find their setting as in v1 (they may read `W/.jad/setting.json` or
+     `G/setting.json`); the catalog routes use the start workspace's layout (global models and
+     tools, the start workspace's profiles).
 2. **Self-access:** `{profile_own}`, `{profile_data}`, the private-document check, reading own
    config and state, `profile config`.
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
@@ -305,9 +368,19 @@ golden changes; an in-process writer is found that takes a model-chosen path.
 Global profiles; automatic workspace discovery; adding workspaces without restart;
 confidentiality against same-user processes; admin API hardening; profile import command.
 
-## 9. Open questions (for jad/decider)
+## 9. Questions settled by jad/decider
 
-Each has the proposed default the executor would use.
+Answers (T-028, after phase 0): Q1 accepted (`G/global.json`; `G/setting.json` not read in v2,
+an info line when it exists; v1 and v2 may read the same `G/models` and `G/tools`, so v2 writes
+nothing v1 cannot read). Q2 accepted with one change: a missing or broken listed workspace is
+skipped with a warning, not refused (section 4.2). Q3 accepted: `workspace.json` `libraries`,
+resolved from `W/.jad`, after the global ones, only in that workspace, a name in both an error,
+no profile libraries (phase 1b). Q4 accepted with a fixed hidden list (section 4.6); hiding
+other profiles' `profile-own/` is a phase 2 feasibility check, else the private-document rule
+is a prompt-building rule only. Q5 accepted (section 4.4). Q6 accepted: not found, never
+forbidden; remotes still work; the HTTP API and UI see every workspace; v1 multi-root is
+unchanged. Q7 accepted with tighter self-edit limits (section 4.4). The proposals as they were
+put to the decider follow.
 
 - **Q1. Name of the v2 global setting** (blocks phase 1). `$HOME/.jad/setting.json` is a v1
   discovery candidate. Proposed: the v2 global setting is `G/global.json`, which v1 never
@@ -342,3 +415,25 @@ Each has the proposed default the executor would use.
   still be set by the user in a profile file, as in v1, and are refused only for self-edit
   under `on`. A stricter reading (refuse them in every profile file) would break profiles
   that set them today when they move to v2.
+
+## 10. Phase 1a as built
+
+- `sessionfs.Load` runs `loadWorkspaces` (`sessionfs/workspace_load.go`) when
+  `<start>/.jad/workspace.json` is a file and no root setting is named. G is
+  `LoadOptions.GlobalDir`, `JAD_GLOBAL_DIR`, or `$HOME/.jad`. `G/global.json` is optional
+  (keys: `schema_version` 2, `server`, `cli`, `workspaces`, `catalogs` of models, tools, mcp,
+  remotes, sandbox, `defaults`, `libraries.tool_definition_paths`); `workspace.json` takes
+  `schema_version` 2, `id`, `label`, `defaults`. Unknown keys are refused. Both are read once.
+- One `Root` per served workspace, start first: ID the workspace id, `Directory`
+  `W/.jad/sessions`, `GlobalJadRoot` G, its own `Layout` (profiles and state in `W/.jad`, global
+  catalogs, `WorkspaceModels` and `WorkspaceTools` in `W/.jad`, defaults: cwd W < global <
+  workspace). Same session ids in two workspaces are allowed (`sharesState`); unqualified they
+  are ambiguous for the HTTP API.
+- Tests: `sessionfs/workspace_load_test.go` (one per Q2 row, v1 ignores `global.json`, v2
+  ignores `setting.json`, separate state, scoped names, fixed hidden and read-only paths,
+  ceilings), `sessionfs/workspace_schema_test.go`, `tools/native/sandbox_workspace_test.go`
+  (a real bwrap run: `G/auth` and the other workspace's `.jad` unreadable with
+  `hide_paths: []`, `workspace.json` and session files read-only), `app/workspace_tools_test.go`
+  (Q6 for transcript, transcripts listing, profile list and actions, profile_message).
+- Interface change: `native.ProfileActions` and `native.TranscriptSessions` take the caller's
+  session key, so the app can look sessions up as the caller sees them.

@@ -140,6 +140,10 @@ type Config struct {
 	SettingPath string
 	// Warnings are notices about the root setting, not errors: keys the loader does not read.
 	Warnings []string
+	// Workspaces and GlobalDir are set by the workspace layout only (v2): every known workspace,
+	// served or skipped, start first, and the global folder G.
+	Workspaces []Workspace
+	GlobalDir  string
 }
 
 // LoadOptions allows tests and embedders to provide deterministic environment
@@ -150,6 +154,9 @@ type LoadOptions struct {
 	SessionsDir     string
 	RootSettingPath string
 	Environment     map[string]string
+	// GlobalDir is the global folder of the workspace layout; empty means JAD_GLOBAL_DIR, then
+	// $HOME/.jad.
+	GlobalDir string
 }
 
 // ResolveErrorKind identifies a filesystem reference failure without coupling
@@ -261,6 +268,17 @@ func Load(options LoadOptions) (Config, error) {
 		}, nil
 	}
 
+	// The workspace layout runs when the start directory has .jad/workspace.json and no root
+	// setting is named; a named setting keeps v1 (docs/design_workspace_layout.md §4.2).
+	if strings.TrimSpace(options.RootSettingPath) == "" && strings.TrimSpace(env["JAD_ROOT_SETTING_PATH"]) == "" {
+		workspace, err := workspaceAt(cwd)
+		if err != nil {
+			return Config{}, err
+		}
+		if workspace {
+			return loadWorkspaces(cwd, options.GlobalDir, env)
+		}
+	}
 	settingPath, err := findRootSettingPath(cwd, options.RootSettingPath, env["JAD_ROOT_SETTING_PATH"], env["HOME"])
 	if err != nil {
 		return Config{}, err

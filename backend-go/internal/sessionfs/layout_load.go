@@ -142,10 +142,10 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 			return SessionConfig{}, err
 		}
 	}
-	if err := resolveSubagentModels(config.NativeSubagent, layout.Models, sessionPath, scans); err != nil {
+	if err := resolveSubagentModels(config.NativeSubagent, layout, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
-	if err := resolveFallbackModels(config.ModelFallback, layout.Models, sessionPath, scans, built.warn); err != nil {
+	if err := resolveFallbackModels(config.ModelFallback, layout, sessionPath, scans, built.warn); err != nil {
 		return SessionConfig{}, err
 	}
 	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
@@ -155,11 +155,11 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 // resolveFallbackModels turns each model_fallback model ID into its model file and
 // effort. Like an agent's model, a fallback may be any model of the catalog, not only one
 // the profile lists. An unknown ID or an effort the model does not offer is a config error.
-func resolveFallbackModels(settings *ModelFallbackSettings, modelsDir, sessionPath string, scans *CatalogScans, warn func(format string, args ...any)) error {
+func resolveFallbackModels(settings *ModelFallbackSettings, layout Layout, sessionPath string, scans *CatalogScans, warn func(format string, args ...any)) error {
 	if settings == nil {
 		return nil
 	}
-	models, err := scans.Scan("model", modelsDir)
+	models, err := layout.ScanModels(scans)
 	if err != nil {
 		return configError("%s: %v", sessionPath, err)
 	}
@@ -210,7 +210,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		}
 		if available == nil {
 			var err error
-			if available, err = c.scans.Scan("toolset", c.layout.Tools); err != nil {
+			if available, err = c.layout.ScanToolsets(c.scans); err != nil {
 				return configError("%s: %v", c.sessionPath, err)
 			}
 		}
@@ -228,8 +228,9 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 				derived.NativeSubagent = nil
 				if derived.Sandbox != nil && config.Sandbox != nil {
 					derived.Sandbox.ReadOnlyPaths = config.Sandbox.ReadOnlyPaths
+					c.addFixedHidePaths(derived.Sandbox)
 				}
-				setPlanSandboxReadOnlyPaths(derived, c.readOnly)
+				c.setPlanSandboxReadOnlyPaths(derived, c.readOnly)
 				if config.AgentToolsets == nil {
 					config.AgentToolsets = make(map[string]SessionConfig)
 				}
@@ -256,9 +257,10 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 		// isolation (also SessionConfig.Isolation) applies only to the runs a profile_message
 		// starts in the profile: its own runs always work in its cwd (D7).
 		config.Sandbox.ReadOnlyPaths = readOnly
+		c.addFixedHidePaths(config.Sandbox)
 	}
 	// The sandbox exec's read_only and plan-mode calls fall back to keeps them read-only too.
-	setPlanSandboxReadOnlyPaths(*config, readOnly)
+	c.setPlanSandboxReadOnlyPaths(*config, readOnly)
 	c.readOnly = readOnly
 	if err := c.finishSandboxChoices(config, readOnly); err != nil {
 		return err
@@ -267,11 +269,24 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 }
 
 // setPlanSandboxReadOnlyPaths gives the sandbox exec's read_only and plan-mode calls fall back
-// to (NativeBashSettings.PlanSandbox) the session's read-only paths.
-func setPlanSandboxReadOnlyPaths(config SessionConfig, readOnly []string) {
+// to (NativeBashSettings.PlanSandbox) the session's read-only paths, and the layout's fixed
+// hidden paths.
+func (c *layoutCompose) setPlanSandboxReadOnlyPaths(config SessionConfig, readOnly []string) {
 	if config.NativeExec != nil && config.NativeExec.Child.PlanSandbox != nil {
 		config.NativeExec.Child.PlanSandbox.ReadOnlyPaths = append([]string(nil), readOnly...)
+		c.addFixedHidePaths(config.NativeExec.Child.PlanSandbox)
 	}
+}
+
+// addFixedHidePaths adds the layout's fixed hidden paths (workspace layout only: G/auth and the
+// other workspaces' .jad folders) to a sandbox after its hide_paths were read, so neither a
+// profile's hide_paths nor a template can remove them. The list is copied, never appended to
+// in place, because sandboxes may share it.
+func (c *layoutCompose) addFixedHidePaths(sandbox *SandboxSettings) {
+	if sandbox == nil || len(c.layout.FixedHidePaths) == 0 {
+		return
+	}
+	sandbox.HidePaths = appendNewStrings(append([]string(nil), sandbox.HidePaths...), c.layout.FixedHidePaths...)
 }
 
 // sessionConfigPaths are the files and folders the session's configuration comes from: the
@@ -282,7 +297,10 @@ func setPlanSandboxReadOnlyPaths(config SessionConfig, readOnly []string) {
 // agent folders are not among them: an agent's sandbox is narrowed by the session's, so an
 // edited agent.json cannot widen the environment, and agents may keep their own files there.
 func (c *layoutCompose) sessionConfigPaths(config *SessionConfig) []string {
-	candidates := []string{c.layout.RootSetting, c.location.File, c.layout.Profiles, c.layout.Models, c.layout.Tools, c.layout.MCP, c.layout.Remotes, c.layout.State, c.templates.dir}
+	candidates := []string{c.layout.RootSetting, c.location.File, c.layout.Profiles, c.layout.Models, c.layout.Tools, c.layout.MCP, c.layout.Remotes, c.layout.State, c.templates.dir,
+		// Workspace layout only (empty otherwise): workspace.json, the private catalogs and
+		// every session file of the workspace.
+		c.layout.WorkspaceSetting, c.layout.WorkspaceModels, c.layout.WorkspaceTools, c.layout.SessionsDir}
 	var paths []string
 	for _, path := range candidates {
 		if path != "" {
@@ -340,6 +358,7 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 			continue
 		}
 		own.ReadOnlyPaths = readOnly
+		c.addFixedHidePaths(own)
 		narrowed, err := NarrowSandbox(config.Sandbox, own, nil, nil)
 		if err != nil {
 			template := ""
@@ -358,7 +377,7 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 // name any model of the catalog, not only the ones its caller's profile lists: a cheap
 // reviewer model should not have to be listed in every main profile. An unknown ID is a
 // config error that lists the available ones.
-func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionPath string, scans *CatalogScans) error {
+func resolveSubagentModels(settings *NativeSubagentSettings, layout Layout, sessionPath string, scans *CatalogScans) error {
 	if settings == nil {
 		return nil
 	}
@@ -376,7 +395,7 @@ func resolveSubagentModels(settings *NativeSubagentSettings, modelsDir, sessionP
 		}
 		if models == nil {
 			var err error
-			if models, err = scans.Scan("model", modelsDir); err != nil {
+			if models, err = layout.ScanModels(scans); err != nil {
 				return configError("%s: %v", sessionPath, err)
 			}
 		}
@@ -682,7 +701,7 @@ type loadedToolset struct {
 // addToolsets puts the native settings, MCP servers and hooks of the toolsets into the
 // setting. Each toolset is "<category>/<name>" under tools/; the first listed wins a clash.
 func (c *layoutCompose) addToolsets(setting map[string]json.RawMessage, ids []string, profilePath string, defaultEnvFile json.RawMessage) error {
-	toolsets, err := c.scans.Scan("toolset", c.layout.Tools)
+	toolsets, err := c.layout.ScanToolsets(c.scans)
 	if err != nil {
 		return configError("%s: %v", profilePath, err)
 	}

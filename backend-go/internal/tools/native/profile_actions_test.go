@@ -17,17 +17,17 @@ type fakeProfileActions struct {
 	failErr error
 }
 
-func (f *fakeProfileActions) ProfileInfo(_ context.Context, session, profile string) (*int64, error) {
+func (f *fakeProfileActions) ProfileInfo(_ context.Context, _, session, profile string) (*int64, error) {
 	f.calls = append(f.calls, "info "+session+" "+profile)
 	return f.tokens, nil
 }
 
-func (f *fakeProfileActions) CompactProfile(_ context.Context, session, profile string) error {
+func (f *fakeProfileActions) CompactProfile(_ context.Context, _, session, profile string) error {
 	f.calls = append(f.calls, "compact "+session+" "+profile)
 	return f.failErr
 }
 
-func (f *fakeProfileActions) ResetProfile(_ context.Context, session, profile string) error {
+func (f *fakeProfileActions) ResetProfile(_ context.Context, _, session, profile string) error {
 	f.calls = append(f.calls, "reset "+session+" "+profile)
 	return f.failErr
 }

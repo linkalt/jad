@@ -15,7 +15,7 @@ import (
 
 type fakeSessions []string
 
-func (f fakeSessions) Sessions(context.Context) []string { return f }
+func (f fakeSessions) Sessions(context.Context, string) []string { return f }
 
 // uniqueProfiles lists each profile once, as the real source does; the fake keys every
 // profile twice so that an empty session name resolves.

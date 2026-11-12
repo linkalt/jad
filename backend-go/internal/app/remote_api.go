@@ -522,7 +522,7 @@ func (b remoteBackend) ProfileInfo(ctx context.Context, request remoteapi.Profil
 	if !slices.Contains(info.Profiles, request.Profile) {
 		return "", remoteapi.ErrUnknownTarget
 	}
-	tokens, err := profileMessenger{resolver: b.resolver}.ProfileInfo(ctx, request.Session, request.Profile)
+	tokens, err := profileMessenger{resolver: b.resolver}.ProfileInfo(ctx, request.Session, request.Session, request.Profile)
 	if err != nil {
 		return "", err
 	}

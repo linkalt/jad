@@ -42,22 +42,22 @@ func TestProfileInfoReportsTheLastCompletedResponseOrNoUsage(t *testing.T) {
 	withUsage := `{"type":"response.completed","session_turn":2,"session_step":1,"response":{"id":"resp-2","status":"completed","model":"gpt-test","output":[],"usage":{"input_tokens":1234,"output_tokens":5,"total_tokens":1239}}}`
 
 	// No transcript yet: no response has completed.
-	if tokens, err := actions.ProfileInfo(context.Background(), "session-1", "dev/coder"); err != nil || tokens != nil {
+	if tokens, err := actions.ProfileInfo(context.Background(), "session-1\x00dev/coder", "session-1", "dev/coder"); err != nil || tokens != nil {
 		t.Fatalf("no transcript: tokens = %v, err = %v; want nil (no usage yet)", tokens, err)
 	}
 	// A transcript with a user message but no completed response.
 	write(user + "\n")
-	if tokens, err := actions.ProfileInfo(context.Background(), "session-1", "dev/coder"); err != nil || tokens != nil {
+	if tokens, err := actions.ProfileInfo(context.Background(), "session-1\x00dev/coder", "session-1", "dev/coder"); err != nil || tokens != nil {
 		t.Fatalf("no completed response: tokens = %v, err = %v; want nil", tokens, err)
 	}
 	// A completed response without a usage block: Current is set, InputTokens is not.
 	write(user + "\n" + noUsage + "\n")
-	if tokens, err := actions.ProfileInfo(context.Background(), "session-1", "dev/coder"); err != nil || tokens != nil {
+	if tokens, err := actions.ProfileInfo(context.Background(), "session-1\x00dev/coder", "session-1", "dev/coder"); err != nil || tokens != nil {
 		t.Fatalf("completed response without usage: tokens = %v, err = %v; want nil", tokens, err)
 	}
 	// A completed response with usage after one without: its input tokens, the newest.
 	write(strings.Join([]string{user, noUsage, withUsage}, "\n") + "\n")
-	tokens, err := actions.ProfileInfo(context.Background(), "session-1", "dev/coder")
+	tokens, err := actions.ProfileInfo(context.Background(), "session-1\x00dev/coder", "session-1", "dev/coder")
 	if err != nil || tokens == nil || *tokens != 1234 {
 		t.Fatalf("with usage: tokens = %v, err = %v; want 1234", tokens, err)
 	}

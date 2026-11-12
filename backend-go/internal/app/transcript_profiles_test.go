@@ -73,7 +73,7 @@ func TestTranscriptProfilesReportTheSubagentStorageOfTheProfile(t *testing.T) {
 func TestTranscriptSessionsListsTheCatalogSessions(t *testing.T) {
 	f := newLayoutFixture(t)
 	messenger := profileMessenger{resolver: f.service.resolver}
-	if sessions := messenger.Sessions(context.Background()); !slices.Contains(sessions, "demo") {
+	if sessions := messenger.Sessions(context.Background(), "demo\x00dev/coder"); !slices.Contains(sessions, "demo") {
 		t.Fatalf("sessions = %v", sessions)
 	}
 }

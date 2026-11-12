@@ -26,7 +26,7 @@ func TestProfileInfoMatchesTheScanOfTheSamePrefixWhenAppendsRunAlongside(t *test
 		t.Fatal(err)
 	}
 	actions := profileMessenger{resolver: resolver}
-	before, err := actions.ProfileInfo(context.Background(), "demo", "dev/p00")
+	before, err := actions.ProfileInfo(context.Background(), "demo", "demo", "dev/p00")
 	if err != nil || before == nil {
 		t.Fatalf("scan before appends: tokens = %v, err = %v", before, err)
 	}
@@ -36,7 +36,7 @@ func TestProfileInfoMatchesTheScanOfTheSamePrefixWhenAppendsRunAlongside(t *test
 			t.Fatal(err)
 		}
 	}
-	after, err := actions.ProfileInfo(context.Background(), "demo", "dev/p00")
+	after, err := actions.ProfileInfo(context.Background(), "demo", "demo", "dev/p00")
 	if err != nil || after == nil || *after != *before {
 		t.Fatalf("scan after appends: tokens = %v, err = %v; want %v (appends add no usage)", after, err, *before)
 	}

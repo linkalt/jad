@@ -219,10 +219,11 @@ func WriteSessionFile(roots []Root, reference string, data []byte, condition Wri
 }
 
 // checkSessionIDFreeInOtherRoots refuses a create of an id that another root already
-// holds: every root shares one state folder per id (see checkUniqueSessionIDs).
+// holds: every root shares one state folder per id (see checkUniqueSessionIDs). Roots with
+// their own state folder (the workspaces of the workspace layout) may hold the same id.
 func checkSessionIDFreeInOtherRoots(roots []Root, location Location) error {
 	for _, other := range roots {
-		if other.ID == location.Root.ID {
+		if other.ID == location.Root.ID || !sharesState(other, location.Root) {
 			continue
 		}
 		info, err := os.Stat(filepath.Join(other.Directory, location.SessionID+sessionFileSuffix))
@@ -302,4 +303,13 @@ func DeleteSessionFile(roots []Root, reference, ifMatch string, deleteState bool
 	}
 	stateDir := location.StateDir()
 	return stateDir, os.RemoveAll(stateDir)
+}
+
+// sharesState reports whether two roots keep their sessions' state in one folder: always for
+// roots of a root setting (v1), never for two workspaces of the workspace layout.
+func sharesState(a, b Root) bool {
+	if a.Layout == nil || b.Layout == nil || a.Layout.Workspace == "" || b.Layout.Workspace == "" {
+		return true
+	}
+	return a.Layout.State == b.Layout.State
 }

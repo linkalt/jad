@@ -61,7 +61,8 @@ func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionf
 		}
 		messages := plan.targetMessages
 		if messages == "" {
-			config, err := m.profileConfig(plan.reference, plan.target)
+			// plan.reference is already the caller-visible session, so it is its own caller.
+			config, err := m.profileConfig(plan.reference, plan.reference, plan.target)
 			if err != nil {
 				return fail("the target's transcript could not be located", "could not locate the target transcript", err)
 			}
@@ -119,7 +120,7 @@ func (m profileMessenger) contextStep(plan *profileMessagePlan, trigger sessionf
 // usage-cache.json is neither read nor written, so a stale cache (or the zeroed counts a
 // compaction leaves in it) cannot decide the trigger.
 func (m profileMessenger) transcriptTokens(ctx context.Context, session, profile string) (*int64, error) {
-	config, err := m.profileConfig(session, profile)
+	config, err := m.profileConfig(session, session, profile)
 	if err != nil {
 		return nil, err
 	}

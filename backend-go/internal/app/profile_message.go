@@ -59,7 +59,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	targetReference := reference
 	if request.Session != "" {
 		var err error
-		if targetReference, err = m.otherSession(request.Session, target); err != nil {
+		if targetReference, err = m.otherSession(reference, request.Session, target); err != nil {
 			return nil, err
 		}
 	}
@@ -196,9 +196,10 @@ func chainNode(reference, profile string) string { return reference + "\x00" + p
 
 // otherSession is the reference of an existing catalog-layout session that has the profile.
 // A session or profile that does not exist is native.ErrProfileUnknown, whatever the reason,
-// so it reads like one the settings do not allow.
-func (m profileMessenger) otherSession(session, profile string) (string, error) {
-	location, err := sessionfs.Resolve(m.resolver.roots, session)
+// so it reads like one the settings do not allow. The session is looked up as the caller sees it:
+// in the workspace layout, only in the caller's workspace.
+func (m profileMessenger) otherSession(caller, session, profile string) (string, error) {
+	location, err := sessionfs.ResolveFrom(m.resolver.roots, caller, session)
 	if err != nil || !location.UsesLayout() {
 		return "", native.ErrProfileUnknown
 	}

@@ -395,7 +395,7 @@ func validateModelFile(path string, data []byte) error {
 // selection or model_default names it, or the selection loses its last member of a category.
 // A profile that does not resolve today is not counted.
 func modelUsers(layout Layout, id string) ([]string, error) {
-	all, err := catalog.Scan("model", layout.Models)
+	all, err := layout.ScanModels(nil)
 	if err != nil {
 		return nil, configError("%v", err)
 	}
@@ -427,7 +427,7 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 	if err := parseLayoutFile(path, data, &profile); err != nil {
 		return err
 	}
-	models, err := catalog.Scan("model", layout.Models)
+	models, err := layout.ScanModels(nil)
 	if err != nil {
 		return configError("%s: %v", path, err)
 	}
@@ -438,7 +438,7 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 		return err
 	}
 	if len(profile.Toolset) > 0 {
-		toolsets, err := catalog.Scan("toolset", layout.Tools)
+		toolsets, err := layout.ScanToolsets(nil)
 		if err != nil {
 			return configError("%s: %v", path, err)
 		}

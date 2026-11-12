@@ -31,6 +31,9 @@ type Catalog struct {
 	index   map[string]int
 	// skipped are the files and folders the scan left out for their names; only a scan sets it.
 	skipped []Skipped
+	// ambiguous are the IDs Merge found in more than one scope, with their files; naming one
+	// is an error. Narrow and Without keep them.
+	ambiguous map[string][]string
 }
 
 // Skipped is a file or category folder a scan left out because its name is not an identifier
@@ -111,6 +114,9 @@ func (c *Catalog) Lookup(id string) (Entry, error) {
 	if entry, found := c.Get(id); found {
 		return entry, nil
 	}
+	if _, ambiguous := c.ambiguous[id]; ambiguous {
+		return Entry{}, c.ambiguityError(id)
+	}
 	return Entry{}, fmt.Errorf("%s %q is not available here (available: %s)", c.kind, id, availableText(c.IDs()))
 }
 
@@ -128,6 +134,9 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 	}
 	var missing []string
 	for _, item := range sel.items {
+		if id := c.ambiguousIn(item); id != "" {
+			return nil, c.ambiguityError(id)
+		}
 		switch item.kind {
 		case selectCategory:
 			if !categories[item.category] {
@@ -149,7 +158,9 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 			kept = append(kept, entry)
 		}
 	}
-	return newCatalog(c.kind, kept), nil
+	narrowed := newCatalog(c.kind, kept)
+	narrowed.ambiguous = c.ambiguous
+	return narrowed, nil
 }
 
 // Without returns the catalog minus the entry with this ID.
@@ -160,7 +171,9 @@ func (c *Catalog) Without(id string) *Catalog {
 			kept = append(kept, entry)
 		}
 	}
-	return newCatalog(c.kind, kept)
+	without := newCatalog(c.kind, kept)
+	without.ambiguous = c.ambiguous
+	return without
 }
 
 func quoteList(values []string) string {

@@ -26,10 +26,41 @@ type Layout struct {
 	// the path, taken from each session's cwd (SandboxTemplateDir).
 	Sandbox        string
 	SandboxFromCWD string
-	// RootSetting is the root setting file the layout was read from.
+	// RootSetting is the root setting file the layout was read from (the global setting in
+	// the workspace layout; empty when there is none).
 	RootSetting         string
 	Defaults            map[string]json.RawMessage
 	ToolDefinitionPaths []string
+
+	// The fields below are set only by the workspace layout (v2, docs/design_workspace_layout.md);
+	// they are empty for a layout read from a root setting.json, so v1 is unchanged.
+	//
+	// Workspace is the workspace directory W; WorkspaceSetting is W/.jad/workspace.json and
+	// GlobalDir the global folder G. Models and Tools are the global folders,
+	// WorkspaceModels and WorkspaceTools the workspace's private ones: a name is looked up in
+	// both, and a name in both is an error (catalog.Merge).
+	Workspace        string
+	WorkspaceSetting string
+	GlobalDir        string
+	WorkspaceModels  string
+	WorkspaceTools   string
+	// SessionsDir is W/.jad/sessions; kept read-only in a sandbox with the other config folders.
+	SessionsDir string
+	// FixedHidePaths are hidden in every sandbox of a session of this workspace, after the
+	// profile's hide_paths: G/auth and the .jad folder of every other listed workspace. A
+	// profile or template can add hidden paths but cannot remove these.
+	FixedHidePaths []string
+}
+
+// ScanModels is the model catalog of the layout: the models folder, and in the workspace
+// layout the workspace's private models too (catalog.Merge).
+func (l Layout) ScanModels(scans *CatalogScans) (*catalog.Catalog, error) {
+	return scans.scanScopes("model", l.Models, l.WorkspaceModels)
+}
+
+// ScanToolsets is the toolset catalog of the layout, like ScanModels.
+func (l Layout) ScanToolsets(scans *CatalogScans) (*catalog.Catalog, error) {
+	return scans.scanScopes("toolset", l.Tools, l.WorkspaceTools)
 }
 
 // layoutSettingKeys are the setting keys a `settings` object (session, profile) and the

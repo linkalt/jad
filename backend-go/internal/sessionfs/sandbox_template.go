@@ -402,7 +402,7 @@ func sandboxUsers(layout Layout, roots []Root, name string) ([]string, error) {
 			}
 		}
 	}
-	if toolsets, err := catalog.Scan("toolset", layout.Tools); err == nil {
+	if toolsets, err := layout.ScanToolsets(nil); err == nil {
 		for _, entry := range toolsets.Entries() {
 			var toolset layoutToolsetFile
 			if readLayoutFile(entry.Path, &toolset) != nil {

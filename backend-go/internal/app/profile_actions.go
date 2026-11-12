@@ -13,8 +13,8 @@ import (
 // ProfileInfo implements native.ProfileActions: the input tokens of the profile's last completed
 // response, or nil when no response has completed (or none carried usage). It reads the same
 // transcript index the catalog reads, so it never builds a second store.
-func (m profileMessenger) ProfileInfo(ctx context.Context, session, profile string) (*int64, error) {
-	config, err := m.profileConfig(session, profile)
+func (m profileMessenger) ProfileInfo(ctx context.Context, ownerKey, session, profile string) (*int64, error) {
+	config, err := m.profileConfig(ownerKey, session, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -36,8 +36,8 @@ func (m profileMessenger) ProfileInfo(ctx context.Context, session, profile stri
 
 // CompactProfile implements native.ProfileActions through the same compaction the HTTP route
 // uses (Resolver.CompactProfile), not profile_message's allow_other_profiles gate.
-func (m profileMessenger) CompactProfile(ctx context.Context, session, profile string) error {
-	reference, name, err := m.profileTarget(session, profile)
+func (m profileMessenger) CompactProfile(ctx context.Context, ownerKey, session, profile string) error {
+	reference, name, err := m.profileTarget(ownerKey, session, profile)
 	if err != nil {
 		return err
 	}
@@ -47,8 +47,8 @@ func (m profileMessenger) CompactProfile(ctx context.Context, session, profile s
 
 // ResetProfile implements native.ProfileActions through ResetProfile, which refuses while a run
 // of the profile is active.
-func (m profileMessenger) ResetProfile(ctx context.Context, session, profile string) error {
-	reference, name, err := m.profileTarget(session, profile)
+func (m profileMessenger) ResetProfile(ctx context.Context, ownerKey, session, profile string) error {
+	reference, name, err := m.profileTarget(ownerKey, session, profile)
 	if err != nil {
 		return err
 	}
@@ -56,12 +56,14 @@ func (m profileMessenger) ResetProfile(ctx context.Context, session, profile str
 }
 
 // profileTarget resolves the session and profile a request names: an empty session is the
-// caller's, which the messenger does not know here, so the session must be given.
-func (m profileMessenger) profileTarget(session, profile string) (string, string, error) {
+// caller's, which the messenger does not know here, so the session must be given. The session
+// is looked up as the caller (ownerKey) sees it: in the workspace layout, in its own workspace.
+func (m profileMessenger) profileTarget(ownerKey, session, profile string) (string, string, error) {
 	if session == "" || profile == "" {
 		return "", "", errors.New("profile actions need the session and the profile named")
 	}
-	location, err := sessionfs.Resolve(m.resolver.roots, session)
+	callerSession, _, _ := strings.Cut(ownerKey, "\x00")
+	location, err := sessionfs.ResolveFrom(m.resolver.roots, callerSession, session)
 	if err != nil {
 		return "", "", mapSessionError(err)
 	}
@@ -72,8 +74,8 @@ func (m profileMessenger) profileTarget(session, profile string) (string, string
 }
 
 // profileConfig loads the settings of a profile of a session for a read.
-func (m profileMessenger) profileConfig(session, profile string) (sessionfs.SessionConfig, error) {
-	reference, name, err := m.profileTarget(session, profile)
+func (m profileMessenger) profileConfig(ownerKey, session, profile string) (sessionfs.SessionConfig, error) {
+	reference, name, err := m.profileTarget(ownerKey, session, profile)
 	if err != nil {
 		return sessionfs.SessionConfig{}, err
 	}

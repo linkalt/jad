@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workspace.schema.json",
+  "title": "Jad workspace.json (workspace layout)",
+  "description": "W/.jad/workspace.json turns the workspace layout on for a server started in W (docs/design_workspace_layout.md): W keeps its sessions (W/.jad/sessions), profiles (W/.jad/profiles), private models and tools (W/.jad/models, W/.jad/tools) and state (W/.jad/state); the shared catalogs come from the global folder (global.schema.json). A W/.jad/setting.json is then not read. Read once at start. Deleting this file goes back to the setting.json layout. An unknown key is refused; for the start workspace that refuses the start, for a listed one it skips the workspace.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2,
+      "default": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "description": "The workspace id when global.json does not list this workspace (default: the folder name made an id). When it is listed, the id must be the listed one."
+    },
+    "label": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "defaults": {
+      "$ref": "setting.schema.json#/$defs/layout_settings",
+      "description": "Setting values every session of this workspace starts from, over global.json defaults. A relative env_file is relative to W/.jad, a relative cwd to W; without any cwd a session works in W. A profile may tighten, never loosen, the caps and an enabled sandbox set here or in global.json."
+    }
+  },
+  "additionalProperties": false
+}

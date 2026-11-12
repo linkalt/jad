@@ -32,9 +32,10 @@ const transcriptsDescription = "List the sub-agent runs of a profile, newest fir
 // transcriptsKinds are the forms of path, as the error for a bad one lists them.
 const transcriptsKinds = "sessions, session:<id>, profile:<category>/<name>, profile:<session>/<category>/<name>"
 
-// TranscriptSessions names the sessions a listing may show. The profile port finds the rest.
+// TranscriptSessions names the sessions a listing may show to the caller (ownerKey, the
+// session key of the calling run). The profile port finds the rest.
 type TranscriptSessions interface {
-	Sessions(ctx context.Context) []string
+	Sessions(ctx context.Context, ownerKey string) []string
 }
 
 // transcriptsLevel is what a call lists: the sessions, the profiles of a session (an empty
