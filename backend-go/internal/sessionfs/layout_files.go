@@ -44,6 +44,10 @@ type Layout struct {
 	GlobalDir        string
 	WorkspaceModels  string
 	WorkspaceTools   string
+	// WorkspaceToolDefinitions are the tool definition files workspace.json lists
+	// (libraries.tool_definition_paths, 4c), absolute; ToolDefinitionPaths holds them after the
+	// global ones. They are read-only in every sandbox of the workspace.
+	WorkspaceToolDefinitions []string
 	// SessionsDir is W/.jad/sessions; kept read-only in a sandbox with the other config folders.
 	SessionsDir string
 	// FixedHidePaths are hidden in every sandbox of a session of this workspace, after the

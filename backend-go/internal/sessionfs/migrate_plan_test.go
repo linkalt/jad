@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -330,22 +331,74 @@ func TestMigrationPlanCopiesFilesFromOtherFoldersAndRewritesMovedPaths(t *testin
 	}
 }
 
-func TestMigrationPlanStopsOnStorageOutsideTheCopiedState(t *testing.T) {
+// Decider 4c: a write target outside the copied state is shared by v1 and v2, never copied; the
+// plan says so once per setting and does not stop. v2 refuses a target in G or in this
+// workspace's profile-own folder, and the plan stops on those.
+func TestMigrationPlanSharesStorageOutsideTheCopiedState(t *testing.T) {
 	f := newMigrateFixture(t)
 	otherFolders(t, f)
 	// The default tool storage is <cwd>/.jad/state, outside the copied v1 state.
 	f.setting["defaults"] = map[string]any{"cwd": f.workspace}
 	f.writeSetting(t)
 	plan := f.plan(t, "")
-	if !hasBlocker(plan, migrationBlockStorage) {
-		t.Fatalf("blockers: %+v", plan.Blockers)
+	if plan.Blocked() {
+		t.Fatalf("shared storage is not a blocker: %+v", plan.Blockers)
 	}
-	named := false
-	for _, blocker := range plan.Blockers {
-		named = named || blocker.Kind == migrationBlockStorage && strings.Contains(blocker.Message, "tool_storage_dir writes "+filepath.Join(f.jad, "state", "work"))
+	warned := strings.Join(plan.Warnings, "\n")
+	if !strings.Contains(warned, "shared storage: tool_storage_dir writes "+filepath.Join(f.jad, "state", "work")) || !strings.Contains(warned, "nothing is copied") {
+		t.Fatalf("a note names the setting and where it writes: %s", warned)
 	}
-	if !named {
-		t.Fatalf("a blocker names tool_storage_dir and where it writes: %+v", plan.Blockers)
+	if strings.Count(warned, "shared storage: tool_storage_dir") != 1 {
+		t.Fatalf("one note per setting: %s", warned)
+	}
+}
+
+func TestMigrationPlanStopsOnStorageInPlacesV2KeepsAway(t *testing.T) {
+	for name, dir := range map[string]func(f *migrateFixture) string{
+		"G":                func(f *migrateFixture) string { return filepath.Join(f.global, "work") },
+		"G through a link": nil,
+		"profile-own":      func(f *migrateFixture) string { return filepath.Join(f.jad, "profile-own", "x") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMigrateFixture(t)
+			otherFolders(t, f)
+			target := ""
+			if dir != nil {
+				target = dir(f)
+			} else {
+				link := filepath.Join(f.base, "glink")
+				if err := os.MkdirAll(f.global, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(f.global, link); err != nil {
+					t.Fatal(err)
+				}
+				target = filepath.Join(link, "work")
+			}
+			f.setting["defaults"] = map[string]any{"cwd": f.workspace, "tool_storage_dir": target}
+			f.writeSetting(t)
+			plan := f.plan(t, "")
+			found := false
+			for _, blocker := range plan.Blockers {
+				found = found || blocker.Kind == migrationBlockForbidden && strings.Contains(blocker.Message, "tool_storage_dir writes")
+			}
+			if !found {
+				t.Fatalf("want %s: %+v", migrationBlockForbidden, plan.Blockers)
+			}
+		})
+	}
+}
+
+func TestMigrationPlanStopsOnStorageInAnotherListedWorkspace(t *testing.T) {
+	f := newMigrateFixture(t)
+	otherFolders(t, f)
+	other := filepath.Join(f.base, "other")
+	f.write(t, filepath.Join(f.global, "global.json"), `{"schema_version":2,"workspaces":[{"id":"other","path":"`+other+`"}]}`)
+	f.write(t, filepath.Join(other, ".jad", "state", "x"), "")
+	f.setting["defaults"] = map[string]any{"cwd": f.workspace, "tool_storage_dir": filepath.Join(other, ".jad", "state")}
+	f.writeSetting(t)
+	if plan := f.plan(t, ""); !hasBlocker(plan, migrationBlockForbidden) {
+		t.Fatalf("a target in another workspace's .jad: %+v", plan.Blockers)
 	}
 }
 
@@ -468,12 +521,6 @@ func TestMigrationPlanStopsOnGlobalPathsTiedToTheWorkspace(t *testing.T) {
 		key   string
 		file  func(f *migrateFixture) string
 	}{
-		{"relative tool definition path", func(t *testing.T, f *migrateFixture) {
-			f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{"tools_defintion/native/exec.json"}}
-		}, "libraries.tool_definition_paths[0]", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
-		{"absolute tool definition path in W, outside .jad", func(t *testing.T, f *migrateFixture) {
-			f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{filepath.Join(f.workspace, "defs/exec.json")}}
-		}, "libraries.tool_definition_paths[0]", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
 		{"relative server log file", func(t *testing.T, f *migrateFixture) {
 			f.setting["server"] = map[string]any{"port": 4100, "log_file": "jad.log"}
 		}, "server.log_file", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
@@ -522,5 +569,124 @@ func TestMigrationPlanKeepsGlobalPathsOutsideTheWorkspaceAndWarnsForSharedToolse
 	paths := global["libraries"].(map[string]any)["tool_definition_paths"].([]any)
 	if len(paths) != 1 || paths[0] != filepath.Join(f.base, "toolsdef/native/exec.json") {
 		t.Fatalf("a path outside the workspace stays absolute in G: %v", paths)
+	}
+}
+
+// Decider 4c: a v1 tool definition path that names a place in W goes to workspace.json
+// (libraries.tool_definition_paths, from W/.jad), the others stay in G's list.
+func TestMigrationPlanMovesToolDefinitionsInTheWorkspaceToWorkspaceJSON(t *testing.T) {
+	f := newMigrateFixture(t)
+	f.setting["libraries"] = map[string]any{
+		"prompt_dirs": []string{"prompts/prompts"},
+		"tool_definition_paths": []string{
+			"tools_defintion/native/exec.json",                    // relative, inside .jad: as written
+			filepath.Join(f.jad, "tools_defintion/native/a.json"), // absolute, inside .jad: relative
+			filepath.Join(f.workspace, "defs/b.json"),             // absolute, in W outside .jad: absolute
+			"../../toolsdef/native/exec.json",                     // outside W: G's list
+			"../defs/c.json",                                      // relative, in W outside .jad: as written
+		},
+	}
+	f.writeSetting(t)
+	before := snapshotTree(t, f.base)
+	plan := f.plan(t, "")
+	if plan.Blocked() {
+		t.Fatalf("blocked: %+v", plan.Blockers)
+	}
+	if len(snapshotTree(t, f.base)) != len(before) {
+		t.Fatal("the plan changed the tree")
+	}
+	_, workspace := settingOf(t, plan, filepath.Join(f.jad, "workspace.json"))
+	own := workspace["libraries"].(map[string]any)["tool_definition_paths"].([]any)
+	want := []any{"tools_defintion/native/exec.json", "tools_defintion/native/a.json", filepath.Join(f.workspace, "defs/b.json"), "../defs/c.json"}
+	if !reflect.DeepEqual(own, want) {
+		t.Fatalf("workspace.json: %v, want %v", own, want)
+	}
+	_, shared := settingOf(t, plan, filepath.Join(f.global, "global.json"))
+	paths := shared["libraries"].(map[string]any)["tool_definition_paths"].([]any)
+	if len(paths) != 1 || paths[0] != filepath.Join(f.base, "toolsdef/native/exec.json") {
+		t.Fatalf("global.json: %v", paths)
+	}
+	rewritten := false
+	for _, rewrite := range plan.Rewrites {
+		rewritten = rewritten || rewrite.File == filepath.Join(f.jad, "workspace.json") && rewrite.From == filepath.Join(f.jad, "tools_defintion/native/a.json") && rewrite.To == "tools_defintion/native/a.json"
+	}
+	if !rewritten {
+		t.Fatalf("the absolute path made relative is reported: %+v", plan.Rewrites)
+	}
+}
+
+func TestMigrationPlanWithOnlyWorkspaceToolDefinitionsWritesNoGlobalLibraries(t *testing.T) {
+	f := newMigrateFixture(t)
+	f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{"tools_defintion/native/exec.json"}}
+	f.writeSetting(t)
+	plan := f.plan(t, "")
+	if plan.Blocked() {
+		t.Fatalf("blocked: %+v", plan.Blockers)
+	}
+	_, global := settingOf(t, plan, filepath.Join(f.global, "global.json"))
+	if _, has := global["libraries"]; has {
+		t.Fatalf("G carries a libraries object for a workspace's tool definitions: %v", global)
+	}
+}
+
+func TestMigrationPlanStopsOnToolDefinitionsInPlacesV2WillNotReadThemFrom(t *testing.T) {
+	for _, rel := range []string{"profile-own/dev/coder/documents/t.json", "data/profiles/dev/coder/t.json", "profiles/dev/t.json"} {
+		t.Run(rel, func(t *testing.T) {
+			f := newMigrateFixture(t)
+			f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{rel}}
+			f.writeSetting(t)
+			if plan := f.plan(t, ""); !hasBlocker(plan, migrationBlockForbidden) {
+				t.Fatalf("blockers: %+v", plan.Blockers)
+			}
+		})
+	}
+	f := newMigrateFixture(t)
+	f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{filepath.Join(f.global, "auth", "t.json")}}
+	f.writeSetting(t)
+	if plan := f.plan(t, ""); !hasBlocker(plan, migrationBlockForbidden) {
+		t.Fatalf("G/auth: %+v", plan.Blockers)
+	}
+}
+
+// Decider 4c: a global.json default that v2 would apply to sessions with no tool_storage_dir of
+// their own is pinned in workspace.json to v1's default.
+func TestMigrationPlanPinsTheDefaultToolStorageAGlobalDefaultWouldMove(t *testing.T) {
+	f := newMigrateFixture(t)
+	// A global.json is kept only when it agrees with the v1 server and global libraries: v1 has none here.
+	delete(f.setting, "server")
+	f.setting["libraries"] = map[string]any{"prompt_dirs": []string{"prompts/prompts"}}
+	f.writeSetting(t)
+	f.write(t, filepath.Join(f.global, "global.json"), `{"schema_version":2,"defaults":{"tool_storage_dir":"/elsewhere"}}`)
+	plan := f.plan(t, "")
+	if plan.Blocked() {
+		t.Fatalf("blocked: %+v", plan.Blockers)
+	}
+	_, workspace := settingOf(t, plan, filepath.Join(f.jad, "workspace.json"))
+	defaults := workspace["defaults"].(map[string]any)
+	if defaults["tool_storage_dir"] != ".jad/state" || defaults["cwd"] != f.workspace {
+		t.Fatalf("defaults = %v", defaults)
+	}
+	// Set in v1 already: kept as v1 has it. Not in G: nothing is added.
+	f.setting["defaults"] = map[string]any{"cwd": f.workspace, "tool_storage_dir": "mine"}
+	f.writeSetting(t)
+	_, workspace = settingOf(t, f.plan(t, ""), filepath.Join(f.jad, "workspace.json"))
+	if workspace["defaults"].(map[string]any)["tool_storage_dir"] != "mine" {
+		t.Fatalf("v1's own value changed: %v", workspace["defaults"])
+	}
+	// No v1 defaults at all (the cwd is the session's own): the pin makes the object.
+	delete(f.setting, "defaults")
+	f.writeSetting(t)
+	_, workspace = settingOf(t, f.plan(t, ""), filepath.Join(f.jad, "workspace.json"))
+	if only, _ := workspace["defaults"].(map[string]any); len(only) != 1 || only["tool_storage_dir"] != ".jad/state" {
+		t.Fatalf("defaults made by the pin: %v", workspace["defaults"])
+	}
+	if err := os.Remove(filepath.Join(f.global, "global.json")); err != nil {
+		t.Fatal(err)
+	}
+	f.setting["defaults"] = map[string]any{"cwd": f.workspace}
+	f.writeSetting(t)
+	_, workspace = settingOf(t, f.plan(t, ""), filepath.Join(f.jad, "workspace.json"))
+	if _, has := workspace["defaults"].(map[string]any)["tool_storage_dir"]; has {
+		t.Fatalf("pinned without a global default: %v", workspace["defaults"])
 	}
 }

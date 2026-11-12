@@ -222,7 +222,7 @@ command can come later).
 - **Content libraries (Q3, built in phase 1b step 2):** `global.json` `libraries`
   (`prompt_dirs`, `template_dirs`, `skill_dirs`, `command_dirs`, `max_asset_bytes`,
   `tool_definition_paths`) from G, each kind not set using the built-in `.agent/<kind>` under
-  G; `workspace.json` `libraries` (the four folder keys only, none by default) from `W/.jad`,
+  G; `workspace.json` `libraries` (the four folder keys and, since 4c, `tool_definition_paths`; none by default) from `W/.jad`,
   seen only in that workspace. Both are read once at start (`sessionfs.Libraries`); no
   `setting.json` is read by the HTTP library, the `skill` tool or `jad plugin` in v2. A skill
   (by name) or command (by word) found in both scopes is left out of every list, named in the
@@ -492,7 +492,7 @@ put to the decider follow.
   `LoadOptions.GlobalDir`, `JAD_GLOBAL_DIR`, or `$HOME/.jad`. `G/global.json` is optional
   (keys: `schema_version` 2, `server`, `cli`, `workspaces`, `catalogs` of models, tools, mcp,
   remotes, sandbox, `defaults`, `libraries.tool_definition_paths`); `workspace.json` takes
-  `schema_version` 2, `id`, `label`, `defaults`. Unknown keys are refused. Both are read once.
+  `schema_version` 2, `id`, `label`, `defaults`, `libraries` (folders and, since 4c, `tool_definition_paths`). Unknown keys are refused. Both are read once.
 - One `Root` per served workspace, start first: ID the workspace id, `Directory`
   `W/.jad/sessions`, `GlobalJadRoot` G, its own `Layout` (profiles and state in `W/.jad`, global
   catalogs, `WorkspaceModels` and `WorkspaceTools` in `W/.jad`, defaults: cwd W < global <
@@ -1154,22 +1154,24 @@ and `$HOME`). `--apply` (phase 4b, section 24) writes. A blocked plan exits 1. T
   differ from v1's (compared as JSON after the path rewrites; a relative path that means the same
   file is still a conflict, which fails safe); the migration never edits `global.json`.
 - `symlink`: a link at or below a source folder; links are never followed or copied.
-- `storage_outside`: with the state copied, a write target of a migrated session's profile
-  (`SessionConfig.writeTargets`, also of agent toolsets, from the v1 load) lies outside
-  `<v1 state>/<session>`, so v1 and v2 would share live data.
+- `forbidden_place` (4c, replaces `storage_outside`): a write target of a migrated session's profile
+  (`SessionConfig.writeTargets`, also of agent toolsets, from the v1 load) outside `<v1 state>/<session>`
+  lies in G, in the `.jad` of another workspace the existing `global.json` lists, or in this
+  workspace's `profile-own` folder, where v2 keeps no workspace storage (the write-target guard
+  refuses the last). A target outside the copied state anywhere else is *shared storage*, not a
+  blocker (section 25). The same kind stops a v1 tool definition path in `W/.jad/profile-own`,
+  `W/.jad/data`, `W/.jad/profiles` or `G/auth`.
 - `sandbox_catalog_cwd`: `catalogs.sandbox` is `{cwd}/...`; `unreadable`.
-- `tied_to_workspace` (4a.1, decider phase 4): a path in `G/global.json` (`libraries.tool_definition_paths`,
-  `server.log_file`, `server.remote_api.tokens_file`, from the rewritten or the absolute v1 value) or in
-  a remote's file that G receives (`remote.token_file`) names a place inside W. G is read by every
-  workspace, so it would be tied to this one and the others would read this workspace's files. The rule
-  was "put it in `workspace.json` if v2 reads that key there, otherwise block": **`workspace.json` has no
-  key for any of them** (its `libraries` takes only the four folder keys, it has no `server`, and
-  remotes are G files), so the plan blocks, naming the key (one blocker per key, with the first
-  value and the count). The migration never adds a key to `workspace.json` on its own; the person
-  changes the v1 setting so the path names a place outside the workspace (or drops it), or the
-  decider adds a key. A path outside W stays absolute in G. The test is the whole workspace W, one
-  step stricter than W/.jad. A shared toolset, MCP server or sandbox template that names a place in W
-  is only warned (a single shared file, decider M3).
+- `tied_to_workspace` (4a.1, decider phase 4): a path in `G/global.json` (`server.log_file`,
+  `server.remote_api.tokens_file`, from the rewritten or the absolute v1 value) or in a remote's
+  file that G receives (`remote.token_file`) names a place inside W. G is read by every workspace,
+  so it would be tied to this one. None of these keys exists in `workspace.json`, and the migration
+  never adds a key on its own, so the plan blocks, naming the key (one blocker per key, with the
+  first value and the count); the person changes the v1 setting so the path names a place
+  outside the workspace. A path outside W stays absolute in G. The test is the whole workspace W,
+  one step stricter than W/.jad. A shared toolset, MCP server or sandbox template that names a
+  place in W is only warned (a single shared file, decider M3). **`libraries.tool_definition_paths`
+  is no longer in this list since 4c: a path in W goes to `workspace.json` (section 25).**
 
 **Where things go** (each file is `copy` with size and sha256, `in_place`, or `same`):
 
@@ -1188,9 +1190,10 @@ and `$HOME`). `--apply` (phase 4b, section 24) writes. A blocked plan exits 1. T
   same-content rule). A model or toolset that `W/.jad` already holds with the same content is
   not copied to G either.
 - **workspace.json**: `schema_version` 2, `id` and `label` of the v1 root (so `root:session`
-  references keep their meaning), the v1 `defaults` unchanged, and the four library folder keys
-  (each v1 fallback folder written out, since v2 has no workspace fallback).
-- **global.json** (only when missing): v1 `server`, `cli`, `libraries.tool_definition_paths` and
+  references keep their meaning), the v1 `defaults` unchanged (plus the pin of section 25), the
+  four library folder keys (each v1 fallback folder written out, since v2 has no workspace
+  fallback) and, since 4c, the v1 `tool_definition_paths` that name a place in W.
+- **global.json** (only when missing): v1 `server`, `cli`, the other `libraries.tool_definition_paths` and
   `libraries.max_asset_bytes`.
 
 **Path rewrites** (each names the place it named in v1, recorded with key, old and new value):
@@ -1206,11 +1209,8 @@ cookie; every value inside `env` or `headers`) are named by file and key, never 
 `_file`, `*tokens*` and `*cache_key` keys are not named (variable names, paths, counts). State
 files (transcripts) are not scanned.
 
-On this repository (read-only run, 2026-11-12, after 4a.1): **blocked** by one `tied_to_workspace`
-blocker: the 16 `libraries.tool_definition_paths` resolve into `W/.jad/tools_defintion`, and
-`workspace.json` has no key for them. Everything else is as before: sessions, profiles, models
-and tools `in_place`, one MCP server copied to G. Migrating this repository needs a choice: move
-the tool definitions outside W, or add a `workspace.json` key for them (a decider decision).
+On this repository (read-only run, 2026-11-12, after 4a.1) the plan was blocked by one
+`tied_to_workspace` blocker for the 16 tool definition paths; 4c removed that blocker (section 25).
 
 ## 24. Phase 4b as built: `--apply`, the journal and `--rollback`
 
@@ -1264,17 +1264,16 @@ cli settings as JSON. Any difference rolls the run back, `workspace.json` first.
 name that moved; it is not a proof that the two layouts behave alike (hooks, sandbox rules, prompts
 and the model's behaviour are not compared). A session that does not load in v1 is compared as an
 error on both sides. One consequence: an absolute `tool_storage_dir` (or any write target) into the
-v1 state keeps its place in v2 while the copied transcripts move, so v1 and v2 would write the same
-files; the comparison reports it and rolls back.
+v1 state keeps its place in v2 while the copied transcripts move: the copy is then abandoned and
+v1 and v2 write the same files; the comparison reports it and rolls back (a target outside the v1
+state is shared storage and passes, section 25).
 
 **Limits that are not hidden.**
 - `workspace.json` exists, and the folder is v2 for any process that starts there, from the switch
   until the comparison ends (milliseconds on a small workspace). The decision was to write it last and
   compare after it; the only way to load v2 is through that file.
-- The v1 state copy is in practice reachable only when no write target of the session follows the cwd:
-  the exec and tool_smith `functions_dir` and the tool storage default under the cwd, outside the
-  copied state, and the plan blocks (`storage_outside`) or the comparison rolls back. A v1 state outside
-  `W/.jad` therefore mostly stays a blocker. This repository's state is already in `W/.jad` (in place).
+- The v1 state copy and the write targets under the cwd: since 4c these are shared storage, not
+  a blocker (section 25). This repository's state is already in `W/.jad` (in place).
 - A copy is not a live replica: a v1 run after the migration changes the v1 files only.
 - Locks are advisory (flock): a process that does not lock is not stopped. Sources are re-hashed at the
   end, so a change is detected, not prevented.
@@ -1283,3 +1282,81 @@ files; the comparison reports it and rolls back.
 - Creating the lock files touches the v1 state folders (as any jad run does).
 - Not done: moving models or tools into G (they stay workspace-private when already in `W/.jad`;
   a `promote` step is the person's decision), settings outside `W/.jad`, the `.jad/.jad` bug (T-029).
+
+## 25. Phase 4c as built: workspace tool definitions and shared storage
+
+Decider (phase 4 ruling, after 4b), built in 4c.
+
+**`libraries.tool_definition_paths` in `workspace.json`.** Tool definitions in `W/.jad` are tools
+private to the workspace, so v2 gets a place for them. The key sits in `workspace.json`'s
+`libraries` next to the four folder keys (`sample/schemes/workspace.schema.json`). A relative
+path is relative to `W/.jad` (the file's own folder), an absolute path is kept; an empty string,
+a non-array or `null` fails the start. The loader reads the global list first (G/global.json,
+from G), then the workspace's own; the same file in both is read once. `Layout.WorkspaceToolDefinitions`
+holds the workspace's own, `Layout.ToolDefinitionPaths` both. Another workspace sees only the
+global list.
+- **Duplicates:** the same tool ID in two files is the existing error, now naming both files
+  (`<second>: duplicate tool definition <id> (also defined in <first>)`, `loadDefinitions`; v1's
+  message gains the second file). There is no override.
+- **Refused places** (`Layout.checkToolDefinitionPaths`, run for every served workspace at start,
+  for both lists, as written and after links): the fixed hidden list (`G/auth` and the other
+  workspaces' `.jad`), and the folders a profile writes (the `profile-own` folders, the `data`
+  folder of every known workspace and this workspace's `profiles`). The decider named the
+  hidden paths; the writable folders are added because a profile could otherwise change what its
+  tools are. The check is made once at start: a link swapped later is not seen (the known
+  links-race limit), and a workspace listed but not started has its list judged the same way (a bad
+  path there fails the start, as a bad library folder does).
+- **Sandbox:** every file of the workspace's own list is on the read-only list of every sandbox of
+  the workspace (`sessionConfigPaths`), inside or outside `W/.jad`, so a writable path that covers
+  it does not open it (real bwrap: change, delete and replace refused, the sibling file stays
+  writable). They are not self-edit targets. The global list is not added: its files are in G
+  (sealed) or outside, as in v1.
+- **Process reads:** `loadDefinitions` reads the files with the process's permissions; the check
+  above is what keeps that read away from the hidden folders. Sandboxed tool calls are the
+  sandbox's business.
+
+**Migration.** `splitToolDefinitions` sorts the v1 list: a path that names a place in W (lexically
+or after links) goes to `workspace.json`: as written when it was relative (v1 and v2 both resolve it
+from `W/.jad`, since the v1 setting must be in `W/.jad`), relative to `W/.jad` when it was an absolute
+path there (reported as a rewrite), absolute for a place in W outside `.jad`; the others stay in G's list,
+absolute from the v1 setting's folder. `server.log_file`, `server.remote_api.tokens_file` and a remote's
+`token_file` still block when they name a place in W (`tied_to_workspace`): they are settings of the
+shared server, not of a workspace. A `libraries` object in `global.json` is written only when
+something is left for it. The comparison reads both layouts' tool definition lists sorted (v2 puts the
+global ones first).
+
+**Shared storage.** A write target outside `<v1 state>/<session>` (the default tool storage under
+the working folder, the exec and tool_smith function libraries, an absolute `tool_storage_dir`) is
+shared by v1 and v2, never copied: it holds work, not configuration, and v1 and v2 do not run in one
+workspace at once by rule. The plan gives one note per setting (first path and count) and does not
+stop, unless the target is in a place v2 refuses (`forbidden_place`). The comparison accepts a
+target when both layouts follow the state at the same place, or when v1's lies outside its state folder
+and both resolve the same absolute path (v2 may keep it inside its own state folder:
+`sameWriteTargets`, with the absolute path printed beside the state-relative one). A v1 target inside
+the v1 state with v2 pointing at the same absolute path is still a difference and rolls back: the
+copy would be abandoned. After a rollback the shared storage keeps whatever v2 wrote; nothing is
+deleted (the journal only removes files it shows this run created).
+
+**Different defaults.** v2 layers an existing `G/global.json`'s `defaults` under the workspace's. If
+those set `tool_storage_dir` and the v1 defaults do not, a session with no value of its own would write
+elsewhere in v2; the migration then writes v1's default, `.jad/state` (under the session's working
+folder), into the workspace defaults (a rewrite and a note). `tool_storage_dir` is the only default a
+write target comes from. Any other default a global.json adds shows as a difference of the comparison
+and rolls back. No key other than `libraries.tool_definition_paths` was added.
+
+**v1 and v2 processes in one workspace (verified, not enforced).**
+- The mode is chosen once at start by `.jad/workspace.json` in the start folder; a v1 process
+  started before the switch stays v1 (the root setting is read once), a new one is v2, and
+  `JAD_ROOT_SETTING_PATH` (or an explicit root setting path) keeps v1 after the switch.
+- With the folders in place both resolve the same transcript, state folder and lock file, so the
+  per-transcript flock excludes the other mode (`TestV1AndV2ProcessesInOneWorkspace...`). Copied
+  state is different folders: a v1 process after the switch changes only the v1 copy.
+- The profile files are shared when in place. A v2 self-edit that gives a profile a `profile:` model or
+  toolset makes that profile fail to load in v1 (tested): rolling back to v1 after such an edit needs the
+  profile file reverted by hand (the history is in `profile-own`).
+- Process-local only: the profile-file lock, the publish counter and the pin of the own models are in
+  one process. A v1 admin write of a profile file and a v2 self-edit in two processes are ordered only
+  by the size-and-time check of `writeFileIfUnchanged`.
+- A v1 process does not see `profile-own`, the checkpoint exclusions or the sealed sandbox.
+
+**Not built:** the UI (phase 5), `promote`, seatbelt runs.

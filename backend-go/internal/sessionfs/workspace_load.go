@@ -177,10 +177,12 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 	// written and with links resolved (a sandbox binds real paths).
 	jadFolders := make(map[string][]string, len(workspaces))
 	profileOwnRoots := make([]string, 0, len(workspaces))
+	var dataRoots []string
 	for _, workspace := range workspaces {
 		jad := filepath.Join(workspace.Directory, ".jad")
 		jadFolders[workspace.ID] = appendNewStrings([]string{jad}, realPath(jad))
 		profileOwnRoots = appendNewStrings(profileOwnRoots, filepath.Join(jad, profileOwnFolder))
+		dataRoots = append(dataRoots, filepath.Join(jad, filepath.Dir(profileDataFolder)))
 	}
 	auth := appendNewStrings([]string{filepath.Join(global, "auth")}, filepath.Join(globalReal, "auth"))
 	roots := make([]Root, 0, len(specs))
@@ -199,6 +201,9 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 			if workspace.ID != spec.id {
 				layout.FixedHidePaths = appendNewStrings(layout.FixedHidePaths, jadFolders[workspace.ID]...)
 			}
+		}
+		if err := layout.checkToolDefinitionPaths(dataRoots); err != nil {
+			return Config{}, configError("workspace %s: %v", spec.id, err)
 		}
 		roots = append(roots, Root{ID: spec.id, Label: spec.label, Directory: layout.SessionsDir, GlobalJadRoot: global, Layout: layout})
 		if spec.start && !defaultsEnableSandbox(layout.Defaults) {
@@ -548,11 +553,13 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	layout.SessionsDir = filepath.Join(jad, "sessions")
 	layout.Workspace = spec.dir
 	layout.WorkspaceSetting = where
-	layout.ToolDefinitionPaths = append([]string(nil), base.ToolDefinitionPaths...)
-	ownLibraries, err := workspaceLibraries(spec.setting, where, jad)
+	ownLibraries, ownToolDefinitions, err := workspaceLibraries(spec.setting, where, jad)
 	if err != nil {
 		return nil, err
 	}
+	// The global list first, then the workspace's own (4c); the same file in both is read once.
+	layout.WorkspaceToolDefinitions = ownToolDefinitions
+	layout.ToolDefinitionPaths = appendNewStrings(append([]string(nil), base.ToolDefinitionPaths...), ownToolDefinitions...)
 	libraries := Libraries{GlobalDir: base.GlobalDir}
 	if base.Libraries != nil {
 		libraries = *base.Libraries

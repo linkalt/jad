@@ -56,7 +56,7 @@ func printOf(config SessionConfig) migrationPrint {
 		"session": config.SessionName, "category": config.Category, "profile": config.Profile,
 		"default_profile": config.DefaultProfile, "profiles": strings.Join(config.Profiles, ","),
 		"model_default": config.ModelDefault, "models": strings.Join(sortedCopy(config.Models), ","),
-		"cwd": config.WorkingDir, "tool_definition_paths": strings.Join(config.ToolDefinitionPaths, ","),
+		"cwd": config.WorkingDir, "tool_definition_paths": strings.Join(sortedCopy(config.ToolDefinitionPaths), ","),
 		"messages": inState(config, config.MessagesPath), "messages_backup": inState(config, config.MessagesBackupPath),
 		"usage_cache": inState(config, config.UsageCachePath), "staging": inState(config, config.StagingDir),
 		"tools": toolSurface(config),
@@ -75,6 +75,7 @@ func printOf(config SessionConfig) migrationPrint {
 	// that does not (an absolute tool_storage_dir into the v1 state, say) keeps its place in v2
 	// and differs: v1 and v2 would then write the same files.
 	targets := map[string][]string{}
+	absolute := map[string][]string{}
 	for _, target := range config.writeTargets() {
 		path := target.path
 		if path == "" {
@@ -84,14 +85,47 @@ func printOf(config SessionConfig) migrationPrint {
 			path = filepath.Join(config.WorkingDir, path)
 		}
 		targets["write "+target.setting] = append(targets["write "+target.setting], inState(config, path))
+		absolute[absoluteWritePrefix+target.setting] = append(absolute[absoluteWritePrefix+target.setting], filepath.Clean(path))
 	}
 	for key, paths := range targets {
+		print[key] = strings.Join(paths, ",")
+	}
+	for key, paths := range absolute {
 		print[key] = strings.Join(paths, ",")
 	}
 	for _, server := range config.MCPServers {
 		print["mcp "+server.ID] = fmt.Sprintf("%t %s %t %t %s", server.Enabled, strings.Join(sortedCopy(server.DenyTools), ","), server.Resources, server.Prompts, contentOf(server.ConfigPath))
 	}
 	return print
+}
+
+// absoluteWritePrefix names the print fields that hold the absolute path of each write target,
+// beside its state-relative form. They are not compared on their own (sameWriteTargets).
+const absoluteWritePrefix = "abs write "
+
+// sameWriteTargets compares the write targets of one setting in v1 and v2 (decider 4c). Two
+// targets are the same when both follow the session's state folder at the same place (the copy),
+// or when v1's lies outside its state folder and both resolve to the same absolute path: the
+// storage is shared, and v2 may keep it inside its own state folder. A v1 target inside its
+// state with v2 pointing at an absolute path is not the same: the copy would be abandoned.
+func sameWriteTargets(old, now, oldAbsolute, nowAbsolute string) bool {
+	if old == now {
+		return true
+	}
+	olds, nows := strings.Split(old, ","), strings.Split(now, ",")
+	oldPaths, nowPaths := strings.Split(oldAbsolute, ","), strings.Split(nowAbsolute, ",")
+	if len(olds) != len(nows) || len(oldPaths) != len(olds) || len(nowPaths) != len(nows) {
+		return false
+	}
+	for index := range olds {
+		if olds[index] == nows[index] {
+			continue
+		}
+		if strings.HasPrefix(olds[index], "{state}/") || oldPaths[index] != nowPaths[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedCopy(values []string) []string {
@@ -200,6 +234,12 @@ func (a *migrationApplier) compare() (differences []string, compared int, notes 
 		}
 		sort.Strings(names)
 		for _, field := range names {
+			if strings.HasPrefix(field, absoluteWritePrefix) {
+				continue
+			}
+			if strings.HasPrefix(field, "write ") && sameWriteTargets(old[field], now[field], old[absoluteWritePrefix+strings.TrimPrefix(field, "write ")], now[absoluteWritePrefix+strings.TrimPrefix(field, "write ")]) {
+				continue
+			}
 			if old[field] != now[field] {
 				differences = append(differences, fmt.Sprintf("%s: %s differs (v1 %q, workspace layout %q)", key, field, old[field], now[field]))
 			}

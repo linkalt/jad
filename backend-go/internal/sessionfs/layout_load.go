@@ -402,6 +402,9 @@ func (c *layoutCompose) sessionConfigPaths(config *SessionConfig) []string {
 		// Workspace layout only (empty otherwise): workspace.json, the private catalogs and
 		// every session file of the workspace.
 		c.layout.WorkspaceSetting, c.layout.WorkspaceModels, c.layout.WorkspaceTools, c.layout.SessionsDir}
+	// The workspace's own tool definition files (4c; none in v1): outside W/.jad they would
+	// be writable otherwise, and they say what the tools are.
+	candidates = append(candidates, c.layout.WorkspaceToolDefinitions...)
 	var paths []string
 	for _, path := range candidates {
 		if path != "" {

@@ -44,10 +44,10 @@ func TestWorkspaceSchemasAgreeWithTheLoader(t *testing.T) {
 		}
 	}
 	workspace := compileSchema(t, "workspace.schema.json")
-	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"},"libraries":{"prompt_dirs":["prompts"],"skill_dirs":["skills"]}}`) {
+	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"},"libraries":{"prompt_dirs":["prompts"],"skill_dirs":["skills"],"tool_definition_paths":["tools_defintion/native/exec.json"]}}`) {
 		t.Error("a valid workspace.json is refused")
 	}
-	for _, refused := range []string{`{"catalogs":{}}`, `{"libraries":{"max_asset_bytes":2048}}`, `{"libraries":{"tool_definition_paths":[]}}`, `{"id":"bad id"}`} {
+	for _, refused := range []string{`{"catalogs":{}}`, `{"libraries":{"max_asset_bytes":2048}}`, `{"libraries":{"tool_definition_paths":"x.json"}}`, `{"libraries":{"tool_definition_paths":[""]}}`, `{"id":"bad id"}`} {
 		if schemaAccepts(t, workspace, refused) {
 			t.Errorf("workspace.json %s is accepted", refused)
 		}

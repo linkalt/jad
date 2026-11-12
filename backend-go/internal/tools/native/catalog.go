@@ -624,6 +624,7 @@ func loadDefinitions(paths []string) (map[string]tools.Definition, error) {
 		return nil, fmt.Errorf("compile tool definition document schema: %w", err)
 	}
 	definitions := make(map[string]tools.Definition)
+	definedIn := make(map[string]string)
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -648,10 +649,11 @@ func loadDefinitions(paths []string) (map[string]tools.Definition, error) {
 			if err := json.Unmarshal(rawTool, &definition); err != nil {
 				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: could not decode tool definition: %v", path, err)}
 			}
-			if _, exists := definitions[definition.ID]; exists {
-				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: duplicate tool definition %s", path, definition.ID)}
+			if first, exists := definedIn[definition.ID]; exists {
+				return nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: duplicate tool definition %s (also defined in %s)", path, definition.ID, first)}
 			}
 			definitions[definition.ID] = definition
+			definedIn[definition.ID] = path
 		}
 	}
 	return definitions, nil

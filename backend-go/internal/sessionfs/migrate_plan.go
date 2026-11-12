@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -153,6 +154,7 @@ const (
 	migrationBlockUnreadable      = "unreadable"
 	migrationBlockSandboxCWD      = "sandbox_catalog_cwd"
 	migrationBlockTied            = "tied_to_workspace"
+	migrationBlockForbidden       = "forbidden_place"
 )
 
 // v1LibraryGlobalKeys are the v1 libraries keys that belong to G's global.json in v2; the
@@ -174,6 +176,9 @@ type migrationPlanner struct {
 	globalFolders map[string]string
 	// stateInPlace: the v1 state folder is W/.jad/state, so state is not copied.
 	stateInPlace bool
+	// toolDefsWorkspace are the v1 tool definition paths that name a place in W, as
+	// workspace.json will list them (4c); the rest go to G.
+	toolDefsWorkspace []string
 	// config, root and sessions are the v1 load, the migrated root and its session IDs, kept
 	// for the applier's v1 and v2 comparison.
 	config   Config
@@ -382,6 +387,7 @@ func (p *migrationPlanner) planWorkspaceSetting(raw map[string]json.RawMessage, 
 	if defaults, ok := raw["defaults"]; ok {
 		fields["defaults"] = defaults
 	}
+	p.pinToolStorage(fields)
 	libraries, _ := librariesObject(raw, p.setting)
 	own := map[string]json.RawMessage{}
 	for _, key := range libraryFolderKeys {
@@ -391,8 +397,11 @@ func (p *migrationPlanner) planWorkspaceSetting(raw map[string]json.RawMessage, 
 			own[key] = mustJSON(fallback)
 		}
 	}
+	if len(p.toolDefsWorkspace) > 0 {
+		own["tool_definition_paths"] = mustJSON(p.toolDefsWorkspace)
+	}
 	if len(own) > 0 {
-		encoded, err := marshalOrderedObject(own, libraryFolderKeys)
+		encoded, err := marshalOrderedObject(own, append(append([]string(nil), libraryFolderKeys...), "tool_definition_paths"))
 		if err != nil {
 			p.block(migrationBlockV1Invalid, p.setting, "libraries: %v", err)
 			return
@@ -428,16 +437,7 @@ func (p *migrationPlanner) planGlobalSetting(raw map[string]json.RawMessage) {
 	libraries, _ := librariesObject(raw, p.setting)
 	globalLibraries := map[string]json.RawMessage{}
 	if value, ok := libraries["tool_definition_paths"]; ok {
-		var paths []string
-		if err := json.Unmarshal(value, &paths); err != nil {
-			p.block(migrationBlockV1Invalid, p.setting, "libraries.tool_definition_paths must be an array of strings")
-		} else {
-			for index, path := range paths {
-				if trimmed := strings.TrimSpace(path); trimmed != "" && !filepath.IsAbs(trimmed) {
-					paths[index] = resolveFrom(p.settingDir, trimmed)
-					p.rewrite(filepath.Join(p.global, globalSettingName), fmt.Sprintf("libraries.tool_definition_paths[%d]", index), trimmed, paths[index])
-				}
-			}
+		if paths, ok := p.splitToolDefinitions(value); ok && len(paths) > 0 {
 			globalLibraries["tool_definition_paths"] = mustJSON(paths)
 		}
 	}
@@ -509,6 +509,90 @@ func (p *migrationPlanner) planGlobalSetting(raw map[string]json.RawMessage) {
 		}
 	}
 	p.plan.Settings = append(p.plan.Settings, MigrationSettingFile{Path: path, Action: MigrationKeep})
+}
+
+// pinToolStorage keeps the default tool storage where v1 puts it (decider 4c). v2 layers an
+// existing G/global.json's defaults under the workspace's; if they set tool_storage_dir and the
+// v1 defaults do not, a session with no value of its own would write elsewhere in v2. The
+// migration then writes v1's real default, .jad/state under the session's working folder, into
+// the workspace defaults. Only this key has a default a write target comes from; any other
+// default a global.json adds that changes a session shows as a difference of the comparison.
+func (p *migrationPlanner) pinToolStorage(fields map[string]json.RawMessage) {
+	global, err := readObject(filepath.Join(p.global, globalSettingName))
+	if err != nil {
+		return
+	}
+	globalDefaults, ok := rawObjectFields(global["defaults"])
+	if _, set := globalDefaults["tool_storage_dir"]; !ok || !set {
+		return
+	}
+	defaults, _ := rawObjectFields(fields["defaults"])
+	if defaults == nil {
+		defaults = map[string]json.RawMessage{}
+	}
+	if _, set := defaults["tool_storage_dir"]; set {
+		return
+	}
+	defaults["tool_storage_dir"] = mustJSON(defaultToolStorageDir)
+	encoded, err := marshalOrderedObject(defaults, mustKeys(fields["defaults"]))
+	if err != nil {
+		p.block(migrationBlockV1Invalid, p.setting, "defaults: %v", err)
+		return
+	}
+	fields["defaults"] = encoded
+	p.rewrite(filepath.Join(p.jad, workspaceSettingName), "defaults.tool_storage_dir", "(v1 default)", defaultToolStorageDir)
+	p.warn("%s sets defaults.tool_storage_dir, which v2 would apply to sessions that set none; workspace.json pins v1's default %s so they keep writing where they did", filepath.Join(p.global, globalSettingName), defaultToolStorageDir)
+}
+
+// insideWorkspace reports whether path names a place in W, as written or after links.
+func (p *migrationPlanner) insideWorkspace(path string) bool {
+	return PathWithin(p.workspace, path) || PathWithin(realPath(p.workspace), realPath(path))
+}
+
+// splitToolDefinitions sorts the v1 libraries.tool_definition_paths (decider 4c). A path that
+// names a place in W goes to workspace.json (p.toolDefsWorkspace): as written when it was
+// relative (both files resolve it from W/.jad), relative to W/.jad when it was an absolute path
+// there, absolute for a place in W outside .jad. The others stay in G's list, absolute from
+// the v1 setting's folder. A path v2 refuses to read tool definitions from (the folders a
+// profile writes, G/auth) is a blocker. It returns G's list.
+func (p *migrationPlanner) splitToolDefinitions(value json.RawMessage) ([]string, bool) {
+	var paths []string
+	if err := json.Unmarshal(value, &paths); err != nil {
+		p.block(migrationBlockV1Invalid, p.setting, "libraries.tool_definition_paths must be an array of strings")
+		return nil, false
+	}
+	globalFile, workspaceFile := filepath.Join(p.global, globalSettingName), filepath.Join(p.jad, workspaceSettingName)
+	forbidden := []string{filepath.Join(p.global, "auth"), filepath.Join(p.jad, profileOwnFolder), filepath.Join(p.jad, filepath.Dir(profileDataFolder)), filepath.Join(p.jad, "profiles")}
+	var shared []string
+	p.toolDefsWorkspace = nil
+	for _, path := range paths {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" {
+			continue
+		}
+		resolved := resolveFrom(p.settingDir, trimmed)
+		for _, root := range forbidden {
+			if within(resolved, root) || within(resolveExisting(resolved), root) {
+				p.block(migrationBlockForbidden, resolved, "libraries.tool_definition_paths names %s, in %s: v2 reads no tool definitions from the hidden folders or from the folders a profile writes; move the file and plan again", resolved, root)
+			}
+		}
+		if !p.insideWorkspace(resolved) {
+			if trimmed != resolved {
+				p.rewrite(globalFile, fmt.Sprintf("libraries.tool_definition_paths[%d]", len(shared)), trimmed, resolved)
+			}
+			shared = append(shared, resolved)
+			continue
+		}
+		written := trimmed
+		if filepath.IsAbs(trimmed) {
+			if relative, err := filepath.Rel(p.jad, resolved); err == nil && PathWithin(p.jad, resolved) {
+				written = relative
+				p.rewrite(workspaceFile, fmt.Sprintf("libraries.tool_definition_paths[%d]", len(p.toolDefsWorkspace)), trimmed, written)
+			}
+		}
+		p.toolDefsWorkspace = append(p.toolDefsWorkspace, written)
+	}
+	return shared, true
 }
 
 // serverPaths makes the relative paths the server reads from its setting's folder (log_file
@@ -1106,14 +1190,17 @@ func (p *migrationPlanner) checkLinks(dir string, deep bool) bool {
 	return clean
 }
 
-// checkStorage stops when state is copied and a write target of a migrated session lies
-// outside the copied state: v1 and v2 would then share live data. Each profile in the
-// session's scope is loaded with the v1 loader for its resolved write targets
-// (SessionConfig.writeTargets). With the state in place v2 uses the same folders as v1.
+// checkStorage looks at where each migrated session writes (decider 4c). A write target
+// inside the session's v1 state folder is copied with the state. One outside it (the default
+// tool storage under the working folder, a function library, an absolute tool_storage_dir) is
+// shared by v1 and v2, never copied: it holds work, not configuration, and v1 and v2 do not
+// run in one workspace at once. Both layouts resolve it to the same absolute path, which the
+// comparison after the switch checks (migrate_compare.go). It is a blocker when v2 would refuse
+// it: G, the .jad folder of another workspace the existing global.json lists, or the
+// profile-own folder of this one. Each profile in the session's scope is loaded with the v1
+// loader for its resolved write targets (SessionConfig.writeTargets).
 func (p *migrationPlanner) checkStorage(roots []Root, root Root, sessions []string) {
-	if p.stateInPlace {
-		return
-	}
+	shared := &sharedStorage{forbidden: p.storageForbidden()}
 	for _, id := range sessions {
 		location, err := Resolve(roots, root.ID+":"+id)
 		if err != nil {
@@ -1134,12 +1221,48 @@ func (p *migrationPlanner) checkStorage(roots []Root, root Root, sessions []stri
 					continue
 				}
 			}
-			p.checkTargets(id, profile, allowed, config)
+			p.checkTargets(id, profile, allowed, config, shared)
 		}
+	}
+	for _, setting := range slices.Sorted(maps.Keys(shared.paths)) {
+		paths := shared.paths[setting]
+		more := ""
+		if len(paths) > 1 {
+			more = fmt.Sprintf(" and %d more", len(paths)-1)
+		}
+		p.warn("shared storage: %s writes %s%s, outside the state the migration copies; v1 and v2 use the same files, nothing is copied, and a rollback leaves what v2 wrote there", setting, slices.Sorted(maps.Keys(paths))[0], more)
 	}
 }
 
-func (p *migrationPlanner) checkTargets(session, profile, allowed string, config SessionConfig) {
+// sharedStorage collects the write targets outside the copied state by setting name.
+type sharedStorage struct {
+	forbidden []string
+	paths     map[string]map[string]struct{}
+}
+
+// storageForbidden are the places v2 refuses a write target in, or that no workspace may keep
+// its own storage in: G, and the .jad folder of every other workspace the existing global.json
+// lists, and this workspace's profile-own folder (the write-target guard).
+func (p *migrationPlanner) storageForbidden() []string {
+	forbidden := []string{p.global, filepath.Join(p.jad, profileOwnFolder)}
+	path := filepath.Join(p.global, globalSettingName)
+	setting, err := readObject(path)
+	if err != nil {
+		return forbidden
+	}
+	listed, err := listedWorkspaces(setting, path, p.home)
+	if err != nil {
+		return forbidden
+	}
+	for _, workspace := range listed {
+		if directory := filepath.Join(workspace.dir, ".jad"); realPath(directory) != realPath(p.jad) {
+			forbidden = append(forbidden, directory)
+		}
+	}
+	return forbidden
+}
+
+func (p *migrationPlanner) checkTargets(session, profile, allowed string, config SessionConfig, shared *sharedStorage) {
 	for _, target := range config.writeTargets() {
 		path := target.path
 		if path == "" {
@@ -1151,12 +1274,31 @@ func (p *migrationPlanner) checkTargets(session, profile, allowed string, config
 			}
 			path = filepath.Join(config.WorkingDir, path)
 		}
-		if !PathWithin(allowed, path) {
-			p.block(migrationBlockStorage, path, "session %s, profile %s: %s writes %s, outside the state the migration copies (%s); v1 and v2 would share it; change it in v1 first or leave the session out", session, profile, target.setting, path, allowed)
+		if PathWithin(allowed, path) {
+			continue
 		}
+		resolved := resolveExisting(filepath.Clean(path))
+		blocked := false
+		for _, root := range shared.forbidden {
+			if within(path, root) || within(resolved, root) {
+				p.block(migrationBlockForbidden, path, "session %s, profile %s: %s writes %s, in %s, where v2 keeps no workspace storage; change it in v1 first or leave the session out", session, profile, target.setting, path, root)
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		if shared.paths == nil {
+			shared.paths = map[string]map[string]struct{}{}
+		}
+		if shared.paths[target.setting] == nil {
+			shared.paths[target.setting] = map[string]struct{}{}
+		}
+		shared.paths[target.setting][path] = struct{}{}
 	}
 	for _, derived := range config.AgentToolsets {
-		p.checkTargets(session, profile, allowed, derived)
+		p.checkTargets(session, profile, allowed, derived, shared)
 	}
 }
 

@@ -25,7 +25,7 @@
     },
     "libraries": {
       "type": "object",
-      "description": "The workspace's own content library, seen only by this workspace: folders relative to this file's folder (W/.jad), read once at start, listed after the global ones. None by default. A skill or command name also in the global library is left out and naming it is an error; prompts and templates of both are listed side by side.",
+      "description": "The workspace's own content library and tool definition files, seen only by this workspace: folders relative to this file's folder (W/.jad), read once at start, listed after the global ones. None by default. A skill or command name also in the global library is left out and naming it is an error; prompts and templates of both are listed side by side.",
       "properties": {
         "prompt_dirs": {
           "$ref": "root-setting.schema.json#/properties/libraries/properties/prompt_dirs"
@@ -38,6 +38,14 @@
         },
         "command_dirs": {
           "$ref": "root-setting.schema.json#/properties/libraries/properties/command_dirs"
+        },
+        "tool_definition_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "description": "Native tool definition files of this workspace, read after the ones in G/global.json. A relative path is relative to this file's folder (W/.jad); a path may also be absolute. The same tool ID in two files is an error naming both. A file in the folders a profile writes (W/.jad/profile-own, W/.jad/data, W/.jad/profiles), in G/auth or in another workspace's .jad is refused. Every file is read-only in a sandbox of this workspace."
         }
       },
       "additionalProperties": false

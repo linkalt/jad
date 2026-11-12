@@ -132,6 +132,75 @@ func TestWorkspaceSandboxSealsTheGlobalAndWorkspaceConfiguration(t *testing.T) {
 	}
 }
 
+// 4c: the tool definition files workspace.json lists are read-only in every sandbox of the
+// workspace, also outside W/.jad and even when a writable path covers them; a file of the
+// project next to them stays writable. A global.json one outside G is not on this list.
+func TestWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t *testing.T) {
+	requireBwrap(t)
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	a := filepath.Join(base, "a")
+	outside := filepath.Join(base, "defs")
+	inProject := filepath.Join(a, "defs", "native.json")
+	inJad := filepath.Join(a, ".jad", "tools_defintion", "native.json")
+	elsewhere := filepath.Join(outside, "native.json")
+	for _, path := range []string{inProject, inJad, elsewhere} {
+		writeWorkspaceFile(t, path, `{"tools":[]}`)
+	}
+	writeWorkspaceFile(t, filepath.Join(a, "defs", "other.txt"), "plain")
+	writeWorkspaceFile(t, filepath.Join(home, ".jad", "models", "openai", "default.json"), `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY"}`)
+	writeWorkspaceFile(t, filepath.Join(a, ".jad", "workspace.json"), `{"libraries":{"tool_definition_paths":["../defs/native.json","tools_defintion/native.json","`+elsewhere+`"]}}`)
+	writeWorkspaceFile(t, filepath.Join(a, ".jad", "sessions", "s1.json"), `{"schema_version":1}`)
+	writeWorkspaceFile(t, filepath.Join(a, ".jad", "profiles", "dev", "coder.json"), `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap",`+
+		`"writable_paths":["{workspace}","{tmp}","`+outside+`"]}}}`)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: a, Environment: map[string]string{"HOME": home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(config.ToolDefinitionPaths); got != 3 {
+		t.Fatalf("tool definition paths: %q", config.ToolDefinitionPaths)
+	}
+	settings := bashTestSettings(t, a)
+	settings.Sandbox = config.Sandbox
+	useOwnTempDir(t)
+	attempt := func(name, command string) string {
+		return `if ( ` + command + ` ) 2>/dev/null; then echo "` + name + `=written"; else echo "` + name + `=refused"; fi; `
+	}
+	command := ""
+	for name, path := range map[string]string{"project": inProject, "jad": inJad, "outside": elsewhere} {
+		command += attempt(name+"-change", `echo '{"tools":[{"id":"evil"}]}' > `+path) +
+			attempt(name+"-delete", `rm -f `+path) +
+			attempt(name+"-replace", `echo x > `+path+`.new && mv `+path+`.new `+path)
+	}
+	command += attempt("project-sibling", `echo ok > `+filepath.Join(a, "defs", "other.txt")) + attempt("outside-sibling", `echo ok > `+filepath.Join(outside, "new.txt"))
+	output := executeSandboxBashTest(t, a, "tooldefs-call", command, "", settings)
+	for _, name := range []string{"project", "jad", "outside"} {
+		for _, kind := range []string{"change", "delete", "replace"} {
+			if !strings.Contains(output, name+"-"+kind+"=refused") {
+				t.Errorf("%s-%s was not refused:\n%s", name, kind, output)
+			}
+		}
+	}
+	for _, want := range []string{"project-sibling=written", "outside-sibling=written"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("want %s in:\n%s", want, output)
+		}
+	}
+	for _, path := range []string{inProject, inJad, elsewhere} {
+		if data, _ := os.ReadFile(path); string(data) != `{"tools":[]}` {
+			t.Errorf("%s was changed from the sandbox: %q", path, data)
+		}
+	}
+}
+
 // A sealed folder that does not exist yet becomes an empty read-only folder where a writable
 // path covers its parent, so a call cannot make G (and a G/global.json in it); one whose parent
 // is missing too, or that no writable path covers, needs no rule.

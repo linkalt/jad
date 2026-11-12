@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
@@ -76,11 +77,52 @@ func librariesObject(setting map[string]json.RawMessage, where string) (map[stri
 	return libraries, nil
 }
 
-// workspaceLibraries reads workspace.json's libraries: only the folder keys, from W/.jad.
-func workspaceLibraries(setting map[string]json.RawMessage, where, jad string) (LibraryFolders, error) {
+// workspaceLibraries reads workspace.json's libraries: the folder keys and
+// tool_definition_paths (4c), each resolved from W/.jad. The tool definition paths are the
+// workspace's own list, read after the global one.
+func workspaceLibraries(setting map[string]json.RawMessage, where, jad string) (LibraryFolders, []string, error) {
 	libraries, err := librariesObject(setting, where)
 	if err != nil || libraries == nil {
-		return LibraryFolders{}, err
+		return LibraryFolders{}, nil, err
 	}
-	return parseLibraryFolders(libraries, where, jad)
+	folders, err := parseLibraryFolders(libraries, where, jad, "tool_definition_paths")
+	if err != nil {
+		return LibraryFolders{}, nil, err
+	}
+	raw, exists := libraries["tool_definition_paths"]
+	if !exists {
+		return folders, nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return LibraryFolders{}, nil, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
+	}
+	paths := make([]string, 0, len(values))
+	for position, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return LibraryFolders{}, nil, configError("%s: libraries.tool_definition_paths[%d] must be a non-empty string", where, position)
+		}
+		paths = appendNewStrings(paths, resolveFrom(jad, value))
+	}
+	return folders, paths, nil
+}
+
+// checkToolDefinitionPaths refuses a tool definition file, from global.json or workspace.json,
+// that lies in a place the loader keeps away from a configuration file (4c): the folders the
+// fixed hidden list names (G/auth and the other workspaces' .jad), and the folders a profile
+// writes (its own documents and history, the profile catalog and the working data of the
+// profiles), since a profile could then change what the tools are. A path is judged as written
+// and after the links of the part that exists. The workspace layout only.
+func (l Layout) checkToolDefinitionPaths(dataRoots []string) error {
+	forbidden := append(append(slices.Clone(l.FixedHidePaths), l.selfEditPaths()...), dataRoots...)
+	for _, path := range l.ToolDefinitionPaths {
+		resolved := resolveExisting(path)
+		for _, root := range forbidden {
+			if within(path, root) || within(resolved, root) {
+				return configError("libraries.tool_definition_paths: %s is in %s, which tool definitions may not be read from (the hidden folders, and the folders a profile writes)", path, root)
+			}
+		}
+	}
+	return nil
 }

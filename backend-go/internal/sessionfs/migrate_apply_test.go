@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -649,4 +650,169 @@ func TestApplyVerifiesTheCopiesBeforeTheSwitch(t *testing.T) {
 	if data, _ := os.ReadFile(g); string(data) != "damaged" || len(result.Rollback.Kept) == 0 {
 		t.Fatalf("rollback: %+v", result.Rollback)
 	}
+}
+
+// Decider 4c: a workspace's own tool definitions move to workspace.json and v2 reads them in
+// the same order from the same places; the global one stays in global.json.
+func TestApplyKeepsToolDefinitionsInTheWorkspaceInWorkspaceJSON(t *testing.T) {
+	f := newMigrateFixture(t)
+	f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{"tools_defintion/native/exec.json", "../../toolsdef/native/exec.json", filepath.Join(f.jad, "tools_defintion/native/async.json")}}
+	f.writeSetting(t)
+	before := hashes(t, f.base)
+	result, err := f.apply(t)
+	if err != nil {
+		t.Fatalf("apply: %v (%+v)", err, result.Rollback)
+	}
+	unchanged(t, before, hashes(t, f.base))
+	config, err := Load(LoadOptions{WorkingDir: f.workspace, Environment: map[string]string{"HOME": f.home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := config.Roots[0].Layout
+	want := []string{filepath.Join(f.base, "toolsdef/native/exec.json"), filepath.Join(f.jad, "tools_defintion/native/exec.json"), filepath.Join(f.jad, "tools_defintion/native/async.json")}
+	if !reflect.DeepEqual(layout.ToolDefinitionPaths, want) {
+		t.Fatalf("v2 reads %q, want %q", layout.ToolDefinitionPaths, want)
+	}
+	data, _ := os.ReadFile(filepath.Join(f.global, "global.json"))
+	if strings.Contains(string(data), "tools_defintion") {
+		t.Fatalf("a path in the workspace is in G: %s", data)
+	}
+	if _, err := RollbackWorkspaceMigration(result.Journal); err != nil {
+		t.Fatal(err)
+	}
+	if config, err := Load(LoadOptions{WorkingDir: f.workspace, Environment: map[string]string{"HOME": f.home}}); err != nil || len(config.Workspaces) != 0 {
+		t.Fatalf("v1 again: %v", err)
+	}
+}
+
+// Decider 4c: storage outside the copied state (here the default tool storage and the exec
+// function library under the working folder) is shared by v1 and v2: the plan notes it, the
+// comparison accepts the same absolute path, and a rollback keeps whatever v2 wrote there.
+func TestApplySharesStorageOutsideTheCopiedStateAndRollbackKeepsWhatV2Wrote(t *testing.T) {
+	f := newMigrateFixture(t)
+	v1 := otherFolders(t, f)
+	f.put(t, filepath.Join(v1, "tools/coding/default.json"), map[string]any{"native": map[string]any{"async": map[string]any{}, "exec": map[string]any{}}, "mcp": map[string]any{"web/search": map[string]any{}}})
+	f.write(t, filepath.Join(v1, "state/work/dev/coder/messages.jsonl"), "{}\n")
+	f.setting["defaults"] = map[string]any{"cwd": f.workspace}
+	f.writeSetting(t)
+	p := f.planner(t)
+	if !strings.Contains(strings.Join(p.plan.Warnings, "\n"), "shared storage: tool_storage_dir") {
+		t.Fatalf("warnings: %q", p.plan.Warnings)
+	}
+	result, err := applyPlanned(context.Background(), p, nil)
+	if err != nil {
+		t.Fatalf("apply: %v (%+v)", err, result.Rollback)
+	}
+	shared := filepath.Join(f.jad, "state/work/dev/coder/tools/helper")
+	f.write(t, shared, "written by v2")
+	rollback, err := RollbackWorkspaceMigration(result.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(shared); err != nil || string(data) != "written by v2" {
+		t.Fatalf("what v2 wrote in the shared storage is gone after the rollback: %v %+v", err, rollback)
+	}
+}
+
+// sameWriteTargets: a copy compares by its place in the state; shared storage by its absolute
+// path; a v1 target inside the v1 state that v2 points at by an absolute path is a difference.
+func TestSameWriteTargets(t *testing.T) {
+	for _, test := range []struct {
+		name                     string
+		old, now, oldAbs, nowAbs string
+		want                     bool
+	}{
+		{"both in the state", "{state}/a/tools", "{state}/a/tools", "/v1/a/tools", "/w/a/tools", true},
+		{"shared, v2 keeps it in its state", "/w/state/s/a/tools", "{state}/a/tools", "/w/state/s/a/tools", "/w/state/s/a/tools", true},
+		{"shared and outside both", "/x/y", "/x/y", "/x/y", "/x/y", true},
+		{"v1 in the state, v2 absolute", "{state}/a/tools", "/v1/s/a/tools", "/v1/s/a/tools", "/v1/s/a/tools", false},
+		{"a list of a copy and a shared target", "{state}/a,/x/y", "{state}/a,{state}/z", "/v1/a,/x/y", "/w/a,/w/z", false},
+		{"a list of a copy and shared target, v2 inside", "{state}/a,/w/z", "{state}/a,{state}/z", "/v1/a,/w/z", "/w/a,/w/z", true},
+		{"different paths", "/x/y", "{state}/z", "/x/y", "/w/z", false},
+		{"lists of different length", "/x/y", "/x/y,/x/z", "/x/y", "/x/y,/x/z", false},
+	} {
+		if got := sameWriteTargets(test.old, test.now, test.oldAbs, test.nowAbs); got != test.want {
+			t.Errorf("%s: got %v", test.name, got)
+		}
+	}
+}
+
+// What a v1 process and a v2 process in one migrated workspace share (decider 4c: "v1 and v2
+// cannot run in the same W at once" is a rule of the mode, not something the code enforces).
+// The mode is chosen once at start, so a v1 process that was running keeps v1 and a new one
+// started there is v2. With the folders in place both resolve the same transcript, state folder
+// and lock file, so the transcript lock excludes the other mode; the profile files are shared
+// too, and a profile a v2 self-edit gave a profile: model is left out of v1 (a v1 process cannot
+// read it), which is the cost of going back to v1 after such an edit.
+func TestV1AndV2ProcessesInOneWorkspaceShareTranscriptsLocksAndProfileFiles(t *testing.T) {
+	f := newMigrateFixture(t)
+	if result, err := f.apply(t); err != nil {
+		t.Fatalf("apply: %v (%+v)", err, result.Rollback)
+	}
+	env := map[string]string{"HOME": f.home}
+	v1, err := Load(LoadOptions{WorkingDir: f.workspace, Environment: env, RootSettingPath: filepath.Join(f.jad, "setting.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := Load(LoadOptions{WorkingDir: f.workspace, Environment: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v1.Workspaces) != 0 || len(v2.Workspaces) != 1 {
+		t.Fatalf("the mode is chosen at start: v1 %d workspaces, v2 %d", len(v1.Workspaces), len(v2.Workspaces))
+	}
+	session := func(config Config) SessionConfig {
+		t.Helper()
+		location, err := Resolve(config.Roots, config.Roots[0].ID+":work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadLayoutSessionSettings(location, *config.Roots[0].Layout, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loaded
+	}
+	one, two := session(v1), session(v2)
+	if one.MessagesPath != two.MessagesPath || one.StateDir != two.StateDir || one.MessagesPath == "" {
+		t.Fatalf("v1 and v2 use different transcripts: %s / %s", one.MessagesPath, two.MessagesPath)
+	}
+	oneLock, err := sessionlock.PathFor(one.MessagesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoLock, err := sessionlock.PathFor(two.MessagesPath)
+	if err != nil || oneLock != twoLock {
+		t.Fatalf("v1 and v2 lock different files: %s / %s (%v)", oneLock, twoLock, err)
+	}
+	held, err := sessionlock.Acquire(context.Background(), oneLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := sessionlock.TryAcquire(context.Background(), twoLock); !errors.Is(err, sessionlock.ErrBusy) {
+		if again != nil {
+			again.Close()
+		}
+		t.Fatalf("a v2 process and the transcript lock a v1 process holds: %v", err)
+	}
+	held.Close()
+
+	// A profile file a v2 self-edit points at the profile's own model: v2 loads it, v1 cannot.
+	f.write(t, "profile-own/dev/coder/models/openai/fast.json", `{"based_on":"workspace:openai/default"}`)
+	f.put(t, "profiles/dev/coder.json", map[string]any{"models": []string{"openai/default", "profile:openai/fast"}, "model_default": "profile:openai/fast", "toolset": "coding/default"})
+	if _, err := LoadLayoutSessionSettings(mustResolve(t, v2, "work"), *v2.Roots[0].Layout, "", ""); err != nil {
+		t.Fatalf("v2 does not load its own profile: %v", err)
+	}
+	if _, err := LoadLayoutSessionSettings(mustResolve(t, v1, "work"), *v1.Roots[0].Layout, "", ""); err == nil || !strings.Contains(err.Error(), "profile:openai/fast") {
+		t.Fatalf("v1 reads a profile with an own model: %v", err)
+	}
+}
+
+func mustResolve(t *testing.T, config Config, id string) Location {
+	t.Helper()
+	location, err := Resolve(config.Roots, config.Roots[0].ID+":"+id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return location
 }
