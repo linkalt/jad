@@ -17,7 +17,7 @@ const loadToolID = "native.load_tool"
 
 // loadToolInputSchema is the schema of sample/tools/native/load_tool.json. It is flat: no oneOf
 // or anyOf, which the Anthropic adapter strips from the top level. Which of the three
-// uses a call is (list, describe, run) follows from the keys it sends. The batch limit
+// uses a call is (list, describe, run, run several) follows from the keys it sends. The batch limit
 // (tools.lazy_load_max) is enforced when the call runs, so it is not in the schema.
 var loadToolInputSchema = json.RawMessage(`{
   "type":"object",
@@ -26,18 +26,32 @@ var loadToolInputSchema = json.RawMessage(`{
       "type":"array",
       "minItems":1,
       "uniqueItems":true,
-      "description":"Describe lazy tools: their tool names or patterns, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or * (every lazy tool). Returns each tool's name, id, description and inputSchema. Omit names and run to list the lazy tools. The total of matched tools is limited by the profile's tools.lazy_load_max. Not together with run.",
+      "description":"Describe lazy tools: their tool names or patterns, in one call: a tool name, mcp:<server>:<tool>, mcp:<server>:* or * (every lazy tool). Returns each tool's name, id, description and inputSchema. Omit names, run and runs to list the lazy tools. The total of matched tools is limited by the profile's tools.lazy_load_max. Not together with run or runs.",
       "items":{"type":"string","minLength":1}
     },
     "run":{
       "type":"string",
       "minLength":1,
-      "description":"Run one lazy tool: its exact tool name or mcp:<server>:<tool>, no pattern. Give its arguments in arguments, as its inputSchema says (see names). Not together with names."
+      "description":"Run one lazy tool: its exact tool name or mcp:<server>:<tool>, no pattern. Give its arguments in arguments, as its inputSchema says (see names). Not together with names or runs."
     },
     "arguments":{
       "type":"object",
       "description":"The arguments of the tool named in run. Defaults to {}. Used only with run.",
       "default":{}
+    },
+    "runs":{
+      "type":"array",
+      "minItems":1,
+      "description":"Run several lazy tools in one call: each item is run (the exact tool name or mcp:<server>:<tool>, no pattern) and arguments (as that tool's inputSchema says, default {}). At most tools.lazy_load_max items. Tools that change nothing run together; if any of them can change state they run one after another in this order. The results come back in this order, each under a heading naming its run; one failing run does not stop the others. Not together with names, run or arguments.",
+      "items":{
+        "type":"object",
+        "properties":{
+          "run":{"type":"string","minLength":1},
+          "arguments":{"type":"object","default":{}}
+        },
+        "required":["run"],
+        "additionalProperties":false
+      }
     }
   },
   "additionalProperties":false
@@ -49,7 +63,8 @@ var loadToolInputSchema = json.RawMessage(`{
 // select (a tool name, mcp:<server>:<tool>, mcp:<server>:* or *): name, id, description and
 // inputSchema. With run it runs one lazy tool, named exactly, through the catalog that runs
 // load_tool (ExecutionContext.Dispatcher), with the tool's arguments in arguments, and returns the
-// tool's own output. Only the lazy tools the dispatching catalog holds are listed, described or run,
+// tool's own output. With runs it runs several, each dispatched like a single run, and returns
+// every output in the order sent (runLazyTools). Only the lazy tools the dispatching catalog holds are listed, described or run,
 // so a plan-mode or narrowed catalog does not show what it cannot call. Nothing is written to the lazy set.
 func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 	validator, err := tools.CompileSchema(loadToolInputSchema)
@@ -68,11 +83,18 @@ func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 		ReadOnly:         true,
 		ExampleOperation: json.RawMessage(`{"run":"example_tool","arguments":{}}`),
 		Delegate:         loadToolDelegate,
+		DelegateRuns:     loadToolDelegateRuns,
 		ExecuteOutput: func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (json.RawMessage, error) {
 			_, hasRun := arguments["run"]
 			names, hasNames := arguments["names"].([]any)
 			_, hasArguments := arguments["arguments"]
+			_, hasRuns := arguments["runs"]
+			_, hasNamesKey := arguments["names"]
 			switch {
+			case hasRuns && (hasRun || hasNamesKey || hasArguments):
+				return textOutput(invalidLoadToolInput(execution, "runs cannot be combined with names, run or arguments: put each tool's arguments inside its item of runs"))
+			case hasRuns:
+				return runLazyTools(ctx, set, loadMax, arguments, execution)
 			case hasRun && hasNames:
 				return textOutput(invalidLoadToolInput(execution, "names and run cannot be combined: describe with names, then run with run"))
 			case hasRun:
@@ -100,9 +122,54 @@ func NewLoadToolTool(set *tools.LazySet, loadMax int) (tools.Tool, error) {
 	}, nil
 }
 
-const loadToolDescription = "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+const loadToolDescription = "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
 
-// loadToolDelegate is Tool.Delegate of load_tool: a call with run (and no names) runs the tool
+// loadToolDelegateRuns is Tool.DelegateRuns of load_tool: a call with runs, a non-empty list of
+// {run, arguments} and none of names, run or arguments, runs those tools in the order listed.
+// Anything else, a malformed item included, is no batch and runs nothing.
+func loadToolDelegateRuns(arguments map[string]any) ([]tools.DelegateTarget, bool) {
+	raw, present := arguments["runs"]
+	if !present {
+		return nil, false
+	}
+	for _, key := range []string{"run", "names", "arguments"} {
+		if _, has := arguments[key]; has {
+			return nil, false
+		}
+	}
+	items, isArray := raw.([]any)
+	if !isArray || len(items) == 0 {
+		return nil, false
+	}
+	targets := make([]tools.DelegateTarget, 0, len(items))
+	for _, item := range items {
+		object, isObject := item.(map[string]any)
+		if !isObject {
+			return nil, false
+		}
+		for key := range object {
+			if key != "run" && key != "arguments" {
+				return nil, false
+			}
+		}
+		target, _ := object["run"].(string)
+		if target == "" {
+			return nil, false
+		}
+		targetArguments := map[string]any{}
+		if value, has := object["arguments"]; has {
+			argumentsObject, isObject := value.(map[string]any)
+			if !isObject {
+				return nil, false
+			}
+			targetArguments = argumentsObject
+		}
+		targets = append(targets, tools.DelegateTarget{Target: target, Arguments: targetArguments})
+	}
+	return targets, true
+}
+
+// loadToolDelegate is Tool.Delegate of load_tool: a call with run (and no names or runs) runs the tool
 // run names with the arguments in arguments, none being {}. Anything else runs nothing.
 func loadToolDelegate(arguments map[string]any) (string, map[string]any, bool) {
 	target, _ := arguments["run"].(string)
@@ -110,6 +177,9 @@ func loadToolDelegate(arguments map[string]any) (string, map[string]any, bool) {
 		return "", nil, false
 	}
 	if _, hasNames := arguments["names"]; hasNames {
+		return "", nil, false
+	}
+	if _, hasRuns := arguments["runs"]; hasRuns {
 		return "", nil, false
 	}
 	targetArguments := map[string]any{}
@@ -165,21 +235,32 @@ func runLazyTool(ctx context.Context, set *tools.LazySet, arguments map[string]a
 	if !ok {
 		return textOutput(invalidLoadToolInput(execution, "arguments must be an object"))
 	}
-	if tools.IsLazyPattern(target) {
-		return textOutput(invalidLoadToolInput(execution, fmt.Sprintf("run takes one exact tool name or mcp:<server>:<tool>, not the pattern %s; list the lazy tools with %s and no arguments", target, sessionfs.LoadToolName)))
-	}
-	entries := set.Match([]string{target})[0]
-	if len(entries) != 1 {
-		return textOutput(tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "unknown_lazy_tool",
-			fmt.Sprintf("%s is not a lazy tool of this profile; list the lazy tools with %s and no arguments", target, sessionfs.LoadToolName),
-			tools.Information{Key: "tool", Value: target}))
-	}
-	name := entries[0].Tool.Definition.Name
-	if execution.Dispatcher == nil || !execution.Dispatcher.Has(name) {
-		return textOutput(tools.UnknownToolError(execution.CallID, name))
+	name, refusal := resolveLazyTarget(set, target, execution)
+	if refusal != "" {
+		return textOutput(refusal)
 	}
 	execution.ViaRunner = true
 	return tools.DispatchCall(ctx, execution.Dispatcher, name, targetArguments, execution)
+}
+
+// resolveLazyTarget is the lazy tool a run names, by its provider name, or the model-facing
+// refusal (an error result) when the run cannot start: a pattern, a name that is not a lazy tool
+// of the profile, or a tool the dispatching catalog does not hold. Exactly one of the two is set.
+func resolveLazyTarget(set *tools.LazySet, target string, execution tools.ExecutionContext) (name, refusal string) {
+	if tools.IsLazyPattern(target) {
+		return "", invalidLoadToolInput(execution, fmt.Sprintf("run takes one exact tool name or mcp:<server>:<tool>, not the pattern %s; list the lazy tools with %s and no arguments", target, sessionfs.LoadToolName))
+	}
+	entries := set.Match([]string{target})[0]
+	if len(entries) != 1 {
+		return "", tools.ExecutionError(execution.CallID, tools.StatusInvalidInput, "unknown_lazy_tool",
+			fmt.Sprintf("%s is not a lazy tool of this profile; list the lazy tools with %s and no arguments", target, sessionfs.LoadToolName),
+			tools.Information{Key: "tool", Value: target})
+	}
+	name = entries[0].Tool.Definition.Name
+	if execution.Dispatcher == nil || !execution.Dispatcher.Has(name) {
+		return "", tools.UnknownToolError(execution.CallID, name)
+	}
+	return name, ""
 }
 
 // listLazyTools lists every lazy tool, sorted by name, as "name — summary", and says how to describe

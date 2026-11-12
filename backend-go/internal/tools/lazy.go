@@ -227,16 +227,22 @@ func callInner(ctx context.Context, inner *Catalog, arguments map[string]any, ex
 	return DispatchCall(ctx, inner, execution.ToolName, arguments, execution)
 }
 
+// FunctionCall is the function_call item of a call to the tool named name with the given arguments,
+// as the provider sends it: the arguments are a JSON string.
+func FunctionCall(callID, name string, arguments map[string]any) (json.RawMessage, error) {
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]string{"type": "function_call", "call_id": callID, "name": name, "arguments": string(encoded)})
+}
+
 // DispatchCall runs one call of the tool named name through the dispatcher, with the given
 // arguments and the execution context as it is, and returns the output value of the
 // function_call_output the dispatcher answers with. The call keeps the call ID of the execution, so a
 // runner's nested call is the same call to the model.
 func DispatchCall(ctx context.Context, dispatcher Dispatcher, name string, arguments map[string]any, execution ExecutionContext) (json.RawMessage, error) {
-	encoded, err := json.Marshal(arguments)
-	if err != nil {
-		return nil, err
-	}
-	call, err := json.Marshal(map[string]string{"type": "function_call", "call_id": execution.CallID, "name": name, "arguments": string(encoded)})
+	call, err := FunctionCall(execution.CallID, name, arguments)
 	if err != nil {
 		return nil, err
 	}

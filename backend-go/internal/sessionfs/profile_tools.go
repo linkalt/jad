@@ -34,7 +34,8 @@ type ProfileToolSettings struct {
 	// LazySummaryBytes bounds the first line of a lazy tool's description that the
 	// model sees in place of the full description.
 	LazySummaryBytes int64
-	// LazyLoadMax bounds how many lazy tools one load_tool describe call (names) may match.
+	// LazyLoadMax bounds how many lazy tools one load_tool describe call (names) may match, and how
+	// many items one load_tool runs call may list.
 	LazyLoadMax int64
 }
 

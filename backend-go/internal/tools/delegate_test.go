@@ -24,6 +24,26 @@ func delegatingTool(t *testing.T) Tool {
 		}
 		return target, targetArguments, true
 	}
+	runner.DelegateRuns = func(arguments map[string]any) ([]DelegateTarget, bool) {
+		items, ok := arguments["runs"].([]any)
+		if !ok || len(items) == 0 {
+			return nil, false
+		}
+		targets := make([]DelegateTarget, 0, len(items))
+		for _, item := range items {
+			object, _ := item.(map[string]any)
+			target, _ := object["run"].(string)
+			if target == "" {
+				return nil, false
+			}
+			targetArguments, _ := object["arguments"].(map[string]any)
+			if targetArguments == nil {
+				targetArguments = map[string]any{}
+			}
+			targets = append(targets, DelegateTarget{Target: target, Arguments: targetArguments})
+		}
+		return targets, true
+	}
 	return runner
 }
 

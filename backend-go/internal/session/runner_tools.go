@@ -203,19 +203,22 @@ func roundChangesWorkspace(catalog *tools.Catalog, calls []json.RawMessage, run 
 			break
 		}
 	}
-	for _, call := range toRun {
+	for _, outer := range toRun {
 		// A call a runner tool (load_tool run) makes is judged as the lazy tool it runs: a run of
 		// an MCP tool is judged by its source. A run that names a native tool runs nothing (no
-		// native tool is lazy), so it stays load_tool's own read-only call.
-		call = catalog.ResolveCall(call)
-		// A plan-mode guarded tool runs only its calls that change no file; the others are
-		// refused before they start, so neither kind needs a checkpoint. A tool an allow
-		// entry keeps whole is not guarded and still counts.
-		if catalog.IsPlanGuardedCall(call) {
-			continue
-		}
-		if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) || catalog.CallMayChangeFiles(call) {
-			return true
+		// native tool is lazy), so it stays load_tool's own read-only call. A batch (runs) is
+		// judged target by target: one target that changes the workspace takes the checkpoint.
+		resolved, _ := catalog.ResolveCalls(outer)
+		for _, call := range resolved {
+			// A plan-mode guarded tool runs only its calls that change no file; the others are
+			// refused before they start, so neither kind needs a checkpoint. A tool an allow
+			// entry keeps whole is not guarded and still counts.
+			if catalog.IsPlanGuardedCall(call) {
+				continue
+			}
+			if checkpoint.CallChangesWorkspace(call, catalog.SourceOf(call), run.IncludeMCPTools()) || catalog.CallMayChangeFiles(call) {
+				return true
+			}
 		}
 	}
 	return false
@@ -283,6 +286,10 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 
 	var mu sync.Mutex
 	concurrency := toolBatchConcurrency(toExecute, limit, scheduling, catalog.ChangesState)
+	// A call that runs several tools itself (load_tool runs) shares the round's bound with the
+	// calls it runs beside: its share is the limit divided among the calls that run together, so
+	// the tools of a round in flight stay within max_parallel_tool_calls.
+	nestedParallel := max(1, limit/max(1, min(concurrency, len(toExecute))))
 	// With fewer slots than calls, a call that is not the last may hold a later one back
 	// until it returns; it is told so (BatchWaiting) and does not block long by default.
 	held := make(map[string]bool, len(toExecute))
@@ -298,6 +305,9 @@ func executeToolRound(ctx context.Context, catalog *tools.Catalog, calls []json.
 			}
 			callExecution := execution
 			callExecution.BatchWaiting = held[functionCallID(call)]
+			callExecution.LeafBudget = budget
+			callExecution.NestedParallel = nestedParallel
+			callExecution.NestedOrdered = scheduling == "ordered"
 			callCtx, span := tracing.StartToolCall(ctx, call)
 			output, err := catalog.ExecuteFunctionCall(callCtx, call, callExecution)
 			tracing.EndToolCall(span, output, err)

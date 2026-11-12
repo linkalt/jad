@@ -128,6 +128,19 @@ type ExecutionContext struct {
 	// ViaRunner says that a runner tool dispatches this call, not the model: a lazy tool
 	// accepts only such a call. The runner sets it on the call it dispatches.
 	ViaRunner bool
+	// LeafBudget is the process-wide budget of leaf tool calls the round that runs the call shares
+	// (nil: no bound). A runner tool that runs several leaf tools for one call of the model
+	// (load_tool runs) takes one token per leaf target, as a round does for its calls. The round
+	// sets it for each call, and a run the call starts sets its own.
+	LeafBudget *LeafBudget
+	// NestedParallel and NestedOrdered tell a runner tool how it may run the several tools of one
+	// batch call: at most NestedParallel at once (below 2: one after another), and with
+	// NestedOrdered a batch holding a call that can change state runs one at a time in the
+	// model's order, the rule scheduling "ordered" gives the calls of a response. The round sets
+	// them, dividing its max_parallel_tool_calls among the calls it runs together, so a round
+	// stays within that bound. Unset (a call made outside a round) runs a batch one at a time.
+	NestedParallel int
+	NestedOrdered  bool
 	// Environment, when set, is the environment of the run the call belongs to: every child
 	// process of a tool its sandbox covers starts in it, and the in-process readers see only
 	// what it shows. The bound runner sets it from the session's sandbox; a sub-agent with a
@@ -172,7 +185,7 @@ type Dispatcher interface {
 // so ForNested clears them; every other field carries over to the nested call.
 // TestForNestedKeepsEveryRunScopedField walks all the fields and fails when one is
 // neither copied nor listed here.
-var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments", "BatchWaiting", "Dispatcher", "ViaRunner"}
+var executionContextPerCall = []string{"CallID", "ToolName", "RawArguments", "BatchWaiting", "Dispatcher", "ViaRunner", "LeafBudget", "NestedParallel", "NestedOrdered"}
 
 // ForNested returns the context of a call made inside this one: a nested call of a
 // tool_smith script, or the tools of a sub-agent. The whole run scope carries over — above
@@ -188,6 +201,9 @@ func (e ExecutionContext) ForNested() ExecutionContext {
 	nested.BatchWaiting = false
 	nested.Dispatcher = nil
 	nested.ViaRunner = false
+	nested.LeafBudget = nil
+	nested.NestedParallel = 0
+	nested.NestedOrdered = false
 	return nested
 }
 
@@ -197,6 +213,13 @@ func (e ExecutionContext) ForNested() ExecutionContext {
 type PathScope struct {
 	Allow []string
 	Deny  []string
+}
+
+// DelegateTarget is one tool a runner's batch call runs: the target as the model named it (a
+// model-facing name or an ID) and the arguments for it.
+type DelegateTarget struct {
+	Target    string
+	Arguments map[string]any
 }
 
 // Tool is one compiled and executable function tool.
@@ -253,7 +276,14 @@ type Tool struct {
 	// catalog. The catalog judges a delegating call as its target when the target can be lazy
 	// (ResolveCall; a run naming a native tool runs nothing and is judged as the runner), and the
 	// event hooks of a delegating call are the target's, not the runner's.
-	Delegate           func(arguments map[string]any) (target string, targetArguments map[string]any, ok bool)
+	Delegate func(arguments map[string]any) (target string, targetArguments map[string]any, ok bool)
+	// DelegateRuns, set on a runner tool, is the same pure parse for a call that runs several tools
+	// in one call (load_tool runs): the targets in the order the model sent them. ok is false for
+	// any call that is not a well-formed batch. A call is a batch or a single run, never both. The
+	// catalog judges a batch as the tools it runs, together (ResolveCalls), and the runner runs the
+	// targets itself: it schedules them from the same judgments, so a batch keeps the rules of the
+	// calls of one response. The event hooks of a batch are its targets', as for a single run.
+	DelegateRuns       func(arguments map[string]any) (targets []DelegateTarget, ok bool)
 	NormalizeArguments func(map[string]any) map[string]any
 	// RejectedProperties maps an argument name the schema no longer has to the message
 	// shown instead of "must NOT have additional properties".
@@ -299,7 +329,7 @@ func NewCatalog(tools []Tool) (*Catalog, error) {
 			return nil, fmt.Errorf("duplicate tool name %s", tool.Definition.Name)
 		}
 		catalog.byName[tool.Definition.Name] = tool
-		catalog.delegating = catalog.delegating || tool.Delegate != nil
+		catalog.delegating = catalog.delegating || tool.Delegate != nil || tool.DelegateRuns != nil
 	}
 	return catalog, nil
 }
@@ -466,70 +496,133 @@ func (c *Catalog) Has(name string) bool {
 // this catalog (by name or by ID) that can be lazy (CanBeLazy: an MCP or an extension tool). Any
 // other call comes back unchanged: a call whose target is not in the catalog, is itself a runner,
 // or is a native tool. The runner (load_tool) runs only a lazy tool, so a run that names a native
-// tool runs nothing and is judged as the runner itself. A call is resolved at most once.
+// tool runs nothing and is judged as the runner itself. A batch call (DelegateRuns) comes back
+// unchanged too: it stands for several calls, which ResolveCalls returns.
 // The judgments below ask about the resolved call, so a run of an MCP tool takes the checkpoint,
 // the scheduling and the image source of that tool.
 func (c *Catalog) ResolveCall(call json.RawMessage) json.RawMessage {
 	if c == nil || !c.delegating {
 		return call
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(call, &fields) != nil {
+	fields, runner, arguments, ok := c.delegation(call)
+	if !ok {
 		return call
+	}
+	return c.resolveSingle(call, fields, runner, arguments)
+}
+
+// ResolveCalls returns the calls a call stands for, and whether the call is a batch (a runner's
+// DelegateRuns). A single call, a run included, gives the one call ResolveCall gives. A batch gives
+// one resolved call per target that resolves to a lazy-capable tool of this catalog, in the
+// order sent; a target that does not resolve runs nothing and adds none. A batch none of whose
+// targets resolves gives the call itself, judged as the runner: read-only, nothing to checkpoint.
+// The result is never empty.
+func (c *Catalog) ResolveCalls(call json.RawMessage) (calls []json.RawMessage, batch bool) {
+	if c == nil || !c.delegating {
+		return []json.RawMessage{call}, false
+	}
+	fields, runner, arguments, ok := c.delegation(call)
+	if !ok {
+		return []json.RawMessage{call}, false
+	}
+	if runner.DelegateRuns != nil {
+		if targets, isBatch := runner.DelegateRuns(arguments); isBatch {
+			resolved := make([]json.RawMessage, 0, len(targets))
+			for _, target := range targets {
+				if rewritten, found := c.rewriteTarget(fields, target.Target, target.Arguments); found {
+					resolved = append(resolved, rewritten)
+				}
+			}
+			if len(resolved) == 0 {
+				resolved = append(resolved, call)
+			}
+			return resolved, true
+		}
+	}
+	return []json.RawMessage{c.resolveSingle(call, fields, runner, arguments)}, false
+}
+
+// delegation parses a call of a runner tool of this catalog: its fields, the runner and the
+// runner's decoded arguments. ok is false for any other call.
+func (c *Catalog) delegation(call json.RawMessage) (fields map[string]json.RawMessage, runner Tool, arguments map[string]any, ok bool) {
+	if json.Unmarshal(call, &fields) != nil {
+		return nil, Tool{}, nil, false
 	}
 	var name string
 	if json.Unmarshal(fields["name"], &name) != nil {
-		return call
+		return nil, Tool{}, nil, false
 	}
 	runner, exists := c.byName[name]
-	if !exists || runner.Delegate == nil {
-		return call
+	if !exists || (runner.Delegate == nil && runner.DelegateRuns == nil) {
+		return nil, Tool{}, nil, false
 	}
 	var text string
 	if json.Unmarshal(fields["arguments"], &text) != nil {
-		return call
+		return nil, Tool{}, nil, false
 	}
 	decoded, err := jsonschemaDecode([]byte(text))
 	if err != nil {
-		return call
+		return nil, Tool{}, nil, false
 	}
 	arguments, isObject := decoded.(map[string]any)
 	if !isObject {
-		return call
+		return nil, Tool{}, nil, false
 	}
 	if runner.NormalizeArguments != nil {
 		arguments = runner.NormalizeArguments(arguments)
+	}
+	return fields, runner, arguments, true
+}
+
+// resolveSingle is ResolveCall for a parsed call of a runner.
+func (c *Catalog) resolveSingle(call json.RawMessage, fields map[string]json.RawMessage, runner Tool, arguments map[string]any) json.RawMessage {
+	if runner.Delegate == nil {
+		return call
 	}
 	target, targetArguments, ok := runner.Delegate(arguments)
 	if !ok {
 		return call
 	}
+	if rewritten, found := c.rewriteTarget(fields, target, targetArguments); found {
+		return rewritten
+	}
+	return call
+}
+
+// rewriteTarget is the call a run of target stands for: the fields of the runner's call with the
+// target's name and arguments. found is false when the target is not in the catalog, is itself a
+// runner, or cannot be lazy.
+func (c *Catalog) rewriteTarget(fields map[string]json.RawMessage, target string, targetArguments map[string]any) (json.RawMessage, bool) {
 	resolved, found := c.byTarget(target)
-	if !found || resolved.Delegate != nil || !CanBeLazy(resolved.Definition) {
-		return call
+	if !found || resolved.Delegate != nil || resolved.DelegateRuns != nil || !CanBeLazy(resolved.Definition) {
+		return nil, false
 	}
 	encoded, err := json.Marshal(targetArguments)
 	if err != nil {
-		return call
+		return nil, false
 	}
 	nameJSON, err := json.Marshal(resolved.Definition.Name)
 	if err != nil {
-		return call
+		return nil, false
 	}
 	argumentsJSON, err := json.Marshal(string(encoded))
 	if err != nil {
-		return call
+		return nil, false
 	}
-	fields["name"] = nameJSON
-	fields["arguments"] = argumentsJSON
-	rewritten, err := json.Marshal(fields)
+	rewritten := make(map[string]json.RawMessage, len(fields))
+	for key, value := range fields {
+		rewritten[key] = value
+	}
+	rewritten["name"] = nameJSON
+	rewritten["arguments"] = argumentsJSON
+	call, err := json.Marshal(rewritten)
 	if err != nil {
-		return call
+		return nil, false
 	}
-	return rewritten
+	return call, true
 }
 
-// byTarget finds a tool by its provider-facing name or by its ID.
+// byTarget resolves a run target: the exact provider name first, then the definition ID.
 func (c *Catalog) byTarget(target string) (Tool, bool) {
 	if tool, exists := c.byName[target]; exists {
 		return tool, true
@@ -542,69 +635,84 @@ func (c *Catalog) byTarget(target string) (Tool, bool) {
 	return Tool{}, false
 }
 
+// callName is the tool name a (resolved) call names, or "" for a call that is not a JSON object
+// with a string name.
+func callName(call json.RawMessage) string {
+	var fields struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(call, &fields) != nil {
+		return ""
+	}
+	return fields.Name
+}
+
 // IsUserDecisionCall reports whether the call must be resolved before any
-// co-batched calls execute.
+// co-batched calls execute. A batch counts when any of its targets does.
 func (c *Catalog) IsUserDecisionCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
-	call = c.ResolveCall(call)
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(call, &fields) != nil {
-		return false
+	calls, _ := c.ResolveCalls(call)
+	for _, resolved := range calls {
+		if c.byName[callName(resolved)].RequiresUserDecision {
+			return true
+		}
 	}
-	var name string
-	if json.Unmarshal(fields["name"], &name) != nil {
-		return false
-	}
-	return c.byName[name].RequiresUserDecision
+	return false
 }
 
 // ChangesState reports whether a call can change state, or depend on a change made
 // by another call of the same response. An unknown name runs nothing, so it does
-// not count; a tool that is not marked ReadOnly (every MCP tool included) does.
+// not count; a tool that is not marked ReadOnly (every MCP tool included) does. A batch
+// can change state when any of its targets can.
 func (c *Catalog) ChangesState(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
-	call = c.ResolveCall(call)
-	var fields struct {
-		Name string `json:"name"`
+	calls, _ := c.ResolveCalls(call)
+	for _, resolved := range calls {
+		tool, exists := c.byName[callName(resolved)]
+		if exists && (!tool.ReadOnly || c.callMayChangeFiles(resolved)) {
+			return true
+		}
 	}
-	if json.Unmarshal(call, &fields) != nil {
-		return false
-	}
-	tool, exists := c.byName[fields.Name]
-	if !exists {
-		return false
-	}
-	return !tool.ReadOnly || c.CallMayChangeFiles(call)
+	return false
 }
 
 // IsLeafCall reports whether a call runs under the leaf budget: its tool opts in with
-// LeafBudget. An unknown name runs nothing, so it is not a leaf.
+// LeafBudget. An unknown name runs nothing, so it is not a leaf. A batch is never a leaf: it
+// holds no token while it waits, and the runner takes one token for each leaf target it runs
+// (ExecutionContext.LeafBudget), as a round does.
 func (c *Catalog) IsLeafCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
-	call = c.ResolveCall(call)
-	var fields struct {
-		Name string `json:"name"`
-	}
-	if json.Unmarshal(call, &fields) != nil {
+	calls, batch := c.ResolveCalls(call)
+	if batch {
 		return false
 	}
-	return c.byName[fields.Name].LeafBudget
+	return c.byName[callName(calls[0])].LeafBudget
 }
 
 // CallMayChangeFiles reports whether a call to a tool that decides per call (see
 // Tool.MayChangeFiles) can change files. A tool without that hook answers false: the
-// checkpoint judges those by name.
+// checkpoint judges those by name. A batch can when any of its targets can.
 func (c *Catalog) CallMayChangeFiles(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
-	call = c.ResolveCall(call)
+	calls, _ := c.ResolveCalls(call)
+	for _, resolved := range calls {
+		if c.callMayChangeFiles(resolved) {
+			return true
+		}
+	}
+	return false
+}
+
+// callMayChangeFiles is CallMayChangeFiles for a call that is already resolved.
+func (c *Catalog) callMayChangeFiles(call json.RawMessage) bool {
 	var fields struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -631,39 +739,38 @@ func (c *Catalog) CallMayChangeFiles(call json.RawMessage) bool {
 }
 
 // IsPlanGuardedCall reports whether a call goes to a tool that plan mode guards (see
-// Tool.PlanGuarded). An unknown name is not guarded.
+// Tool.PlanGuarded). An unknown name is not guarded. A batch is guarded when every one of its
+// targets is.
 func (c *Catalog) IsPlanGuardedCall(call json.RawMessage) bool {
 	if c == nil {
 		return false
 	}
-	call = c.ResolveCall(call)
-	var fields struct {
-		Name string `json:"name"`
+	calls, _ := c.ResolveCalls(call)
+	for _, resolved := range calls {
+		if !c.byName[callName(resolved)].PlanGuarded {
+			return false
+		}
 	}
-	if json.Unmarshal(call, &fields) != nil {
-		return false
-	}
-	return c.byName[fields.Name].PlanGuarded
+	return true
 }
 
 // SourceOf returns where a called tool comes from ("native" or "mcp"), or "" for
-// an unknown name.
+// an unknown name. A batch whose targets come from different places answers "", so what the
+// source decides (an image resize) is not applied to a result that mixes sources.
 func (c *Catalog) SourceOf(call json.RawMessage) string {
 	if c == nil {
 		return ""
 	}
-	call = c.ResolveCall(call)
-	var fields struct {
-		Name string `json:"name"`
+	calls, _ := c.ResolveCalls(call)
+	source := ""
+	for index, resolved := range calls {
+		tool, exists := c.byName[callName(resolved)]
+		if !exists || (index > 0 && tool.Definition.Source != source) {
+			return ""
+		}
+		source = tool.Definition.Source
 	}
-	if json.Unmarshal(call, &fields) != nil {
-		return ""
-	}
-	tool, exists := c.byName[fields.Name]
-	if !exists {
-		return ""
-	}
-	return tool.Definition.Source
+	return source
 }
 
 // ExecuteFunctionCall validates arguments and returns a Responses

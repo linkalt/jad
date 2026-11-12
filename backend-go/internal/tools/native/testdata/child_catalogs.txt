@@ -1,96 +1,96 @@
 == agent=nester choice="" depth=0
-fingerprint=5044862406a1cf7ec89ec8524c582e3319469d165d421781343855a9e19b3117 repeat_same_fingerprint=true
+fingerprint=2ff0961a8bc1c7175e958500fbcd3ca25d424aa88df6c9a5e4756e4e27254d5c repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=cf6888d4b36f
+routes=b8206b2d3463
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="" depth=2
-fingerprint=5044862406a1cf7ec89ec8524c582e3319469d165d421781343855a9e19b3117 repeat_same_fingerprint=true
+fingerprint=2ff0961a8bc1c7175e958500fbcd3ca25d424aa88df6c9a5e4756e4e27254d5c repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=ba4be54caf56
+routes=ca6497e29e56
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="reader" depth=0
-fingerprint=0ad711b2b1ea32a19dc87f43d5341692b5527023931cbe100c42b9c7b64e7de7 repeat_same_fingerprint=true
+fingerprint=5e443482823cb84ca7fad72880de7f1732a4a0bec322d8de8e3db572e2d249cc repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=8b91303cbbd7
+routes=61efb9b24754
   read 39514eb40055 "read."
   exec 32fafb9eae43 "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. Network: off, so downloads, package installs and git fetch or push fail. Do not try to get around the sandbox; say what access a task needs instead."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="reader" depth=2
-fingerprint=0ad711b2b1ea32a19dc87f43d5341692b5527023931cbe100c42b9c7b64e7de7 repeat_same_fingerprint=true
+fingerprint=5e443482823cb84ca7fad72880de7f1732a4a0bec322d8de8e3db572e2d249cc repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=f15b0a59dea9
+routes=a8a55d26cd2c
   read 39514eb40055 "read."
   exec 32fafb9eae43 "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. Network: off, so downloads, package installs and git fetch or push fail. Do not try to get around the sandbox; say what access a task needs instead."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="online" depth=0
-fingerprint=54214a7ba2d239a599c99a874072459f115cb835dfce7be94e91641c3b1b4e18 repeat_same_fingerprint=true
+fingerprint=bcfe07fe74c5fdfbb106b9c8f923eb4051b04effcce1f5641ef894279cadad49 repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=95aea4f7cd62
+routes=2bb1321ff150
   read 39514eb40055 "read."
   exec b2a7947073bb "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: <workspace>, <repository git directory>, $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. In plan mode, writable: nothing. Network: on. Do not try to get around the sandbox; say what access a task needs instead."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="online" depth=2
-fingerprint=54214a7ba2d239a599c99a874072459f115cb835dfce7be94e91641c3b1b4e18 repeat_same_fingerprint=true
+fingerprint=bcfe07fe74c5fdfbb106b9c8f923eb4051b04effcce1f5641ef894279cadad49 repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=9f27a8327f70
+routes=911c4f358623
   read 39514eb40055 "read."
   exec b2a7947073bb "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: <workspace>, <repository git directory>, $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. In plan mode, writable: nothing. Network: on. Do not try to get around the sandbox; say what access a task needs instead."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="isolate" depth=0
-fingerprint=39029a48207454ec2d20d8b232fa2d9d79727ad74382c56e4584eabb5eefcb28 repeat_same_fingerprint=true
+fingerprint=21f0f281c5a4efcfff95c4d94ded327aa29c65182aa7bd9788050e84b586ff26 repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=28eb3766a99c
+routes=15189f16ddc2
   read 39514eb40055 "read."
   exec 0fae91b7f394 "exec. Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="isolate" depth=2
-fingerprint=39029a48207454ec2d20d8b232fa2d9d79727ad74382c56e4584eabb5eefcb28 repeat_same_fingerprint=true
+fingerprint=21f0f281c5a4efcfff95c4d94ded327aa29c65182aa7bd9788050e84b586ff26 repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=a5e1e780c2bc
+routes=756828d15b6a
   read 39514eb40055 "read."
   exec 0fae91b7f394 "exec. Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="in-place" depth=0
-fingerprint=5044862406a1cf7ec89ec8524c582e3319469d165d421781343855a9e19b3117 repeat_same_fingerprint=true
+fingerprint=2ff0961a8bc1c7175e958500fbcd3ca25d424aa88df6c9a5e4756e4e27254d5c repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=cf6888d4b36f
+routes=b8206b2d3463
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=nester choice="in-place" depth=2
-fingerprint=5044862406a1cf7ec89ec8524c582e3319469d165d421781343855a9e19b3117 repeat_same_fingerprint=true
+fingerprint=2ff0961a8bc1c7175e958500fbcd3ca25d424aa88df6c9a5e4756e4e27254d5c repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=ba4be54caf56
+routes=ca6497e29e56
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=reader choice="" depth=0
@@ -375,107 +375,107 @@ routes=c04289a2270f
   profile_message 9e8373cb7dad "profile_message."
   mcp_zvec_search_0123456789 09f8623a867e "search"
 == agent=plain choice="" depth=0
-fingerprint=db64818655d50556bad111668de172d28ed083483565f0c8bbd6bc427c5b1273 repeat_same_fingerprint=true
+fingerprint=cd0118b433f3f2c7a74155632968798967074452aa9d25a6b2841f9302cf04a6 repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=cf8f574a77e5
+routes=1df39b680109
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   profile_message 9e8373cb7dad "profile_message."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="" depth=2
-fingerprint=db64818655d50556bad111668de172d28ed083483565f0c8bbd6bc427c5b1273 repeat_same_fingerprint=true
+fingerprint=cd0118b433f3f2c7a74155632968798967074452aa9d25a6b2841f9302cf04a6 repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=9fda516dbc9e
+routes=8e6aa8c4a59b
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   profile_message 9e8373cb7dad "profile_message."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="reader" depth=0
-fingerprint=510b342c28252969ef1f24d8b4b7263137cd611409f2664730dedbfe4bb735bf repeat_same_fingerprint=true
+fingerprint=c2abb1672121d161508dde743f125e4185915a19babc6ca1811f31b597f09b4a repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=e1b08cc9c25f
+routes=c8ef4fa736d4
   read 39514eb40055 "read."
   exec 32fafb9eae43 "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. Network: off, so downloads, package installs and git fetch or push fail. Do not try to get around the sandbox; say what access a task needs instead."
   profile_message 9e8373cb7dad "profile_message."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="reader" depth=2
-fingerprint=510b342c28252969ef1f24d8b4b7263137cd611409f2664730dedbfe4bb735bf repeat_same_fingerprint=true
+fingerprint=c2abb1672121d161508dde743f125e4185915a19babc6ca1811f31b597f09b4a repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=50325049149f
+routes=6a8065d8ca32
   read 39514eb40055 "read."
   exec 32fafb9eae43 "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. Network: off, so downloads, package installs and git fetch or push fail. Do not try to get around the sandbox; say what access a task needs instead."
   profile_message 9e8373cb7dad "profile_message."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="online" depth=0
-fingerprint=3d46af69e15de75e374ce87cec924b05c260889dec53ef54ec23583bca6b792e repeat_same_fingerprint=true
+fingerprint=b80c61e9e96103f503493919dc6a0bc0e99d6dd73f9679961d01f6617b333b6e repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=8dc69aadd8dd
+routes=f2f61e05bd7e
   read 39514eb40055 "read."
   exec b2a7947073bb "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: <workspace>, <repository git directory>, $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. In plan mode, writable: nothing. Network: on. Do not try to get around the sandbox; say what access a task needs instead."
   profile_message 9e8373cb7dad "profile_message."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="online" depth=2
-fingerprint=3d46af69e15de75e374ce87cec924b05c260889dec53ef54ec23583bca6b792e repeat_same_fingerprint=true
+fingerprint=b80c61e9e96103f503493919dc6a0bc0e99d6dd73f9679961d01f6617b333b6e repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=df5b48df1d87
+routes=f3c9a221ec85
   read 39514eb40055 "read."
   exec b2a7947073bb "exec. Sandbox: every call runs in a bubblewrap sandbox. Writable: <workspace>, <repository git directory>, $TMPDIR (this session's own temp folder); everything else is read-only, so a write elsewhere fails with \"Read-only file system\". The repository's git hooks and config and jad's own settings, catalogs and transcripts stay read-only, and other runs' worktrees are hidden. In plan mode, writable: nothing. Network: on. Do not try to get around the sandbox; say what access a task needs instead."
   profile_message 9e8373cb7dad "profile_message."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="isolate" depth=0
-fingerprint=52a0be1c957d4be66402fc8e4c108537a5eab1327617a6ab865e6e9c9b371efe repeat_same_fingerprint=true
+fingerprint=df77b762b367ec4e72eaff0b64fdaad7fd86d66d95085ab6959080f976d2a35e repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=820681aedf8c
+routes=5c5783d55ce0
   read 39514eb40055 "read."
   exec 0fae91b7f394 "exec. Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
   profile_message 9e8373cb7dad "profile_message."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="isolate" depth=2
-fingerprint=52a0be1c957d4be66402fc8e4c108537a5eab1327617a6ab865e6e9c9b371efe repeat_same_fingerprint=true
+fingerprint=df77b762b367ec4e72eaff0b64fdaad7fd86d66d95085ab6959080f976d2a35e repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=e62ad95b84ca
+routes=56f489df55a4
   read 39514eb40055 "read."
   exec 0fae91b7f394 "exec. Git: this run works in a git worktree of its own on a detached HEAD. Commit as you like: what is committed or left in the worktree comes back as one branch when the run ends. Branches, tags and stashes are not taken back (in a sandbox they fail, as the repository's refs are read-only), and new git objects go to the run's own folder (GIT_OBJECT_DIRECTORY)."
   profile_message 9e8373cb7dad "profile_message."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="in-place" depth=0
-fingerprint=db64818655d50556bad111668de172d28ed083483565f0c8bbd6bc427c5b1273 repeat_same_fingerprint=true
+fingerprint=cd0118b433f3f2c7a74155632968798967074452aa9d25a6b2841f9302cf04a6 repeat_same_fingerprint=true
 repeat_same_catalog=true
-routes=cf8f574a77e5
+routes=1df39b680109
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   profile_message 9e8373cb7dad "profile_message."
   subagent a71b888e4dd5 "Hand a task to a separate agent with its own fresh context and get back only its final answer. Agents only read unless marked [can change files]. Use it for searches or reading that would fill your context. A slow agent returns a run id while it keeps working; never start the task again: use the async tool with that id to wait for it, look at it or stop it. resume continues a finished run of this session as a new run. [can change files; runs to its end] is never handed off. [can change files; may run in the background] is handed off, keeps editing after your turn ends and cannot ask the user: leave its paths alone until it ends.\nAgents:\n- nester [can change files; runs to its end]\n- reader\n- boxed [can change files; runs to its end]\n- isolated [can change files in a git worktree of its own; its changes come back as a branch]\n- finder [can change files; runs to its end]\n- plain [can change files; runs to its end] Sandboxes for sandbox: reader (Reader: writes nothing but scratch); online; isolate; in-place."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"
 == agent=plain choice="in-place" depth=2
-fingerprint=db64818655d50556bad111668de172d28ed083483565f0c8bbd6bc427c5b1273 repeat_same_fingerprint=true
+fingerprint=cd0118b433f3f2c7a74155632968798967074452aa9d25a6b2841f9302cf04a6 repeat_same_fingerprint=true
 repeat_same_catalog=true same_as_depth0=false
-routes=9fda516dbc9e
+routes=8e6aa8c4a59b
   read 39514eb40055 "read."
   exec 6972ae577743 "exec."
   profile_message 9e8373cb7dad "profile_message."
-  load_tool efda125edb92 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. A lazy tool is never called by its own name: a direct call is refused. names and run cannot be combined."
+  load_tool 673cfc080df0 "Lazy tools (MCP and extension tools only; native tools are always in your tool list) are not in your tool list. With no arguments, list them (name and one-line summary). With names, describe lazy tools: each one's name, id, description and inputSchema. With run and arguments, run one lazy tool by its exact name or mcp:<server>:<tool>; arguments are its arguments as its inputSchema says. With runs, run several lazy tools in one call: a list of {run, arguments}, at most tools.lazy_load_max, run together when none can change state and one after another otherwise; the results come back in the order sent, each under a heading naming its run. A lazy tool is never called by its own name: a direct call is refused. names, run (with arguments) and runs cannot be combined."
   mcp_srv_look_0123456789 a1fdfa029a0b "look"
   mcp_srv_slow_0123456789 2ada10b8e8be "slow"

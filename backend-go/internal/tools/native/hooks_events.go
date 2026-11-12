@@ -67,14 +67,20 @@ func WithToolEventHooks(tool tools.Tool, hooks sessionfs.HooksSettings, apiKeyEn
 		}
 		return report, blockedBy, arguments, execution
 	}
-	// A runner's call that runs another tool fires that tool's hooks, once, when the runner
-	// dispatches it, and not the runner's own.
+	// A runner's call that runs other tools (a run, or each item of a batch of runs) fires each
+	// tool's hooks, once, when the runner dispatches it, and not the runner's own.
 	delegating := func(arguments map[string]any) bool {
-		if tool.Delegate == nil {
-			return false
+		if tool.Delegate != nil {
+			if _, _, ok := tool.Delegate(arguments); ok {
+				return true
+			}
 		}
-		_, _, ok := tool.Delegate(arguments)
-		return ok
+		if tool.DelegateRuns != nil {
+			if _, ok := tool.DelegateRuns(arguments); ok {
+				return true
+			}
+		}
+		return false
 	}
 	if inner := tool.Execute; inner != nil {
 		tool.Execute = func(ctx context.Context, arguments map[string]any, execution tools.ExecutionContext) (string, error) {

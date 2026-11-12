@@ -72,8 +72,8 @@ func TestLoadToolShippedSchemaTakesNamesRunAndArguments(t *testing.T) {
 		}
 	}
 	properties, _ := schema["properties"].(map[string]any)
-	if len(properties) != 3 {
-		t.Errorf("properties = %v, want names, run and arguments", properties)
+	if len(properties) != 4 {
+		t.Errorf("properties = %v, want names, run, arguments and runs", properties)
 	}
 	names, _ := properties["names"].(map[string]any)
 	if names["type"] != "array" || names["uniqueItems"] != true || names["minItems"] != float64(1) {
@@ -253,6 +253,8 @@ func TestLoadToolDelegateParsesOnlyARun(t *testing.T) {
 		"run and names":           {map[string]any{"run": "read", "names": []any{"read"}}, "", false},
 		"arguments not an object": {map[string]any{"run": "read", "arguments": "x"}, "", false},
 		"arguments alone":         {map[string]any{"arguments": map[string]any{}}, "", false},
+		"run and runs":            {map[string]any{"run": "read", "runs": []any{map[string]any{"run": "read"}}}, "", false},
+		"runs":                    {map[string]any{"runs": []any{map[string]any{"run": "read"}}}, "", false},
 	} {
 		target, arguments, ok := loadToolDelegate(tc.arguments)
 		if target != tc.target || ok != tc.ok || (ok && arguments == nil) {
