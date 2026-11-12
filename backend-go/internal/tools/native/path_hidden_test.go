@@ -52,3 +52,32 @@ func TestHiddenPathsReadAsMissing(t *testing.T) {
 		t.Fatalf("scoped policy lost Hidden: %+v", scoped)
 	}
 }
+
+// Other profiles' private folders read as missing, the own one stays readable, also through
+// every copy scopedPolicy makes; a link from the own folder to another's is not "own".
+func TestOtherProfilesFoldersReadAsMissing(t *testing.T) {
+	base := t.TempDir()
+	if real, err := filepath.EvalSymlinks(base); err == nil {
+		base = real
+	}
+	root := filepath.Join(base, ".jad", "profile-own")
+	own, other := filepath.Join(root, "dev", "a"), filepath.Join(root, "dev", "b")
+	writeWorkspaceFile(t, filepath.Join(own, "doc.md"), "mine")
+	writeWorkspaceFile(t, filepath.Join(other, "doc.md"), "theirs")
+	if err := os.Symlink(filepath.Join(other, "doc.md"), filepath.Join(own, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	policy := sessionfs.NativePathPolicy{UnrestrictedPaths: true, Hidden: []string{root}, HiddenExcept: []string{own}}
+	execution := tools.ExecutionContext{WorkspaceRoot: base, WorkspaceOrigin: filepath.Join(base, "x"), PathScope: &tools.PathScope{Deny: []string{"x"}},
+		Environment: &tools.Environment{Sandbox: &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, ReadPaths: []string{base}}}}
+	for name, scoped := range map[string]sessionfs.NativePathPolicy{"plain": policy, "scoped": scopedPolicy(policy, execution)} {
+		if _, failure := resolveExistingTarget(filepath.Join(own, "doc.md"), base, scoped, "call"); failure != "" {
+			t.Fatalf("%s: own document: %s", name, failure)
+		}
+		for _, path := range []string{filepath.Join(other, "doc.md"), filepath.Join(own, "link.md")} {
+			if _, failure := resolveExistingTarget(path, base, scoped, "call"); failure == "" {
+				t.Fatalf("%s: %s is readable", name, path)
+			}
+		}
+	}
+}

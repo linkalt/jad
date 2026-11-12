@@ -82,6 +82,17 @@ func NarrowSandbox(parent, child *SandboxSettings, parentExpand, childExpand San
 	narrowed.HidePaths = appendNewStrings(append([]string(nil), child.HidePaths...), expandedPaths(parent.HidePaths, parentExpand)...)
 	narrowed.ReadOnlyPaths = appendNewStrings(append([]string(nil), child.ReadOnlyPaths...), parent.ReadOnlyPaths...)
 	narrowed.SealedPaths = appendNewStrings(append([]string(nil), child.SealedPaths...), parent.SealedPaths...)
+	// Private profile folders: hidden where either hides them, shown only where both show the
+	// same folder (a profile_message target under a sandboxed caller sees neither's), and the
+	// data folder of no run but the profile's own (decider S2).
+	narrowed.ProfileHidden = appendNewStrings(append([]string(nil), child.ProfileHidden...), parent.ProfileHidden...)
+	narrowed.ProfileShown = nil
+	for _, shown := range child.ProfileShown {
+		if containsString(parent.ProfileShown, shown) {
+			narrowed.ProfileShown = append(narrowed.ProfileShown, shown)
+		}
+	}
+	narrowed.ProfileData = ""
 	// A helper folder stays writable only where the parent lets it: the parent may seal its
 	// folder without it (a tool it does not cover, whose helpers would then run unconfined).
 	narrowed.SealedInner = nil
@@ -105,10 +116,13 @@ func InheritSandbox(parent *SandboxSettings, parentExpand SandboxExpander) *Sand
 		return parent
 	}
 	inherited := *parent
-	inherited.ReadPaths = expandedPaths(parent.ReadPaths, parentExpand)
-	inherited.WritablePaths = expandedPaths(parent.WritablePaths, parentExpand)
-	inherited.PlanWritablePaths = expandedPaths(parent.PlanWritablePaths, parentExpand)
+	// The parent's private profile folders are not the target's: they stay hidden and are
+	// neither shown nor writable, and no {profile_data} path of the parent is carried over.
+	inherited.ReadPaths = expandedPaths(withoutProfileData(parent.ReadPaths), parentExpand)
+	inherited.WritablePaths = expandedPaths(withoutProfileData(parent.WritablePaths), parentExpand)
+	inherited.PlanWritablePaths = expandedPaths(withoutProfileData(parent.PlanWritablePaths), parentExpand)
 	inherited.HidePaths = expandedPaths(parent.HidePaths, parentExpand)
+	inherited.ProfileShown, inherited.ProfileData = nil, ""
 	return &inherited
 }
 
@@ -273,13 +287,15 @@ type SandboxPlace struct {
 	Workspace  string
 	CWD        string
 	SessionDir string
+	// ProfileData fills {profile_data}: the data folder of the run's profile, if any.
+	ProfileData string
 }
 
 // Expander fills the placeholders of place; a path whose placeholder names nothing is "".
 // {tmp} and {system} are left as they are.
 func (place SandboxPlace) Expander() SandboxExpander {
 	home, _ := os.UserHomeDir()
-	values := map[string]string{"{workspace}": place.Workspace, "{cwd}": place.CWD, "{home}": home, "{session_dir}": place.SessionDir}
+	values := map[string]string{"{workspace}": place.Workspace, "{cwd}": place.CWD, "{home}": home, "{session_dir}": place.SessionDir, ProfileDataPlaceholder: place.ProfileData}
 	gitDirKnown := false
 	return func(value string) string {
 		if keepsPlaceholder(value) {
@@ -297,4 +313,18 @@ func (place SandboxPlace) Expander() SandboxExpander {
 		}
 		return strings.NewReplacer(pairs...).Replace(value)
 	}
+}
+
+// withoutProfileData is paths without the ones that name {profile_data}.
+func withoutProfileData(paths []string) []string {
+	if paths == nil {
+		return nil
+	}
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if !strings.Contains(path, ProfileDataPlaceholder) {
+			kept = append(kept, path)
+		}
+	}
+	return kept
 }

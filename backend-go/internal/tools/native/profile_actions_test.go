@@ -32,7 +32,7 @@ func (f *fakeProfileActions) ResetProfile(_ context.Context, _, session, profile
 	return f.failErr
 }
 
-func (f *fakeProfileActions) ProfileConfig(_ context.Context, ownerKey string) (sessionfs.ProfileConfig, error) {
+func (f *fakeProfileActions) ProfileConfig(_ context.Context, ownerKey string, _ sessionfs.ProfileRun) (sessionfs.ProfileConfig, error) {
 	f.calls = append(f.calls, "config "+strings.ReplaceAll(ownerKey, "\x00", " "))
 	return sessionfs.ProfileConfig{Profile: "own"}, f.failErr
 }

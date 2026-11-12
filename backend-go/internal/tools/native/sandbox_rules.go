@@ -251,9 +251,10 @@ type sandboxKeep struct {
 // configuration paths. The configuration rules come first: they bind writable folders inside
 // them again, which the rules after them then narrow as usual. The sealed folders follow them
 // and cover those again (sandboxSealedRules).
-func sandboxFixedRules(place sandboxPlace, writable []string, sandbox *sessionfs.SandboxSettings, candidates []string) []sandboxRule {
+func sandboxFixedRules(place sandboxPlace, writable []string, sandbox *sessionfs.SandboxSettings, candidates []string, visible func(string) bool) []sandboxRule {
 	rules := sandboxConfigurationRules(place, writable, sandbox.ReadOnlyPaths, candidates)
 	rules = append(rules, sandboxSealedRules(writable, sandbox.SealedPaths, sandbox.SealedInner)...)
+	rules = append(rules, sandboxProfileRules(sandbox, writable, visible)...)
 	if root, err := filepath.EvalSymlinks(sandboxTempRoot()); err == nil {
 		var keep []sandboxKeep
 		if place.tmp != "" {

@@ -44,12 +44,18 @@ type NativePathPolicy struct {
 	// .jad folders) are answered by the in-process readers as if absent, also when a link
 	// leads there, with or without a sandbox. The loader sets it; no setting does.
 	Hidden []string `json:",omitempty"`
+	// HiddenExcept are folders inside a Hidden path that are not hidden: the running profile's
+	// own private and data folders inside W/.jad/profile-own and W/.jad/data/profiles.
+	HiddenExcept []string `json:",omitempty"`
 }
 
-// Hides reports whether path lies in a Hidden path.
+// Hides reports whether path lies in a Hidden path and not in one of the HiddenExcept
+// folders inside that hidden path; an except folder never shows a hidden path inside it.
 func (p NativePathPolicy) Hides(path string) bool {
 	for _, hidden := range p.Hidden {
-		if PathWithin(hidden, path) {
+		if PathWithin(hidden, path) && !slices.ContainsFunc(p.HiddenExcept, func(shown string) bool {
+			return filepath.Clean(shown) != filepath.Clean(hidden) && PathWithin(hidden, shown) && PathWithin(shown, path)
+		}) {
 			return true
 		}
 	}

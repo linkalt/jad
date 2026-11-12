@@ -136,7 +136,7 @@ func TestProfileConfigSaysWhereEachSettingComesFrom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := ReadProfileConfig(session)
+	view, err := ReadProfileConfig(session, ProfileRun{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,5 +214,116 @@ func TestTriggerPrivateDocumentOfAnotherProfileFailsTheLoad(t *testing.T) {
 	}
 	if _, err := wsSession(t, config, "s1", "dev/other"); err == nil || !strings.Contains(err.Error(), "another profile's private folder") {
 		t.Fatalf("another profile's trigger document = %v", err)
+	}
+}
+
+// The loader gives the session sandbox the private folders to hide, the own ones to show and
+// its data folder; the plan-mode fallback and plan mode get no data folder.
+func TestWorkspaceSandboxKnowsTheProfilesFolders(t *testing.T) {
+	f := newWSFixture(t)
+	w := f.workspace(t, "proj", wsSandboxDefaults(f, ""))
+	wsPut(t, filepath.Join(w, ".jad", "profiles", "dev", "coder.json"), `{"models":["openai/default"],"toolset":["dev/t"]}`)
+	wsPut(t, filepath.Join(w, ".jad", "tools", "dev", "t.json"), `{"native":{"exec":{}}}`)
+	session, err := wsSession(t, wsMustLoad(t, f, w), "s1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jad := filepath.Join(w, ".jad")
+	sandbox := session.Sandbox
+	if sandbox == nil {
+		t.Fatal("no sandbox")
+	}
+	if want := []string{filepath.Join(jad, "profile-own"), filepath.Join(jad, "data", "profiles")}; !slices.Equal(sandbox.ProfileHidden, want) {
+		t.Fatalf("hidden = %q, want %q", sandbox.ProfileHidden, want)
+	}
+	if want := []string{session.ProfileOwnDir, session.ProfileDataDir}; !slices.Equal(sandbox.ProfileShown, want) || sandbox.ProfileData != session.ProfileDataDir {
+		t.Fatalf("shown = %q, data = %q", sandbox.ProfileShown, sandbox.ProfileData)
+	}
+	if plan := sandbox.ForPlanMode(); plan.ProfileData != "" || len(plan.ProfileShown) != 2 {
+		t.Fatalf("plan mode = %+v", plan)
+	}
+	if fallback := session.NativeExec.Child.PlanSandbox; fallback != nil && fallback.ProfileData != "" {
+		t.Fatalf("plan fallback has a data folder: %+v", fallback)
+	}
+}
+
+// v1 refuses {profile_data} as before; v2 takes it.
+func TestProfileDataPlaceholderIsRefusedInV1(t *testing.T) {
+	layout, location, root := sampleLayout(t)
+	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
+		settings, _ := m["settings"].(map[string]any)
+		if settings == nil {
+			settings = map[string]any{}
+		}
+		settings["sandbox"] = map[string]any{"enabled": true, "backend": "command", "command": []string{"true"}, "writable_paths": []string{"{profile_data}"}}
+		m["settings"] = settings
+	})
+	if _, err := LoadLayoutSessionConfig(location, layout, "", ""); err == nil || !strings.Contains(err.Error(), "{profile_data} is only known in the workspace layout") {
+		t.Fatalf("v1 {profile_data} = %v", err)
+	}
+}
+
+// NarrowSandbox and InheritSandbox never pass a data folder on; the shown folders are those
+// both sides show, and an inherited sandbox shows none and drops {profile_data} paths.
+func TestNarrowedAndInheritedSandboxesWriteNoDataFolder(t *testing.T) {
+	parent := &SandboxSettings{Backend: SandboxBackendBwrap, WritablePaths: []string{"/w", "{profile_data}"}, ReadPaths: []string{"/"},
+		ProfileHidden: []string{"/w/.jad/profile-own"}, ProfileShown: []string{"/w/.jad/profile-own/dev/a"}, ProfileData: "/w/.jad/data/profiles/dev/a"}
+	child := &SandboxSettings{Backend: SandboxBackendBwrap, WritablePaths: []string{"/w"}, ReadPaths: []string{"/"},
+		ProfileHidden: []string{"/w/.jad/data/profiles"}, ProfileShown: []string{"/w/.jad/profile-own/dev/a", "/w/.jad/profile-own/dev/b"}, ProfileData: "/w/.jad/data/profiles/dev/b"}
+	narrowed, err := NarrowSandbox(parent, child, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if narrowed.ProfileData != "" || !slices.Equal(narrowed.ProfileShown, []string{"/w/.jad/profile-own/dev/a"}) || len(narrowed.ProfileHidden) != 2 {
+		t.Fatalf("narrowed = %+v", narrowed)
+	}
+	place := SandboxPlace{Workspace: "/w", CWD: "/w", ProfileData: parent.ProfileData}
+	inherited := InheritSandbox(parent, place.Expander())
+	if inherited.ProfileData != "" || inherited.ProfileShown != nil || !slices.Equal(inherited.WritablePaths, []string{"/w"}) || !slices.Equal(inherited.ProfileHidden, parent.ProfileHidden) {
+		t.Fatalf("inherited = %+v", inherited)
+	}
+	if parent.ProfileData == "" || len(parent.WritablePaths) != 2 {
+		t.Fatal("the parent was changed")
+	}
+}
+
+// profile config says when the data folder is writable in this run, and why not.
+func TestProfileDataAccessFollowsTheRun(t *testing.T) {
+	config := SessionConfig{WorkingDir: "/w", ProfileDataDir: "/w/.jad/data/profiles/dev/a",
+		Sandbox: &SandboxSettings{Backend: SandboxBackendBwrap, Tools: []string{"exec"}, WritablePaths: []string{"{workspace}"}, ProfileData: "/w/.jad/data/profiles/dev/a"}}
+	for name, test := range map[string]struct {
+		config SessionConfig
+		run    ProfileRun
+		want   bool
+		reason string
+	}{
+		"own":      {config, ProfileRun{}, true, "writable"},
+		"plan":     {config, ProfileRun{PlanMode: true}, false, "plan mode"},
+		"confined": {config, ProfileRun{HasEnvironment: true, Sandbox: config.Sandbox.WithoutProfileData()}, false, "confined"},
+		"none":     {SessionConfig{ProfileDataDir: config.ProfileDataDir}, ProfileRun{}, true, "every other profile's"},
+		"v1":       {SessionConfig{}, ProfileRun{}, false, "only the workspace layout"},
+	} {
+		writable, reason := ProfileDataAccess(test.config, test.run)
+		if writable != test.want || !strings.Contains(reason, test.reason) {
+			t.Errorf("%s = %v %q", name, writable, reason)
+		}
+	}
+}
+
+// An except folder shows only what is inside it and inside its hidden folder; a hidden folder
+// inside it, or one it names whole, stays hidden.
+func TestHiddenExceptShowsOnlyItsOwnFolder(t *testing.T) {
+	policy := NativePathPolicy{Hidden: []string{"/w/.jad/profile-own", "/w/.jad/profile-own/dev/a/secret", "/g/auth"}, HiddenExcept: []string{"/w/.jad/profile-own/dev/a", "/g/auth"}}
+	for path, hidden := range map[string]bool{
+		"/w/.jad/profile-own/dev/a/doc.md":   false,
+		"/w/.jad/profile-own/dev/a/secret/x": true,
+		"/w/.jad/profile-own/dev/b/doc.md":   true,
+		"/w/.jad/profile-own":                true,
+		"/g/auth/token":                      true,
+		"/w/src/main.go":                     false,
+	} {
+		if policy.Hides(path) != hidden {
+			t.Errorf("Hides(%s) = %v", path, !hidden)
+		}
 	}
 }

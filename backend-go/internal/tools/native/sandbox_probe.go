@@ -66,5 +66,6 @@ func ProbePlanFallback(ctx context.Context) error {
 	}
 	probed := *fallback.ForPlanMode()
 	probed.ReadOnlyPaths, probed.SealedPaths, probed.SealedInner = nil, nil, nil
+	probed.ProfileHidden, probed.ProfileShown, probed.ProfileData = nil, nil, ""
 	return ProbeSandbox(ctx, &probed, os.TempDir())
 }

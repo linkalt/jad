@@ -179,3 +179,44 @@ func (l Layout) judgePrivateDocuments(id, profilePath string, file layoutProfile
 	}
 	return nil
 }
+
+// profilePrivateRoots are the folders that hold every profile's private folders in the
+// workspace, W/.jad/profile-own and W/.jad/data/profiles, as written and below the real
+// W/.jad; nil in v1.
+func (l Layout) profilePrivateRoots() []string {
+	if l.Workspace == "" {
+		return nil
+	}
+	jad := filepath.Join(l.Workspace, ".jad")
+	var roots []string
+	for _, base := range appendNewStrings([]string{jad}, realPath(jad)) {
+		roots = appendNewStrings(roots, filepath.Join(base, profileOwnFolder), filepath.Join(base, profileDataFolder))
+	}
+	return roots
+}
+
+// profileShown are the profile's own folder and data folder, as written and below the real
+// W/.jad (never by the target of a link at the folder itself); nil in v1.
+func (l Layout) profileShown(id string) []string {
+	own, data := l.ProfileOwnDir(id), l.ProfileDataDir(id)
+	if own == "" {
+		return nil
+	}
+	jad := filepath.Join(l.Workspace, ".jad")
+	real := realPath(jad)
+	shown := []string{own, data}
+	if real != jad {
+		relative := filepath.FromSlash(id)
+		shown = append(shown, filepath.Join(real, profileOwnFolder, relative), filepath.Join(real, profileDataFolder, relative))
+	}
+	return shown
+}
+
+// refuseV1ProfileData refuses {profile_data} in a sandbox value of a v1 session, where no
+// profile has a data folder, as an unknown placeholder was refused before the workspace layout.
+func (c *layoutCompose) refuseV1ProfileData(raw json.RawMessage, where string) error {
+	if c.layout.Workspace == "" && strings.Contains(string(raw), ProfileDataPlaceholder) {
+		return configError("%s: %s is only known in the workspace layout (W/.jad/workspace.json); known are {workspace}, {cwd}, {git_common_dir}, {tmp}, {home}, {session_dir}, {system}", where, ProfileDataPlaceholder)
+	}
+	return nil
+}

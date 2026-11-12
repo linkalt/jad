@@ -23,6 +23,9 @@ type sandboxPlace struct {
 	cwd        string
 	tmp        string
 	sessionDir string
+	// profileData fills {profile_data}; sandboxedLaunch takes it from the sandbox
+	// (SandboxSettings.ProfileData), so it is empty wherever that was cleared.
+	profileData string
 }
 
 // sandboxLaunch is the program that starts a child, possibly inside a sandbox: the name it is
@@ -47,6 +50,10 @@ func callSandbox(tool string, configured *sessionfs.SandboxSettings, execution t
 		if environment.Sandbox.Covers(tool) {
 			sandbox = environment.Sandbox
 		}
+	}
+	if execution.AgentDepth > 0 {
+		// A sub-agent's children never write the profile's data folder (decider S2).
+		sandbox = sandbox.WithoutProfileData()
 	}
 	if execution.PlanMode {
 		return sandbox.ForPlanMode()
@@ -75,6 +82,12 @@ func sandboxed(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configure
 func sandboxedLaunch(sandbox *sessionfs.SandboxSettings, place sandboxPlace, configured, resolved string, args []string) (sandboxLaunch, error) {
 	if sandbox == nil {
 		return sandboxLaunch{configured: configured, resolved: resolved, args: args}, nil
+	}
+	place.profileData = sandbox.ProfileData
+	if sandbox.ProfileData != "" && sandbox.Backend != sessionfs.SandboxBackendCommand {
+		if err := ensureProfileData(sandbox.ProfileData); err != nil {
+			return sandboxLaunch{}, err
+		}
 	}
 	expand := sandboxExpander(place)
 	if sandbox.Backend != sessionfs.SandboxBackendCommand {
@@ -171,7 +184,8 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	for _, path := range writable {
 		arguments = append(arguments, "--bind-try", path, path)
 	}
-	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand)))...)
+	visible := func(path string) bool { return whole || sandboxVisible(path, readable, writable) }
+	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand), visible))...)
 	for _, path := range sandbox.HidePaths {
 		path = expand(path)
 		info, err := statInRun(path)
@@ -223,7 +237,7 @@ func sandboxExpander(place sandboxPlace) func(string) string {
 	if tmp == "" {
 		tmp = os.TempDir()
 	}
-	values := map[string]string{"{workspace}": place.workspace, "{cwd}": place.cwd, "{tmp}": tmp, "{home}": home, "{session_dir}": place.sessionDir}
+	values := map[string]string{"{workspace}": place.workspace, "{cwd}": place.cwd, "{tmp}": tmp, "{home}": home, "{session_dir}": place.sessionDir, sessionfs.ProfileDataPlaceholder: place.profileData}
 	gitDirKnown := false
 	return func(value string) string {
 		if strings.Contains(value, "{git_common_dir}") && !gitDirKnown {

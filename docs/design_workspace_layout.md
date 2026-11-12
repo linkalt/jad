@@ -282,8 +282,8 @@ sandbox that hides other profiles' `profile-own/`, a profile can still read them
   `functions_dir` of each tool for a session working in `W`; made when missing. A
   `functions_dir` configured elsewhere in `W/.jad` is read-only. Tool storage under `W/.jad/state`
   was already read-only to sandboxed calls (the session state folder is a configuration path),
-  so nothing that worked before needs `W/.jad` writable. Phase 2 adds the running profile's
-  `{profile_data}` folder.
+  so nothing that worked before needs `W/.jad` writable. Phase 2b adds the running profile's
+  data folder (section 12).
 - **Consequences:** a sandboxed call can no longer edit files a project keeps in `W/.jad`, such
   as this repository's `.jad/prompts` library; a worktree run's copy of a tracked `.jad` is
   sealed too.
@@ -354,7 +354,9 @@ the audit record and `off` are the mitigations.
 | A profile cannot raise a ceiling key through the `profile` tool | the `profile` tool | yes, but without a sandbox `exec` can still rewrite the profile file |
 | A profile cannot put another profile's private document in its prompt | the loader (symlink-resolved check) | yes |
 | A tool call cannot write config, sessions or state | bwrap/seatbelt read-only paths | **no** |
-| A tool call cannot read another workspace's `.jad` or another profile's private files | hidden paths (Q4) | **no** |
+| A tool call cannot read another workspace's `.jad` or another profile's private and data folders | hidden paths (Q4, phase 2b `ProfileHidden`), bwrap tested | **no** |
+| A tool call writes only its own profile's data folder, and only in that profile's own top-level run (not plan mode, a sub-agent, a sandboxed caller's `profile_message`, a sandbox choice) | `ProfileData` and the hide rules (phase 2b), bwrap tested | **no**: without a sandbox `exec` writes every profile's folders |
+| The in-process readers answer another profile's private and data folders as not found | `NativePathPolicy.Hidden` with `HiddenExcept` (phase 2b) | yes; not `exec` |
 | `G/auth` unreadable to tool calls | fixed hidden path | **no** |
 | A sandboxed call cannot change `G` or `W/.jad` (but the helper folders) | sealed paths (fix A), bwrap tested | **no** |
 | The in-process readers (code_context, lsp, read_image, transcript `path:`, transcripts, profile) answer `G/auth` and other workspaces' `.jad` as not found | `NativePathPolicy.Hidden` (fix C) | yes; not other workspaces' project files, and not `exec` |
@@ -389,8 +391,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
      `G/setting.json`); the catalog routes use the start workspace's layout (global models and
      tools, the start workspace's profiles).
 2. **Self-access (section 12):** `{profile_own}`, `{profile_data}`, the private-document check,
-   reading own config and state, `profile config`. 2a (backend) built; 2b (sandbox) see
-   section 12.
+   reading own config and state, `profile config`. Built in two commits (2a backend, 2b
+   sandbox), section 12.
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
    `profile_self_edit`, the D3 path limits.
 4. **Migration command.**
@@ -577,3 +579,42 @@ writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlo
 - Schema: `sample/tools/native/profile.json` changed with the Go schema. The gitignored local
   copy `.jad/tools_defintion/native/profile.json` is not changed by the commit and must be
   replaced by the sample (or regenerated), or the running jad refuses the `profile` tool.
+
+**Commit 2b, the sandbox side:**
+
+- `SandboxSettings.ProfileHidden` (`W/.jad/profile-own`, `W/.jad/data/profiles`, as written and
+  below the real `W/.jad`), `ProfileShown` (the running profile's own folder and data folder) and
+  `ProfileData` (its data folder). `layoutCompose.addFixedHidePaths` sets the first two on every
+  sandbox of a v2 session (session, agents, agent toolsets, sandbox choices, the plan-mode
+  fallback); `finishSandbox` sets `ProfileData` on the session's own sandbox only.
+- S3, hiding: `sandboxProfileRules` (bwrap and seatbelt, after the sealed rules) cover each
+  hidden folder with an empty read-only one and show the own folders again by name below the
+  hidden folder's target; a shown folder that is missing, a link or behind a link is not shown.
+  The parent folders are hidden and the own subfolders bound back, so folders made later are
+  hidden too (no listing at run start). The in-process readers get the same folders as
+  `NativePathPolicy.Hidden` with the own ones in `HiddenExcept`, with or without a sandbox; an
+  except folder never shows a hidden path inside it.
+- S1, own data writable: the shown data folder is bound read-write when it is `ProfileData` and a
+  writable path covers it (as the helper folders); the hide rule is what decides, so neither a
+  writable path inside `W/.jad` nor a `{profile_data}` entry can open another profile's folder.
+  `ensureProfileData` makes it (0700, with its parents) before a bwrap or seatbelt start and
+  refuses the call when any part below the real `W/.jad` is a link or not a folder.
+- S2, only the profile's own top-level runs: `ForPlanMode`, `callSandbox` for `AgentDepth > 0`,
+  `NarrowSandbox` and `InheritSandbox` clear `ProfileData`. `NarrowSandbox` keeps the hidden
+  folders of both and shows only folders both show (a `profile_message` target under a
+  sandboxed caller sees neither's); `InheritSandbox` shows none and drops the caller's
+  `{profile_data}` paths. A target's own runs (by the user, a trigger, an unsandboxed caller)
+  write normally. A sandbox choice and a worktree run (whose writable paths moved to the
+  worktree) do not write the data folder.
+- `{profile_data}` is a sandbox path placeholder filled from `SandboxSettings.ProfileData` at
+  each start (`sandboxedLaunch`, the reader mirror `environmentPolicy`) and from
+  `SessionConfig.ProfileDataDir` in the narrowing places (`SandboxPlace.ProfileData`), so it
+  names nothing wherever the data folder was cleared and the path is left out. In v1 it is
+  refused at load (`refuseV1ProfileData`), as an unknown placeholder was.
+- `profile config` reports `data_writable` and `data_access` (`ProfileDataAccess`): from the
+  settings of this run (plan mode, the run's own environment, the sandbox), not from the host.
+- S4, concurrency: the engine takes no lock on data files. The path holds the workspace and the
+  profile ID, so nothing is shared across workspaces; sessions of one profile share the folder
+  by design.
+- Not changed: without a sandbox, `exec` reads and writes every profile's folders; seatbelt is
+  not run on a Mac (its profile text is tested only).

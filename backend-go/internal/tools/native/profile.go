@@ -46,7 +46,7 @@ type ProfileActions interface {
 	ResetProfile(ctx context.Context, ownerKey, session, profile string) error
 	// ProfileConfig describes the caller's own profile: the session and profile come from
 	// ownerKey only, never from the model's input.
-	ProfileConfig(ctx context.Context, ownerKey string) (sessionfs.ProfileConfig, error)
+	ProfileConfig(ctx context.Context, ownerKey string, run sessionfs.ProfileRun) (sessionfs.ProfileConfig, error)
 }
 
 // profileNoUsage is what info prints when no response has completed.
@@ -219,7 +219,11 @@ func (t *profileTool) config(ctx context.Context, path string, execution tools.E
 	if t.actions == nil {
 		return t.fail(execution, tools.StatusError, "profile_unavailable", "Profiles are not available to this tool")
 	}
-	config, err := t.actions.ProfileConfig(ctx, execution.SessionKey)
+	run := sessionfs.ProfileRun{PlanMode: execution.PlanMode}
+	if execution.Environment != nil {
+		run.HasEnvironment, run.Sandbox = true, execution.Environment.Sandbox
+	}
+	config, err := t.actions.ProfileConfig(ctx, execution.SessionKey, run)
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "profile_config_failed", err.Error())
 	}

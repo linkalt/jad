@@ -95,6 +95,7 @@ func (r *CheckReport) addSandbox(id string, config SessionConfig) {
 	// sandboxes that differ only there are started once.
 	probed := *config.Sandbox
 	probed.ReadOnlyPaths, probed.SealedPaths, probed.SealedInner = nil, nil, nil
+	probed.ProfileHidden, probed.ProfileShown, probed.ProfileData = nil, nil, ""
 	key, _ := json.Marshal(probed)
 	if r.seenSandbox[string(key)] {
 		return

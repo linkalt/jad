@@ -470,6 +470,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
 	block := p.blockFor(arguments, execution)
+	environment := callerEnvironment(execution)
 	request := ProfileMessageRequest{
 		Blocking:       !handled || block > 0,
 		OwnerKey:       execution.SessionKey,
@@ -482,8 +483,8 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		Timeout:        time.Duration(p.settings.TimeoutMs) * time.Millisecond,
 		MaxQueued:      p.settings.MaxQueued,
 		MaxRunsPerRoot: p.maxPerRoot,
-		Environment:    callerEnvironment(execution),
-		CallerPlace:    sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir},
+		Environment:    environment,
+		CallerPlace:    sessionfs.SandboxPlace{Workspace: execution.WorkspaceRoot, CWD: execution.WorkspaceRoot, SessionDir: execution.SessionDir, ProfileData: callerProfileData(environment)},
 		Sandbox:        choice,
 		Caller:         profileMessageCaller(ctx, execution, model, sandboxName),
 	}
@@ -684,6 +685,14 @@ func profileMessageCaller(ctx context.Context, execution tools.ExecutionContext,
 // callerEnvironment is the environment a profile_message target is narrowed by: the calling
 // run's, in its plan-mode form for a call of a plan-mode run, so a caller that may not write
 // cannot have a target write for it.
+// callerProfileData is the data folder the caller's sandbox fills {profile_data} with.
+func callerProfileData(environment *tools.Environment) string {
+	if environment == nil || environment.Sandbox == nil {
+		return ""
+	}
+	return environment.Sandbox.ProfileData
+}
+
 func callerEnvironment(execution tools.ExecutionContext) *tools.Environment {
 	environment := execution.Environment
 	if environment == nil || environment.Sandbox == nil || !execution.PlanMode {

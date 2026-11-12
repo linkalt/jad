@@ -21,10 +21,17 @@ func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, exp
 	profile.WriteString("(version 1)\n(allow default)\n")
 	writes := sandboxWritePaths(sandbox.WritablePaths, place)
 	writable := sandboxWritableRoots(writes, expand)
-	if !sandbox.WholeFileSystemReadable() {
+	whole := sandbox.WholeFileSystemReadable()
+	var readable []sandboxReadRoot
+	if !whole {
+		readable = sandboxReadRoots(sandbox.ReadPaths, expand, writable)
+	}
+	// A shown profile folder outside the read paths stays unreadable.
+	visible := func(path string) bool { return whole || sandboxVisible(path, readable, writable) }
+	if !whole {
 		// Metadata stays readable so that programs can walk to what they may read.
 		profile.WriteString("(deny file-read*)\n(allow file-read-metadata)\n(allow file-read* (subpath \"/dev\")")
-		for _, root := range sandboxReadRoots(sandbox.ReadPaths, expand, writable) {
+		for _, root := range readable {
 			profile.WriteString(" (subpath " + seatbeltString(root.real) + ")")
 		}
 		for _, path := range writable {
@@ -47,7 +54,7 @@ func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, exp
 		}
 	}
 	profile.WriteString(")\n")
-	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand))))
+	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand), visible)))
 	for _, path := range sandbox.HidePaths {
 		path = seatbeltPath(expand(path))
 		if path == "" {

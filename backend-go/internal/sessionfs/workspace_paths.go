@@ -164,12 +164,13 @@ func absolutePolicyPaths(raw json.RawMessage, base string) (json.RawMessage, boo
 // paths (decider fix C): code_context, lsp, read_image, the transcript, transcripts and profile
 // tools, the UI file list and the cwd checks of exec and tool_smith answer a path in G/auth or
 // another workspace's .jad as missing, links followed, with or without a sandbox. Nothing in v1.
-func (c *SessionConfig) hideFixedPaths(hidden []string) {
+func (c *SessionConfig) hideFixedPaths(hidden, except []string) {
 	if len(hidden) == 0 {
 		return
 	}
 	hide := func(policy *NativePathPolicy) {
 		policy.Hidden = appendNewStrings(append([]string(nil), policy.Hidden...), hidden...)
+		policy.HiddenExcept = appendNewStrings(append([]string(nil), policy.HiddenExcept...), except...)
 	}
 	hide(&c.FilePolicy)
 	if c.NativeReadImage != nil {

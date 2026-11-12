@@ -718,7 +718,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		ProjectInstructionFiles: instructionFiles,
 	}
 	if location.Root.Layout != nil {
-		config.hideFixedPaths(location.Root.Layout.FixedHidePaths)
+		config.hideFixedPaths(location.Root.Layout.FixedHidePaths, nil)
 		config.Libraries = location.Root.Layout.Libraries
 	}
 	return config, nil

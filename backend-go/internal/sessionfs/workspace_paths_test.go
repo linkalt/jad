@@ -106,11 +106,16 @@ func TestWorkspaceReadersGetTheFixedHiddenPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{filepath.Join(f.global, "auth"), filepath.Join(b, ".jad")}
+	want := []string{filepath.Join(f.global, "auth"), filepath.Join(b, ".jad"), filepath.Join(a, ".jad", "profile-own"), filepath.Join(a, ".jad", "data", "profiles")}
+	shown := []string{filepath.Join(a, ".jad", "profile-own", "dev", "reader"), filepath.Join(a, ".jad", "data", "profiles", "dev", "reader")}
 	for name, policy := range map[string]NativePathPolicy{"transcript": session.NativeTranscript.Policy, "transcripts": session.NativeTranscripts.Policy,
 		"code_context": session.NativeCodeContext.Policy, "exec": session.NativeExec.Child.Policy, "files": session.FilePolicy} {
-		if !slices.Equal(policy.Hidden, want) {
-			t.Errorf("%s hidden = %q, want %q", name, policy.Hidden, want)
+		if !slices.Equal(policy.Hidden, want) || !slices.Equal(policy.HiddenExcept, shown) {
+			t.Errorf("%s hidden = %q except %q, want %q except %q", name, policy.Hidden, policy.HiddenExcept, want, shown)
+		}
+		if !policy.Hides(filepath.Join(a, ".jad", "profile-own", "dev", "coder", "x.md")) || policy.Hides(filepath.Join(shown[0], "x.md")) ||
+			policy.Hides(filepath.Join(shown[1], "notes")) || !policy.Hides(filepath.Join(a, ".jad", "data", "profiles", "dev", "readers")) {
+			t.Errorf("%s hides the wrong profile folders", name)
 		}
 	}
 }

@@ -6,6 +6,7 @@ func cloneNativePathPolicy(policy NativePathPolicy) NativePathPolicy {
 		UnrestrictedPaths: policy.UnrestrictedPaths,
 		Within:            append([]string(nil), policy.Within...),
 		Hidden:            append([]string(nil), policy.Hidden...),
+		HiddenExcept:      append([]string(nil), policy.HiddenExcept...),
 	}
 }
 

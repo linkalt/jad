@@ -132,11 +132,56 @@ type ProfileConfig struct {
 	// layout only).
 	OwnDir  string `json:"own_dir,omitempty"`
 	DataDir string `json:"data_dir,omitempty"`
+	// DataWritable says whether this run's tool calls are expected to write DataDir, and
+	// DataAccess why (ProfileDataAccess).
+	DataWritable bool   `json:"data_writable"`
+	DataAccess   string `json:"data_access,omitempty"`
+}
+
+// ProfileRun is what the profile tool knows of the run that asks for its config.
+type ProfileRun struct {
+	PlanMode bool
+	// HasEnvironment says the run has an environment of its own (a profile_message run, a
+	// worktree run), whose Sandbox replaces the session's.
+	HasEnvironment bool
+	Sandbox        *SandboxSettings
+}
+
+// ProfileDataAccess says whether the exec calls of run are expected to write the profile's
+// data folder, and why. It reads the settings, not the host: a sandbox that does not start
+// writes nothing.
+func ProfileDataAccess(config SessionConfig, run ProfileRun) (bool, string) {
+	if config.ProfileDataDir == "" {
+		return false, "no data folder: only the workspace layout has one"
+	}
+	sandbox := config.Sandbox
+	if run.HasEnvironment {
+		sandbox = run.Sandbox
+	}
+	if !sandbox.Covers("exec") {
+		return true, "no sandbox covers exec: every exec call can write it, and every other profile's data folder too"
+	}
+	if sandbox.Backend == SandboxBackendCommand {
+		return false, "a command sandbox: jad binds no folder in it, so the command decides"
+	}
+	if run.PlanMode {
+		return false, "plan mode: read-only"
+	}
+	if sandbox.ProfileData == "" {
+		return false, "this run is confined by another sandbox (a caller's, or a sandbox choice): read-only"
+	}
+	expand := SandboxPlace{Workspace: config.WorkingDir, CWD: config.WorkingDir, SessionDir: config.StateDir, ProfileData: sandbox.ProfileData}.Expander()
+	for _, path := range sandbox.WritablePaths {
+		if expanded := expand(path); expanded != "" && PathWithin(expanded, config.ProfileDataDir) {
+			return true, "writable in this run's sandbox"
+		}
+	}
+	return false, "no writable path of the sandbox covers it; add {profile_data} to the defaults' writable paths"
 }
 
 // ReadProfileConfig reads the profile file of a loaded catalog-layout configuration and
 // describes its settings. The revision is that of the bytes shown.
-func ReadProfileConfig(config SessionConfig) (ProfileConfig, error) {
+func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, error) {
 	if config.ProfilePath == "" || config.SettingSources == nil {
 		return ProfileConfig{}, errors.New("the profile's configuration is known only in a catalog-layout session")
 	}
@@ -151,15 +196,18 @@ func ReadProfileConfig(config SessionConfig) (ProfileConfig, error) {
 	for _, layer := range config.SettingSources.Layers {
 		layers = append(layers, layer.Name)
 	}
+	writable, access := ProfileDataAccess(config, run)
 	return ProfileConfig{
-		Profile:   config.Profile,
-		File:      config.ProfilePath,
-		Revision:  CatalogETag(contents),
-		Contents:  json.RawMessage(strings.TrimSpace(string(contents))),
-		Effective: maps.Clone(config.SettingSources.Effective),
-		SetBy:     config.SettingSources.SetBy(),
-		Layers:    layers,
-		OwnDir:    config.ProfileOwnDir,
-		DataDir:   config.ProfileDataDir,
+		DataWritable: writable,
+		DataAccess:   access,
+		Profile:      config.Profile,
+		File:         config.ProfilePath,
+		Revision:     CatalogETag(contents),
+		Contents:     json.RawMessage(strings.TrimSpace(string(contents))),
+		Effective:    maps.Clone(config.SettingSources.Effective),
+		SetBy:        config.SettingSources.SetBy(),
+		Layers:       layers,
+		OwnDir:       config.ProfileOwnDir,
+		DataDir:      config.ProfileDataDir,
 	}, nil
 }

@@ -87,6 +87,9 @@ func (c *layoutCompose) resolveSandboxChoices(names []string, readOnly []string,
 			return nil, err
 		}
 		fields["template"] = mustJSON(name)
+		if err := c.refuseV1ProfileData(mustJSON(fields), where); err != nil {
+			return nil, err
+		}
 		own, enabled, err := parseSandbox(mustJSON(fields), where, "sandbox")
 		if err != nil {
 			return nil, err

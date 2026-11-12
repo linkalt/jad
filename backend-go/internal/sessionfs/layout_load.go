@@ -83,7 +83,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	profiles := judged.usable
 
-	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans, judged: judged}
+	built := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: profiles, keys: keys, scans: scans, judged: judged, profileID: entry.ID()}
 	built.warnings = judged.skippedNotes(sessionPath, session.defaultProfile(judged.all), defaultProfile)
 	setting, modelPaths, err := built.compose(entry, nil)
 	if err != nil {
@@ -111,6 +111,16 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
+	}
+	if roots := layout.profilePrivateRoots(); len(roots) > 0 {
+		// The in-process readers answer other profiles' private and data folders as missing,
+		// with or without a sandbox; the profile's own stay readable (decider S3).
+		shown := layout.profileShown(entry.ID())
+		config.hideFixedPaths(roots, shown)
+		for key, derived := range config.AgentToolsets {
+			derived.hideFixedPaths(roots, shown)
+			config.AgentToolsets[key] = derived
+		}
 	}
 	config.RemotesDir = layout.Remotes
 	// The normalizers know a profile only by its storage key; callers get the ID.
@@ -264,6 +274,9 @@ func (c *layoutCompose) finishSandbox(config *SessionConfig) error {
 		// starts in the profile: its own runs always work in its cwd (D7).
 		config.Sandbox.ReadOnlyPaths = readOnly
 		c.addFixedHidePaths(config.Sandbox)
+		// Only the session's own sandbox, that of the profile's top-level runs, may write its
+		// data folder; agent sandboxes, sandbox choices and the plan-mode fallback may not.
+		config.Sandbox.ProfileData = config.ProfileDataDir
 	}
 	// The sandbox exec's read_only and plan-mode calls fall back to keeps them read-only too.
 	c.setPlanSandboxReadOnlyPaths(*config, readOnly)
@@ -302,6 +315,10 @@ func (c *layoutCompose) addFixedHidePaths(sandbox *SandboxSettings) {
 		}
 	}
 	sandbox.SealedInner = inner
+	sandbox.ProfileHidden = appendNewStrings(append([]string(nil), sandbox.ProfileHidden...), c.layout.profilePrivateRoots()...)
+	if c.profileID != "" {
+		sandbox.ProfileShown = appendNewStrings(append([]string(nil), sandbox.ProfileShown...), c.layout.profileShown(c.profileID)...)
+	}
 }
 
 // sessionConfigPaths are the files and folders the session's configuration comes from: the
@@ -342,6 +359,9 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 		where := fmt.Sprintf("%s: tools.native.subagent agent %s", c.sessionPath, agent.Name)
 		fields, reset, err := expandSandboxValue(agent.sandboxRaw, c.templates, where)
 		if err != nil || reset || fields == nil {
+			return err
+		}
+		if err := c.refuseV1ProfileData(mustJSON(fields), where); err != nil {
 			return err
 		}
 		own, enabled, err := parseSandbox(mustJSON(fields), where, "sandbox")
@@ -486,6 +506,8 @@ type layoutCompose struct {
 	withoutToolsets bool
 	// sessionLayer is the session's settings with its top-level cwd; set by compose.
 	sessionLayer map[string]json.RawMessage
+	// profileID is the selected profile, whose private folders its sandboxes show.
+	profileID string
 }
 
 func (c *layoutCompose) warn(format string, args ...any) {
@@ -615,6 +637,9 @@ func (c *layoutCompose) composeSandbox(setting, sessionLayer, profileSettings ma
 	}
 	composed, absent, err := composeSandboxLayers(layers, wheres, c.templates)
 	if err != nil {
+		return err
+	}
+	if err := c.refuseV1ProfileData(composed, c.sessionPath+": sandbox"); err != nil {
 		return err
 	}
 	if absent {

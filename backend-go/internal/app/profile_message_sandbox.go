@@ -58,7 +58,7 @@ func chooseTargetSandbox(choice *sessionfs.SandboxChoice, target sessionfs.Sessi
 	if choice.Sandbox == nil {
 		return target, nil
 	}
-	place := sessionfs.SandboxPlace{Workspace: target.WorkingDir, CWD: target.WorkingDir, SessionDir: target.StateDir}
+	place := sessionfs.SandboxPlace{Workspace: target.WorkingDir, CWD: target.WorkingDir, SessionDir: target.StateDir, ProfileData: target.ProfileDataDir}
 	narrowed, err := sessionfs.NarrowSandbox(target.Sandbox, choice.Sandbox, place.Expander(), place.Expander())
 	if err != nil {
 		return sessionfs.SessionConfig{}, &choiceWidensError{choice: choice.Name, err: err}
@@ -88,7 +88,7 @@ func confineByCaller(caller *sessionfs.SandboxSettings, callerPlace sessionfs.Sa
 			confined.ReadOnlyPaths = append(append([]string(nil), confined.ReadOnlyPaths...), target.SettingPath)
 		}
 	} else {
-		targetPlace := sessionfs.SandboxPlace{Workspace: target.WorkingDir, CWD: target.WorkingDir, SessionDir: target.StateDir}
+		targetPlace := sessionfs.SandboxPlace{Workspace: target.WorkingDir, CWD: target.WorkingDir, SessionDir: target.StateDir, ProfileData: target.ProfileDataDir}
 		var err error
 		if confined, err = sessionfs.NarrowSandbox(caller, target.Sandbox, callerExpand, targetPlace.Expander()); err != nil {
 			return sessionfs.SessionConfig{}, err

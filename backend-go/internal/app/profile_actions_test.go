@@ -71,7 +71,7 @@ func TestProfileConfigReadsTheOwnersProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	actions := profileMessenger{resolver: resolver}
-	view, err := actions.ProfileConfig(context.Background(), "session-1\x00dev/coder")
+	view, err := actions.ProfileConfig(context.Background(), "session-1\x00dev/coder", sessionfs.ProfileRun{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,10 +82,10 @@ func TestProfileConfigReadsTheOwnersProfile(t *testing.T) {
 	if view.Profile != "dev/coder" || view.Revision != sessionfs.CatalogETag(contents) || len(view.Layers) == 0 {
 		t.Fatalf("view = %+v", view)
 	}
-	if _, err := actions.ProfileConfig(context.Background(), "session-1"); err == nil {
+	if _, err := actions.ProfileConfig(context.Background(), "session-1", sessionfs.ProfileRun{}); err == nil {
 		t.Fatal("an owner key without a profile was read")
 	}
-	if _, err := actions.ProfileConfig(context.Background(), "nope\x00dev/coder"); err == nil {
+	if _, err := actions.ProfileConfig(context.Background(), "nope\x00dev/coder", sessionfs.ProfileRun{}); err == nil {
 		t.Fatal("an unknown session was read")
 	}
 }

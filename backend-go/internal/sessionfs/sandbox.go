@@ -91,10 +91,26 @@ var sandboxPlaceholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 // workspace and plan-mode form; the system temp folder for a process outside a call, such as
 // an MCP server), the user's home folder and the session's state folder. One that names
 // nothing (no repository, no home) leaves its path out. {system} is the platform's runtime
-// folders (SandboxSystemPaths) and is a whole read path of its own.
-var sandboxPlaceholders = map[string]bool{"workspace": true, "cwd": true, "git_common_dir": true, "tmp": true, "home": true, "session_dir": true, "system": true}
+// folders (SandboxSystemPaths) and is a whole read path of its own. {profile_data} is the
+// running profile's data folder (ProfileDataPlaceholder).
+var sandboxPlaceholders = map[string]bool{"workspace": true, "cwd": true, "git_common_dir": true, "tmp": true, "home": true, "session_dir": true, "system": true, "profile_data": true}
 
-const sandboxPlaceholderList = "{workspace}, {cwd}, {git_common_dir}, {tmp}, {home}, {session_dir}, {system}"
+const sandboxPlaceholderList = "{workspace}, {cwd}, {git_common_dir}, {tmp}, {home}, {session_dir}, {system}, {profile_data}"
+
+// ProfileDataPlaceholder is the running profile's data folder in a sandbox path (workspace
+// layout only, refused in v1). It names nothing where the sandbox is not that of the profile's
+// own top-level run (SandboxSettings.ProfileData is empty), so its path is left out there.
+const ProfileDataPlaceholder = "{profile_data}"
+
+// WithoutProfileData is the sandbox with its ProfileData cleared: a copy when it has one.
+func (s *SandboxSettings) WithoutProfileData() *SandboxSettings {
+	if s == nil || s.ProfileData == "" {
+		return s
+	}
+	copied := *s
+	copied.ProfileData = ""
+	return &copied
+}
 
 // SandboxSystemPlaceholder is the read path that stands for the platform's runtime folders.
 const SandboxSystemPlaceholder = "{system}"
@@ -173,6 +189,16 @@ type SandboxSettings struct {
 	// them a covered tool still writes (W/.jad/exec, W/.jad/functions); the loader sets both.
 	SealedPaths []string `json:",omitempty"`
 	SealedInner []string `json:",omitempty"`
+	// ProfileHidden (workspace layout only: W/.jad/profile-own and W/.jad/data/profiles) are
+	// hidden in every bwrap or seatbelt sandbox, but for the ProfileShown folders inside them
+	// (the running profile's own folder and data folder), which are shown read-only. ProfileData
+	// is the running profile's data folder when this sandbox is that of its own top-level run:
+	// the one shown folder that stays writable where a writable path covers it. Plan mode
+	// (ForPlanMode), sub-agents (native callSandbox), NarrowSandbox and InheritSandbox clear it;
+	// the loader sets all three (docs/design_workspace_layout.md §12).
+	ProfileHidden []string `json:",omitempty"`
+	ProfileShown  []string `json:",omitempty"`
+	ProfileData   string   `json:",omitempty"`
 	// Isolation is how a delegated run that uses this sandbox works (sandbox.isolation).
 	Isolation SandboxIsolation `json:",omitzero"`
 }
@@ -593,6 +619,7 @@ func (s *SandboxSettings) ForPlanMode() *SandboxSettings {
 	}
 	plan := *s
 	plan.WritablePaths = append([]string(nil), s.PlanWritablePaths...)
+	plan.ProfileData = ""
 	return &plan
 }
 
