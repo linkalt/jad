@@ -152,6 +152,7 @@ const (
 	migrationBlockStorage         = "storage_outside"
 	migrationBlockUnreadable      = "unreadable"
 	migrationBlockSandboxCWD      = "sandbox_catalog_cwd"
+	migrationBlockTied            = "tied_to_workspace"
 )
 
 // v1LibraryGlobalKeys are the v1 libraries keys that belong to G's global.json in v2; the
@@ -173,8 +174,6 @@ type migrationPlanner struct {
 	globalFolders map[string]string
 	// stateInPlace: the v1 state folder is W/.jad/state, so state is not copied.
 	stateInPlace bool
-	// tied are the keys of each global file that a rewrite points into W/.jad.
-	tied map[string][]string
 }
 
 // PlanWorkspaceMigration plans the migration of the v1 setting W loads into the workspace
@@ -457,6 +456,7 @@ func (p *migrationPlanner) planGlobalSetting(raw map[string]json.RawMessage) {
 		}
 		p.plan.Settings = append(p.plan.Settings, MigrationSettingFile{Path: path, Action: MigrationCreate, Content: content})
 		p.scanSecrets(path, content)
+		p.blockTied(path, content)
 		return
 	case err != nil || !existing.Mode().IsRegular():
 		p.block(migrationBlockGlobalSetting, path, "global.json is not a readable regular file")
@@ -531,12 +531,89 @@ func (p *migrationPlanner) absoluteString(fields map[string]json.RawMessage, key
 
 func (p *migrationPlanner) rewrite(file, key, from, to string) {
 	p.plan.Rewrites = append(p.plan.Rewrites, MigrationRewrite{File: file, Key: key, From: from, To: to})
-	if p.global != "" && PathWithin(p.global, file) && PathWithin(p.jad, to) {
-		if p.tied == nil {
-			p.tied = map[string][]string{}
-		}
-		p.tied[file] = append(p.tied[file], key)
+}
+
+// tiedPaths lists the paths of a file the migration writes into G that name a place in this
+// workspace. G is read by every workspace, so such a path ties the shared file to this one,
+// and the other workspaces would read this workspace's files. A path outside the workspace
+// stays absolute in G.
+func (p *migrationPlanner) tiedPaths(data []byte) []pathString {
+	var value any
+	if json.Unmarshal(data, &value) != nil {
+		return nil
 	}
+	realWorkspace := realPath(p.workspace)
+	var tied []pathString
+	for _, found := range pathStrings(value, "") {
+		if filepath.IsAbs(found.value) && (PathWithin(p.workspace, found.value) || PathWithin(realWorkspace, realPath(found.value))) {
+			tied = append(tied, found)
+		}
+	}
+	return tied
+}
+
+// blockTied stops on a tied path of a global setting or of a remote (decider 4a.1). v2 would
+// take the path from workspace.json if that file had a key for it; none of these keys
+// (libraries.tool_definition_paths, server.log_file, server.remote_api.tokens_file, a remote's
+// token_file) has one, and the migration never adds a key on its own, so the person chooses.
+func (p *migrationPlanner) blockTied(file string, data []byte) {
+	var order []string
+	groups := map[string][]pathString{}
+	for _, found := range p.tiedPaths(data) {
+		stem := found.key
+		if cut := strings.IndexByte(stem, '['); cut >= 0 {
+			stem = stem[:cut]
+		}
+		if _, seen := groups[stem]; !seen {
+			order = append(order, stem)
+		}
+		groups[stem] = append(groups[stem], found)
+	}
+	for _, stem := range order {
+		found := groups[stem]
+		more := ""
+		if len(found) > 1 {
+			more = fmt.Sprintf(" and %d more", len(found)-1)
+		}
+		p.block(migrationBlockTied, file, "%s is %s%s, a place in this workspace (%s); %s is read by every workspace, so it would be tied to this one, and workspace.json has no key for %s; make it name a place outside the workspace in v1 (or remove it), then plan again", found[0].key, found[0].value, more, p.workspace, file, stem)
+	}
+}
+
+// warnTied notes a tied path of one shared file (a toolset, MCP server or sandbox template in
+// G): the file works for this workspace and names this workspace's files for the others.
+func (p *migrationPlanner) warnTied(file string, data []byte) {
+	for _, found := range p.tiedPaths(data) {
+		p.warn("%s: %s is %s, a place in this workspace, so this shared file is tied to this workspace", file, found.key, found.value)
+	}
+}
+
+type pathString struct{ key, value string }
+
+// pathStrings lists the string values of a decoded JSON value by key path, in key order.
+func pathStrings(value any, prefix string) []pathString {
+	var found []pathString
+	switch typed := value.(type) {
+	case string:
+		found = append(found, pathString{key: prefix, value: strings.TrimSpace(typed)})
+	case map[string]any:
+		names := make([]string, 0, len(typed))
+		for name := range typed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			path := name
+			if prefix != "" {
+				path = prefix + "." + name
+			}
+			found = append(found, pathStrings(typed[name], path)...)
+		}
+	case []any:
+		for index, child := range typed {
+			found = append(found, pathStrings(child, fmt.Sprintf("%s[%d]", prefix, index))...)
+		}
+	}
+	return found
 }
 
 // planSessions plans the session files of the migrated root into W/.jad/sessions.
@@ -814,6 +891,11 @@ func (p *migrationPlanner) planGlobalKind(kind, source, destination, workspace s
 		}
 		p.plan.Files = append(p.plan.Files, file)
 		p.scanSecretsData(kind, target, data)
+		if file.Action == MigrationCopy && kind == "remotes" {
+			p.blockTied(target, candidate)
+		} else if file.Action == MigrationCopy {
+			p.warnTied(target, candidate)
+		}
 	}
 }
 
@@ -1063,14 +1145,6 @@ func (p *migrationPlanner) checkTargets(session, profile, allowed string, config
 
 // advise adds the notes of a plan that has no blocker of its own.
 func (p *migrationPlanner) advise() {
-	files := make([]string, 0, len(p.tied))
-	for file := range p.tied {
-		files = append(files, file)
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		p.warn("%s: %s point into %s, a folder of this workspace, so this global file is tied to this workspace", file, strings.Join(p.tied[file], ", "), p.jad)
-	}
 	p.warn("start the workspace in %s itself: v2 is chosen only when the start folder holds .jad/%s", p.workspace, workspaceSettingName)
 	if p.stateInPlace {
 		p.warn("the state stays in %s; v1 and v2 use the same transcripts, so a run in either changes them", filepath.Join(p.jad, "state"))

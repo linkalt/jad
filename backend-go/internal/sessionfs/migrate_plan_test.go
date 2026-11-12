@@ -31,10 +31,10 @@ func newMigrateFixture(t *testing.T) *migrateFixture {
 	}
 	f.setting = map[string]any{
 		"schema_version": 1,
-		"server":         map[string]any{"port": 4100, "log_file": "jad.log"},
+		"server":         map[string]any{"port": 4100, "log_file": "../../logs/jad.log"},
 		"session_roots":  []any{map[string]any{"id": "local", "label": "Local sessions", "path": "sessions"}},
 		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": "state"},
-		"libraries":      map[string]any{"prompt_dirs": []string{"prompts/prompts"}, "tool_definition_paths": []string{"tools_defintion/native/exec.json"}},
+		"libraries":      map[string]any{"prompt_dirs": []string{"prompts/prompts"}, "tool_definition_paths": []string{"../../toolsdef/native/exec.json"}},
 		"defaults":       map[string]any{"cwd": f.workspace, "env_file": "env"},
 	}
 	f.put(t, "models/openai/default.json", map[string]any{"provider": "openai", "model": "gpt-test", "api_key_env": "FIXTURE_KEY"})
@@ -219,22 +219,22 @@ func TestMigrationPlanOfARepositoryShapedSettingWritesNothing(t *testing.T) {
 
 	_, global := settingOf(t, plan, filepath.Join(f.global, "global.json"))
 	server := global["server"].(map[string]any)
-	if server["log_file"] != filepath.Join(f.jad, "jad.log") || server["port"] != float64(4100) {
+	if server["log_file"] != filepath.Join(f.base, "logs/jad.log") || server["port"] != float64(4100) {
 		t.Fatalf("server: %v", server)
 	}
 	paths := global["libraries"].(map[string]any)["tool_definition_paths"].([]any)
-	if len(paths) != 1 || paths[0] != filepath.Join(f.jad, "tools_defintion/native/exec.json") {
+	if len(paths) != 1 || paths[0] != filepath.Join(f.base, "toolsdef/native/exec.json") {
 		t.Fatalf("tool_definition_paths: %v", paths)
 	}
 	rewrites := map[string]MigrationRewrite{}
 	for _, item := range plan.Rewrites {
 		rewrites[item.Key] = item
 	}
-	if rewrites["server.log_file"].From != "jad.log" || rewrites["libraries.tool_definition_paths[0]"].To != filepath.Join(f.jad, "tools_defintion/native/exec.json") {
+	if rewrites["server.log_file"].From != "../../logs/jad.log" || rewrites["libraries.tool_definition_paths[0]"].To != filepath.Join(f.base, "toolsdef/native/exec.json") {
 		t.Fatalf("rewrites: %+v", plan.Rewrites)
 	}
 	warned := strings.Join(plan.Warnings, "\n")
-	if !strings.Contains(warned, "stay workspace-private") || !strings.Contains(warned, "tied to this workspace") {
+	if !strings.Contains(warned, "stay workspace-private") || strings.Contains(warned, "tied to this workspace") {
 		t.Fatalf("warnings: %s", warned)
 	}
 
@@ -447,7 +447,7 @@ func TestMigrationPlanSkipsWhatGAlreadyHolds(t *testing.T) {
 	}
 	f.write(t, filepath.Join(f.global, "mcp/web/search.json"), string(data))
 	// A global.json that agrees with the v1 server, cli and libraries is kept.
-	f.write(t, filepath.Join(f.global, "global.json"), `{"schema_version":2,"server":{"port":4100,"log_file":"`+filepath.Join(f.jad, "jad.log")+`"},"libraries":{"tool_definition_paths":["`+filepath.Join(f.jad, "tools_defintion/native/exec.json")+`"]}}`)
+	f.write(t, filepath.Join(f.global, "global.json"), `{"schema_version":2,"server":{"port":4100,"log_file":"`+filepath.Join(f.base, "logs/jad.log")+`"},"libraries":{"tool_definition_paths":["`+filepath.Join(f.base, "toolsdef/native/exec.json")+`"]}}`)
 	plan := f.plan(t, "")
 	if plan.Blocked() {
 		t.Fatalf("blocked: %+v", plan.Blockers)
@@ -457,5 +457,69 @@ func TestMigrationPlanSkipsWhatGAlreadyHolds(t *testing.T) {
 	}
 	if setting, _ := settingOf(t, plan, filepath.Join(f.global, "global.json")); setting.Action != MigrationKeep {
 		t.Fatalf("global.json: %+v", setting)
+	}
+}
+
+func TestMigrationPlanStopsOnGlobalPathsTiedToTheWorkspace(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, f *migrateFixture)
+		key   string
+		file  func(f *migrateFixture) string
+	}{
+		{"relative tool definition path", func(t *testing.T, f *migrateFixture) {
+			f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{"tools_defintion/native/exec.json"}}
+		}, "libraries.tool_definition_paths[0]", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
+		{"absolute tool definition path in W, outside .jad", func(t *testing.T, f *migrateFixture) {
+			f.setting["libraries"] = map[string]any{"tool_definition_paths": []string{filepath.Join(f.workspace, "defs/exec.json")}}
+		}, "libraries.tool_definition_paths[0]", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
+		{"relative server log file", func(t *testing.T, f *migrateFixture) {
+			f.setting["server"] = map[string]any{"port": 4100, "log_file": "jad.log"}
+		}, "server.log_file", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
+		{"relative remote api tokens file", func(t *testing.T, f *migrateFixture) {
+			f.setting["server"] = map[string]any{"port": 4100, "remote_api": map[string]any{"tokens_file": "remote-tokens.json"}}
+		}, "server.remote_api.tokens_file", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
+		{"relative token file of a remote", func(t *testing.T, f *migrateFixture) {
+			f.setting["catalogs"] = map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": "state", "remotes": "remotes"}
+			f.put(t, "remotes/home.json", map[string]any{"schema_version": 1, "remote": map[string]any{"url": "http://127.0.0.1:1", "token_file": "tokens/home"}})
+		}, "remote.token_file", func(f *migrateFixture) string { return filepath.Join(f.global, "remotes/home.json") }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newMigrateFixture(t)
+			test.setup(t, f)
+			f.writeSetting(t)
+			before := snapshotTree(t, f.base)
+			plan := f.plan(t, "")
+			found := false
+			for _, blocker := range plan.Blockers {
+				found = found || blocker.Kind == migrationBlockTied && strings.Contains(blocker.Message, test.key+" is ") && blocker.Path == test.file(f)
+			}
+			if !found {
+				t.Fatalf("want %s on %s in %s: %+v", migrationBlockTied, test.key, test.file(f), plan.Blockers)
+			}
+			if len(snapshotTree(t, f.base)) != len(before) {
+				t.Fatal("the plan changed the tree")
+			}
+		})
+	}
+}
+
+func TestMigrationPlanKeepsGlobalPathsOutsideTheWorkspaceAndWarnsForSharedToolsets(t *testing.T) {
+	f := newMigrateFixture(t)
+	v1 := otherFolders(t, f)
+	f.put(t, filepath.Join(v1, "tools/coding/default.json"), map[string]any{"native": map[string]any{"async": map[string]any{}, "exec": map[string]any{"env_file": "exec.env"}}, "mcp": map[string]any{"web/search": map[string]any{}}})
+	plan := f.plan(t, "")
+	if plan.Blocked() {
+		t.Fatalf("a path outside the workspace and a toolset's env file are not blockers: %+v", plan.Blockers)
+	}
+	warned := strings.Join(plan.Warnings, "\n")
+	if !strings.Contains(warned, "native.exec.env_file is "+filepath.Join(f.jad, "exec.env")) || !strings.Contains(warned, "tied to this workspace") {
+		t.Fatalf("a shared toolset that names the workspace's file is warned about: %s", warned)
+	}
+	_, global := settingOf(t, plan, filepath.Join(f.global, "global.json"))
+	paths := global["libraries"].(map[string]any)["tool_definition_paths"].([]any)
+	if len(paths) != 1 || paths[0] != filepath.Join(f.base, "toolsdef/native/exec.json") {
+		t.Fatalf("a path outside the workspace stays absolute in G: %v", paths)
 	}
 }

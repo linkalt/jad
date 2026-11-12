@@ -1157,6 +1157,18 @@ and `$HOME`). `--apply` is refused ("not built yet"). A blocked plan exits 1. Th
   (`SessionConfig.writeTargets`, also of agent toolsets, from the v1 load) lies outside
   `<v1 state>/<session>`, so v1 and v2 would share live data.
 - `sandbox_catalog_cwd`: `catalogs.sandbox` is `{cwd}/...`; `unreadable`.
+- `tied_to_workspace` (4a.1, decider phase 4): a path in `G/global.json` (`libraries.tool_definition_paths`,
+  `server.log_file`, `server.remote_api.tokens_file`, from the rewritten or the absolute v1 value) or in
+  a remote's file that G receives (`remote.token_file`) names a place inside W. G is read by every
+  workspace, so it would be tied to this one and the others would read this workspace's files. The rule
+  was "put it in `workspace.json` if v2 reads that key there, otherwise block": **`workspace.json` has no
+  key for any of them** (its `libraries` takes only the four folder keys, it has no `server`, and
+  remotes are G files), so the plan blocks, naming the key (one blocker per key, with the first
+  value and the count). The migration never adds a key to `workspace.json` on its own; the person
+  changes the v1 setting so the path names a place outside the workspace (or drops it), or the
+  decider adds a key. A path outside W stays absolute in G. The test is the whole workspace W, one
+  step stricter than W/.jad. A shared toolset, MCP server or sandbox template that names a place in W
+  is only warned (a single shared file, decider M3).
 
 **Where things go** (each file is `copy` with size and sha256, `in_place`, or `same`):
 
@@ -1185,8 +1197,7 @@ a moved toolset through `absoluteGlobalToolsetPaths` with the v1 base (the loade
 a global toolset: `env_file` of exec and tool_smith, the path rules of exec, read_image, lsp and
 code_context, `hooks.env_file`); a remote's `token_file` from its v1 folder; `server.log_file`,
 `server.remote_api.tokens_file` and `libraries.tool_definition_paths` from the v1 setting's
-folder. Model, MCP and sandbox files have no path the move changes. A rewritten G file that points
-into `W/.jad` is warned as tied to this workspace. `defaults.cwd` is copied as is: v1 requires an
+folder. Model, MCP and sandbox files have no path the move changes. `defaults.cwd` is copied as is: v1 requires an
 absolute (or `~`) cwd, so the decider's `"."` example cannot occur.
 
 **Secrets**: keys that look like secrets (key, token, secret, password, authorization, credential,
@@ -1194,6 +1205,8 @@ cookie; every value inside `env` or `headers`) are named by file and key, never 
 `_file`, `*tokens*` and `*cache_key` keys are not named (variable names, paths, counts). State
 files (transcripts) are not scanned.
 
-On this repository (read-only run, 2026-11-12): not blocked; sessions, profiles, models and
-tools `in_place`; one MCP server copied to G; `global.json` and `workspace.json` created; 16
-`tool_definition_paths` rewritten to absolute paths in `W/.jad` (tied to this workspace).
+On this repository (read-only run, 2026-11-12, after 4a.1): **blocked** by one `tied_to_workspace`
+blocker: the 16 `libraries.tool_definition_paths` resolve into `W/.jad/tools_defintion`, and
+`workspace.json` has no key for them. Everything else is as before: sessions, profiles, models
+and tools `in_place`, one MCP server copied to G. Migrating this repository needs a choice: move
+the tool definitions outside W, or add a `workspace.json` key for them (a decider decision).

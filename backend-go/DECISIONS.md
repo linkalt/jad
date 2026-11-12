@@ -4511,3 +4511,12 @@ Open gaps:
 - **`global.json` conflicts fail safe:** an existing `global.json` whose relative path means the same file as v1's absolute one is still a conflict.
 - **Write-nothing is tested on the fixtures:** the before-and-after tree snapshot covers the planner's v1 loads in the tests; a loader path that creates folders for settings the fixtures do not use is not covered.
 - **v1 bug confirmed, not fixed (#287):** a setting in `W/.jad` without `catalogs` resolves its catalogs to `W/.jad/.jad/<catalog>` (reproduced with a scratch test, not committed). The planner follows what v1 reads. Fixing it changes v1, so it is the decider's call.
+
+## Workspace layout v2: phase 4a.1, no paths tied to one workspace in G (T-028, Go, 2026-11-12)
+
+Decider 34.5. The 4a plan wrote the 16 `libraries.tool_definition_paths` of this repository, as absolute paths into its `.jad`, into the shared `G/global.json`; every other workspace would then read this workspace's tool definitions (design section 23). The planner now blocks (`tied_to_workspace`) on any path in the global settings it would write (`libraries.tool_definition_paths`, `server.log_file`, `server.remote_api.tokens_file`) or in a remote file it would copy into G (`remote.token_file`) that names a place inside W, rewritten or already absolute. The rule was to move such a path to `workspace.json` where v2 reads the key there. **Stop condition hit, as named:** v2 has no key in `workspace.json` for `tool_definition_paths` (its `libraries` takes only the four folder keys; `server` is global only), nor for the other keys, so none is placed; no key was added (the decider's call). A path outside W stays absolute in G. A shared toolset, MCP server or sandbox template that names a place in W is a warning, not a blocker (decider: M3's warn was meant for single G items).
+
+Open gaps:
+- **This repository cannot be migrated as it is:** its 16 tool definition paths are in `W/.jad/tools_defintion`. Choices: keep them outside W, or the decider adds a `workspace.json` key for `tool_definition_paths`.
+- **Stricter than asked:** the test is the whole workspace W, not only W/.jad; a G setting that names `W/logs` is blocked too.
+- **Only JSON string values are judged:** a path inside a command line string (`"command": "sh /W/x.sh"`) is not a standalone path value and is not found.
