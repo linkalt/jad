@@ -15,6 +15,8 @@
  * does not hold it whole (`omitsLastText` on its summary: handed off, cut, failed, lost),
  * or whose snapshot says its last step may not be the child's newest response
  * (`mayHaveNewer`), gets nothing left out. The snapshot and the shared renderer stay whole.
+ * A snapshot that shows only the child's newest steps says so (`earlierOmitted`) and the
+ * panel says so above the first step (`subagentEarlierOmittedNote`).
  */
 import {
   validSubagentTranscript,
@@ -50,6 +52,28 @@ function mayHaveNewer(subagent: WebUiSubagentTranscript | undefined): boolean {
   return subagent?.mayHaveNewer !== undefined && subagent.mayHaveNewer !== false;
 }
 
+/** The note above a transcript that shows only the child's newest steps. */
+export const SUBAGENT_EARLIER_OMITTED_NOTE = 'Earlier steps are not shown.';
+
+/**
+ * The line that says the transcript starts after the child's first step. The server keeps
+ * the newest steps whole and drops the oldest, so the note goes above the first step. A
+ * transcript with nothing to show can carry it too (the server read only the middle of one
+ * very long line): the note then stands beside "No steps to show.".
+ */
+export function subagentEarlierOmittedNote(subagent: WebUiSubagentTranscript | undefined): string | undefined {
+  const valid = validSubagentTranscript(subagent);
+  return valid?.earlierOmitted === true ? SUBAGENT_EARLIER_OMITTED_NOTE : undefined;
+}
+
+/**
+ * The line that ends a running child's transcript. The step number is the count of steps
+ * shown plus one, which is the child's own number only when no earlier step was left out.
+ */
+export function subagentWorkingNote(subagent: WebUiSubagentTranscript): string {
+  return subagent.earlierOmitted === true ? 'Working on the next step…' : `Working on step ${subagent.steps.length + 1}…`;
+}
+
 /**
  * The steps to show: the completed steps without the child's last text, which the tool
  * result above already shows. When the result holds that text whole and the snapshot has a
@@ -61,8 +85,9 @@ function mayHaveNewer(subagent: WebUiSubagentTranscript | undefined): boolean {
  * be the child's newest response (`mayHaveNewer`: it stopped at a limit, refused or withheld
  * a later response) is shown whole as well, since the result's text may belong to a step the
  * snapshot does not show; that text can then appear twice, which is the cheaper mistake. A
- * snapshot without any tool call is shown whole too, since there the text is all the child
- * did. Nothing is left out while the parent's call is unsettled (no result holds the text
+ * snapshot without any tool call has no tool step to end on, and its final text is all the
+ * child did: that text is replaced by the word `Done` (`withDoneForFinalSummary`), after the
+ * child's reasoning, rather than shown twice. Nothing is left out or replaced while the parent's call is unsettled (no result holds the text
  * yet) or the child is still running (`running`: its last step is not its end): the trim
  * applies only to a settled result, an uncut text and a finished child.
  */
@@ -71,10 +96,35 @@ function shownSubagentSteps(
   result: SubagentResultShape,
 ): WebUiSubagentStep[] {
   const steps = completedSubagentSteps(subagent);
-  if (result.unsettled === true || subagent?.running === true || result.omitsLastText === true || mayHaveNewer(subagent) || !steps.some(step => step.parts.some(isToolCall))) return steps;
+  if (steps.length === 0 || result.unsettled === true || subagent?.running === true || result.omitsLastText === true || mayHaveNewer(subagent)) return steps;
+  if (!steps.some(step => step.parts.some(isToolCall))) return withDoneForFinalSummary(steps);
   const last = steps[steps.length - 1];
   const parts = last.parts.filter(part => part.type !== 'text');
   return parts.length === 0 ? steps.slice(0, -1) : [...steps.slice(0, -1), {...last, parts}];
+}
+
+/** The word a finished child's transcript ends with where its final summary would repeat the tool result. */
+export const SUBAGENT_DONE_TEXT = 'Done';
+
+/**
+ * A finished child that made no tool call ends with a summary and nothing else, so there is
+ * no tool step to end the transcript on and the summary is the whole of what the child did.
+ * The tool result above holds that summary; the transcript says `Done` in its place, after
+ * any reasoning, instead of showing the same text twice. Everything that keeps a text on
+ * screen under a tool call keeps it here too (the same conditions as `shownSubagentSteps`),
+ * and so does a summary that carries images or files: those are the child's content, which
+ * the word would hide.
+ */
+function withDoneForFinalSummary(steps: WebUiSubagentStep[]): WebUiSubagentStep[] {
+  const last = steps[steps.length - 1];
+  const texts = last.parts.filter((part): part is Extract<WebUiPart, {type: 'text'}> => part.type === 'text');
+  if (texts.length === 0 || texts.some(part => (part.images?.length ?? 0) > 0 || (part.files?.length ?? 0) > 0)) return steps;
+  const parts: WebUiPart[] = [];
+  for (const part of last.parts) {
+    if (part.type !== 'text') parts.push(part);
+    else if (part === texts[0]) parts.push({type: 'text', text: SUBAGENT_DONE_TEXT});
+  }
+  return [...steps.slice(0, -1), {...last, parts}];
 }
 
 /**

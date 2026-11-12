@@ -24,8 +24,8 @@ type subagentSnapshotLimits struct {
 	steps webui.SubagentLimits
 	// maxLine skips a transcript line over it (a huge tool result, a hostile record).
 	maxLine int64
-	// maxScan stops the scan at this many bytes of the transcript; a child that wrote
-	// more shows only the steps within them.
+	// maxScan is how many bytes at the end of the transcript the scan reads; a child that
+	// wrote more shows only the newest steps within them (and says earlier ones were left out).
 	maxScan int64
 	// cacheEntries is how many snapshots stay cached.
 	cacheEntries int
@@ -242,13 +242,8 @@ func readSubagentSteps(ctx context.Context, root string, call webui.SubagentCall
 		return nil, true, fmt.Errorf("subagent transcript %s is not a regular file", path)
 	}
 	builder := webui.NewSubagentBuilder(call.Agent, limits.steps)
-	err = native.ScanTranscriptLinesSkipping(ctx, file, min(info.Size(), limits.maxScan), limits.maxLine, builder.Add, func(int64) { builder.Unseen() })
-	if err != nil {
+	if err := scanSubagentTail(ctx, file, info.Size(), limits, builder); err != nil {
 		return nil, true, err
-	}
-	if info.Size() > limits.maxScan {
-		// The file goes on past the window; what it holds there is unknown.
-		builder.Unseen()
 	}
 	snapshot := builder.Snapshot()
 	subagentSnapshots.put(key, subagentSnapshotEntry{path: path, size: info.Size(), modTime: info.ModTime(), snapshot: snapshot}, limits.cacheEntries)
@@ -329,4 +324,35 @@ func confinedTranscript(realRoot, path string) string {
 		return ""
 	}
 	return real
+}
+
+// scanSubagentTail feeds the builder the newest maxScan bytes of the transcript (all of it
+// when it is smaller), whole lines only: a child that wrote more shows its newest steps,
+// not its first. A window that begins inside a line skips that line's tail, since a
+// fragment is no record, and tells the builder the lines before were never seen.
+func scanSubagentTail(ctx context.Context, file *os.File, size int64, limits subagentSnapshotLimits, builder *webui.SubagentBuilder) error {
+	start := max(size-max(limits.maxScan, 0), 0)
+	skip := int64(-1) // offset of the fragment to ignore, if the window begins inside a line
+	if start > 0 {
+		builder.EarlierUnread()
+		var before [1]byte
+		if _, err := file.ReadAt(before[:], start-1); err != nil {
+			return err
+		}
+		if before[0] != '\n' {
+			skip = start
+		}
+	}
+	return native.ScanTranscriptRangeSkipping(ctx, file, start, size, limits.maxLine,
+		func(offset int64, line []byte) bool {
+			if offset == skip {
+				return true
+			}
+			return builder.Add(offset, line)
+		},
+		func(offset int64) {
+			if offset != skip {
+				builder.Unseen()
+			}
+		})
 }

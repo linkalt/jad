@@ -30,6 +30,13 @@ type SubagentSnapshot struct {
 	// about this read of the snapshot, so it belongs to the route body and is not part of
 	// the Summary a tool result carries.
 	MayHaveNewer bool `json:"mayHaveNewer,omitempty"`
+	// EarlierOmitted is set when steps before the first one shown were left out: the
+	// snapshot keeps the newest steps within its limits and drops the oldest whole steps, or
+	// the reader began inside the file (a transcript over its scan window), or the records
+	// before the first step could not be read. Absent when the first step shown is the
+	// child's first. It never says how many; the dropped steps are not counted. Like
+	// MayHaveNewer it belongs to the route body, not to the Summary a tool result carries.
+	EarlierOmitted bool `json:"earlierOmitted,omitempty"`
 }
 
 // SubagentSummary is what a tool result carries of its child: the agent and how many
@@ -84,10 +91,12 @@ type SubagentStep struct {
 	Parts  []Part `json:"parts"`
 }
 
-// SubagentLimits bounds a snapshot. A step, part or byte over a limit is left out (text
-// is cut and marked with Truncated), so a snapshot never grows with its child.
+// SubagentLimits bounds a snapshot. A snapshot keeps the newest steps: a step over the step
+// or byte limit pushes the oldest whole steps out (EarlierOmitted), so a snapshot never
+// grows with its child and never shows a step cut in half at its start. A part or result
+// over its own limit is cut and marked with Truncated.
 type SubagentLimits struct {
-	// MaxSteps is the most steps a snapshot keeps; the first ones win.
+	// MaxSteps is the most steps a snapshot keeps; the newest ones win.
 	MaxSteps int
 	// MaxPartsPerStep is the most text, reasoning and tool_call parts one step keeps; the
 	// result of a kept call comes on top, so a step holds at most twice as many parts.
@@ -96,7 +105,9 @@ type SubagentLimits struct {
 	MaxPartBytes int
 	// MaxResultBytes cuts the output of one tool result.
 	MaxResultBytes int
-	// MaxTotalBytes bounds the text of the whole snapshot.
+	// MaxTotalBytes bounds the text of the whole snapshot. One step holds at most this alone
+	// (its later parts are left out, a tool name aside), so the newest step is always shown,
+	// and older steps stay only while the sum fits.
 	MaxTotalBytes int
 }
 
@@ -261,11 +272,20 @@ var (
 // line, then one function_call_output line per call it made. Each record is normalized by
 // NormalizeTranscript, so the parts are the conversation's own, and the grouping is the
 // child's: one response.completed line is one step, and the results that follow it join it.
+//
+// The snapshot is a window over the newest steps: a step that joins it may push the oldest
+// ones out, whole, when MaxSteps or MaxTotalBytes is exceeded. The builder therefore reads
+// every line it is given and never asks the reader to stop.
 type SubagentBuilder struct {
 	limits   SubagentLimits
 	snapshot SubagentSnapshot
-	total    int
-	done     bool
+	// total is the bytes of the steps the snapshot holds; sizes is that of each of them.
+	total int
+	sizes []int
+	// taken is set once a response became a step (or the pending one); omitted says steps
+	// before the first one shown were left out (SubagentSnapshot.EarlierOmitted).
+	taken   bool
+	omitted bool
 	// pending is the step whose response is written but whose calls still wait for a
 	// result; it joins the snapshot when the last result arrives, or when the child moves
 	// on without one. A child that is still running a tool leaves it unreported.
@@ -279,6 +299,8 @@ type SubagentBuilder struct {
 
 type pendingStep struct {
 	step SubagentStep
+	// bytes is what the step holds against MaxTotalBytes.
+	bytes int
 	// open holds the call ids of the step that have no result yet.
 	open map[string]bool
 }
@@ -316,24 +338,11 @@ type subagentHead struct {
 	} `json:"response"`
 }
 
-// Add takes one complete line of the child's transcript and reports whether more lines
-// can still change the snapshot: false once a limit is reached and the first
-// response.completed record after it has been seen, which is all a snapshot at its limit
-// still wants to know (whether the child went on). The look-ahead costs the lines up to
-// that record, or to the end of the caller's input when the child wrote none, and no
-// parsing but of the lines that name a response.completed; a caller that bounds its input
-// bounds it too.
+// Add takes one complete line of the child's transcript and reports whether more lines can
+// still change the snapshot. It always does: a later step is newer than every step held,
+// so the window moves on, and the reader's own bound on its input is what ends the scan.
+// The cost is a parse of every line that names a response or a result.
 func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
-	if b.done {
-		if !b.newer && bytes.Contains(line, completedMarker) {
-			var head subagentHead
-			// A line that names a response and cannot be read may be one the child wrote.
-			if json.Unmarshal(line, &head) != nil || head.Type == "response.completed" {
-				b.newer = true
-			}
-		}
-		return !b.newer
-	}
 	// The markers only decide whether a line is worth parsing; the record's own type decides
 	// what it is, since a tool output may well contain the words of a marker.
 	if !bytes.Contains(line, completedMarker) && !bytes.Contains(line, outputMarker) && !bytes.Contains(line, messageMarker) {
@@ -357,25 +366,28 @@ func (b *SubagentBuilder) Add(offset int64, line []byte) bool {
 	case head.Type == "message" && head.Role == "user":
 		b.closePending()
 	}
-	return !(b.done && b.newer)
+	return true
 }
 
 // Unseen tells the builder that the reader did not give it everything after the lines it
-// has had: a line over the reader's length limit was skipped, or the input ended at the
-// reader's scan limit. Either may hold a response newer than the last step, so the
-// snapshot says so (MayHaveNewer) unless a response that follows becomes a step.
+// has had: a line over the reader's length limit was skipped. It may hold a response newer
+// than the last step, so the snapshot says so (MayHaveNewer) unless a response that follows
+// becomes a step.
 func (b *SubagentBuilder) Unseen() {
 	b.newer = true
+}
+
+// EarlierUnread tells the builder that the reader began inside the child's transcript, so
+// the lines before the first one it gave were never seen. Steps may precede the first one
+// the snapshot shows (SubagentSnapshot.EarlierOmitted).
+func (b *SubagentBuilder) EarlierUnread() {
+	b.omitted = true
 }
 
 // addResponse starts the step of a response.completed record. A record it refuses (a
 // limit is reached, the provider did not complete it, it cannot be read or has nothing
 // to keep) is still a response the child wrote after the last step, so it sets newer.
 func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHead) {
-	if b.done {
-		b.newer = true
-		return
-	}
 	// A response the provider reports as anything but completed is not a completed step.
 	if head.Response.Status != "" && head.Response.Status != "completed" {
 		b.newer = true
@@ -386,7 +398,7 @@ func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHe
 		b.newer = true
 		return
 	}
-	parts := b.keep(messages[0].Parts)
+	parts, size := b.keep(messages[0].Parts)
 	if len(parts) == 0 {
 		b.newer = true
 		return
@@ -395,17 +407,22 @@ func (b *SubagentBuilder) addResponse(offset int64, line []byte, head subagentHe
 	if head.SessionTurn != nil && head.SessionStep != nil {
 		id = strconv.FormatInt(*head.SessionTurn, 10) + "." + strconv.FormatInt(*head.SessionStep, 10)
 	}
-	pending := &pendingStep{step: SubagentStep{ID: id, Status: SubagentStepCompleted, Parts: parts}, open: map[string]bool{}}
+	pending := &pendingStep{step: SubagentStep{ID: id, Status: SubagentStepCompleted, Parts: parts}, bytes: size, open: map[string]bool{}}
 	for _, part := range parts {
 		if part.Type == "tool_call" {
 			pending.open[part.CallID] = true
 		}
 	}
 	b.pending = pending
+	// What was refused or skipped before the first response taken precedes every step shown.
+	if b.newer && !b.taken {
+		b.omitted = true
+	}
+	b.taken = true
 	// This response is the newest now; what is refused or skipped from here on is newer still.
 	b.newer = false
-	// A step with no call has nothing to wait for; so does one the byte budget cut short.
-	if len(pending.open) == 0 || b.done {
+	// A step with no call has nothing to wait for.
+	if len(pending.open) == 0 {
 		b.closePending()
 	}
 }
@@ -417,9 +434,9 @@ func (b *SubagentBuilder) addResult(offset int64, line []byte, head subagentHead
 	if pending == nil || !pending.open[head.CallID] {
 		return
 	}
-	remaining := b.limits.MaxTotalBytes - b.total
+	// The step's own budget is spent: its remaining calls get no result.
+	remaining := b.limits.MaxTotalBytes - pending.bytes
 	if remaining <= 0 {
-		b.done = true
 		b.closePending()
 		return
 	}
@@ -436,7 +453,7 @@ func (b *SubagentBuilder) addResult(offset int64, line []byte, head subagentHead
 	if len(output) < len(read.Output) {
 		result.Truncated = &PartTruncation{Bytes: len(read.Output)}
 	}
-	b.total += len(output)
+	pending.bytes += len(output)
 	pending.step.Parts = append(pending.step.Parts, result)
 	delete(pending.open, head.CallID)
 	if len(pending.open) == 0 {
@@ -452,34 +469,52 @@ func (b *SubagentBuilder) closePending() {
 		return
 	}
 	b.snapshot.Steps = append(b.snapshot.Steps, pending.step)
-	if len(b.snapshot.Steps) >= b.limits.MaxSteps {
-		b.done = true
+	b.sizes = append(b.sizes, pending.bytes)
+	b.total += pending.bytes
+	// The oldest whole steps make room; the step just added stays (it alone fits the byte
+	// limit, since a step is built within it).
+	for len(b.snapshot.Steps) > b.limits.MaxSteps || (b.total > b.limits.MaxTotalBytes && len(b.snapshot.Steps) > 1) {
+		b.total -= b.sizes[0]
+		b.snapshot.Steps[0] = SubagentStep{}
+		b.snapshot.Steps = b.snapshot.Steps[1:]
+		b.sizes = b.sizes[1:]
+		b.omitted = true
 	}
 }
 
-// Snapshot is what the lines added so far completed, nil when no step was. A step whose
-// calls still wait for a result at the end of the lines is not completed and is left out;
-// that withheld step is a newer response, so the snapshot says it may have one.
+// Snapshot is what the lines added so far completed, nil when no step was and nothing is
+// known to be missing. A step whose calls still wait for a result at the end of the lines
+// is not completed and is left out; that withheld step is a newer response, so the
+// snapshot says it may have one.
+//
+// With no completed step but a known gap (the reader began inside the transcript, a line
+// was refused, a step waits for its result), the snapshot has no steps and says so with
+// its flags: an empty snapshot without them would read as a complete, empty transcript.
+// Its Summary is still nil.
 func (b *SubagentBuilder) Snapshot() *SubagentSnapshot {
-	if len(b.snapshot.Steps) == 0 {
+	if len(b.snapshot.Steps) == 0 && !b.omitted && !b.newer && b.pending == nil {
 		return nil
 	}
 	snapshot := b.snapshot
+	if snapshot.Steps == nil {
+		snapshot.Steps = []SubagentStep{}
+	}
 	snapshot.MayHaveNewer = b.newer || b.pending != nil
+	snapshot.EarlierOmitted = b.omitted
 	return &snapshot
 }
 
 // keep copies the renderable parts of one response within the limits: text, reasoning and
 // tool_call parts only; the results are added as their records arrive.
-func (b *SubagentBuilder) keep(parts []Part) []Part {
+func (b *SubagentBuilder) keep(parts []Part) ([]Part, int) {
 	kept := make([]Part, 0, min(len(parts), b.limits.MaxPartsPerStep))
+	used := 0
 	for _, part := range parts {
 		if len(kept) >= b.limits.MaxPartsPerStep {
 			break
 		}
-		remaining := b.limits.MaxTotalBytes - b.total
+		remaining := b.limits.MaxTotalBytes - used
 		if remaining <= 0 {
-			b.done = true
 			break
 		}
 		limit := min(b.limits.MaxPartBytes, remaining)
@@ -493,20 +528,21 @@ func (b *SubagentBuilder) keep(parts []Part) []Part {
 			if len(text) < len(part.Text) {
 				next.Truncated = &PartTruncation{Bytes: len(part.Text)}
 			}
-			b.total += len(text)
+			used += len(text)
 			kept = append(kept, next)
 		case "tool_call":
 			if part.Arguments == nil || part.CallID == "" || part.Name == "" {
 				continue
 			}
-			arguments := cutUTF8(*part.Arguments, limit)
+			// The name counts against the step's budget too (the arguments give way to it).
+			arguments := cutUTF8(*part.Arguments, min(limit, max(remaining-len(part.Name), 0)))
 			next := Part{Type: "tool_call", CallID: part.CallID, Name: part.Name, Arguments: &arguments}
 			if len(arguments) < len(*part.Arguments) {
 				next.Truncated = &PartTruncation{Bytes: len(*part.Arguments)}
 			}
-			b.total += len(arguments) + len(part.Name)
+			used += len(arguments) + len(part.Name)
 			kept = append(kept, next)
 		}
 	}
-	return kept
+	return kept, used
 }

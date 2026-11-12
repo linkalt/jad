@@ -3374,6 +3374,7 @@ function App({
           icon={<Icon icon="warning" size="sm" />}
           variant={isActionsOpen ? 'secondary' : 'ghost'}
           size="sm"
+          isDisabled={isBlocked}
           onClick={() => requestPaneCommand(pane.viewKey, 'conversationActions')}
         />
       </>

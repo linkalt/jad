@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 
 import {
   completedSubagentSteps,
   isSubagentToolName,
+  subagentEarlierOmittedNote,
   subagentSectionOf,
   subagentTranscriptLabel,
   subagentTranscriptMessages,
+  subagentWorkingNote,
 } from './subagent-transcript.ts';
+import {validSubagentTranscript} from './api.ts';
 
 const text = value => [{type: 'text', text: value}];
 
@@ -130,11 +134,43 @@ test('stopped and timed out: a result that holds the child\'s last text whole re
   assert.deepEqual(shown(steps, finished), [call('a'), result('a'), call('b'), result('b')]);
 });
 
-test('without any tool call the snapshot is shown whole, summary included, however the result left the child', () => {
-  for (const shape of [finished, omitsLastText]) {
-    assert.deepEqual(shown([step('1', [reasoning('think')]), step('2', text('answer'))], shape), [reasoning('think'), ...text('answer')]);
-    assert.deepEqual(shown([step('1', text('answer'))], shape), text('answer'));
+test('without any tool call a finished child ends with Done in place of its summary, reasoning kept', () => {
+  const done = text('Done');
+  assert.deepEqual(shown([step('1', [reasoning('think')]), step('2', text('answer'))], finished), [reasoning('think'), ...done]);
+  assert.deepEqual(shown([step('1', text('answer'))], finished), done);
+  // Reasoning and summary in one step: the reasoning stays, the summary becomes the word.
+  assert.deepEqual(shown([step('1', [reasoning('think'), ...text('answer')])], finished), [reasoning('think'), ...done]);
+  // Several text parts of the last step are one finish; an earlier step's text is the child's own and stays.
+  assert.deepEqual(
+    shown([step('1', text('first thoughts')), step('2', [...text('a'), reasoning('r'), ...text('b')])], finished),
+    [...text('first thoughts'), ...done, reasoning('r')],
+  );
+  // The step range still covers the step, so the renderer groups it as before.
+  const [message] = subagentTranscriptMessages({steps: [step('1', [reasoning('think'), ...text('answer')])]}, finished);
+  assert.deepEqual(message.steps, [{id: '1', startPart: 0, endPart: 2, hasTools: false}]);
+  // The word is not the tool result: the result's text never reaches the transcript.
+  assert.ok(!JSON.stringify(message).includes('answer'));
+});
+
+test('a last text that carries images or files is the child\'s content and is kept', () => {
+  for (const extra of [{images: ['a.png']}, {files: ['b.pdf']}]) {
+    const parts = [{type: 'text', text: 'answer', ...extra}];
+    assert.deepEqual(shown([step('1', parts)], finished), parts);
   }
+});
+
+test('a child without a tool call keeps its summary whenever the result does not hold it whole or the child is live', () => {
+  const steps = [step('1', [reasoning('think')]), step('2', text('answer'))];
+  const whole = [reasoning('think'), ...text('answer')];
+  assert.deepEqual(shown(steps, omitsLastText), whole);
+  assert.deepEqual(shown(steps, {unsettled: true}), whole);
+  assert.deepEqual(shownWith(steps, true, finished), whole);
+  assert.deepEqual(subagentTranscriptMessages({steps, running: true}, finished).flatMap(message => message.parts), whole);
+});
+
+test('a finished child with a tool call gets no Done: the summary is dropped as before', () => {
+  const steps = [step('1', [reasoning('r'), call('a'), result('a')]), step('2', text('final'))];
+  assert.deepEqual(shown(steps, finished), [reasoning('r'), call('a'), result('a')]);
 });
 
 test('nothing surviving gives no message, so no button renders', () => {
@@ -142,7 +178,7 @@ test('nothing surviving gives no message, so no button renders', () => {
   assert.deepEqual(subagentTranscriptMessages({steps: [{id: '1', status: 'running', parts: [call('a')]}]}), []);
   assert.deepEqual(subagentTranscriptMessages({steps: 'no'}), []);
   // Running steps do not count as tool calls: the completed text-only snapshot stays whole.
-  assert.deepEqual(shown([step('1', text('x')), {id: '2', status: 'running', parts: [call('a')]}]), text('x'));
+  assert.deepEqual(shown([step('1', text('x')), {id: '2', status: 'running', parts: [call('a')]}]), text('Done'));
 });
 
 // The snapshot's own bit (webui.SubagentSnapshot.MayHaveNewer): its last step may not be the
@@ -228,4 +264,40 @@ test('the label: running with no step completed yet, running with a count, or th
   assert.equal(label({isOpen: true, summary: {steps: 2}, transcript: {steps: [step('1', text('a')), step('2', text('b'))]}}), 'Hide Transcript · 2 steps');
   // A handed-off child that ended with no step says so once it has been read.
   assert.equal(label({isOpen: true, summary: {steps: 0}, transcript: {steps: []}}), 'Hide Transcript · 0 steps');
+});
+
+test('a snapshot that omits earlier steps says so, in any form the server might send', () => {
+  const note = 'Earlier steps are not shown.';
+  const steps = [step('9', text('late'))];
+  assert.equal(subagentEarlierOmittedNote({steps, earlierOmitted: true}), note);
+  // Anything but an absent field or an explicit false counts as set, as for mayHaveNewer.
+  assert.equal(subagentEarlierOmittedNote(validSubagentTranscript({steps, earlierOmitted: 'yes'})), note);
+  assert.equal(subagentEarlierOmittedNote(validSubagentTranscript({steps, earlierOmitted: true})), note);
+  assert.equal(subagentEarlierOmittedNote(validSubagentTranscript({steps, earlierOmitted: false})), undefined);
+  assert.equal(subagentEarlierOmittedNote(validSubagentTranscript({steps})), undefined);
+  assert.equal(subagentEarlierOmittedNote(undefined), undefined);
+  // The server's body for a window with no line start: no step, the flag set.
+  const empty = validSubagentTranscript(JSON.parse('{"steps":[],"earlierOmitted":true}'));
+  assert.equal(subagentEarlierOmittedNote(empty), note);
+  assert.deepEqual(subagentTranscriptMessages(empty), []);
+});
+
+test('the working line does not number a step when earlier steps were left out', () => {
+  const steps = [step('1.9', text('x'))];
+  assert.equal(subagentWorkingNote({steps, running: true}), 'Working on step 2…');
+  assert.equal(subagentWorkingNote({steps, running: true, earlierOmitted: true}), 'Working on the next step…');
+});
+
+// The panel itself is not rendered here (it needs the poller and the whole transcript
+// renderer), so its wiring is pinned in the source: the note comes from the snapshot, sits
+// above the transcript, and the running line is the one that knows about omitted steps.
+test('the panel shows the omission note above the transcript and uses the working line', () => {
+  const source = readFileSync(new URL('./components/SubagentTranscript.tsx', import.meta.url), 'utf8');
+  assert.match(source, /const earlierNote = subagentEarlierOmittedNote\(transcript\);/);
+  const note = source.indexOf('{earlierNote !== undefined && (');
+  const empty = source.indexOf('No steps to show.');
+  const body = source.indexOf('<ReadOnlyTranscript messages={messages} />');
+  assert.ok(note > 0 && note < empty && empty < body, 'the note comes before the empty line and the transcript');
+  assert.match(source, /\{subagentWorkingNote\(transcript\)\}/);
+  assert.doesNotMatch(source, /Working on step \{/);
 });

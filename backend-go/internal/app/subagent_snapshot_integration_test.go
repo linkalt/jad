@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -203,6 +204,57 @@ func TestSubagentRouteSaysWhenTheLastStepMayNotBeTheNewestResponse(t *testing.T)
 		t.Fatalf("child with a newer refused response: status %d, body %s", status, after)
 	}
 	// The summary of the result keeps its two keys; the bit is not part of it.
+	summaries, _ := subagentSnapshotOf(t, f.sessionSnapshot(t))
+	if len(summaries) != 1 || len(summaries[0]) != 2 {
+		t.Fatalf("served summaries = %v, want only agent and steps", summaries)
+	}
+}
+
+// TestSubagentRouteShowsTheNewestStepsOfAChildThatWroteMoreThanTheLimit: through the route, a
+// child with more steps than the snapshot keeps shows its newest ones, in order and whole,
+// and the body says earlier ones were left out; the summary a tool result carries has no
+// such key. A finished child within the limit has no such key either.
+func TestSubagentRouteShowsTheNewestStepsOfAChildThatWroteMoreThanTheLimit(t *testing.T) {
+	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
+	if live := f.run(t); !strings.Contains(live, "event: completed") {
+		t.Fatalf("run did not complete:\n%s", live)
+	}
+	ids := subagentCallIDs(t, f.sessionSnapshot(t))
+	transcripts, err := filepath.Glob(filepath.Join(f.toolDir, ".subagents", "*", "messages.jsonl"))
+	if len(ids) != 1 || err != nil || len(transcripts) != 1 {
+		t.Fatalf("subagent calls %v, child transcripts %v (%v)", ids, transcripts, err)
+	}
+	status, before := f.get(t, "/subagents/"+ids[0])
+	if status != http.StatusOK || strings.Contains(before, "earlierOmitted") || !strings.Contains(before, "the answer is 42") {
+		t.Fatalf("finished child within the limit: status %d, body %s", status, before)
+	}
+	file, err := os.OpenFile(transcripts[0], os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := 1; step <= 40; step++ {
+		_, err = file.WriteString(completedLine(9, step, fmt.Sprintf("later step %d", step)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	status, after := f.get(t, "/subagents/"+ids[0])
+	if status != http.StatusOK || !strings.Contains(after, `"earlierOmitted":true`) || strings.Contains(after, "mayHaveNewer") {
+		t.Fatalf("long child: status %d, body %s", status, after)
+	}
+	var body struct {
+		Subagent webui.SubagentSnapshot `json:"subagent"`
+	}
+	if err := json.Unmarshal([]byte(after), &body); err != nil {
+		t.Fatal(err)
+	}
+	steps := body.Subagent.Steps
+	if len(steps) != 32 || steps[0].ID != "9.9" || steps[31].ID != "9.40" || steps[31].Parts[0].Text != "later step 40" || strings.Contains(after, "the answer is 42") {
+		t.Fatalf("steps = %d, first %q, last %q: want the newest 32 in order", len(steps), steps[0].ID, steps[len(steps)-1].ID)
+	}
 	summaries, _ := subagentSnapshotOf(t, f.sessionSnapshot(t))
 	if len(summaries) != 1 || len(summaries[0]) != 2 {
 		t.Fatalf("served summaries = %v, want only agent and steps", summaries)

@@ -8,7 +8,7 @@ import (
 // handleSubagent serves the completed steps of the child behind one subagent tool call.
 //
 //	GET /api/sessions/{reference}/subagents/{callId}[?profile=<profile>]
-//	200 {"subagent": {"agent"?: string, "steps": [{"id", "status": "completed", "parts": [...]}], "mayHaveNewer"?: true, "running"?: true}}
+//	200 {"subagent": {"agent"?: string, "steps": [{"id", "status": "completed", "parts": [...]}], "mayHaveNewer"?: true, "earlierOmitted"?: true, "running"?: true}}
 //	404 {"error": "subagent transcript not found"}  (no child folder for the call id)
 //
 // The transcript routes carry only {agent?, steps: <count>} on a subagent tool_result; this
@@ -18,8 +18,10 @@ import (
 // since a later read may hold more. "running" is present (true) only while the session still
 // holds a queued or running run for the call, so a client polling the route knows when to
 // stop; it is read at request time and absent for a finished child. "mayHaveNewer" is present (true) only when the last
-// step shown may not be the child's newest response (webui.SubagentSnapshot). The caller
-// has been authorised already.
+// step shown may not be the child's newest response (webui.SubagentSnapshot). The steps are
+// the child's newest, whole and in order; "earlierOmitted" is present (true) when steps
+// before the first one shown were left out (a long child keeps its newest steps within the
+// snapshot's limits). The caller has been authorised already.
 func (h *Handler) handleSubagent(w http.ResponseWriter, r *http.Request, reference, profile, callID string) {
 	if h.subagents == nil {
 		writeJSONError(w, &StatusError{Code: http.StatusNotImplemented, Message: "subagent transcripts are unavailable"})

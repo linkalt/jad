@@ -133,6 +133,13 @@ export interface WebUiSubagentTranscript {
    */
   mayHaveNewer?: boolean;
   /**
+   * Set when steps before the first one shown were left out: the snapshot keeps the child's
+   * newest steps, so a long child (or one whose earliest lines the server did not read)
+   * shows its tail only. Absent when every step is shown, and from an older server. A flag,
+   * not a count: the number of steps left out is not known.
+   */
+  earlierOmitted?: boolean;
+  /**
    * Set while the session still holds a queued or running run for the call, so a client
    * that polls keeps asking; absent for a finished child and from an older server (which
    * is read as finished). Never stored by the server: it is the answer of that moment.
@@ -1660,8 +1667,12 @@ export function validSubagentTranscript(value: unknown): WebUiSubagentTranscript
   const {mayHaveNewer} = value;
   const named = agent === undefined ? {steps} : {agent, steps};
   const newer = mayHaveNewer === undefined || mayHaveNewer === false ? named : {...named, mayHaveNewer: true};
+  // Read the same way: a transcript is never taken for complete because of a field it
+  // sent in a form this client does not know.
+  const {earlierOmitted} = value;
+  const omitted = earlierOmitted === undefined || earlierOmitted === false ? newer : {...newer, earlierOmitted: true};
   // Only an explicit true keeps a client polling; anything else reads as a finished child.
-  return value.running === true ? {...newer, running: true} : newer;
+  return value.running === true ? {...omitted, running: true} : omitted;
 }
 
 function isWebUiPart(value: unknown): value is WebUiPart {

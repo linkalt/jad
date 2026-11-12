@@ -2376,7 +2376,7 @@ T-111. The backend now emits the `subagent` field T-110 documented, from the chi
 
 **Resolution.** The folder `<storage_dir>/<sanitised call id>-<8 hex>` is found by name, because the 8 hex characters are random and a manifest is keyed by `sub_...`, not by call id. If no folder or more than one carries the call id, the `transcript:` line of the result is used. Either way the path is resolved with `EvalSymlinks` and must be `messages.jsonl` in a folder directly under the real storage dir, never `.runs`; anything else gives no field and no error. The storage dir is the session config's `tools.native.subagent.storage_dir`, so a call made under another profile's storage is not found.
 
-**Caps** (`webui.DefaultSubagentLimits`, `app.defaultSubagentSnapshotLimits`): 32 steps (the first ones; the scan stops there), 12 parts per step, 2048 bytes per text/reasoning/arguments (cut at a UTF-8 boundary, marked with `truncated.bytes`), 48 KiB of text in all, lines over 1 MiB skipped, 16 MiB scanned at most. `CapMessages` also cuts snapshot text to `max_inline_part_bytes` and gives the message its cursor. Only text, reasoning and tool_call parts are kept (T-112: and the result of each kept call); a response whose `status` is present and not `completed` adds no step; an incomplete last line is never read.
+**Caps** (`webui.DefaultSubagentLimits`, `app.defaultSubagentSnapshotLimits`): 32 steps (the first ones; the scan stops there — superseded by T-021: the newest steps, the scan reads the end of the file), 12 parts per step, 2048 bytes per text/reasoning/arguments (cut at a UTF-8 boundary, marked with `truncated.bytes`), 48 KiB of text in all, lines over 1 MiB skipped, 16 MiB scanned at most. `CapMessages` also cuts snapshot text to `max_inline_part_bytes` and gives the message its cursor. Only text, reasoning and tool_call parts are kept (T-112: and the result of each kept call); a response whose `status` is present and not `completed` adds no step; an incomplete last line is never read.
 
 **Cache.** Process-wide LRU of 256 snapshots keyed by storage dir, call id, agent and transcript hint. A found transcript is valid while its size and mtime are unchanged; a missing one is remembered while the storage dir's mtime is unchanged. A hit costs one stat.
 
@@ -2488,7 +2488,7 @@ Closes the T-115 open gap "a snapshot whose last step is not the child's last re
 
 - *Route body, not summary.* This replaces the T-115 proposal to route the bit through `SubagentSummaryOf` and `omitsLastText`. `omitsLastText` is a fact about the result (`SubagentCallOf`, from the result's own INFORMATION); the new bit is a fact about one read of the child's file. Folding it in would give one flag two meanings and move the decision to summary time, where a handed-off or still-growing child can differ from the route read. In the body, one read gives the steps and the bit together, the cache entry (size + mtime) covers it with no new field, and `SubagentSummary`, `SubagentSummaryOf`, the live path and the replay are unchanged (a test pins that `Summary()` and the served summary keep two keys). `omitempty` keeps the body of an ordinary child byte-identical.
 - *Failure direction: never hide text.* Duplicated text is accepted and documented; wherever exact detection costs too much the bit over-reports.
-- *Exact look-ahead, bounded, over a conservative flag at a limit.* A snapshot at `MaxSteps` or the byte budget used to stop reading (`Add` returned false). A conservative "stopped at a limit, so true" would show the text twice for every child that ends exactly at 32 steps or in its last response's budget; the look-ahead costs the lines up to the first response.completed after the limit (or EOF), parsing only lines that contain `response.completed`. It never reads more than the same file read to EOF, which the reader already bounds by `maxScan` (16 MiB) for a child under the limits, and the cache (size + mtime) means it is paid once per change of the file, not per poll. `Add`'s contract is now "false once a limit is reached *and* a newer response was seen"; `TestSubagentBuilderStopsAtItsLimits` pins both halves.
+- *Exact look-ahead, bounded, over a conservative flag at a limit.* A snapshot at `MaxSteps` or the byte budget used to stop reading (`Add` returned false). A conservative "stopped at a limit, so true" would show the text twice for every child that ends exactly at 32 steps or in its last response's budget; the look-ahead costs the lines up to the first response.completed after the limit (or EOF), parsing only lines that contain `response.completed`. It never reads more than the same file read to EOF, which the reader already bounds by `maxScan` (16 MiB) for a child under the limits, and the cache (size + mtime) means it is paid once per change of the file, not per poll. `Add`'s contract is now "false once a limit is reached *and* a newer response was seen"; `TestSubagentBuilderStopsAtItsLimits` pins both halves. (Superseded by T-021: the snapshot keeps the newest steps and `Add` always returns true.)
 
 **Per case** (E = exact, C = conservative, i.e. may show a text twice):
 
@@ -4129,3 +4129,66 @@ Decider: the first T-020 entry left session files and sandbox templates with a b
   - **Not a session root, not read.** Roots without a layout are not examined.
   - **Template folders per cwd.** With `{cwd}/<folder>`, the warning appears for the sessions of that cwd only; `jad check` visits the folder of each session that loads. A session that fails to load is not visited.
   - **Case and other suffixes.** `x.JSON`, `x.json.bak` and similar are ignored, as in the catalogs.
+
+## T-021 frontend and subagent transcript follow-up (Go, 2026-11-12)
+
+The conversation-actions trigger now uses the same per-pane busy guard as compaction, so it cannot open during a run or another destructive operation. The existing action and reset guards remain in place.
+
+### Multi-call tool group (frontend, done)
+
+Supersedes the T-108 header rule ("latest call plus wrench, count and chevron on the right").
+
+- **Header is the first call.** `ToolGroupRow` renders the group's first call as a normal panel row (`ActivityRow`), so it still opens the panel. The expanded list holds only calls 2..N, so no call appears twice. The layout rule is the pure function `toolGroupLayout` in `frontend_new/src/tool-group.ts`.
+- **Left aligned.** The wrench, count and chevron follow the first call directly instead of sitting at the far right. The toggle also fills the space after them, so a press there still expands the list.
+- **Toggle is separate from the first call.** Before, one press target did both jobs; now the first call opens the panel and the icon group expands the list. The toggle has `aria-expanded`, `aria-controls` and an `aria-label` that counts the hidden calls (the label is new).
+- **Held open.** The list stays expanded while the panel shows a listed call; the panel showing the header call holds nothing open, since that row is always visible.
+- **Unchanged.** Streaming, status, errors and result images of each row; a group of one call; the read-only transcript, which uses Astryx's own grouped header.
+
+### Open
+
+- The omission note, the `Done` rule and the subagent tail window are described in the sections below.
+- The grouping tests cover the layout function and pin the renderer's wiring in the source; `ToolGroupRow` itself is not rendered (it needs the app's style compiler), so alignment and the toggle interaction have not been checked in a browser. The group's own header still uses raw `<div>` elements, as the surrounding rows do, against the frontend no-div rule.
+- `frontend_new/src/composer-triggers.test.mjs` "every built-in path ... exists" fails because `MEMORY_DESIGN.md` is not in the repository (known, unrelated).
+- The reset-trigger regression checks source wiring rather than interacting with a rendered composer. A browser or component interaction test would strengthen this coverage.
+- Verified as one change before its commit: `npm test` (881 tests, 880 pass; the one failure is the known `composer-triggers` test above), `npm run typecheck`, and a final `verify-go.sh` with races on the packages the tail window touches.
+
+### Subagent transcript keeps the newest tail (backend, done; frontend display below)
+
+Supersedes the "first 32 steps; the scan stops there" cap (T-111/T-112 caps entry) and the exact look-ahead at a limit (T-116 "Exact look-ahead"; `TestSubagentBuilderStopsAtItsLimits` is replaced by `TestSubagentBuilderKeepsTheNewestStepsWithinItsLimits`). The step count, part, per-part, per-result and 48 KiB limits are unchanged in value; what they do at the limit changed.
+
+- **Window, not a prefix.** `SubagentBuilder` keeps the newest steps: when a step joins and the count passes `MaxSteps`, or the bytes held pass `MaxTotalBytes`, the oldest whole steps are dropped (`closePending`). A step is never cut because of its age. `Add` always returns true; the look-ahead and the `done` state are gone.
+- **Per-step budget.** One step has the whole `MaxTotalBytes` to itself (parts, then results); a call whose result no longer fits in its step gets none (as before), and a tool name counts against the budget. So the newest step is always shown and the total never exceeds the budget (a tool name longer than the remaining budget aside).
+- **Reader reads the end of the file.** `scanSubagentTail` scans the last `maxScan` (16 MiB) bytes instead of the first; a window that begins inside a line skips that line's tail (a fragment is not a record, even when it parses), decided by the byte before the window. `native.ScanTranscriptRangeSkipping` is the range variant of the existing scanner; offsets are the file's own. The cache is unchanged (size and mtime).
+- **Omission is reported.** `SubagentSnapshot.EarlierOmitted` (`earlierOmitted`, omitted when false) is set when steps were pushed out, the window began inside the file, or something unreadable, refused or skipped precedes the first step shown. It is a boolean: the dropped steps are not counted, since a window that began inside the file cannot know. `mayHaveNewer` keeps its meaning and is no longer set by a limit or by the scan window, because the window is the end of the file; it is set by a refused or skipped record after the last step, and by a step still waiting for a result. `Summary` (what a tool result carries) has neither flag, and its step count is now the number of steps shown.
+- **Pending results.** A step waiting for a result is held back and does not push an older step out; it joins when its result arrives, or without one when the child moves on. A result whose call lies before the window pairs with nothing and is not shown. The running flag is unchanged (read before the steps).
+- **Security.** The path confinement in `resolveSubagentTranscript`/`confinedTranscript` is unchanged and runs before the scan.
+- **Tests.** Builder: window by steps and by bytes, a waiting step, a late result, `EarlierOmitted` cases, 500 large steps within the limits. Reader: a window ending exactly at, inside and at the line start, a fragment that parses, a window starting at a call, at a result and at an orphan result, a 20 MB transcript with the default limits, and the route over HTTP. Mutations of the step limit, the byte limit, the fragment skip, the window start, `EarlierUnread` and the first-step rule are each caught.
+
+Open:
+
+- ~~Frontend does not show `earlierOmitted`~~ — done in the follow-up below.
+- **Cost moved.** A child over the limits used to stop after 32 steps; the builder now parses every response and result line in the window, up to 16 MiB per change of the file (the cache still holds one read per size and mtime). A running child with a huge transcript re-reads the window on every poll that sees growth. Not measured; a backwards scan from the end would avoid it.
+- **Middle gaps are not flagged.** A line skipped or a response refused between two shown steps is not reported (`earlierOmitted` covers only before the first step shown), as before.
+- ~~A window with no newline shows nothing and no flag~~ — fixed in the follow-up below.
+- **The step count in the tool result's summary** is the shown steps (at most 32 and within the byte budget), the same kind of cap as before but of the newest steps.
+- **Result of a call over the step's budget** is still dropped (the call shows with no result), as before.
+
+### Omission note, empty-window flag and `Done` (follow-up to the tail window)
+
+**Backend: a snapshot with a gap but no step is no longer `nil`.** `SubagentBuilder.Snapshot` returned nil whenever no step completed, so the flags were lost: a scan window with no line start in it (`EarlierUnread` set, the one fragment skipped) was served by the route as `{"steps":[]}`, which reads as a complete, empty transcript. It now returns a snapshot with `steps: []` and the flags (`earlierOmitted`, `mayHaveNewer`) whenever `omitted`, `newer` or a pending step is set; with none of them it is still nil. `Summary()` is nil for zero steps, so the tool result's summary, the history block and the label count are unchanged. A side effect: a running child whose first step waits for its result, or whose only line was refused or too long, now answers `mayHaveNewer: true` with no steps (accurate; the client shows nothing different because there is no step to trim). Tests: `TestSubagentBuilderWithoutAStepStillReportsAKnownGap`, the "less than one line" case of `TestSubagentSnapshotReadsTheEndOfATranscriptPastTheScanWindow` (it had pinned the old nil), and `TestSubagentRouteBodyOfAWindowWithoutALineStart` (exact body `{"steps":[],"earlierOmitted":true}`; an empty transcript is still nil).
+
+**Frontend: omission note.** `validSubagentTranscript` keeps `earlierOmitted` (anything but an absent field or an explicit `false` counts as set, the rule `mayHaveNewer` already follows). `OpenSubagentTranscript` shows "Earlier steps are not shown." above the first step (and beside "No steps to show." when the window held none). A running child's last line is "Working on the next step…" instead of "Working on step N+1…" when earlier steps were left out, because N is then the number of steps shown, not the child's own count. The label ("Show Transcript · N steps") still counts the shown steps.
+
+**Frontend: `Done`.** Interpreted from the code: no literal finish label existed; the finish text a user sees is the child's final summary, which the tool result above already shows. The rule, in `subagent-transcript.ts`:
+- Unchanged: with a tool call anywhere in the snapshot, a settled, finished, whole-text result drops the trailing step's text (no `Done` there; the transcript ends on the last tool step).
+- New: with no tool call (reasoning + summary, or summary only), the same conditions replace the final step's text with the word `Done`, after the step's reasoning. The parent tool result is never copied into the transcript.
+- Kept whole, as before: an unsettled call, a running child, a result with `omitsLastText`, a snapshot with `mayHaveNewer` (live and incomplete content), and a final text that carries images or files (the child's own content).
+Choices for the decider: (1) `Done` appears only in the no-tool case, to preserve the established suppression; showing it after tool steps as well is one condition. (2) Several text parts in the last step become one `Done`. (3) A final text with citations but no images or files is replaced; its citations go with it.
+
+**Tests.** `subagent-transcript.test.mjs` (Done cases, kept cases, the validator forms of `earlierOmitted`, the notes, and a source pin of the panel wiring); `subagent-transcript-store.test.mjs` pin updated to the new working-line call. Mutations (removing the Done branch, the images/files guard, the running guard, the validator key, the note, and the Go `omitted` condition) were each caught.
+
+**Open.**
+- The panel (`OpenSubagentTranscript`) is not rendered in a test: it needs the poller and the whole transcript renderer, so the note's place and text are checked by a source pin and the pure functions, not by markup.
+- A steps-only count in the label can read lower than the child's real count when steps are omitted; the real count is unknown.
+- `Done` replaces the text before a reader can see it, so a user cannot expand the summary in the transcript; it is in the tool result above.
+- `composer-triggers.test.mjs` "every built-in path ... exists" still fails (`MEMORY_DESIGN.md`, known and unrelated).

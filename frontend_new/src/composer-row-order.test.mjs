@@ -80,3 +80,9 @@ test('the session navigation clears its selection only when the README fills the
     'the navigation must not blank activeViewKey on isReadmeShown',
   );
 });
+
+test('conversation actions trigger is disabled while its pane or destructive operations are busy', () => {
+  const block = app.slice(contextOpen, toolbarOpen);
+  assert.match(block, /const isBlocked\s*=\s*pane\.isRunning\s*\|\|[\s\S]*?frontCompactingViewKey !== null/);
+  assert.match(block, /label="Conversation actions"[\s\S]*?isDisabled=\{isBlocked\}[\s\S]*?requestPaneCommand\(pane\.viewKey, 'conversationActions'\)/);
+});

@@ -12,7 +12,8 @@
  * `subagent_transcript_poll_ms` for as long as the call is unsettled or the answer says the
  * child is `running`; each answer replaces the store's entry, and the steps appear one
  * completed response at a time (never token by token, and never the step still waiting for
- * its tool results). A running child ends the transcript with "Working on step N+1…". The
+ * its tool results). A running child ends the transcript with "Working on step N+1…"; a
+ * transcript that shows only the newest steps (`earlierOmitted`) says so above the first. The
  * host keys this component by the open call, so every open, and every switch to another
  * call, starts closed. The shared renderer opens no panel.
  */
@@ -24,7 +25,12 @@ import {
   type WebUiSubagentSummary,
 } from '../api';
 import appConfig from '../config.json';
-import {subagentTranscriptLabel, subagentTranscriptMessages} from '../subagent-transcript';
+import {
+  subagentEarlierOmittedNote,
+  subagentTranscriptLabel,
+  subagentTranscriptMessages,
+  subagentWorkingNote,
+} from '../subagent-transcript';
 import {
   createSubagentPoller,
   type SubagentPoller,
@@ -170,6 +176,7 @@ function OpenSubagentTranscript({
     [transcript, omitsLastText, settled],
   );
   const running = transcript?.running === true;
+  const earlierNote = subagentEarlierOmittedNote(transcript);
   const name = agent ?? transcript?.agent;
   return (
     <VStack gap={2} width="100%">
@@ -194,6 +201,11 @@ function OpenSubagentTranscript({
           <Button label="Retry" variant="ghost" size="sm" onClick={onRetry} />
         </VStack>
       )}
+      {earlierNote !== undefined && (
+        <Text type="supporting" color="secondary">
+          {earlierNote}
+        </Text>
+      )}
       {transcript !== undefined && messages.length === 0 && !running && (
         <Text type="supporting" color="secondary">
           No steps to show.
@@ -202,7 +214,7 @@ function OpenSubagentTranscript({
       {messages.length > 0 && <ReadOnlyTranscript messages={messages} />}
       {running && transcript !== undefined && (
         <Text type="supporting" color="secondary">
-          Working on step {transcript.steps.length + 1}…
+          {subagentWorkingNote(transcript)}
         </Text>
       )}
       {state.phase === 'ready' && state.retryError !== undefined && (

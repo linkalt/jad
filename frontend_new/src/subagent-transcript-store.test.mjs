@@ -202,7 +202,7 @@ test('closed, the section is one button: no request, no mapping, no timer and no
   assert.match(closed, /omitsLastText=\{summary\?\.omitsLastText === true\}/);
   assert.equal((open.match(/<ReadOnlyTranscript/g) ?? []).length, 1);
   // A running child ends with the step it works on; a failure has a retry; a start is shown.
-  assert.match(open, /Working on step \{transcript\.steps\.length \+ 1\}…/);
+  assert.match(open, /\{subagentWorkingNote\(transcript\)\}/);
   assert.match(open, /Retry/);
   assert.match(open, /Starting…/);
 });

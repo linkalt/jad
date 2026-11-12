@@ -18,6 +18,7 @@ import {
   webUiGroupIndex,
   webUiGroupKey,
 } from '../web-ui-part-groups';
+import {toolGroupLayout} from '../tool-group';
 import {hiddenWebUiStepIds, isWebUiPartHidden, visibleWebUiItems} from '../web-ui-steps';
 import {type ActivityDetail, ActivityPanelContext} from './activity-panel';
 import {CitationList} from './CitationList';
@@ -41,6 +42,17 @@ const styles = stylex.create({
   },
   toolCallsFlush: {
     marginBlockStart: spacingVars['--spacing-0'],
+  },
+  // The first call of a group shrinks (its text is cut) before the toggle does.
+  groupHeaderCall: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  // Fills the rest of the header row, so the empty space after the chevron
+  // toggles too while the icon group stays next to the first call.
+  groupToggle: {
+    flexGrow: 1,
+    paddingBlock: spacingVars['--spacing-1'],
   },
   activityTrigger: {
     cursor: 'pointer',
@@ -678,53 +690,50 @@ export function toolActivityForParts(
 }
 
 /**
- * The summary row of a tool group with several calls: the latest call, the call
- * count and a chevron. Pressing it only expands or collapses the list of the
- * group's calls; each call in the list is a row of its own that opens the panel.
- * While the panel shows one of the group's calls the list stays expanded, so
- * the row that opened the panel stays on screen. The expanded state is local, so
- * calls streaming in neither collapse nor re-expand it.
+ * A tool group with several calls: the first call is the header row, followed
+ * directly by the wrench, the call count and a chevron, all left aligned. The
+ * first call opens the panel like any call row; pressing the wrench, count or
+ * chevron (or the empty space after them) only expands or collapses the list of
+ * the remaining calls, each a row of its own. While the panel shows one of the
+ * listed calls the list stays expanded, so the row that opened the panel stays
+ * on screen. The expanded state is local, so calls streaming in neither
+ * collapse nor re-expand it.
  */
 function ToolGroupRow({
   calls,
-  rowWidthPx,
   renderCall,
 }: {
   calls: {call: WebUiToolCall; result: WebUiToolResult | undefined}[];
-  rowWidthPx: number;
   renderCall: (call: WebUiToolCall, result: WebUiToolResult | undefined) => ReactNode;
 }) {
   const control = useContext(ActivityPanelContext);
   const [isToggled, setIsToggled] = useState(false);
-  const holdsOpenPanel =
-    control?.openKey !== undefined && calls.some(({call}) => control.openKey === `tool-${call.callId}`);
+  const {header, listed, holdsOpenPanel} = toolGroupLayout(
+    calls.map(entry => ({...entry, callId: entry.call.callId})),
+    control?.openKey,
+  );
   const isExpanded = isToggled || holdsOpenPanel;
-  const latest = calls[calls.length - 1];
   const toggle = () => setIsToggled(!isExpanded);
   const listId = useId();
   return (
     <VStack gap={1} width="100%">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
-        aria-controls={listId}
-        onClick={toggle}
-        onKeyDown={event => {
-          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-            event.preventDefault();
-            toggle();
-          }
-        }}
-        {...stylex.props(styles.activityTrigger)}
-      >
-        <HStack gap={2} align="center" width="100%">
-          <div style={{flex: 1, minWidth: 0}}>
-            <ChatToolCalls
-              calls={[toolCallItem(latest.call, latest.result, rowWidthPx)]}
-              xstyle={styles.toolCallsFlush}
-            />
-          </div>
+      <HStack gap={2} align="center" width="100%">
+        <div {...stylex.props(styles.groupHeaderCall)}>{renderCall(header.call, header.result)}</div>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={isExpanded}
+          aria-controls={listId}
+          aria-label={`${isExpanded ? 'Hide' : 'Show'} ${listed.length} more tool ${listed.length === 1 ? 'call' : 'calls'}`}
+          onClick={toggle}
+          onKeyDown={event => {
+            if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault();
+              toggle();
+            }
+          }}
+          {...stylex.props(styles.activityTrigger, styles.groupToggle)}
+        >
           <HStack gap={1} align="center">
             <Icon icon="wrench" size="xsm" color="inherit" />
             <Text type="supporting">{calls.length}</Text>
@@ -735,12 +744,12 @@ function ToolGroupRow({
               style={{transform: isExpanded ? 'rotate(180deg)' : undefined}}
             />
           </HStack>
-        </HStack>
-      </div>
+        </div>
+      </HStack>
       <div id={listId} hidden={!isExpanded}>
         {isExpanded && (
           <VStack gap={1} width="100%">
-            {calls.map(({call, result}) => renderCall(call, result))}
+            {listed.map(({call, result}) => renderCall(call, result))}
           </VStack>
         )}
       </div>
@@ -881,7 +890,6 @@ function WebUiActivityGroup({
             <Fragment key={`tool-calls-${index}`}>
               <ToolGroupRow
                 calls={groupCalls}
-                rowWidthPx={rowWidthPx}
                 renderCall={callRow}
               />
               {images}
