@@ -182,6 +182,10 @@ func TestWorkspaceSessionsAreCreatedInTheNamedWorkspaceAndABareNameIsRefused(t *
 	if status < 400 || status >= 500 {
 		t.Fatalf("a bare name with two workspaces = %d %s, want a 4xx", status, body)
 	}
+	// The refusal tells the user what to write, by workspace id and never by directory.
+	if !strings.Contains(body, "name the workspace") || !strings.Contains(body, "served: a, b") || strings.Contains(body, base) {
+		t.Fatalf("the bare name refusal = %s, want it to name the workspace ids a, b and no directory", body)
+	}
 	for _, dir := range []string{a, b} {
 		if _, err := os.Stat(filepath.Join(dir, ".jad", "sessions", "bare.json")); err == nil {
 			t.Fatalf("the refused bare name was written in %s", dir)

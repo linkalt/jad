@@ -3699,6 +3699,7 @@ function App({
         <SessionNavigation
           groups={listGroups}
           workspaces={workspaces}
+          listedWorkspaces={workspaceList.workspaces}
           selectedWorkspace={selectedWorkspace}
           onSelectWorkspace={setPickedWorkspace}
           collapsedRefs={collapsedGroups}

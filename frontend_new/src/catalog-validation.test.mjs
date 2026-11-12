@@ -13,6 +13,11 @@ const schemes = Object.fromEntries(
 );
 const validator = createCatalogValidator(schemes);
 
+// In the workspace layout the workspace's .jad holds profiles and sessions; models, tools and
+// MCP servers are global (G, ~/.jad by default). `jad check` judges those files, not this test,
+// and a unit test must not read $HOME.
+const globalKind = dir => `no .jad/${dir} here: in the workspace layout this kind is global (G); \`jad check\` checks it, not this test`;
+
 const goodProfile = {
   schema_version: 1,
   description: 'x',
@@ -175,7 +180,7 @@ test('the model template is refused until the model name is filled in', () => {
 test('every model in the local layout passes the scheme', t => {
   const root = new URL('../../.jad/models/', import.meta.url);
   if (!existsSync(root)) {
-    t.skip('.jad is git-ignored and absent in this checkout');
+    t.skip(globalKind('models'));
     return;
   }
   let checked = 0;
@@ -234,7 +239,7 @@ test('every session in the local layout passes the scheme', t => {
 function localJson(dir, t) {
   const root = new URL(`../../.jad/${dir}/`, import.meta.url);
   if (!existsSync(root)) {
-    t.skip('.jad is git-ignored and absent in this checkout');
+    t.skip(globalKind(dir));
     return [];
   }
   const files = [];

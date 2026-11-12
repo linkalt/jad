@@ -591,9 +591,10 @@ writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlo
   it, or `toolset`. A setting in neither list takes its built-in default. Not shown: `server`,
   triggers of `global.json`, remotes and their tokens, `G/auth`, the contents of `env_file` (none
   of them is a layer setting key; toolsets are not shown either).
-- Schema: `sample/tools/native/profile.json` changed with the Go schema. The gitignored local
-  copy `.jad/tools_defintion/native/profile.json` is not changed by the commit and must be
-  replaced by the sample (or regenerated), or the running jad refuses the `profile` tool.
+- Schema: `sample/tools/native/profile.json` changed with the Go schema. The definition file the
+  deployment's `tool_definition_paths` points at (in this checkout `~/.jad/tools_definition/native/profile.json`)
+  is not changed by the commit and must match the sample again, or the running jad refuses the
+  `profile` tool. The path is stored in the workspace or global setting, so it is not repeated here.
 
 **Commit 2b, the sandbox side:**
 
@@ -1382,8 +1383,8 @@ workspace, the start workspace first, then the others by label, sessions in list
 heading, a heading with a running run shows the spinner. With one workspace: a flat list, no
 heading and no switcher. "Others" and its config key are gone. A session whose root is not among
 the known workspaces gets a heading of its own (an older server that names no root: "Unknown
-workspace") instead of vanishing. A listed workspace the server does not serve is left out: it can
-hold no session and cannot be chosen. Collapse state of a heading is per workspace and, as before,
+workspace") instead of vanishing. A listed workspace the server does not serve has no section (it
+can hold no session); the switcher shows it greyed out (section 27). Collapse state of a heading is per workspace and, as before,
 not stored.
 
 **The chosen workspace** is the switcher's pick and follows the session the user opens. It decides
@@ -1430,3 +1431,34 @@ the start workspace's library being shown silently.
   rules, the request URLs and source-text wiring.
 - A profile row whose profile the session does not offer is refused by the server (422) if a stale
   stored view names it; the UI does not clean such a view up.
+
+## 27. Phase 5b as built: cleanup after phase 5
+
+Decider phase 5b ruling (step 37.10 of the decider transcript).
+
+**Bare session name with several workspaces.** The refusal now says how to fix it:
+`name the workspace: write the session as <root>:<name>; served: a, b`. It lists root ids only,
+never a directory (the ids are on every list record). The old layout with several roots and a root
+that has no session is still unknown to the UI (workspaces come from the session list there);
+making that layout list its roots would be new behaviour in the old layout, so it stays a limit and
+this message is how the user gets out of it. Pinned by `TestNewLayoutSessionNeedsAnUnambiguousRoot`
+and `TestWorkspaceSessionsAreCreatedInTheNamedWorkspaceAndABareNameIsRefused`.
+
+**Unavailable workspaces.** `GET /api/workspaces` already marks a listed workspace the server does
+not serve (`unavailable`). The rail switcher (`workspaceOptions`) now lists it after the served ones,
+greyed out and not selectable, with "Not available (the server log says why)". It still has no
+section and cannot be a target. The server's reason is **not** shown: it is an error text that names
+files and folders (for example the path of its `workspace.json`), and the screen shows no path. The
+catalog dialog's workspace choice lists served workspaces only. No backend change.
+
+**Stored view and the 422.** A request for a profile the session's scope does not list fails in
+`loadLayoutSessionSettings` (`judged.all.Lookup`) as a config error, which the HTTP layer answers with
+422. That is old behaviour of the loader. The UI removes such a pinned row once the session list
+names the profiles (`prunePinnedViews`, since 2026-10-18). Phase 5 did not change either, and the
+workspace pick drives no session request (it feeds only the switcher, the new-session name and the
+catalog dialog), so the pick cannot cause it. Left as it was.
+
+**Tests that skip.** Three frontend tests (`every model/toolset/MCP server ... in the local layout`)
+read `.jad/models`, `.jad/tools` and `.jad/mcp` of the checkout. In the workspace layout those kinds
+are global (`G`, `~/.jad` by default), so the folders are absent and the tests skip; the skip reason
+now says so. A unit test must not read `$HOME`; `jad check` judges the global files.

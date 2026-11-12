@@ -41,8 +41,19 @@ func TestNewLayoutSessionNeedsAnUnambiguousRoot(t *testing.T) {
 		t.Fatalf("qualified in one root: %+v %v", location, err)
 	}
 	two := sessionRoots(t, 2)
-	if _, err := newLayoutSession(two, "demo"); err == nil {
+	_, err = newLayoutSession(two, "demo")
+	if err == nil {
 		t.Fatal("an unqualified name was accepted with two roots")
+	}
+	// The refusal says how to fix it, by root id and never by directory.
+	if kind, ok := catalogErrorKind(err); !ok || kind != CatalogBadID {
+		t.Errorf("bare name error kind = %v, want a bad id", err)
+	}
+	if want := "name the workspace: write the session as <root>:<name>; served: a, b"; err.Error() != want {
+		t.Errorf("bare name error = %q, want %q", err.Error(), want)
+	}
+	if strings.Contains(err.Error(), two[0].Directory) {
+		t.Errorf("bare name error names a directory: %q", err.Error())
 	}
 	if location, err = newLayoutSession(two, "b:demo"); err != nil || location.Reference != "b:demo" || location.Root.ID != "b" {
 		t.Fatalf("qualified in two roots: %+v %v", location, err)

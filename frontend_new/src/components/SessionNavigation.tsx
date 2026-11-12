@@ -10,7 +10,7 @@ import {type ColorScheme} from '../color-scheme';
 import {type LeftPanelId} from '../left-panel';
 import {paneCountLabel} from '../pane-count';
 import {type SessionListGroup, groupHasRunningRun} from '../session-views';
-import {type Workspace, groupByWorkspace} from '../workspaces';
+import {type Workspace, groupByWorkspace, workspaceOptions} from '../workspaces';
 import {NotificationBellIcon} from './AppIcons';
 import {MoonIcon, SunIcon} from './ColorSchemeIcon';
 import {FolderIcon} from './FolderIcon';
@@ -39,6 +39,7 @@ function closeHoverFlyout(anchor: HTMLElement): void {
 export function SessionNavigation({
   groups,
   workspaces,
+  listedWorkspaces,
   selectedWorkspace,
   onSelectWorkspace,
   collapsedRefs,
@@ -71,6 +72,8 @@ export function SessionNavigation({
   groups: SessionListGroup[];
   /** The workspaces the list is grouped by (see workspacesOf); one or none means a flat list. */
   workspaces: readonly Workspace[];
+  /** Everything GET /api/workspaces lists, including workspaces the server does not serve (shown greyed out). */
+  listedWorkspaces: readonly Workspace[];
   /** The workspace new sessions and catalog files go to; absent before the list is known. */
   selectedWorkspace: string | undefined;
   onSelectWorkspace: (workspace: string) => void;
@@ -111,6 +114,7 @@ export function SessionNavigation({
   onFocusPane: (viewKey: string) => void;
 }) {
   const sections = useMemo(() => groupByWorkspace(groups, workspaces), [groups, workspaces]);
+  const workspaceSwitcherOptions = useMemo(() => workspaceOptions(workspaces, listedWorkspaces), [workspaces, listedWorkspaces]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const {isMobile} = useAppShellMobile();
@@ -292,11 +296,11 @@ export function SessionNavigation({
       }
       collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
     >
-      {workspaces.length > 1 && !isCollapsed && (
+      {workspaceSwitcherOptions.length > 1 && !isCollapsed && (
         <VStack paddingInline={2} paddingBlock={1}>
           <Selector
             label="Workspace"
-            options={workspaces.map(workspace => ({value: workspace.id, label: workspace.label}))}
+            options={workspaceSwitcherOptions}
             value={selectedWorkspace}
             onChange={onSelectWorkspace}
           />

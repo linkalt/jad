@@ -19,7 +19,9 @@ const {
   libraryWorkspace,
   newSessionNote,
   newSessionRef,
+  UNAVAILABLE_WORKSPACE_NOTE,
   workspaceOfSessionRef,
+  workspaceOptions,
   workspacesOf,
 } = await import('./workspaces.ts');
 const {sessionListGroups} = await import('./session-views.ts');
@@ -47,6 +49,29 @@ test('the workspaces are the served listed ones, the start workspace first and t
 test('a listed workspace that is not served cannot hold a session or be chosen', () => {
   assert.equal(workspacesOf(listed, []).some(workspace => workspace.id === 'down'), false);
   assert.equal(effectiveWorkspace(workspacesOf(listed, []), 'down')?.id, 'start');
+});
+
+test('a listed workspace that is not served is shown greyed out, never chosen, and never with the server\'s reason', () => {
+  const served = workspacesOf(listed, []);
+  assert.deepEqual(workspaceOptions(served, listed), [
+    {value: 'start', label: 'Start here'},
+    {value: 'alpha', label: 'Alpha'},
+    {value: 'beta', label: 'Beta'},
+    {value: 'down', label: 'Down', disabled: true, description: UNAVAILABLE_WORKSPACE_NOTE},
+  ]);
+  // The reason is an error text with file and folder names; it must not reach the screen.
+  const withPath = [...listed, {id: 'gone', label: 'Gone', unavailable: '/home/me/gone/.jad/workspace.json: no such file'}];
+  assert.equal(JSON.stringify(workspaceOptions(workspacesOf(withPath, []), withPath)).includes('/home/me'), false);
+  // Outside the workspace layout nothing is listed, so nothing is greyed out.
+  assert.deepEqual(workspaceOptions([{id: 'a', label: 'A'}], []), [{value: 'a', label: 'A'}]);
+  // A served workspace is never also shown as unavailable.
+  assert.equal(workspaceOptions(served, [...listed, {id: 'alpha', label: 'Alpha', unavailable: 'x'}]).filter(option => option.value === 'alpha').length, 1);
+});
+
+test('the rail switcher is built from the served and the listed workspaces', () => {
+  const nav = read('components/SessionNavigation.tsx');
+  assert.match(nav, /workspaceOptions\(workspaces, listedWorkspaces\)/);
+  assert.match(read('App.tsx'), /listedWorkspaces=\{workspaceList\.workspaces\}/);
 });
 
 test('outside the workspace layout the workspaces are the session roots, with their labels', () => {

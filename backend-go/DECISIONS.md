@@ -4339,7 +4339,7 @@ Decider phase 2 decisions P1 to P4 (design section 12). `{profile_own}` in a pro
 Open gaps:
 - **The private-document check is by path, not by file identity.** It resolves links before (judging) and after (load) the read, but a link swapped between the check and the read, or a hard link to another profile's document, is not caught. It is a prompt-assembly rule and not a read barrier (D1): without a sandbox `exec` reads every profile's folder anyway; with one, S3 (phase 2b) hides the folders from tool calls, so a sandboxed call cannot make a hard link to them. Closing it would need the read and the check on one opened file (openat2 `RESOLVE_NO_SYMLINKS` or a SameFile check of the opened descriptor) in `readPromptDocument` and its two other callers (statecontext, agents).
 - **`config` in plan mode only through `plan_mode.allow`.** The decider allowed `config` in plan mode; the action does not refuse it, but the `profile` tool is not `ReadOnly` (compact and reset change transcripts), so a plan-mode catalog drops it unless an allow entry keeps it, as in v1. Marking it read-only per call (MayChangeFiles for compact and reset) would add the tool to every plan-mode run and change v1 requests; left for the decider.
-- **The local runtime copy of the tool definition.** `.jad/tools_defintion/native/profile.json` (gitignored) now differs from the sample; a running jad that compares it refuses the `profile` tool until the file is replaced with `sample/tools/native/profile.json`. There is no sync command.
+- **The local runtime copy of the tool definition.** The definition file that the deployment's `tool_definition_paths` points at (then `.jad/tools_defintion/native/profile.json`, gitignored) now differs from the sample; a running jad that compares it refuses the `profile` tool until the file matches `sample/tools/native/profile.json` again. There is no sync command.
 - **Effective settings are those of the default model's load.** `config` loads the profile with its default model; the settings shown do not depend on the model, but a model fault of the default model is not shown.
 
 ## Workspace layout v2: phase 2b, own data folder, other profiles' folders hidden (T-028, Go, 2026-11-12)
@@ -4379,7 +4379,7 @@ Open gaps:
 - **Policy limits are approximations of D3.** `env_file` (settings and hooks) and prompt documents are checked for `G/auth`; other settings strings under `full` are not path-checked; documents must exist (the trial load reads them). Hooks and commands under `full` can read anything the user can.
 - **Admin routes** still have no ownership check; self-edit does not use them (out of scope, decider).
 - **Not built yet:** 3b (writing `{profile_own}/documents`), 3c (profile-scope models and tools), seatbelt runs, the UI.
-- **Local tool definition.** The gitignored `.jad/tools_defintion/native/profile.json` must be replaced by `sample/tools/native/profile.json`; an older copy is refused when the catalog is built (`TestAnOlderProfileDefinitionIsRefused`).
+- **Local tool definition.** The definition file that `tool_definition_paths` points at must match `sample/tools/native/profile.json`; an older copy is refused when the catalog is built (`TestAnOlderProfileDefinitionIsRefused`).
 
 ## Workspace layout v2: phase 3b, own documents through profile edit (T-028, Go, 2026-11-12)
 
@@ -4392,7 +4392,7 @@ Open gaps:
 - **Single process, links race.** The lock is in-process; another jad process or a hand edit can still race (deletes check the same file, size and mtime; replaces the size and mtime). Without a sandbox `exec` can replace a checked folder with a link between the walk and the write.
 - **No pruning, no listing cap.** Entries holding old documents can be large (up to the 32 MiB read limit); `config` reads every own document to hash it.
 - **Not built yet:** 3c (profile-scope models and tools), seatbelt runs, the UI.
-- **Local tool definition.** The tool schema changed again (`documents`); the gitignored `.jad/tools_defintion/native/profile.json` must be replaced by `sample/tools/native/profile.json` before the running jad accepts the `profile` tool.
+- **Local tool definition.** The tool schema changed again (`documents`); the definition file that `tool_definition_paths` points at must match `sample/tools/native/profile.json` before the running jad accepts the `profile` tool.
 
 ## Workspace layout v2: phase 3b.1, configured writers stay out of profile-own (T-028, Go, 2026-11-12)
 
@@ -4453,7 +4453,7 @@ Open gaps:
 
 ## Workspace layout v2: phase 3c.2, self-edit of a profile's own models (T-028, Go, 2026-11-12)
 
-Decider 3c C3 with the 3c.1b key table (design section 19). `profile edit` takes `models: [{id, content | delete, if_match}]` beside `contents` and `documents`; one call is one revision under the profile file's lock. Own model and document changes share one `ownFileKind` table (folder, name rule, size limit) for the checks, the walk without links, publish, rollback, revert and the `config` listing. Before the trial each written model must pass the own model file rules (`parseOwnModel`, `ownModelSet`) and take an ID no shared model has. The trial memo overlays own model files by profile and ID (created added to the own catalog, deleted removed, written read from memory through `ModelBase.trial`); after the load each written model must be usable (`ownModels.problem`) and the model a run would use must load with its effort (`ModelFault`, else `WithModel`), unless it fails the same way before the change. History entries are version 3 with `models`; version 2 and 3a entries still read and revert (`complete` now checks against `profileHistoryFilesVersion`). `jad check` reports each own model file a profile's load leaves out (`checkOwnModels`). The tool schema, the description and `sample/tools/native/profile.json` changed together; the runtime copy `.jad/tools_defintion/native/profile.json` is the user's to replace. **Tests:** `profile_model_edit_test.go` (create with the profile change, indented file and 0700 folder, next load composed, config listing ignoring stray files, models-only replace, version 3 history, revert both ways; 19 rule cases at `on` and `full` with nothing written; delete of an offered model, a dropped effort, `model_default` on a broken own model, a known fault not blocking, a repair; preconditions, twice-named, a linked category folder, two writers; a publish fault at each step; revert over a later change; a version 2 entry reverting; the trial overlay; `jad check`), `TestProfileSelfEditModelsArgument` (tool parsing, raw key order, refusals), and the checkpoint test now edits an own model too. 13 mutations of the new guards were caught.
+Decider 3c C3 with the 3c.1b key table (design section 19). `profile edit` takes `models: [{id, content | delete, if_match}]` beside `contents` and `documents`; one call is one revision under the profile file's lock. Own model and document changes share one `ownFileKind` table (folder, name rule, size limit) for the checks, the walk without links, publish, rollback, revert and the `config` listing. Before the trial each written model must pass the own model file rules (`parseOwnModel`, `ownModelSet`) and take an ID no shared model has. The trial memo overlays own model files by profile and ID (created added to the own catalog, deleted removed, written read from memory through `ModelBase.trial`); after the load each written model must be usable (`ownModels.problem`) and the model a run would use must load with its effort (`ModelFault`, else `WithModel`), unless it fails the same way before the change. History entries are version 3 with `models`; version 2 and 3a entries still read and revert (`complete` now checks against `profileHistoryFilesVersion`). `jad check` reports each own model file a profile's load leaves out (`checkOwnModels`). The tool schema, the description and `sample/tools/native/profile.json` changed together; the runtime copy (the definition file `tool_definition_paths` points at) is the user's to replace. **Tests:** `profile_model_edit_test.go` (create with the profile change, indented file and 0700 folder, next load composed, config listing ignoring stray files, models-only replace, version 3 history, revert both ways; 19 rule cases at `on` and `full` with nothing written; delete of an offered model, a dropped effort, `model_default` on a broken own model, a known fault not blocking, a repair; preconditions, twice-named, a linked category folder, two writers; a publish fault at each step; revert over a later change; a version 2 entry reverting; the trial overlay; `jad check`), `TestProfileSelfEditModelsArgument` (tool parsing, raw key order, refusals), and the checkpoint test now edits an own model too. 13 mutations of the new guards were caught.
 
 Open gaps:
 - **A running run may read the new own model:** closed by 3c.2b: own models are copied at run start (`PinOwnModels`), see the 3c.2b section.
@@ -4587,16 +4587,46 @@ workspace (its root). Backend, API, session files and ids are unchanged; this su
 
 Open gaps:
 - **Old layout, empty roots:** workspaces are read from the session list, so a root without a
-  session is not known; a new bare name may be refused by the server (clear message, nothing
-  written). Closing it needs the old layout to list its roots too (a backend change the ruling did
-  not ask for).
+  session is not known; a new bare name may be refused by the server (nothing written). Closing it
+  needs the old layout to list its roots too (a backend change the ruling did not ask for). *5b: the
+  refusal now names the roots to write; the limit stays.*
 - **Not stored:** the chosen workspace and a heading's collapse.
 - **Unavailable workspaces** (listed but not served) are not shown, so their reason is only in the
-  server log and `GET /api/workspaces`.
+  server log and `GET /api/workspaces`. *5b: the rail switcher shows them greyed out, without the
+  reason.*
 - **No automated rendering test:** the frontend tests cover pure rules, request URLs and source-text
   wiring; the rail, switcher and dialog were exercised by hand in a browser against a temporary
   two-workspace server in one small viewport.
 - **Stale stored view:** a pinned view naming a profile the session no longer offers gets a 422 from
-  the server and is not cleaned up.
+  the server. *5b: this is old loader behaviour, not caused by phase 5; `prunePinnedViews` removes the
+  row once the session list names the profiles. The first report said "not cleaned up", which was
+  too strong.*
 - **Sandbox templates** have no catalog kind in the dialog, so there is no scope choice for them.
 - **Still not built:** `promote`, seatbelt runs.
+
+## Workspace layout v2: phase 5b, cleanup after phase 5 (T-028, 2026-11-13)
+
+Decider phase 5b ruling (design section 27).
+
+- **Bare session name:** the refusal reads `name the workspace: write the session as <root>:<name>;
+  served: a, b` (root ids, never directories). The old-layout empty-root limit stays.
+- **Unavailable workspaces:** the rail switcher shows a listed but unserved workspace greyed out
+  ("Not available (the server log says why)"). The reason text is deliberately not shown: it is an
+  error message with file and folder names (`known.Unavailable = err.Error()` in `pickWorkspaces`),
+  and the UI shows no path. This is narrower than the ruling ("and the reason, if the API gives
+  one"); showing it would need a reason without paths from the backend.
+- **The 422 is not a phase 5 regression.** Evidence: the failing lookup is `judged.all.Lookup` in
+  `loadLayoutSessionSettings`; `prunePinnedViews` has existed since `c4c1262e` (2026-10-18);
+  `1700be94` changes neither, and `selectedWorkspace` reaches only the switcher, the new-session
+  name and the catalog dialog. I did not reproduce the 422 in a browser. No fix.
+- **Skipped tests:** the three "local layout" tests (models, toolsets, MCP) skip because the
+  workspace layout keeps those kinds in `G`; the reason says so.
+- **`jad check` on this checkout** (temporary binary in `/tmp`, run from the repository root; the
+  files of `.jad` (without `state`) and `~/.jad` and `git status` were identical before and after):
+  `checked 41 files, 1 problems`: `toolset jad/default: /home/www/.jad/tools/jad/default.json:
+  tools.native.subagent needs tools.native.async to collect, list and stop its handles`. The file
+  has `subagent` and no `async` under `native`; the rule is old (`6481146c`). It is the user's
+  global file (changed 2026-11-12 22:55), so it was not edited. This is not a result of this phase.
+- **Open:** the catalog dialog's workspace choice does not list unavailable workspaces; the reason
+  of an unavailable workspace is still only in the server log; the 422 above stays; `promote` and
+  seatbelt runs are not built.

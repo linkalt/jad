@@ -167,7 +167,12 @@ func newLayoutSession(roots []Root, reference string) (Location, error) {
 	case len(roots) == 1:
 		chosen = &roots[0]
 	default:
-		return Location{}, &CatalogError{Kind: CatalogBadID, Message: "write the session as <root>:<name>; there is more than one session root"}
+		// Root ids only, never a directory: they are already on every session list record.
+		ids := make([]string, 0, len(roots))
+		for index := range roots {
+			ids = append(ids, roots[index].ID)
+		}
+		return Location{}, &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("name the workspace: write the session as <root>:<name>; served: %s", strings.Join(ids, ", "))}
 	}
 	if chosen.Layout == nil {
 		return Location{}, &CatalogError{Kind: CatalogBadID, Message: fmt.Sprintf("session root %q does not use the catalog layout", chosen.ID)}

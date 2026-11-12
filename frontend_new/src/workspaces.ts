@@ -48,6 +48,36 @@ export function workspacesOf(listed: readonly Workspace[], sessions: readonly Wo
   );
 }
 
+/** What the switcher says under a listed workspace the server does not serve. */
+export const UNAVAILABLE_WORKSPACE_NOTE = 'Not available (the server log says why)';
+
+/** One entry of the workspace switcher. */
+export interface WorkspaceOption {
+  value: string;
+  label: string;
+  /** A listed workspace the server does not serve: shown, but it cannot be chosen. */
+  disabled?: true;
+  description?: string;
+}
+
+/**
+ * The switcher's entries: the served workspaces, then the listed ones that are not served,
+ * greyed out, so a workspace never just disappears from the list. Only the id and label are
+ * used. The server's reason is not shown: it is an error text that names files and folders,
+ * and the screen shows no path. It is in the server log.
+ */
+export function workspaceOptions(workspaces: readonly Workspace[], listed: readonly Workspace[]): WorkspaceOption[] {
+  const options: WorkspaceOption[] = workspaces.map(workspace => ({value: workspace.id, label: workspace.label}));
+  const shown = new Set(workspaces.map(workspace => workspace.id));
+  const down = listed
+    .filter(workspace => workspace.unavailable !== undefined && !shown.has(workspace.id))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  for (const workspace of down) {
+    options.push({value: workspace.id, label: workspace.label, disabled: true, description: UNAVAILABLE_WORKSPACE_NOTE});
+  }
+  return options;
+}
+
 /** Whether the server runs the workspace layout: only then is a scope or workspace sent. */
 export function isWorkspaceLayout(listed: readonly Workspace[]): boolean {
   return listed.some(workspace => workspace.unavailable === undefined);
