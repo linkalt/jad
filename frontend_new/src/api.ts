@@ -277,6 +277,11 @@ export interface SessionSnapshot {
   /** Display name each profile file sets, by profile ID; a profile without one is absent. */
   profile_names?: Record<string, string>;
   model_default?: string;
+  /**
+   * Why the model a run of this session would use cannot be used (the text names the file); set
+   * with no model_default. The client must not pick another model for the user.
+   */
+  model_fault?: string;
   /** The entity tag of the profile file the record was built for; the model-default route takes it as If-Match. */
   profile_etag?: string;
   models?: string[];

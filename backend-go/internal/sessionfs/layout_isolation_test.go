@@ -421,10 +421,11 @@ func TestAProfileWhoseToolsetFailsWhenAppliedIsLeftOut(t *testing.T) {
 	}
 }
 
-// Only what the toolsets add is judged for the profile list. A setting the selected profile
-// cannot be loaded with (a native tool of its toolset that fails its own rules, like the
-// sandbox in the test above) fails the load, and no other profile takes its place.
-func TestAToolsetNativeSettingErrorStillFailsTheProfileThatRuns(t *testing.T) {
+// A native tool setting of a toolset that fails its own rules (a key the tool does not have)
+// leaves the profile out like any other toolset that cannot be applied: the profile lists,
+// default and info views agree, the default moves with a warning that names the toolset, a
+// named profile is an error, and a repaired toolset brings it back.
+func TestAToolsetNativeSettingErrorLeavesTheProfileOut(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{
 		Models:   isolationModels(),
 		Native:   map[string]any{},
@@ -432,15 +433,118 @@ func TestAToolsetNativeSettingErrorStillFailsTheProfileThatRuns(t *testing.T) {
 	})
 	toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
 	writeFileT(t, toolsetFile, `{"native":{"exec":{"no_such_setting":1}}}`)
+
 	config, err := LoadSessionSettings(location, "", "")
-	if err == nil {
-		t.Fatalf("the profile loaded: Profile %q Warnings %q", config.Profile, config.Warnings)
+	if err != nil {
+		t.Fatalf("a toolset with a bad native setting failed the session: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no_such_setting") {
-		t.Fatalf("error = %v", err)
+	if config.Profile != "dev/bbb" || !reflect.DeepEqual(config.Profiles, []string{"dev/bbb"}) || config.DefaultProfile != "dev/bbb" {
+		t.Errorf("Profile %q Profiles %v default %q", config.Profile, config.Profiles, config.DefaultProfile)
 	}
-	if _, err := LoadSessionSettings(location, "dev/bbb", ""); err != nil {
-		t.Fatalf("dev/bbb named: %v", err)
+	if !hasWarning(config, "profile dev/aaa left out", "no_such_setting", "toolsets it names (coding/default)", "the default profile is dev/bbb instead") {
+		t.Errorf("Warnings = %q", config.Warnings)
+	}
+	info, err := ReadLayoutProfileInfo(location)
+	if err != nil || info.ActiveProfile != "dev/bbb" || !reflect.DeepEqual(info.Profiles, []string{"dev/bbb"}) {
+		t.Errorf("ProfileInfo = %+v, %v", info, err)
+	}
+	// Named, it is an error that names the toolset, and nothing else takes its place.
+	if _, err := LoadSessionSettings(location, "dev/aaa", ""); err == nil || !strings.Contains(err.Error(), "no_such_setting") {
+		t.Fatalf("selecting dev/aaa: error = %v", err)
+	}
+	// The profile that passes, selected by name, does not list the one that is left out.
+	if config, err = LoadSessionSettings(location, "dev/bbb", ""); err != nil || !reflect.DeepEqual(config.Profiles, []string{"dev/bbb"}) {
+		t.Fatalf("dev/bbb named: %v, Profiles %v", err, config.Profiles)
+	}
+
+	writeFileT(t, toolsetFile, `{"native":{"exec":{"timeout_ms":1000}}}`)
+	config, err = LoadSessionSettings(location, "", "")
+	if err != nil || config.Profile != "dev/aaa" || !reflect.DeepEqual(config.Profiles, []string{"dev/aaa", "dev/bbb"}) {
+		t.Fatalf("after the repair: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
+	}
+}
+
+// Only the profile that would be the default is judged: a profile that is not stays offered, and
+// choosing it fails with the setting's error and nothing takes its place. When the default and
+// the next one both fail through the toolset, the default moves on to the first that loads; when
+// every profile fails the load fails with the first one's error.
+func TestToolsetNativeSettingErrorsAreJudgedForTheDefaultChainOnly(t *testing.T) {
+	bad := `{"native":{"exec":{"no_such_setting":1}}}`
+	profile := func(toolset string) map[string]any {
+		file := map[string]any{"models": []string{"m/a"}}
+		if toolset != "" {
+			file["toolset"] = toolset
+		}
+		return file
+	}
+	t.Run("a profile that is not the default stays offered", func(t *testing.T) {
+		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile(""), "dev/bbb": profile("coding/default")}})
+		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		config, err := LoadSessionSettings(location, "", "")
+		if err != nil || config.Profile != "dev/aaa" || !reflect.DeepEqual(config.Profiles, []string{"dev/aaa", "dev/bbb"}) {
+			t.Fatalf("default load: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
+		}
+		if _, err := LoadSessionSettings(location, "dev/bbb", ""); err == nil || !strings.Contains(err.Error(), "no_such_setting") {
+			t.Fatalf("dev/bbb named: error = %v", err)
+		}
+	})
+	t.Run("the default moves past every profile the toolset fails", func(t *testing.T) {
+		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile("coding/default"), "dev/bbb": profile("coding/default"), "dev/ccc": profile("")}})
+		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		config, err := LoadSessionSettings(location, "", "")
+		if err != nil || config.Profile != "dev/ccc" || !reflect.DeepEqual(config.Profiles, []string{"dev/ccc"}) {
+			t.Fatalf("load: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
+		}
+		if !hasWarning(config, "profile dev/aaa left out", "the default profile is dev/ccc instead") || !hasWarning(config, "profile dev/bbb left out") {
+			t.Errorf("Warnings = %q", config.Warnings)
+		}
+	})
+	t.Run("every profile failing fails the load", func(t *testing.T) {
+		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile("coding/default"), "dev/bbb": profile("coding/default")}})
+		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		if _, err := LoadSessionSettings(location, "", ""); err == nil || !strings.Contains(err.Error(), "no_such_setting") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+// Only a failure that the toolsets cause leaves a profile out. A setting the profile itself or
+// the session carries that fails its rules still fails the load, with a good toolset or a bad
+// one, and no other profile takes the place of the one that fails.
+func TestASettingThatIsNotTheToolsetsStillFailsTheLoad(t *testing.T) {
+	tests := map[string]struct {
+		profile map[string]any
+		session map[string]any
+	}{
+		"the profile's own setting": {
+			profile: map[string]any{"models": []string{"m/a"}, "toolset": "coding/default", "settings": map[string]any{"max_tool_rounds": "many"}},
+		},
+		"the profile's own setting with a good toolset": {
+			profile: map[string]any{"models": []string{"m/a"}, "toolset": "coding/good", "settings": map[string]any{"max_tool_rounds": "many"}},
+		},
+		"the session's setting": {
+			profile: map[string]any{"models": []string{"m/a"}, "toolset": "coding/default"},
+			session: map[string]any{"max_tool_rounds": "many"},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			spec := layouttest.Spec{
+				Models:   isolationModels(),
+				Native:   map[string]any{},
+				Profiles: map[string]map[string]any{"dev/aaa": test.profile, "dev/bbb": {"models": []string{"m/b"}}},
+			}
+			if test.session != nil {
+				spec.Settings = test.session
+			}
+			location, fixture := layoutLocation(t, spec)
+			writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), `{"native":{"exec":{"no_such_setting":1}}}`)
+			writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "good.json"), `{"native":{}}`)
+			config, err := LoadSessionSettings(location, "", "")
+			if err == nil || !strings.Contains(err.Error(), "max_tool_rounds") {
+				t.Fatalf("the load = Profile %q, %v; want the setting's error", config.Profile, err)
+			}
+		})
 	}
 }
 

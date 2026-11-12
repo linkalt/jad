@@ -114,6 +114,11 @@ type sessionListRecord struct {
 	Profiles       []string          `json:"profiles,omitempty"`
 	ProfileNames   map[string]string `json:"profile_names,omitempty"`
 	ModelDefault   string            `json:"model_default,omitempty"`
+	// ModelFault is why the model a run of this session would use cannot be used (the error
+	// names its file); set with ModelDefault empty and absent otherwise. A client must not
+	// choose another model for the user: it asks for an explicit choice, which the model-default
+	// route writes into the profile.
+	ModelFault string `json:"model_fault,omitempty"`
 	// ProfileETag is the entity tag of the profile file (catalog layout only), which the
 	// model-default route takes back as If-Match.
 	ProfileETag     string                             `json:"profile_etag,omitempty"`
@@ -722,6 +727,9 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 			Model:    config.Model.Name,
 		},
 	}
+	if config.ModelFault != nil {
+		item.ModelFault = config.ModelFault.Error()
+	}
 	if config.Models != nil {
 		models := append([]string{}, config.Models...)
 		item.Models = &models
@@ -804,6 +812,7 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		config.DefaultProfile,
 		config.Category,
 		config.ModelDefault,
+		faultText(config.ModelFault),
 		strings.Join(config.Profiles, "\x00"),
 		profileNamesVersion(config.ProfileNames),
 		fileStamp(config.MessagesPath),
@@ -821,6 +830,14 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		parts = append(parts, fileStamp(config.ModelPaths[id]))
 	}
 	return makeETag(strings.Join(parts, "|"))
+}
+
+// faultText is the text of err, empty for nil.
+func faultText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // profileETag is the entity tag of the profile file, empty when there is none or it cannot be read.

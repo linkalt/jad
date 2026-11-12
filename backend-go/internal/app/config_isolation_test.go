@@ -112,6 +112,7 @@ func TestAHiddenModelDefaultKeepsTheSessionReadableAndIsNeverSubstituted(t *test
 		Sessions []struct {
 			ID           string `json:"id"`
 			ModelDefault string `json:"model_default"`
+			ModelFault   string `json:"model_fault"`
 			Models       []string
 			ModelOptions []struct {
 				ID string `json:"id"`
@@ -125,8 +126,13 @@ func TestAHiddenModelDefaultKeepsTheSessionReadableAndIsNeverSubstituted(t *test
 	if strings.Join(session.Models, ",") != "openai/large" || session.ModelDefault != "" || len(session.ModelOptions) != 1 || session.ModelOptions[0].ID != "openai/large" {
 		t.Errorf("the list offers the hidden model: models %v default %q options %+v", session.Models, session.ModelDefault, session.ModelOptions)
 	}
-	if strings.Contains(body, "openai/small") {
-		t.Errorf("the list names the hidden model:\n%s", body)
+	// The record says why there is no default, naming the file, so a client asks for a choice
+	// and does not preselect another model; the snapshot carries the same.
+	if !strings.Contains(session.ModelFault, small) {
+		t.Errorf("model_fault = %q, want it to name %s", session.ModelFault, small)
+	}
+	if _, snapshot := f.do(t, http.MethodGet, "/api/sessions/local:demo", ""); !strings.Contains(snapshot, `"model_fault":"`) || !strings.Contains(snapshot, "small.json") {
+		t.Errorf("the snapshot lacks model_fault:\n%s", snapshot)
 	}
 	if !strings.Contains(logs.String(), "model openai/small left out") || !strings.Contains(logs.String(), small) {
 		t.Errorf("the log lacks the warning naming the file:\n%s", logs.String())
@@ -176,6 +182,9 @@ func TestAHiddenModelDefaultKeepsTheSessionReadableAndIsNeverSubstituted(t *test
 	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`); status != http.StatusOK {
 		t.Fatalf("model-default on the other model: %d %s", status, body)
 	}
+	if _, body = f.do(t, http.MethodGet, "/api/sessions", ""); strings.Contains(body, "model_fault") || !strings.Contains(body, `"model_default":"openai/large"`) {
+		t.Errorf("a repaired session still reports a model fault or lacks its default:\n%s", body)
+	}
 	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"sixth"}`); status != http.StatusOK || strings.Contains(body, "event: error") || f.lastModel() != "model-large" {
 		t.Fatalf("run after the repair: %d %s (provider model %q)", status, body, f.lastModel())
 	}
@@ -206,6 +215,45 @@ func TestAProfileWhoseToolsetCannotBeAppliedIsLeftOutOfTheSession(t *testing.T) 
 	// not apply to a session is named with the session (TestCheckFilesLoadsEveryProfileOfASession).
 	if valid, out := f.checkFiles(t); valid || !strings.Contains(out, "nope/missing") {
 		t.Errorf("jad check: valid=%v\n%s", valid, out)
+	}
+	// Named, the profile is an error and the reviewer does not run in its place.
+	before := len(f.models)
+	status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run?profile="+url.QueryEscape("dev/coder"), `{"input":"x"}`)
+	if status == http.StatusOK && !strings.Contains(body, "event: error") {
+		t.Fatalf("run on the profile: %d %s", status, body)
+	}
+	if len(f.models) != before {
+		t.Fatalf("the provider was called for the left-out profile")
+	}
+}
+
+// A native tool setting of a toolset that fails its rules leaves the default profile out of the
+// session, and the profile that takes its place is the one the list, the profile info and the
+// model-default route all use; a run on the profile named explicitly is an error.
+func TestADefaultProfileWithABadNativeToolsetSettingMovesTheDefaultEverywhere(t *testing.T) {
+	logs := &lockedBuffer{}
+	f := newLayoutFixtureWithBudget(t, nil, nil, func(c *Config) { c.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"exec":{"no_such_setting":1}},"mcp":{}}`)
+	f.overwrite(t, "tools/coding/fine.json", `{"native":{},"mcp":{}}`)
+	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"coding/fine"}`)
+
+	status, body := f.do(t, http.MethodGet, "/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("list: %d %s", status, body)
+	}
+	listed := listedFor(t, []byte(body))
+	if listed.ID != "demo" || listed.Active != "review/reviewer" || strings.Join(listed.Profiles, ",") != "review/reviewer" {
+		t.Fatalf("listed = %+v, want demo on review/reviewer only", listed)
+	}
+	if !strings.Contains(logs.String(), "profile dev/coder left out") || !strings.Contains(logs.String(), "no_such_setting") {
+		t.Errorf("the log lacks the warning naming the setting:\n%s", logs.String())
+	}
+	// The picker's write goes to the profile the session runs, not to the one left out.
+	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/model-default", `{"model_default":"openai/large"}`); status != http.StatusOK || !strings.Contains(body, `"active_profile":"review/reviewer"`) {
+		t.Fatalf("model-default: %d %s", status, body)
+	}
+	if status, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"hello"}`); status != http.StatusOK || strings.Contains(body, "event: error") {
+		t.Fatalf("run: %d %s", status, body)
 	}
 	// Named, the profile is an error and the reviewer does not run in its place.
 	before := len(f.models)

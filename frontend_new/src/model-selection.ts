@@ -5,7 +5,7 @@ export interface RunModelChoice {
   effort?: string;
 }
 
-type ModelRecord = Pick<Session, 'id' | 'modelDefault' | 'models' | 'modelOptions' | 'model'>;
+type ModelRecord = Pick<Session, 'id' | 'modelDefault' | 'modelFault' | 'models' | 'modelOptions' | 'model'>;
 
 export function modelOptionsForSession(record: ModelRecord): ModelOption[] {
   if (record.modelOptions !== undefined && record.modelOptions.length > 0) return record.modelOptions;
@@ -75,8 +75,34 @@ export function splitModelDefault(modelDefault: string | undefined): {modelId?: 
   return effort === '' ? {modelId} : {modelId, effort};
 }
 
-/** Display choice: the profile's model_default (`id@effort`), else the first offered model. */
+/** Why the session's configured model cannot be used, or undefined when it can. */
+export function modelFaultOf(record: Pick<Session, 'modelFault'> | undefined): string | undefined {
+  const fault = record?.modelFault;
+  return fault === undefined || fault === '' ? undefined : fault;
+}
+
+/**
+ * What stops a run that names no model of its own: the session's configured model cannot be used,
+ * and the server runs no other model in its place. The user has to choose one (the drawer saves
+ * it as the profile's default); the client never picks for them. A run that names a model itself,
+ * through a command, is the user's explicit choice and is left to the server.
+ */
+export function runModelBlock(
+  record: Pick<Session, 'modelFault'> | undefined,
+  explicitModel: string | undefined,
+): string | undefined {
+  const fault = modelFaultOf(record);
+  if (fault === undefined || explicitModel !== undefined) return undefined;
+  return `The configured model cannot be used (${fault}). Choose a model in the model picker, or fix the file. The message was not sent.`;
+}
+
+/**
+ * Display choice: the profile's model_default (`id@effort`), else the first offered model. A
+ * session whose configured model cannot be used has no choice: showing another model would
+ * name a run that will not happen (the server runs none in its place).
+ */
 export function resolveRunModelChoice(record: ModelRecord): {option?: ModelOption; effort?: string} {
+  if (modelFaultOf(record) !== undefined) return {};
   const options = modelOptionsForSession(record);
   const {modelId, effort: defaultEffort} = splitModelDefault(record.modelDefault);
   const option = options.find(o => o.id === modelId) ?? options[0];

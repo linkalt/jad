@@ -43,6 +43,9 @@ type profileVerdict struct {
 	// found. That depends on the session, so jad check reports it with the session; the
 	// other reasons are about the profile's own files, which check reports on their own.
 	composition bool
+	// toolsets is set when the profile is left out because the settings its toolsets add fail
+	// their rules (judgeDefaultToolsetSettings).
+	toolsets bool
 }
 
 // scopeJudgement is the verdict on every profile of a session's scope.
@@ -67,7 +70,7 @@ func (j scopeJudgement) leftOut() []string {
 
 // judgeScope reads the profile files of the session's scope and judges each. A nil scans
 // shares its reads of model and toolset files within this call only.
-func judgeScope(layout Layout, session layoutSessionFile, sessionPath string, scans *CatalogScans) (scopeJudgement, error) {
+func judgeScope(layout Layout, location Location, session layoutSessionFile, sessionPath string, scans *CatalogScans) (scopeJudgement, error) {
 	if scans == nil {
 		scans = NewCatalogScans()
 	}
@@ -114,7 +117,90 @@ func judgeScope(layout Layout, session layoutSessionFile, sessionPath string, sc
 			judgement.usable = judgement.usable.Without(entry.ID())
 		}
 	}
+	judgement.judgeDefaultToolsetSettings(layout, location, session, sessionPath, scans)
 	return judgement, nil
+}
+
+// judgeDefaultToolsetSettings leaves out the profile that would be the default when the native
+// tool settings its toolsets add (a misspelt key, a value out of range) make the settings it
+// would run with fail their rules, so that one toolset file does not fail the session while
+// another profile can run. It repeats for the profile that becomes the default, and stops at
+// the first that is fine. Knowing means composing and normalising the settings as a load does,
+// so this is done for the default only, not for every profile: that was measured at about four
+// times the cost of the judgement of five profiles, on every list and profile lookup. Every
+// caller reads the default from this judgement, so the load, the profile list and the model and
+// profile-message routes agree on it. A profile that is not the default stays offered, and
+// selecting it fails the load of that profile with the setting's error; nothing takes its place.
+//
+// The profile is left out only when its settings fail with its toolsets and load without them.
+// A failure that stays without them belongs to the shared settings or to the profile's own
+// (sandbox, hooks, tool settings, storage), and the profile is kept so that the load that runs
+// it fails with that error, as it always did: leaving it out would let another profile run in
+// its place. A left-out profile is never run, so nothing is loosened. The toolsets an agent
+// names are not judged: a failure of those still fails the load that reads them.
+func (j *scopeJudgement) judgeDefaultToolsetSettings(layout Layout, location Location, session layoutSessionFile, sessionPath string, scans *CatalogScans) {
+	keys, err := profileKeys(j.all, sessionPath)
+	if err != nil {
+		return
+	}
+	for {
+		id := session.defaultProfile(j.usable)
+		if id == "" {
+			return
+		}
+		verdict := j.verdicts[id]
+		if !toolsetsAddNativeSettings(j.toolsetPaths(verdict.file, scans, layout)) {
+			return
+		}
+		attempt := func(withoutToolsets bool) error {
+			c := &layoutCompose{layout: layout, location: location, sessionPath: sessionPath, session: session, profiles: j.usable, judged: *j, keys: keys, scans: scans, withoutToolsets: withoutToolsets}
+			setting, _, err := c.compose(verdict.entry, nil)
+			if err != nil {
+				return err
+			}
+			_, err = loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[id], "")
+			return err
+		}
+		err := attempt(false)
+		if err == nil || attempt(true) != nil {
+			return
+		}
+		verdict.err = err
+		verdict.composition = true
+		verdict.toolsets = true
+		j.usable = j.usable.Without(id)
+	}
+}
+
+// toolsetPaths returns the files of the toolsets the profile names, empty when they cannot be
+// found (a profile whose toolset is missing was already left out).
+func (j *scopeJudgement) toolsetPaths(file layoutProfileFile, scans *CatalogScans, layout Layout) []string {
+	if len(file.Toolset) == 0 {
+		return nil
+	}
+	toolsets, err := scans.Scan("toolset", layout.Tools)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, id := range file.Toolset {
+		if found, err := toolsets.Lookup(id); err == nil {
+			paths = append(paths, found.Path)
+		}
+	}
+	return paths
+}
+
+// toolsetsAddNativeSettings reports whether any of the toolset files gives native or extension
+// tool settings, the only ones whose rules a toolset can fail beyond what composing found.
+func toolsetsAddNativeSettings(paths []string) bool {
+	for _, path := range paths {
+		var toolset layoutToolsetFile
+		if readLayoutFile(path, &toolset) == nil && (len(toolset.Native) > 0 || len(toolset.Extension) > 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkProfileToolsets requires each toolset the profile names to exist and to parse. What the
@@ -159,9 +245,9 @@ func badModelsOf(scans *CatalogScans, listed *catalog.Catalog) []badModel {
 // toolset, an MCP server that does not exist or is given twice, a malformed mcp object, a
 // removed key. Only what the toolsets add is judged here, so a profile left out for it is one
 // whose toolset files are what is wrong. A profile's own settings (sandbox, hooks, tool
-// settings) are not, and a native tool setting of a toolset is checked with every other
-// setting when the profile is loaded: those fail the load of the profile that runs, and no
-// other profile takes its place.
+// settings) are not. A native tool setting of a toolset is judged only for the profile that
+// would be the default (judgeDefaultToolsetSettings); for another profile it fails the load
+// of that profile when it is selected.
 func checkToolsetComposition(layout Layout, session layoutSessionFile, sessionPath, profilePath string, file layoutProfileFile, scans *CatalogScans) error {
 	if len(file.Toolset) == 0 {
 		return nil
@@ -249,6 +335,9 @@ func (j scopeJudgement) skippedNotes(sessionPath, wouldBeDefault, defaultID stri
 	var notes []string
 	for _, id := range j.leftOut() {
 		note := fmt.Sprintf("%s: profile %s left out: %v", sessionPath, id, j.verdicts[id].err)
+		if j.verdicts[id].toolsets {
+			note += fmt.Sprintf("; its settings fail with the toolsets it names (%s) and load without them", strings.Join(j.verdicts[id].file.Toolset, ", "))
+		}
 		if id == wouldBeDefault && defaultID != "" {
 			note += fmt.Sprintf("; the default profile is %s instead", defaultID)
 		}

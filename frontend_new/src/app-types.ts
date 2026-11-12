@@ -49,6 +49,8 @@ export interface Session {
   profiles?: string[];
   profileNames?: Record<string, string>;
   modelDefault?: string;
+  /** Why the configured model cannot be used; set, the user must choose one before a run. */
+  modelFault?: string;
   /** The profile file's entity tag when the record was read; sent back with a model-default write. */
   profileEtag?: string;
   models?: string[];

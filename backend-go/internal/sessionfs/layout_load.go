@@ -50,7 +50,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if scans == nil {
 		scans = NewCatalogScans()
 	}
-	judged, err := judgeScope(layout, session, sessionPath, scans)
+	judged, err := judgeScope(layout, location, session, sessionPath, scans)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -446,6 +446,9 @@ type layoutCompose struct {
 	templates sandboxTemplates
 	// readOnly are the session's configuration paths (sessionConfigPaths); set by finishSandbox.
 	readOnly []string
+	// withoutToolsets composes the profile as if it named no toolset, to tell a failure of the
+	// toolsets from one of the profile's own and the shared settings.
+	withoutToolsets bool
 }
 
 func (c *layoutCompose) warn(format string, args ...any) {
@@ -503,7 +506,9 @@ func (c *layoutCompose) compose(selected catalog.Entry, toolsets []string) (map[
 		setting["tool_definition_paths"], _ = json.Marshal(c.layout.ToolDefinitionPaths)
 	}
 	if len(toolsets) == 0 {
-		toolsets = profile.Toolset
+		if !c.withoutToolsets {
+			toolsets = profile.Toolset
+		}
 	} else {
 		// Only the tools of this toolset are used. The state-context providers read the
 		// session's own tools, which this toolset may not have.

@@ -12,6 +12,8 @@ interface ModelDrawerProps {
   options: readonly ModelOption[];
   selectedModelId?: string;
   selectedEffort?: string;
+  /** Why the configured model cannot be used; set, no row is selected and the list opens for an explicit choice. */
+  fault?: string;
   isDisabled?: boolean;
   onChange: (choice: {modelId: string; effort?: string}) => void;
 }
@@ -61,10 +63,14 @@ export function ModelDrawer({
   options,
   selectedModelId,
   selectedEffort,
+  fault,
   isDisabled = false,
   onChange,
 }: ModelDrawerProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpandedByUser, setIsExpandedByUser] = useState(false);
+  // With no usable configured model there is nothing to collapse to: the whole list is shown.
+  const isExpanded = isExpandedByUser || fault !== undefined;
+  const setIsExpanded = setIsExpandedByUser;
   const [query, setQuery] = useState('');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -120,6 +126,11 @@ export function ModelDrawer({
             value={query}
             onChange={setQuery}
           />
+        )}
+        {fault === undefined ? null : (
+          <Text type="supporting" color="secondary" role="alert" data-model-fault>
+            The configured model cannot be used ({fault}). Choose one: it is saved as this profile's default.
+          </Text>
         )}
         {isSearching ? (
           <Text type="supporting" color="secondary" role="status" aria-live="polite">

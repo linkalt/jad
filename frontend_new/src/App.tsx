@@ -44,7 +44,7 @@ import type {RowMenuTarget} from './components/RowContextMenu';
 import {type InteractionEnd, interactionEndNotice} from './interaction-end';
 import {type LeftPanelId, leftPanelAfterToggle} from './left-panel';
 import {applyPart, applyPartDelta} from './messagePatch';
-import {modelOptionsForSession, defaultEffortFor, formatRunModel, modelDefaultIfMatch, resolveRunModelChoice, type RunModelChoice} from './model-selection';
+import {modelFaultOf, modelOptionsForSession, defaultEffortFor, formatRunModel, modelDefaultIfMatch, resolveRunModelChoice, runModelBlock, type RunModelChoice} from './model-selection';
 import {NO_PANE_DRAWERS, closePaneDrawer, hasPaneDrawer, openPaneDrawer, paneDrawerPressOpens, togglePaneDrawer, type PaneDrawerSet} from './pane-drawers';
 import {canOpenPane, closePane, ensurePane, focusPane, paneCapacity, parsePaneState, prunePanes, replaceFocusedPane, replacePaneView, type PaneState} from './pane-layout';
 import {allProfileRows, hasProfileToSwitchTo, type ProfileSourceRow} from './profile-rows';
@@ -1703,6 +1703,19 @@ function App({
       ) {
         return false;
       }
+      // The session's configured model cannot be used and the server runs no other in its place:
+      // the user picks a model first, so the draft is kept and no input is stored.
+      const modelBlock = runModelBlock(target.session, options.model);
+      if (modelBlock !== undefined) {
+        recordNotification({
+          sessionId: sessionRefOfViewKey(target.viewKey),
+          sessionTitle: target.title,
+          kind: 'error',
+          title: 'Choose a model',
+          message: modelBlock,
+        });
+        return false;
+      }
 
       // The view's own transcript and run slot: a pinned tab must not write into
       // the session's default profile.
@@ -3234,6 +3247,7 @@ function App({
           options={modelOptionsForSession(pane.session)}
           selectedModelId={pane.modelChoice?.option?.id}
           selectedEffort={pane.modelChoice?.effort}
+          fault={modelFaultOf(pane.session)}
           isDisabled={
             pane.sessionRef === undefined ||
             pane.isRunning ||
@@ -3405,7 +3419,9 @@ function App({
               label="Model"
               tooltip={
                 choice?.option === undefined
-                  ? 'Select a model'
+                  ? modelFaultOf(pane.session) === undefined
+                    ? 'Select a model'
+                    : 'Choose a model: the configured one cannot be used'
                   : `Current model: ${choice.option.id}`
               }
               icon={<Icon icon="app:model" size="sm" />}

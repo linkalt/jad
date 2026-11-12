@@ -21,7 +21,7 @@ func ReadLayoutProfileInfo(location Location) (ProfileInfo, error) {
 	}
 	// The same verdicts as the session load, so the profiles named here and the default are
 	// the ones a load offers.
-	judged, err := judgeScope(layout, session, location.SettingFile(), nil)
+	judged, err := judgeScope(layout, location, session, location.SettingFile(), nil)
 	if err != nil {
 		return ProfileInfo{}, err
 	}
@@ -73,7 +73,7 @@ func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability,
 	if err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	judged, err := judgeScope(layout, session, sessionPath, nil)
+	judged, err := judgeScope(layout, location, session, sessionPath, nil)
 	if err != nil {
 		return ModelDefaultUpdate{}, err
 	}

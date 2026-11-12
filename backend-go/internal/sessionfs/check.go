@@ -187,7 +187,7 @@ func (r *CheckReport) addLeftOutByComposition(id string, location Location) {
 	if err != nil {
 		return
 	}
-	judged, err := judgeScope(*location.Root.Layout, session, location.SettingFile(), nil)
+	judged, err := judgeScope(*location.Root.Layout, location, session, location.SettingFile(), nil)
 	if err != nil {
 		return
 	}
