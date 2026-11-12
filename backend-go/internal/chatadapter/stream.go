@@ -79,11 +79,14 @@ type translator struct {
 	text       *openItem
 	reasoning  *openItem
 	calls      map[int]*openCall
-	outputs    []map[string]any
-	finish     string
-	finished   bool
-	usage      *chatUsage
-	done       bool
+	// outputs are the finished items. They are closed in the order the stream ends
+	// them, which is not the order they were opened in when text follows a call that is
+	// still open, so complete() puts them in output_index order.
+	outputs  []finishedItem
+	finish   string
+	finished bool
+	usage    *chatUsage
+	done     bool
 }
 
 func newTranslator(sink *sink, config *Config, model string, now func() time.Time) *translator {
@@ -214,6 +217,12 @@ func (t *translator) response(status string) map[string]any {
 	}
 }
 
+// finishedItem is a closed output item and the output_index it was opened with.
+type finishedItem struct {
+	index int
+	item  map[string]any
+}
+
 func (t *translator) allocate() int {
 	index := t.nextIndex
 	t.nextIndex++
@@ -251,7 +260,7 @@ func (t *translator) closeReasoning() {
 		"content": []map[string]any{{"type": "reasoning_text", "text": text}},
 	}
 	t.sink.event("response.output_item.done", map[string]any{"output_index": open.outputIndex, "item": item})
-	t.outputs = append(t.outputs, item)
+	t.outputs = append(t.outputs, finishedItem{open.outputIndex, item})
 }
 
 func (t *translator) textDelta(text string) {
@@ -294,7 +303,7 @@ func (t *translator) closeText() {
 		"content": []map[string]any{{"type": "output_text", "text": text, "annotations": []any{}}},
 	}
 	t.sink.event("response.output_item.done", map[string]any{"output_index": open.outputIndex, "item": item})
-	t.outputs = append(t.outputs, item)
+	t.outputs = append(t.outputs, finishedItem{open.outputIndex, item})
 }
 
 func (t *translator) callDelta(index int, delta *toolCallDelta) {
@@ -347,7 +356,7 @@ func (t *translator) closeCalls() {
 			"type": "function_call", "id": open.itemID, "call_id": open.callID, "name": open.name, "arguments": arguments, "status": "completed",
 		}
 		t.sink.event("response.output_item.done", map[string]any{"output_index": open.outputIndex, "item": item})
-		t.outputs = append(t.outputs, item)
+		t.outputs = append(t.outputs, finishedItem{open.outputIndex, item})
 	}
 }
 
@@ -361,10 +370,12 @@ func (t *translator) complete() {
 	t.closeText()
 	t.closeCalls()
 	response := t.response("completed")
-	response["output"] = t.outputs
-	if t.outputs == nil {
-		response["output"] = []map[string]any{}
+	sort.SliceStable(t.outputs, func(i, j int) bool { return t.outputs[i].index < t.outputs[j].index })
+	output := make([]map[string]any, 0, len(t.outputs))
+	for _, finished := range t.outputs {
+		output = append(output, finished.item)
 	}
+	response["output"] = output
 	kind := "response.completed"
 	switch t.finish {
 	case "length":

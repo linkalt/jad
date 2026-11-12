@@ -88,6 +88,9 @@ type itemIndexEntry struct {
 	outputIndex int64
 	offset      int64
 	length      int64
+	// identity is read when the item is staged. It lives in memory only: recovery
+	// never matches a staged item to a completed response.
+	identity itemIdentity
 }
 
 // ResponseTurn stages completed output items and commits one terminal response.
@@ -246,7 +249,8 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 	if !exists {
 		return errors.New("output item must be an object")
 	}
-	if err := validateOutputItemJSON(itemRaw); err != nil {
+	identity, err := identityOfItem(itemRaw)
+	if err != nil {
 		return err
 	}
 	item, err := canonicalJSON(itemRaw)
@@ -304,6 +308,7 @@ func (t *ResponseTurn) StageOutputItem(event []byte) error {
 		outputIndex: outputIndex,
 		offset:      itemOffset,
 		length:      int64(len(itemLine)),
+		identity:    identity,
 	}
 	t.manifest.ItemCount = len(t.itemIndex)
 	if outputIndex >= t.manifest.NextSequence {
@@ -357,13 +362,11 @@ func (t *ResponseTurn) CommitWithObserver(event []byte, observer func(CommitResu
 	if t.manifest.ResponseID != "" && plan.responseID != "" && t.manifest.ResponseID != plan.responseID {
 		return CommitResult{}, errors.New("response ID does not match the active turn")
 	}
-	for outputIndex := 0; outputIndex < plan.itemCount; outputIndex++ {
-		if _, exists := t.itemIndex[int64(outputIndex)]; !exists {
-			return CommitResult{}, fmt.Errorf("missing staged output_index %d", outputIndex)
-		}
-	}
 	if len(t.itemIndex) != plan.itemCount {
 		return CommitResult{}, fmt.Errorf("staged item count %d does not match completed output count %d", len(t.itemIndex), plan.itemCount)
+	}
+	if plan.order, err = t.stagedOrder(plan); err != nil {
+		return CommitResult{}, err
 	}
 	if plan.responseID != "" {
 		t.manifest.ResponseID = plan.responseID
@@ -549,14 +552,14 @@ func (t *ResponseTurn) writeFinalLine(path string, plan completionPlan) (hashTex
 		_ = file.Close()
 		return "", 0, err
 	}
-	for outputIndex := 0; outputIndex < plan.itemCount; outputIndex++ {
-		if outputIndex > 0 {
+	for position, stagedIndex := range plan.order {
+		if position > 0 {
 			if err := writeChunk([]byte{','}); err != nil {
 				_ = file.Close()
 				return "", 0, err
 			}
 		}
-		entry := t.itemIndex[int64(outputIndex)]
+		entry := t.itemIndex[stagedIndex]
 		item, err := t.readStagedItem(entry)
 		if err != nil {
 			_ = file.Close()

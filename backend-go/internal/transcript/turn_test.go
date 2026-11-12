@@ -245,9 +245,11 @@ func TestTurnRejectsInvalidIndexesAndOutputCountMismatch(t *testing.T) {
 	if err := turn.StageOutputItem(outputItemEvent(1, item)); err == nil {
 		t.Fatal("duplicate output_index was accepted")
 	}
-	mismatched := []byte(`{"type":"response.completed","response":{"id":"resp-mismatch","output":[{"type":"message","role":"assistant","content":[]}]}}`)
-	if _, err := turn.Commit(mismatched); err == nil || !strings.Contains(err.Error(), "missing staged output_index 0") {
-		t.Fatalf("Commit() error = %v, want missing staged output_index 0", err)
+	// The one staged item has index 1 and the completed output has one item that differs
+	// from it and shares no id: they are not paired by guessing.
+	mismatched := []byte(`{"type":"response.completed","response":{"id":"resp-mismatch","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"other"}]}]}}`)
+	if _, err := turn.Commit(mismatched); err == nil || !strings.Contains(err.Error(), "cannot be matched to staged output_index 1") {
+		t.Fatalf("Commit() error = %v, want an unmatched item error", err)
 	}
 	if turn.manifest.Status != "streaming" {
 		t.Fatalf("failed validation changed turn status to %q", turn.manifest.Status)

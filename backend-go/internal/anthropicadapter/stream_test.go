@@ -682,3 +682,44 @@ func TestStreamEndsWithAClearErrorOnAnOversizeEvent(t *testing.T) {
 		t.Fatalf("an oversize event must end in response.failed naming max_event_bytes: %v", last.Body)
 	}
 }
+
+// Every item closes in the order it opened and with the next output_index, so the
+// done events and the completed output agree on both order and index: text around
+// two tool calls gives 0..3 in every list.
+func TestStreamedOutputIndexesMatchOutputPositionsAcrossToolCalls(t *testing.T) {
+	upstream, _ := scriptedUpstream(t, sse(startEvent,
+		`content_block_start|{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`content_block_delta|{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}`,
+		`content_block_stop|{"type":"content_block_stop","index":0}`,
+		`content_block_start|{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}`,
+		`content_block_delta|{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+		`content_block_stop|{"type":"content_block_stop","index":1}`,
+		`content_block_start|{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+		`content_block_delta|{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"b"}}`,
+		`content_block_stop|{"type":"content_block_stop","index":2}`,
+		`content_block_start|{"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"toolu_2","name":"g","input":{}}}`,
+		`content_block_delta|{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+		`content_block_stop|{"type":"content_block_stop","index":3}`,
+		`message_delta|{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`,
+		`message_stop|{"type":"message_stop"}`))
+	_, events, _ := postStream(t, adapterFor(t, upstream.URL, "").URL, `{"model":"claude-x","input":"x","stream":true}`)
+	var doneIndexes, doneTypes []string
+	for _, one := range events {
+		if one.get("type") == "response.output_item.done" {
+			doneIndexes = append(doneIndexes, asJSON(t, one.get("output_index")))
+			doneTypes = append(doneTypes, asJSON(t, one.get("item", "type")))
+		}
+	}
+	if got := strings.Join(doneIndexes, ","); got != "0,1,2,3" {
+		t.Fatalf("done output_index order = %s", got)
+	}
+	output, _ := events[len(events)-1].get("response", "output").([]any)
+	if len(output) != 4 {
+		t.Fatalf("completed output has %d items", len(output))
+	}
+	for position, raw := range output {
+		if got, want := asJSON(t, raw.(map[string]any)["type"]), doneTypes[position]; got != want {
+			t.Fatalf("completed output %d is %s, the done event at that index is %s", position, got, want)
+		}
+	}
+}

@@ -17,9 +17,15 @@ const (
 )
 
 type completionPlan struct {
-	prefix      []byte
-	suffix      []byte
-	itemCount   int
+	prefix    []byte
+	suffix    []byte
+	itemCount int
+	// hasOutput reports that the completed response carried an output array; outputs
+	// are its items in order, and order the staged output indexes in that order. They
+	// are set by makeCompletionPlan and by ResponseTurn.CommitWithObserver.
+	hasOutput   bool
+	outputs     []completedItem
+	order       []int64
 	responseID  string
 	sessionTurn int64
 	sessionStep int64
@@ -75,21 +81,24 @@ func makeCompletionPlan(event []byte, stagedItemCount int, mode ResponseMetadata
 	}
 
 	if outputRaw, exists := fieldValue(responseFields, "output"); exists {
-		count := 0
+		var outputs []completedItem
 		err := arrayValues(outputRaw, func(item []byte) error {
-			if err := validateOutputItemJSON(item); err != nil {
+			identity, err := identityOfItem(item)
+			if err != nil {
 				return err
 			}
-			count++
+			outputs = append(outputs, completedItem{raw: item, identity: identity})
 			return nil
 		})
 		if err != nil {
 			return completionPlan{}, fmt.Errorf("completed response.output must be an array of output items: %w", err)
 		}
-		if count != stagedItemCount {
-			return completionPlan{}, fmt.Errorf("staged item count %d does not match completed output count %d", stagedItemCount, count)
+		if len(outputs) != stagedItemCount {
+			return completionPlan{}, fmt.Errorf("staged item count %d does not match completed output count %d", stagedItemCount, len(outputs))
 		}
-		plan.itemCount = count
+		plan.itemCount = len(outputs)
+		plan.hasOutput = true
+		plan.outputs = outputs
 	}
 
 	metadataFields := make([]jsonField, 0, len(responseFields))
