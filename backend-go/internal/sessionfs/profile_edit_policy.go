@@ -76,6 +76,9 @@ func checkSelfEditPolicy(level string, current, candidate []byte, place selfEdit
 			if err := checkSelfEditEnvFiles(after[key], place); err != nil {
 				return nil, err
 			}
+			if err := checkSelfEditSettingPaths(after[key], settings, place); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if !slices.Contains(selfEditTopKeys, key) {
@@ -117,6 +120,10 @@ func changedSettings(before, after json.RawMessage) ([]string, error) {
 func checkSelfEditDocuments(level string, before, after json.RawMessage, place selfEditPlace) error {
 	var old, documents []string
 	_ = json.Unmarshal(before, &old)
+	if len(after) == 0 {
+		// The key is removed: no document is added.
+		return nil
+	}
 	if err := json.Unmarshal(after, &documents); err != nil {
 		return &ClientError{Message: "prompt_documents must be an array of strings"}
 	}
@@ -211,6 +218,79 @@ func checkSelfEditEnvFiles(raw json.RawMessage, place selfEditPlace) error {
 		}
 	}
 	return nil
+}
+
+// checkSelfEditSettingPaths refuses a changed setting, at every level, that names a path in a
+// profile-own folder of any known workspace (3b D3): tool storage, session files, writable
+// paths and the like would let an in-process writer or a sandbox bind reach the history and
+// the documents around the lock and the history. Every string of the setting is judged as a
+// path ({profile_own}, {workspace} and ~ expanded, a relative one from the session cwd and from
+// W/.jad), so a string that is not a path is refused only if it lands there.
+func checkSelfEditSettingPaths(raw json.RawMessage, changed []string, place selfEditPlace) error {
+	var settings map[string]json.RawMessage
+	if len(changed) == 0 || json.Unmarshal(raw, &settings) != nil {
+		return nil
+	}
+	roots := append([]string{filepath.Join(place.layout.Workspace, ".jad", profileOwnFolder)}, place.layout.ProfileOwnRoots...)
+	for _, setting := range changed {
+		var value any
+		if json.Unmarshal(settings[setting], &value) != nil {
+			continue
+		}
+		for _, text := range jsonStrings(value, nil) {
+			for _, path := range place.settingPaths(text) {
+				for _, root := range roots {
+					if within(path, root) {
+						return &ClientError{Message: fmt.Sprintf("settings.%s names %q, in a profile-own folder (%s): a self-edit never points a setting there; own documents change through edit documents", setting, text, root)}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// settingPaths are the places a setting string could name, after links as far as they exist.
+func (p selfEditPlace) settingPaths(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	value, _, err := cutPlaceholder(text, profileOwnPlaceholder, p.layout.ProfileOwnDir(p.profile))
+	if err != nil {
+		return nil
+	}
+	if value, _, err = cutPlaceholder(value, workspacePlaceholder, p.layout.Workspace); err != nil {
+		return nil
+	}
+	value = expandHome(value)
+	if filepath.IsAbs(value) {
+		return []string{resolveExisting(filepath.Clean(value))}
+	}
+	var paths []string
+	for _, base := range []string{p.cwd, filepath.Join(p.layout.Workspace, ".jad")} {
+		if filepath.IsAbs(base) {
+			paths = append(paths, resolveExisting(filepath.Join(base, value)))
+		}
+	}
+	return paths
+}
+
+// jsonStrings appends every string of a decoded JSON value, keys of objects included.
+func jsonStrings(value any, out []string) []string {
+	switch typed := value.(type) {
+	case string:
+		out = append(out, typed)
+	case []any:
+		for _, item := range typed {
+			out = jsonStrings(item, out)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			out = jsonStrings(item, append(out, key))
+		}
+	}
+	return out
 }
 
 // within reports whether path is root or below it, comparing both as written and after links.

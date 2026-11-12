@@ -241,7 +241,7 @@ func stateContextTriggerPrompt(fields map[string]json.RawMessage, section, setti
 			if len(texts) > 0 {
 				separator = 2
 			}
-			contents, resolved, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath, max(maxBytes-used-separator, 0))
+			contents, resolved, err := readPromptDocument(document, index, section+".prompt_documents", cwd, settingPath, max(maxBytes-used-separator, 0), nil)
 			if err != nil {
 				return "", nil, err
 			}

@@ -185,6 +185,9 @@ type Location struct {
 	Root      Root
 	// File is the session file, <root directory>/<session id>.json.
 	File string
+	// documents, set only on the location of a profile edit's trial load, are the prompt
+	// documents that load reads in place of the disk (decider 3b D4).
+	documents *documentOverlay
 }
 
 // Defaults returns the TypeScript root server defaults, converted to Go units.

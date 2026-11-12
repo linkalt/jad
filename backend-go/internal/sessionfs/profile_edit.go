@@ -38,8 +38,11 @@ var profileHistoryName = regexp.MustCompile(`^([0-9]{6,})-([0-9a-f]{12})\.json$`
 // ProfileEditRequest is one edit or revert of the caller's own profile file.
 type ProfileEditRequest struct {
 	Action string
-	// Contents is the whole new profile file (edit).
+	// Contents is the whole new profile file (edit); empty leaves the file as it is.
 	Contents json.RawMessage
+	// Documents are the own documents an edit creates, replaces or deletes in the same
+	// revision (decider 3b D1); an edit gives Contents, Documents or both.
+	Documents []ProfileDocumentChange
 	// HistoryID names the history entry whose stored file a revert restores.
 	HistoryID string
 	// IfMatch is the revision the caller read (profile config); required.
@@ -65,15 +68,24 @@ type ProfileEditResult struct {
 	OldRevision string   `json:"old_revision"`
 	Revision    string   `json:"revision"`
 	ChangedKeys []string `json:"changed_keys,omitempty"`
-	HistoryID   string   `json:"history_id,omitempty"`
-	RevertedTo  string   `json:"reverted_to,omitempty"`
-	SelfEdit    string   `json:"profile_self_edit"`
-	Note        string   `json:"note"`
+	// Documents are the own documents the change created, replaced or deleted.
+	Documents  []ProfileDocumentRecord `json:"documents,omitempty"`
+	HistoryID  string                  `json:"history_id,omitempty"`
+	RevertedTo string                  `json:"reverted_to,omitempty"`
+	SelfEdit   string                  `json:"profile_self_edit"`
+	Note       string                  `json:"note"`
 }
 
+// profileHistoryVersion is the version of the history entries written now: 2 adds the
+// documents and leaves Previous out when the profile file did not change. 3a entries have no
+// version and always hold Previous.
+const profileHistoryVersion = 2
+
 // ProfileHistoryEntry is one change in a profile's history: the file as it was before the
-// change (Previous, left out of listings) and who made the change.
+// change (Previous, left out of listings; only when the file changed), the documents it touched
+// with their bytes before (left out of listings) and who made the change.
 type ProfileHistoryEntry struct {
+	Version     int              `json:"version,omitempty"`
 	ID          string           `json:"id"`
 	Time        string           `json:"time"`
 	Action      string           `json:"action"`
@@ -85,6 +97,8 @@ type ProfileHistoryEntry struct {
 	ChangedKeys []string         `json:"changed_keys,omitempty"`
 	RevertedTo  string           `json:"reverted_to,omitempty"`
 	Previous    string           `json:"previous,omitempty"`
+	// Documents are the own documents the change touched (version 2).
+	Documents []ProfileDocumentRecord `json:"documents,omitempty"`
 }
 
 // ProfileHistory is a page of a profile's history, newest first.
@@ -163,50 +177,86 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 		return ProfileEditResult{}, &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("the profile file changed since revision %s was read (now %s); read it again with config", ifMatch, revision)}
 	}
 	result := ProfileEditResult{Profile: loaded.Profile, Action: request.Action, File: path, OldRevision: revision, Revision: revision, SelfEdit: level}
-	var candidate []byte
+	candidate := current
+	changes := request.Documents
 	if request.Action == ProfileEditActionEdit {
-		if candidate, err = editedProfileFile(current, request.Contents); err != nil {
-			return ProfileEditResult{}, err
+		if len(request.Contents) == 0 && len(changes) == 0 {
+			return ProfileEditResult{}, &ClientError{Message: "edit needs contents (the whole new profile file), documents, or both"}
+		}
+		if len(request.Contents) > 0 {
+			if candidate, err = editedProfileFile(current, request.Contents); err != nil {
+				return ProfileEditResult{}, err
+			}
 		}
 	} else {
+		if len(changes) > 0 {
+			return ProfileEditResult{}, &ClientError{Message: "revert restores what a history entry touched; it takes no documents"}
+		}
 		entry, err := readHistoryEntry(layout.Workspace, loaded.Profile, request.HistoryID)
 		if err != nil {
 			return ProfileEditResult{}, err
 		}
-		candidate, result.RevertedTo = []byte(entry.Previous), entry.ID
+		if entry.Previous != "" {
+			candidate = []byte(entry.Previous)
+		}
+		if changes, err = revertDocumentChanges(layout, loaded.Profile, entry); err != nil {
+			return ProfileEditResult{}, err
+		}
+		result.RevertedTo = entry.ID
 	}
-	if bytes.Equal(candidate, current) {
+	steps, err := prepareDocumentSteps(layout, loaded.Profile, changes)
+	if err != nil {
+		return ProfileEditResult{}, err
+	}
+	profileChanged := !bytes.Equal(candidate, current)
+	if !profileChanged && len(steps) == 0 {
 		result.Note = "nothing changed"
 		return result, nil
 	}
 	if len(candidate) > maxInternalJSONFileBytes {
 		return ProfileEditResult{}, &ClientError{Message: fmt.Sprintf("the new profile file is larger than %d bytes", maxInternalJSONFileBytes)}
 	}
-	place := selfEditPlace{layout: layout, profile: loaded.Profile, cwd: loaded.WorkingDir}
-	if result.ChangedKeys, err = checkSelfEditPolicy(level, current, candidate, place); err != nil {
-		return ProfileEditResult{}, err
+	if profileChanged {
+		place := selfEditPlace{layout: layout, profile: loaded.Profile, cwd: loaded.WorkingDir}
+		if result.ChangedKeys, err = checkSelfEditPolicy(level, current, candidate, place); err != nil {
+			return ProfileEditResult{}, err
+		}
 	}
 	// The trial load: the whole load of the session with this profile selected, reading the
-	// candidate in place of the file, which is not written before it passes (S4).
-	if _, err := loadLayoutSessionSettings(location, layout, loaded.Profile, "", newTrialScans(path, candidate)); err != nil {
+	// candidate in place of the file and the changed documents in place of theirs; nothing is
+	// written before it passes (S4, 3b D4).
+	overlay := newDocumentOverlay(steps)
+	trialLocation := location
+	trialLocation.documents = overlay
+	trial, err := loadLayoutSessionSettings(trialLocation, layout, loaded.Profile, "", newTrialScans(path, candidate))
+	if err != nil {
 		return ProfileEditResult{}, &ClientError{Message: "the change does not load, so it was not made: " + err.Error()}
 	}
+	if document := overlay.readOutside(trial); document != "" {
+		return ProfileEditResult{}, &ClientError{Message: fmt.Sprintf("%s is also read by a statecontext trigger, a sub-agent or project_instructions, which the trial load does not judge with the change; it was not made (change that document by hand)", document)}
+	}
 	newRevision := CatalogETag(candidate)
-	entry := ProfileHistoryEntry{Time: time.Now().UTC().Format(time.RFC3339Nano), Action: request.Action, Profile: loaded.Profile, Audit: request.Audit, SelfEdit: level,
-		OldRevision: revision, NewRevision: newRevision, ChangedKeys: result.ChangedKeys, RevertedTo: result.RevertedTo, Previous: string(current)}
+	entry := ProfileHistoryEntry{Version: profileHistoryVersion, Time: time.Now().UTC().Format(time.RFC3339Nano), Action: request.Action, Profile: loaded.Profile, Audit: request.Audit, SelfEdit: level,
+		OldRevision: revision, NewRevision: newRevision, ChangedKeys: result.ChangedKeys, RevertedTo: result.RevertedTo}
+	if profileChanged {
+		entry.Previous = string(current)
+	}
+	for _, step := range steps {
+		entry.Documents = append(entry.Documents, step.record)
+		listed := step.record
+		listed.Previous = nil
+		result.Documents = append(result.Documents, listed)
+	}
 	// The history entry is on disk before the change is published: if publishing fails, the
-	// entry holds the file as it still is (S6).
+	// entry holds every file as it still is (S6, 3b D5).
 	if result.HistoryID, err = writeHistoryEntry(layout.Workspace, loaded.Profile, entry); err != nil {
 		return ProfileEditResult{}, fmt.Errorf("keep the profile history: %w", err)
 	}
-	if err := writeFileIfUnchanged(path, candidate, before, true); err != nil {
-		return ProfileEditResult{}, err
-	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
-		return ProfileEditResult{}, err
+	if err := publishProfileEdit(layout.Workspace, loaded.Profile, steps, path, candidate, current, before, profileChanged); err != nil {
+		return ProfileEditResult{}, fmt.Errorf("the change was not published (history entry %s): %w", result.HistoryID, err)
 	}
 	result.Changed, result.Revision = true, newRevision
-	result.Note = "saved; the running run keeps the settings it started with, the next run uses the new file"
+	result.Note = "saved; the running run keeps the settings it started with, the next run uses the new files"
 	return result, nil
 }
 
@@ -235,6 +285,9 @@ func ReadProfileHistory(location Location, profile string, limit int) (ProfileHi
 			return ProfileHistory{}, err
 		}
 		entry.Previous = ""
+		for index := range entry.Documents {
+			entry.Documents[index].Previous = nil
+		}
 		history.Entries = append(history.Entries, entry)
 	}
 	return history, nil
@@ -275,11 +328,16 @@ func editedProfileFile(current []byte, contents json.RawMessage) ([]byte, error)
 	return out.Bytes(), nil
 }
 
-// historyFolder checks, and with create makes (mode 0700), each folder from the real W/.jad
-// down to W/.jad/profile-own/<category>/<name>/history, refusing a link or a file on the way:
-// a link planted there could send the history elsewhere. It returns the folder, or "" when it
-// does not exist and create is false.
+// historyFolder is the history folder of the profile, made or checked by ownFolder.
 func historyFolder(workspace, profile string, create bool) (string, error) {
+	return ownFolder(workspace, profile, []string{profileHistoryFolder}, create)
+}
+
+// ownFolder checks, and with create makes (mode 0700), each folder from the real W/.jad down
+// to W/.jad/profile-own/<category>/<name>/<folders...>, refusing a link or a file on the way: a
+// link planted there could send the history or a document elsewhere. It returns the folder, or
+// "" when it does not exist and create is false.
+func ownFolder(workspace, profile string, folders []string, create bool) (string, error) {
 	jad := filepath.Join(workspace, ".jad")
 	current, err := filepath.EvalSymlinks(jad)
 	if err != nil {
@@ -289,7 +347,7 @@ func historyFolder(workspace, profile string, create bool) (string, error) {
 	if !found || !filepath.IsLocal(category) || !filepath.IsLocal(name) || strings.Contains(name, "/") {
 		return "", fmt.Errorf("%s is not a <category>/<name> profile", profile)
 	}
-	for _, part := range []string{profileOwnFolder, category, name, profileHistoryFolder} {
+	for _, part := range append([]string{profileOwnFolder, category, name}, folders...) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -306,7 +364,7 @@ func historyFolder(workspace, profile string, create bool) (string, error) {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return "", fmt.Errorf("%s is a link or not a folder; the profile history is not kept there", current)
+			return "", fmt.Errorf("%s is a link or not a folder; nothing of the profile's own is kept there", current)
 		}
 	}
 	return current, nil
@@ -370,6 +428,9 @@ func writeHistoryEntry(workspace, profile string, entry ProfileHistoryEntry) (st
 	if err != nil {
 		return "", err
 	}
+	if len(encoded) >= maxHistoryEntryBytes {
+		return "", &ClientError{Message: fmt.Sprintf("the history entry of this change would be larger than %d bytes, too large to read back for a revert; split the change", maxHistoryEntryBytes)}
+	}
 	if err := createFileExclusive(filepath.Join(dir, entry.ID+".json"), append(encoded, '\n'), true); err != nil {
 		return "", err
 	}
@@ -401,16 +462,28 @@ func readHistoryEntry(workspace, profile, id string) (ProfileHistoryEntry, error
 	if err != nil || !info.Mode().IsRegular() {
 		return ProfileHistoryEntry{}, fmt.Errorf("history entry %s is not a regular file", id)
 	}
-	// The stored file is a JSON string inside the entry, so the entry may be larger than it.
-	contents, err := readRegularFile(path, 8*maxInternalJSONFileBytes)
+	contents, err := readRegularFile(path, maxHistoryEntryBytes)
 	if err != nil {
 		return ProfileHistoryEntry{}, err
 	}
 	var entry ProfileHistoryEntry
-	if err := json.Unmarshal(contents, &entry); err != nil || entry.ID != id || !json.Valid([]byte(entry.Previous)) {
+	if err := json.Unmarshal(contents, &entry); err != nil || entry.ID != id || !entry.complete() {
 		return ProfileHistoryEntry{}, fmt.Errorf("history entry %s is damaged", id)
 	}
 	return entry, nil
+}
+
+// maxHistoryEntryBytes caps a history entry: the stored profile file is a JSON string inside
+// it and documents are base64, so an entry may be larger than the files it holds.
+const maxHistoryEntryBytes = 8 * maxInternalJSONFileBytes
+
+// complete reports whether an entry holds what a revert needs: the profile file as it was
+// (always in a 3a entry, a valid JSON file), or, from version 2, the documents it touched.
+func (e ProfileHistoryEntry) complete() bool {
+	if e.Previous == "" {
+		return e.Version >= profileHistoryVersion && len(e.Documents) > 0
+	}
+	return json.Valid([]byte(e.Previous))
 }
 
 // syncDirectory makes a rename or a new file in dir durable.

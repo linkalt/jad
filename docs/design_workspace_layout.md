@@ -320,6 +320,9 @@ The native `profile` tool gets actions on its own profile only:
   refused. The old version goes into history, the write is atomic, an audit record goes into
   the transcript, the change applies from the next run.
 - `history`, `revert`.
+- From phase 3b, `edit` also creates, replaces and deletes the profile's own documents
+  (`{profile_own}/documents` only) in the same revision as the profile file; `config` lists
+  them with their revisions and `revert` restores them (section 14).
 
 May change: instructions and documents (D3), offered models and default model and tools
 from visible scopes, tuning settings (compaction, parallel calls), and its own models and
@@ -686,3 +689,65 @@ Decider phase 3 decisions S1 to S7; 3b (own documents) and 3c (own models and to
   profile file during a run), so an edit applies from the next run.
 - Workspace layout only: in v1 the actions answer that self-edit needs `workspace.json`; no v1
   path or golden changed.
+
+## 14. Phase 3b as built
+
+Decider phase 3b D1 to D7: a profile writes its own documents through the `profile` tool.
+
+- **D1, shape:** `edit` takes `contents` (now optional), `documents`, or both; each item is
+  `{path, content, if_match}` to create (no `if_match`) or replace, or `{path, delete: true,
+  if_match}`. `content` is taken as the model wrote it, never trimmed. One call is one revision
+  and one history entry, so a new document and the profile reference to it arrive together.
+  `config` lists `documents_dir` and each own document (`path`, `size`, `revision`); `history`
+  lists the documents each entry touched (path, change, old and new revision; no bytes).
+- **D2, where:** only `W/.jad/profile-own/<cat>/<name>/documents`, at `on` and `full`; `off`
+  refuses. A path is relative with `/` between folders; no empty, `.`, `..` or dot-leading
+  segment, no backslash or NUL. Every folder from the real `W/.jad` down is walked one part at
+  a time (`ownFolder`, the walk the history uses), refusing a link or a file, and made 0700 when
+  missing; an existing target must be a regular file, not a link. Each document and all of
+  one edit's new contents are capped at `maxPromptDocumentBytes` (8 MiB; there is no tool
+  argument cap). Sandboxed `exec` cannot write the folder (`sandboxProfileRules` keeps the own
+  folder read-only); no admin route writes it.
+- **D3, revisions and lock:** the profile file's `if_match` is required for every edit, also a
+  document-only one; each document has its own (its `CatalogETag`; none means "must not
+  exist"). The profile file's lock (`lockProfileFile`) covers the documents, so edit, revert
+  and the 3a writers stay serialized with no second lock. All preconditions are checked under
+  the lock before anything is written; a mismatch is a precondition failure listing every
+  document. **Writers outside the tool:** the phase 1 audit found none that takes a model path,
+  but a self-edit could point a setting (`tool_storage_dir`, `session_files`, a sandbox
+  `writable_paths`, ...) into `profile-own`, after which an in-process writer or a sandbox bind
+  would reach the documents and the history around the lock. A self-edit is therefore refused,
+  at every level, when any string of a changed setting resolves into a `profile-own` folder of
+  any known workspace (`checkSelfEditSettingPaths`; `{profile_own}`, `{workspace}` and `~`
+  expanded, a relative string judged from the session cwd and from `W/.jad`).
+- **D4, order and trial:** preconditions, paths and sizes, the S5 policy for the profile file
+  (only when it changes; document contents are allowed like instructions), then the trial load
+  with an overlay: the candidate profile file (3a) and every changed document, deleted ones
+  missing (`Location.documents`, read by `readPromptDocument` for the profile's and session's
+  prompt documents, agent toolsets included). Deleting a document still named fails the trial.
+  The other document readers (statecontext triggers, sub-agent prompt files, project
+  instructions) are not routed through the overlay; if the trial configuration shows one of
+  them read a document of the change, the edit is refused (fail closed). A failure writes
+  nothing and keeps no history.
+- **D5, history:** entries get `version: 2`; `previous` (the profile file) only when it
+  changed; `documents` with path, change, old and new revision and the old bytes (base64).
+  3a entries (no version) still decode, list and revert. An entry above the read limit
+  (8 × the JSON file cap) is refused before anything is written, so every entry can be read
+  back.
+- **D6, publish:** new and changed documents (each through a temporary file, fsync, and an
+  exclusive link or a rename that refuses a changed file), then the profile file, then deletes
+  (only of the file the check saw), then an fsync of every touched folder. A failure after
+  publishing began undoes what was published newest first and returns an error naming the
+  history entry and whether the undo finished. Not crash-atomic across files: a run starting
+  between the steps can see new documents with the old profile file; a running run is never
+  affected (S7: prompt documents are read when the run's settings load).
+- **D7, revert:** restores exactly what the entry touched: the profile file when it changed
+  and each document to its old bytes or to absent. Each touched document must now be at the
+  entry's new revision or already at its old one (left alone, which covers a partly published
+  edit); anything else is a conflict listing the documents, and nothing changed later is
+  overwritten. Revert passes the same policy, trial, history and publish order.
+- **Fixed on the way:** an edit or revert that removes the `prompt_documents` key was refused
+  in 3a ("must be an array of strings").
+- With a sandbox on, the own `exec` cannot create, change, delete or move documents and other
+  profiles cannot see them (real bwrap test); without one nothing here is private or
+  tamper-proof, and the link checks race with `exec`.

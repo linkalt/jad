@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"jad/backend-go/internal/sessionfs"
@@ -61,11 +62,21 @@ func (t *profileTool) selfChange(ctx context.Context, action, path string, argum
 		return t.fail(execution, tools.StatusInvalidInput, "if_match_required", action+" needs if_match: the revision config showed")
 	}
 	if action == "edit" {
-		contents, ok := rawArgument(execution.RawArguments, arguments, "contents")
-		if !ok {
-			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents: the whole new profile file as a JSON object")
+		if _, given := arguments["contents"]; given {
+			contents, ok := rawArgument(execution.RawArguments, arguments, "contents")
+			if !ok {
+				return t.fail(execution, tools.StatusInvalidInput, "invalid_contents", "contents must be the whole new profile file as a JSON object")
+			}
+			request.Contents = contents
 		}
-		request.Contents = contents
+		documents, problem := documentArguments(arguments["documents"])
+		if problem != "" {
+			return t.fail(execution, tools.StatusInvalidInput, "invalid_documents", problem)
+		}
+		request.Documents = documents
+		if len(request.Contents) == 0 && len(documents) == 0 {
+			return t.fail(execution, tools.StatusInvalidInput, "contents_required", "edit needs contents (the whole new profile file as a JSON object), documents, or both")
+		}
 	} else {
 		request.HistoryID = stringArgument(arguments, "history_id")
 		if strings.TrimSpace(request.HistoryID) == "" {
@@ -77,6 +88,51 @@ func (t *profileTool) selfChange(ctx context.Context, action, path string, argum
 		return t.fail(execution, editFailureStatus(err), editFailureCode(err), err.Error())
 	}
 	return indentedJSON(execution, t, result)
+}
+
+// documentArguments are the document changes of an edit's documents argument (absent: none),
+// or why they are not valid. A content string is taken as it is, never trimmed.
+func documentArguments(value any) ([]sessionfs.ProfileDocumentChange, string) {
+	if value == nil {
+		return nil, ""
+	}
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil, "documents must be a non-empty array of {path, content or delete, if_match}"
+	}
+	changes := make([]sessionfs.ProfileDocumentChange, 0, len(items))
+	for index, item := range items {
+		fields, ok := item.(map[string]any)
+		if !ok {
+			return nil, "documents[" + strconv.Itoa(index) + "] must be an object"
+		}
+		for key := range fields {
+			if key != "path" && key != "content" && key != "delete" && key != "if_match" {
+				return nil, "documents[" + strconv.Itoa(index) + "] has an unknown key " + key
+			}
+		}
+		path, _ := fields["path"].(string)
+		ifMatch, matchOK := fields["if_match"].(string)
+		remove, deleteOK := fields["delete"].(bool)
+		content, contentOK := fields["content"].(string)
+		_, hasContent := fields["content"]
+		_, hasDelete := fields["delete"]
+		_, hasMatch := fields["if_match"]
+		switch {
+		case path == "":
+			return nil, "documents[" + strconv.Itoa(index) + "] needs a path"
+		case hasMatch && !matchOK, hasDelete && !deleteOK, hasContent && !contentOK:
+			return nil, "documents[" + strconv.Itoa(index) + "]: if_match and content are strings, delete is a boolean"
+		case hasContent == remove:
+			return nil, "documents[" + strconv.Itoa(index) + "] " + path + ": give content to create or replace it, or delete: true to delete it"
+		}
+		change := sessionfs.ProfileDocumentChange{Path: path, Delete: remove, IfMatch: ifMatch}
+		if hasContent {
+			change.Content = []byte(content)
+		}
+		changes = append(changes, change)
+	}
+	return changes, ""
 }
 
 // rawArgument is the JSON object of one argument as the model wrote it, so the keys of a

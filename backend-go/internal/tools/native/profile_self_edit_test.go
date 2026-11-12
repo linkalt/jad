@@ -113,3 +113,49 @@ func TestAnOlderProfileDefinitionIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// documents reach the port as given (content untrimmed, delete, if_match), alone or with
+// contents; a malformed item is refused before the port, and the S2 refusals hold for them.
+func TestProfileSelfEditDocumentsArgument(t *testing.T) {
+	actions := &fakeProfileActions{}
+	tool := newProfileActionsTool(t, profileTestSettings(), actions)
+	own := tools.ExecutionContext{SessionKey: listCaller}
+	only := `{"action":"edit","if_match":"r1","documents":[{"path":"notes/a.md","content":"  keep spaces\n"},{"path":"old.md","delete":true,"if_match":"r2"}]}`
+	if out := callTranscripts(t, tool, only, own); !strings.Contains(out, `"action": "edit"`) {
+		t.Fatalf("documents only = %s", out)
+	}
+	if len(actions.documents) != 2 || string(actions.documents[0].Content) != "  keep spaces\n" || actions.documents[0].Delete || actions.documents[0].IfMatch != "" ||
+		!actions.documents[1].Delete || actions.documents[1].Content != nil || actions.documents[1].IfMatch != "r2" || actions.calls[0] != "edit demo dev/coder r1  " {
+		t.Fatalf("documents = %+v, calls %q", actions.documents, actions.calls)
+	}
+	actions.calls, actions.documents = nil, nil
+	for name, arguments := range map[string]string{
+		"not an array":         `"documents":{"path":"a"}`,
+		"empty":                `"documents":[]`,
+		"no path":              `"documents":[{"content":"x"}]`,
+		"content and delete":   `"documents":[{"path":"a","content":"x","delete":true}]`,
+		"neither":              `"documents":[{"path":"a"}]`,
+		"delete false only":    `"documents":[{"path":"a","delete":false}]`,
+		"content not a string": `"documents":[{"path":"a","content":1}]`,
+		"unknown key":          `"documents":[{"path":"a","content":"x","mode":"0600"}]`,
+	} {
+		if out := callTranscripts(t, tool, `{"action":"edit","if_match":"r1",`+arguments+`}`, own); !strings.Contains(out, "invalid") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	documents := `{"action":"edit","if_match":"r1","documents":[{"path":"a.md","content":"x"}]}`
+	for name, execution := range map[string]tools.ExecutionContext{
+		"sub-agent":   {SessionKey: listCaller, AgentDepth: 1},
+		"plan mode":   {SessionKey: listCaller, PlanMode: true},
+		"started run": {SessionKey: listCaller, ChainDepth: 1, RunNode: "n"},
+		"remote hop":  {SessionKey: listCaller, RemoteHops: 1},
+		"no caller":   {},
+	} {
+		if out := callTranscripts(t, tool, documents, execution); !strings.Contains(out, "denied") && !strings.Contains(out, "unknown") {
+			t.Errorf("%s: %s", name, out)
+		}
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("a refused document change reached the port: %v", actions.calls)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -140,6 +141,12 @@ type ProfileConfig struct {
 	// edit action may change at it.
 	SelfEdit string   `json:"profile_self_edit,omitempty"`
 	Editable []string `json:"editable,omitempty"`
+	// DocumentsDir is the own documents folder ({profile_own}/documents) edit writes, and
+	// Documents what it holds with each revision, the if_match of a change (workspace layout
+	// only); DocumentsError says why they could not be listed.
+	DocumentsDir   string            `json:"documents_dir,omitempty"`
+	Documents      []ProfileDocument `json:"documents,omitempty"`
+	DocumentsError string            `json:"documents_error,omitempty"`
 }
 
 // ProfileRun is what the profile tool knows of the run that asks for its config.
@@ -195,7 +202,7 @@ func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, err
 		layers = append(layers, layer.Name)
 	}
 	writable, access := ProfileDataAccess(config, run)
-	return ProfileConfig{
+	view := ProfileConfig{
 		DataWritable: writable,
 		DataAccess:   access,
 		Profile:      config.Profile,
@@ -209,5 +216,12 @@ func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, err
 		DataDir:      config.ProfileDataDir,
 		SelfEdit:     config.ProfileSelfEdit,
 		Editable:     SelfEditableKeys(config.ProfileSelfEdit),
-	}, nil
+	}
+	if config.ProfileOwnDir != "" {
+		view.DocumentsDir = filepath.Join(config.ProfileOwnDir, profileDocumentsFolder)
+		if view.Documents, err = listProfileDocuments(config.ProfileOwnDir, config.Profile); err != nil {
+			view.Documents, view.DocumentsError = nil, err.Error()
+		}
+	}
+	return view, nil
 }

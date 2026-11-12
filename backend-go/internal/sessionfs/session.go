@@ -568,7 +568,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if location.Root.Layout != nil {
 		workspaceDir = location.Root.Layout.Workspace
 	}
-	promptRole, promptText, promptDocuments, err := loadPrompt(setting, profileSettings, cwd, workspaceDir, settingPath)
+	promptRole, promptText, promptDocuments, err := loadPrompt(setting, profileSettings, cwd, workspaceDir, settingPath, location.documents)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -1166,7 +1166,7 @@ func hostedToolsField(fields map[string]json.RawMessage, path string) ([]json.Ra
 // loadPrompt reads the prompt. workspace is W in the workspace layout, where a prompt
 // document may start with {workspace} (design D1, D2); empty in v1, where the text is a path
 // as written.
-func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, path string) (string, string, []string, error) {
+func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, path string, overlay *documentOverlay) (string, string, []string, error) {
 	role := "system"
 	if raw, ok := setting["prompt_role"]; ok {
 		if err := json.Unmarshal(raw, &role); err != nil || (role != "system" && role != "developer") {
@@ -1203,7 +1203,7 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, pat
 			}
 			document = expanded
 		}
-		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path, maxPromptDocumentBytes)
+		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path, maxPromptDocumentBytes, overlay)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -1214,8 +1214,9 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, pat
 }
 
 // readPromptDocument reads one prompt document: ~ is expanded and a relative path
-// resolves from cwd. field names the setting in errors.
-func readPromptDocument(document string, index int, field, cwd, path string, limit int64) (contents, resolvedPath string, err error) {
+// resolves from cwd. field names the setting in errors. A trial load's overlay (nil
+// otherwise) answers for the documents a profile edit would write or delete.
+func readPromptDocument(document string, index int, field, cwd, path string, limit int64, overlay *documentOverlay) (contents, resolvedPath string, err error) {
 	if strings.TrimSpace(document) == "" {
 		return "", "", configError("%s: %s[%d] must be a non-empty string", path, field, index)
 	}
@@ -1224,7 +1225,7 @@ func readPromptDocument(document string, index int, field, cwd, path string, lim
 		resolved = filepath.Join(cwd, resolved)
 	}
 	resolved = filepath.Clean(resolved)
-	data, err := readRegularFile(resolved, min(limit, maxPromptDocumentBytes))
+	data, err := overlay.read(resolved, min(limit, maxPromptDocumentBytes))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", "", configError("%s: %s[%d] could not be read: %s", path, field, index, resolved)

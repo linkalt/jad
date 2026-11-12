@@ -441,3 +441,63 @@ func TestProfileSandboxKeepsTheHistoryReadOnlyAndPrivate(t *testing.T) {
 	}
 	wantProfileOutput(t, "other profile", f.run(t, profileAttempt("read", `cat `+history+`/`+result.HistoryID+`.json`)+profileAttempt("list", `ls `+history), tools.ExecutionContext{}, otherConfig.Sandbox), "read=no", "list=no")
 }
+
+// The own documents an edit writes are read-only to the profile's own sandboxed exec (all of W
+// writable): it cannot create, change, delete or move them; another profile does not see them.
+func TestProfileSandboxKeepsTheDocumentsReadOnlyAndPrivate(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{workspace}","{tmp}"`)
+	useOwnTempDir(t)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.a, Environment: map[string]string{"HOME": f.home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := sessionfs.ReadProfileConfig(f.config, sessionfs.ProfileRun{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessionfs.EditProfile(location, "dev/coder", sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionEdit, IfMatch: view.Revision,
+		Documents: []sessionfs.ProfileDocumentChange{{Path: "notes.md", Content: []byte("own-notes")}}}); err != nil {
+		t.Fatal(err)
+	}
+	host := filepath.Join(f.a, ".jad", "profile-own", "dev", "coder", "documents", "notes.md")
+	documents := ".jad/profile-own/dev/coder/documents"
+	command := profileAttempt("read", `grep -q own-notes `+documents+`/notes.md`) +
+		profileAttempt("create", `echo x > `+documents+`/new.md`) +
+		profileAttempt("change", `echo x > `+documents+`/notes.md`) +
+		profileAttempt("remove", `rm -f `+documents+`/notes.md && test ! -e `+documents+`/notes.md`) +
+		profileAttempt("folder", `mkdir `+documents+`/sub`) +
+		profileAttempt("replace", `mv `+documents+` .jad/profile-own/dev/coder/old`)
+	config, err := sessionfs.LoadSessionSettings(location, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "own run", f.run(t, command, tools.ExecutionContext{}, config.Sandbox), "read=yes", "create=no", "change=no", "remove=no", "folder=no", "replace=no")
+	if got, err := os.ReadFile(host); err != nil || string(got) != "own-notes" {
+		t.Fatalf("the document changed on the host: %q, %v", got, err)
+	}
+	// The fixture's own doc.md and the edit's notes.md, nothing the exec call made.
+	entries, _ := os.ReadDir(filepath.Dir(host))
+	names := []string{}
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if strings.Join(names, ",") != "doc.md,notes.md" {
+		t.Fatalf("documents folder holds %v", names)
+	}
+
+	other := filepath.Join(f.a, ".jad", "profiles", "dev", "other.json")
+	writeWorkspaceFile(t, other, `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	otherConfig, err := sessionfs.LoadSessionSettings(location, "dev/other", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "other profile", f.run(t, profileAttempt("read", `cat `+documents+`/notes.md`)+profileAttempt("list", `ls `+documents)+profileAttempt("write", `echo x > `+documents+`/planted.md`), tools.ExecutionContext{}, otherConfig.Sandbox), "read=no", "list=no", "write=no")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(host), "planted.md")); err == nil {
+		t.Fatal("another profile planted a document")
+	}
+}
