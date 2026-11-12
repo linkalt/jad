@@ -24,7 +24,7 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 	if profile == "" {
 		profile = callerProfile
 	}
-	location, err := sessionfs.ResolveFrom(m.resolver.roots, callerSession, session)
+	location, err := m.resolveSession(ownerKey, callerSession, session)
 	if err != nil {
 		return native.TranscriptTarget{}, mapSessionError(err)
 	}
@@ -49,6 +49,18 @@ func (m profileMessenger) Profile(ctx context.Context, ownerKey, session, profil
 	return target, nil
 }
 
+// resolveSession finds the session a transcript tool names as its caller sees it: a session
+// of the caller's workspace (sessionfs.ResolveFrom), or, for the remote API's reader, any
+// workspace of the server, as the token's globs allow (a session that does not exist fails
+// where its file is read). The reader is told by its whole owner
+// key, which no session's key can equal (a profile id has a slash), not by a session id.
+func (m profileMessenger) resolveSession(ownerKey, callerSession, session string) (sessionfs.Location, error) {
+	if ownerKey == remoteTranscriptCaller {
+		return sessionfs.Resolve(m.resolver.roots, session)
+	}
+	return sessionfs.ResolveFrom(m.resolver.roots, callerSession, session)
+}
+
 // Candidates implements native.TranscriptProfiles: the profiles of the session, or the
 // sessions when that session cannot be read.
 func (m profileMessenger) Candidates(ctx context.Context, ownerKey, session string) (profiles, sessions []string) {
@@ -56,7 +68,7 @@ func (m profileMessenger) Candidates(ctx context.Context, ownerKey, session stri
 	if session == "" {
 		session = callerSession
 	}
-	if location, err := sessionfs.ResolveFrom(m.resolver.roots, callerSession, session); err == nil && location.UsesLayout() {
+	if location, err := m.resolveSession(ownerKey, callerSession, session); err == nil && location.UsesLayout() {
 		if info, err := sessionfs.ReadLayoutProfileInfo(location); err == nil {
 			return info.Profiles, nil
 		}

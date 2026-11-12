@@ -47,7 +47,7 @@ func TestProfileSchemaNamesSelfInBothCopies(t *testing.T) {
 	}
 }
 
-// The sample manifests of the profile, transcripts and exec tools carry the same input schema
+// The sample manifests of the profile, profile_message, transcripts and exec tools carry the same input schema
 // as the Go code (the catalog refuses a mismatch; for exec it also accepts older schemas, so
 // only this catches a stale sample); this pins them so an edit to one shows up here.
 func TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas(t *testing.T) {
@@ -58,6 +58,7 @@ func TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas(t *testing.T) {
 		{"profile.json", profileInputSchema},
 		{"transcripts.json", transcriptsInputSchema},
 		{"exec.json", execInputSchema},
+		{"profile_message.json", profileMessageInputSchema},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sample", "tools", "native", tc.file))
 		if err != nil {

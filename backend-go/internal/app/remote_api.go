@@ -150,10 +150,18 @@ func (r *Resolver) RemoteBackend(runTimeout time.Duration) remoteapi.Backend {
 	return remoteBackend{resolver: r, runTimeout: runTimeout, runs: r.remoteRuns}
 }
 
+// location is the session a remote request names, in any workspace of this server: a token is not
+// a session, so the workspace boundary of a session's tools (sessionfs.ResolveFrom, design Q6)
+// does not apply, and the token's globs decide what it reaches. A bare id that more than one
+// workspace holds is ambiguous; a session that does not exist fails later, where the session
+// file is read, as the same "no session".
 func (b remoteBackend) location(session string) (sessionfs.Location, error) {
 	location, err := sessionfs.Resolve(b.resolver.roots, session)
 	var resolveErr *sessionfs.ResolveError
 	if errors.As(err, &resolveErr) {
+		if resolveErr.Kind == sessionfs.ResolveAmbiguous {
+			return sessionfs.Location{}, remoteapi.ErrAmbiguousSession
+		}
 		return sessionfs.Location{}, remoteapi.ErrNoSession
 	}
 	if err != nil {

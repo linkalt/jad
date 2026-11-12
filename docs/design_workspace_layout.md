@@ -1462,3 +1462,75 @@ catalog dialog), so the pick cannot cause it. Left as it was.
 read `.jad/models`, `.jad/tools` and `.jad/mcp` of the checkout. In the workspace layout those kinds
 are global (`G`, `~/.jad` by default), so the folders are absent and the tests skip; the skip reason
 now says so. A unit test must not read `$HOME`; `jad check` judges the global files.
+
+## 28. profile_message and the workspace layout (T-036)
+
+The user said `profile_message` still addressed only a session. Decider ruling for T-036 (step 41.6
+of the decider transcript), checked against the code before it was built.
+
+**Local calls do not change.** `<session>/<category>/<profile>` already goes through
+`sessionfs.ResolveFrom`: in the workspace layout only the caller's own workspace is searched, and a
+session of another workspace, written bare, as `b:s1` or as a name only that workspace holds, is
+`ErrProfileUnknown`, the same answer as a session that does not exist (Q6). That stays: a local
+`<workspace>:<session>` form that crossed workspaces would undo Q6. The `sessions` globs match
+session ids of the caller's workspace only. The tool's description now says "(in the workspace
+layout, only those of your own workspace)". The profile and its private folder belong to the
+workspace, not the session, so a message to the same profile in another session of the workspace
+reaches the same `profile-own` and data folder, by design. v1 is unchanged, several session roots
+included.
+
+**Remote calls name the workspace.** The way across workspaces is a remote entry, which is
+configured, holds a token and has an allow-list. Its target is now
+`remote:<name>/[<workspace>:]<session>/<category>/<profile>`; `<workspace>` is the root id the
+remote server lists (`/api/workspaces`, `makeLocation`): `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, one
+colon, no more. One grammar serves every remote use: `profile_message`, `subagent`, `profile`
+info, `transcript` and `transcripts` (`remote.SessionRefPattern`), and the entry's
+`default_session` may be written the same way.
+
+- The server's routes take the same form (`sessionPattern` in `remoteapi`) and resolve it with
+  `sessionfs.Resolve`, which already read `root:session`. A bare id that more than one workspace
+  holds was "no session"; it is now 409 `ambiguous_session` ("write `<workspace>:<session>`", no
+  workspace named). A bare id held by one workspace, and every v1 request, work as before.
+- The ambiguity is told only where the token's globs have already admitted the session id (start
+  of a message or sub-agent, profile info). The profile list reads the names before the token's
+  globs are applied, so there it still answers `no_session`; a token that does not reach a session
+  id learns nothing about it.
+- A remote reader of transcripts was not a session: in the workspace layout its caller key
+  (`remote-api\x00reader`) went through `ResolveFrom`, which resolves the caller first, so with
+  several workspaces every remote transcript read failed as "session not found". The reader now
+  resolves with `sessionfs.Resolve` (any workspace, token globs decide), recognised by its whole
+  owner key, which no session's key equals (a profile id has a slash).
+- Token globs (`profiles`, `agents`) are matched over `<session>/<category>/<name>` with the
+  session as written. A qualified session contains a colon, which `*` would match: a glob written
+  for bare ids (`s*/dev/*`, `*1/dev/*`) would have started to reach `staging:x`. So a qualified
+  session is matched only by a glob whose session part is `*` or has a colon of its own
+  (`a:*/dev/*`, `*:s1/dev/*`, `a:s1/dev/coder`). `*` still means every session of every workspace.
+- Client side, `remote_ambiguous_session` tells the form to write.
+
+**Security statement.** A remote token reaches every workspace of the server it points to, as far
+as its globs allow; that was already so (Q6: remotes still work, the HTTP API and UI see every
+workspace) and is now usable on purpose. An entry that points at the server it runs on is an
+explicit way across workspaces. Not built: a token limited to workspaces, or a session/workspace
+allow-list in the client entry (`Entry.Allows` covers category/name only). The target still runs
+with its own sandbox, cannot be given a model or sandbox, a `reset` fails closed, and the hop and
+depth limits apply; chain nodes are keyed by the full reference (`a:s1`, not `s1`), so the same
+profile name in two workspaces is never taken for a cycle.
+
+**Not changed.** The manifest `sample/tools/native/profile_message.json` and its schema: the
+catalog refuses a definition whose schema differs from the code, so a schema edit would make every
+copied definition fail. The workspace wording is in the description the code appends. The manifest
+is now pinned by `TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas`.
+
+**Limits.**
+- Transcript tools re-check a token against the session's canonical reference (`a:s1` with several
+  workspaces): a token whose globs are written for bare ids sends and reads nothing there, because
+  its canonical form has a colon. Write `*` or `<workspace>:<session>` globs for such a server.
+- A workspace that is not listed in `global.json` (the start directory) gets an id derived from
+  its folder name; list it with an `id` for a remote address that does not depend on the folder.
+- v1 with several session roots now also takes `<root>:<session>` on the remote routes and answers
+  `ambiguous_session` for a bare id held by two roots (before: `no_session`).
+- Tests: `remote_workspace_test.go` (two workspaces that both hold `s1`, real server, real client
+  tool, remote transcripts, tokens, hop limit, local refusal), `remote/target_workspace_test.go`,
+  `remoteapi/hardening_test.go`. The loop across a remote entry that points at the same server is
+  not run end to end; its pieces are: the hop limit applies to qualified sessions, and chain keys
+  carry the workspace.

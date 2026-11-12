@@ -182,7 +182,7 @@ func startError(name string, err error) error {
 
 func remoteCode(failure *remote.Error) string {
 	switch failure.Code {
-	case "remote_hop_limit", "forbidden", "unauthorized", "no_session", "unknown_target", "too_many_runs", "unavailable":
+	case "remote_hop_limit", "forbidden", "unauthorized", "no_session", "ambiguous_session", "unknown_target", "too_many_runs", "unavailable":
 		return "remote_" + strings.TrimPrefix(failure.Code, "remote_")
 	}
 	if failure.Status == http.StatusUnauthorized {
@@ -201,6 +201,8 @@ func remoteMessage(name string, failure *remote.Error) string {
 		return fmt.Sprintf("Remote %s did not accept this server's token", name)
 	case "no_session":
 		return fmt.Sprintf("Remote %s has no such session", name)
+	case "ambiguous_session":
+		return fmt.Sprintf("Remote %s holds that session id in more than one workspace: write <workspace>:<session>", name)
 	case "unknown_target":
 		return fmt.Sprintf("Remote %s has no such profile in that session", name)
 	}

@@ -157,7 +157,17 @@ func matchAny(globs []string, target string) bool {
 			return false
 		}
 	}
+	// A session written <workspace>:<session> is reached only by a glob that says so: its session
+	// part is "*" (every session) or holds a colon. A glob such as "s*/dev/*", written when a
+	// session could not be qualified, keeps meaning the bare session ids it matched.
+	session, _, _ := strings.Cut(target, "/")
+	qualified := strings.Contains(session, ":")
 	for _, glob := range globs {
+		if qualified {
+			if globSession, _, _ := strings.Cut(glob, "/"); globSession != "*" && !strings.Contains(globSession, ":") {
+				continue
+			}
+		}
 		if ok, err := path.Match(glob, target); err == nil && ok {
 			return true
 		}

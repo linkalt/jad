@@ -41,10 +41,14 @@ const (
 
 // Errors a Backend returns; anything else is an internal error and is not shown to the client.
 var (
-	ErrNoSession     = errors.New("session not found")
-	ErrUnknownTarget = errors.New("unknown profile or agent")
-	ErrBusy          = errors.New("target is busy")
-	ErrRefused       = errors.New("request refused")
+	ErrNoSession = errors.New("session not found")
+	// ErrAmbiguousSession is a bare session id that more than one workspace of the server holds.
+	// The caller writes <workspace>:<session>. It is shown only to a token that already reaches
+	// that session id (see handleProfiles for the one route that cannot know).
+	ErrAmbiguousSession = errors.New("session id is in more than one workspace")
+	ErrUnknownTarget    = errors.New("unknown profile or agent")
+	ErrBusy             = errors.New("target is busy")
+	ErrRefused          = errors.New("request refused")
 )
 
 // Refusal is ErrRefused with a client-safe reason (cycle, chain too long, unavailable).
@@ -247,7 +251,9 @@ var (
 	requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 	runIDPattern     = regexp.MustCompile(`^rr_[0-9a-f]{16}$`)
 	namePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
-	sessionPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	// sessionPattern is a session id or <workspace>:<session>, the root id the server lists
+	// for a workspace (a v1 server with several session roots takes <root>:<session> alike).
+	sessionPattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,63}:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +342,13 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request, token To
 		return
 	}
 	names, err := s.opts.Backend.Profiles(r.Context(), session)
+	if errors.Is(err, ErrAmbiguousSession) {
+		// The token is checked against profile names only after the list is read, so naming the
+		// ambiguity here would tell any token that a session id exists in two workspaces. The
+		// list answers as a missing session; a start or info request, which the token's globs
+		// have already admitted, names the ambiguity.
+		err = ErrNoSession
+	}
 	if err != nil {
 		s.backendError(w, token, err)
 		return
@@ -572,6 +585,8 @@ func (s *Server) backendError(w http.ResponseWriter, token Token, err error) {
 	switch {
 	case errors.Is(err, ErrNoSession):
 		writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+	case errors.Is(err, ErrAmbiguousSession):
+		writeError(w, http.StatusConflict, "ambiguous_session", "that session id is in more than one workspace of this server; write <workspace>:<session>")
 	case errors.Is(err, ErrUnknownTarget):
 		writeError(w, http.StatusNotFound, "unknown_target", "that profile or agent does not exist in the session")
 	default:

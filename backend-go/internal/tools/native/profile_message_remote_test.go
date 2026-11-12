@@ -429,7 +429,10 @@ func TestRemoteProfileMessageRefusals(t *testing.T) {
 		"token may not message":              {`"profiles":["*/*/*"],"actions":["status"]`, remoteTarget, "remote_forbidden", nil},
 		"malformed reference":                {peerGrant, "remote:peer/reviewer", "bad_remote_reference", nil},
 		"path in the reference":              {peerGrant, "remote:peer/main/review/../etc", "bad_remote_reference", nil},
-		"session with a colon":               {peerGrant, "remote:peer/local:main/review/reviewer", "bad_remote_reference", nil},
+		"session with two colons":            {peerGrant, "remote:peer/local:main:x/review/reviewer", "bad_remote_reference", nil},
+		"workspace without a session":        {peerGrant, "remote:peer/local:/review/reviewer", "bad_remote_reference", nil},
+		"session without a workspace":        {peerGrant, "remote:peer/:main/review/reviewer", "bad_remote_reference", nil},
+		"workspace that is not an id":        {peerGrant, "remote:peer/.l:main/review/reviewer", "bad_remote_reference", nil},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -461,7 +464,7 @@ func TestRemoteProfileMessageNotOfferedWithoutRemotesSetting(t *testing.T) {
 
 func TestRemoteProfileMessageDescriptionListsTheRemotes(t *testing.T) {
 	f := newRemoteMessageFixture(t, peerGrant, nil)
-	if !strings.Contains(f.message.Definition.Description, "remote:<name>/<session>/<category>/<profile> (remotes: peer)") {
+	if !strings.Contains(f.message.Definition.Description, "remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: peer)") {
 		t.Fatalf("description:\n%s", f.message.Definition.Description)
 	}
 }

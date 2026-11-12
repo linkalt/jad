@@ -51,7 +51,7 @@ var remoteShapes = map[string]map[string][2]int{
 	"transcripts": {"profile": {2, 3}, "session": {1, 1}},
 }
 
-const remotePathForms = "remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<session>/<category>/<name>/<run id>"
+const remotePathForms = "remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<session>/<category>/<name>/<run id> (<session> is <workspace>:<session> when the remote holds that session id in several workspaces)"
 
 // selector turns "remote:<name>/<rest>" into the name and the remote's own path, after the
 // switch, the allow-list of this tool and the entry's profile globs. An empty rest lists the
@@ -93,7 +93,7 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 		valid := remote.NamePattern.MatchString(part)
 		switch {
 		case index == 0:
-			valid = remote.SessionPattern.MatchString(part)
+			valid = remote.SessionRefPattern.MatchString(part)
 		case kind == "subagent" && index == 3:
 			valid = transcriptRunID.MatchString(part)
 		}

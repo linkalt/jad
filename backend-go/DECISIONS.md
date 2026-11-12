@@ -4648,3 +4648,45 @@ Decider phase 5b ruling (design section 27).
 - The check is by directory name `.jad` of the setting's folder. A setting copied to another folder name gets `<project>/.jad/<catalog>` relative to that folder, as before.
 - Moving or merging the data stays the person's step; there is no command for it, and `promote` is still not built.
 - A migration apply from a legacy root is tested only in a temporary base (`TestApplyFromTheDoubledFolderCopiesAndLeavesItUntouched`: profiles and state copied byte for byte, the doubled folder unchanged, the result loads as v2). It was not run on real data, and the legacy models, tools and mcp go to G or stay workspace-private by the existing planner rules, with no extra check for the legacy case.
+
+## profile_message in the workspace layout: remote workspace addressing (T-036, Go, 2026-11-13)
+
+**Decision (decider T-036, step 41.6).** Local `profile_message` is unchanged: it reaches the sessions
+of the caller's own workspace only (`ResolveFrom`, Q6), another workspace answers as a missing
+session, and a profile's private folder is shared by the sessions of its workspace. The change is on
+the remote path: `remote:<name>/[<workspace>:]<session>/<category>/<profile>` for profile_message,
+subagent, profile info, transcript and transcripts, with the root id the server lists. Details and
+reasoning in `docs/design_workspace_layout.md` section 28.
+
+**Built.** One session grammar (`remote.SessionRefPattern`, also for `default_session`) and the same
+pattern on the server routes; 409 `ambiguous_session` for a bare id that several workspaces hold,
+told only after the token's globs admitted the id (the profile list keeps `no_session`); client
+text `remote_ambiguous_session`; the remote transcript reader resolves across workspaces
+(`remoteTranscriptCaller`, before it failed with several workspaces); tool description and schemas
+(`remote.schema.json` `default_session`, `setting.schema.json`, `design_remote.md`) updated;
+`profile_message.json` pinned by the manifest sync test, and not changed.
+
+**Executor decision, not in the ruling (needs the decider's confirmation).** A qualified session is
+matched only by a token glob whose session part is `*` or contains a colon. Without it, existing
+globs such as `s*/dev/*` or `*1/dev/*` would start to reach `staging:x` and `a:s1`, because `*`
+matches a colon and the form could not be sent before: new reach for existing tokens. `*` keeps
+meaning every session. This also narrows an edge of v1 with several session roots (a partial
+wildcard no longer matches `root:session`).
+
+**Stop conditions checked.** Root ids are the ids written in `global.json` or `session_roots`, not
+positions, so they are stable across restarts; the routes use the session string only for token
+globs and `Resolve` (no file name before it is parsed); no golden file changed.
+
+**Open gaps.**
+- Transcript reads check the token against the canonical reference (`a:s1` when several workspaces
+  are served): a token with globs written for bare ids sends but cannot read there. Closing it needs
+  a rule for which form a glob is judged by.
+- No token-to-workspace limit and no workspace allow-list in the client entry (`Entry.Allows` is
+  category/name). A remote entry pointing at its own server is an explicit way across workspaces.
+- The start workspace, when not listed in `global.json`, has an id derived from its folder name.
+- Loop through a remote entry that points at the same server is not run end to end (hop limit with
+  qualified sessions and full-reference chain nodes are tested separately).
+- v1 with several session roots: the remote routes take `<root>:<session>` and answer
+  `ambiguous_session` for a bare id held by two roots.
+- The reader fix means remote transcripts work with several workspaces; no test existed for it
+  before, and none runs it with a v1 multi-root server (v1 resolution is unchanged by construction).

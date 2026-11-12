@@ -56,7 +56,7 @@ func ParseSubagent(s string, entry func(name string) (Entry, error)) (Target, er
 }
 
 func parseRest(name, rest string, withoutSession int, agent bool, entry func(string) (Entry, error)) (Target, error) {
-	shape := "remote:<name>/<session>/<category>/<profile>"
+	shape := "remote:<name>/[<workspace>:]<session>/<category>/<profile>"
 	if agent {
 		shape += "/<agent>"
 	}
@@ -67,7 +67,7 @@ func parseRest(name, rest string, withoutSession int, agent bool, entry func(str
 	target := Target{Remote: name}
 	switch len(parts) {
 	case withoutSession + 1:
-		if !SessionPattern.MatchString(parts[0]) || strings.Contains(parts[0], ":") {
+		if !SessionRefPattern.MatchString(parts[0]) {
 			return Target{}, fmt.Errorf("a remote reference is %s", shape)
 		}
 		target.Session, parts = parts[0], parts[1:]

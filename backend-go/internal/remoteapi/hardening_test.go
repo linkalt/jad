@@ -13,7 +13,7 @@ func TestInjectedNamesNeverReachTheBackend(t *testing.T) {
 	bad := []struct{ session, profile string }{
 		{"..", "review/a"}, {"main/../x", "review/a"}, {"main", "../review"}, {"main", "review/../a"}, {"main", "review//a"},
 		{"main", "review/a/extra"}, {"main", "Review/a\n"}, {"main", "review/a\x00"}, {"main", "review/ä"}, {"main", "/review/a"},
-		{"main\\x", "review/a"}, {"ma in", "review/a"}, {"", "review/a"}, {"main", ""}, {".hidden", "review/a"}, {"main:x", "review/a"},
+		{"main\\x", "review/a"}, {"ma in", "review/a"}, {"", "review/a"}, {"main", ""}, {".hidden", "review/a"}, {"main:x:y", "review/a"}, {":x", "review/a"}, {"main:", "review/a"}, {"main:.x", "review/a"},
 	}
 	for i, c := range bad {
 		status, _ := f.do("POST", Prefix+"/messages", secretA, message(c.session, c.profile, fmt.Sprintf("req-inj-%04d", i)))
@@ -121,5 +121,32 @@ func TestEscapedPathCannotReachAnotherRoute(t *testing.T) {
 	}
 	if strings.Contains(Prefix, "%") {
 		t.Fatal("prefix")
+	}
+}
+
+// A session written <workspace>:<session> is reached by a glob that says so: "*" or a session part
+// with a colon. A glob that only meant bare ids ("s*", "*1") keeps meaning them (T-036).
+func TestGlobsReachAQualifiedSessionOnlyWhenTheySayWorkspace(t *testing.T) {
+	for _, c := range []struct {
+		glob, target string
+		want         bool
+	}{
+		{"s*/dev/*", "s1/dev/coder", true},
+		{"s*/dev/*", "staging:x/dev/coder", false},
+		{"*1/dev/*", "a:s1/dev/coder", false},
+		{"*1/dev/*", "s1/dev/coder", true},
+		{"s1/dev/*", "a:s1/dev/coder", false},
+		{"*/dev/*", "a:s1/dev/coder", true},
+		{"*/dev/*", "s1/dev/coder", true},
+		{"a:*/dev/*", "a:s1/dev/coder", true},
+		{"a:*/dev/*", "b:s1/dev/coder", false},
+		{"a:*/dev/*", "s1/dev/coder", false},
+		{"a:s1/dev/coder", "a:s1/dev/coder", true},
+		{"*:s1/dev/*", "b:s1/dev/coder", true},
+		{"*:s1/dev/*", "b:s2/dev/coder", false},
+	} {
+		if got := (&Token{Profiles: []string{c.glob}}).MayProfile(c.target); got != c.want {
+			t.Errorf("glob %q on %q: %v, want %v", c.glob, c.target, got, c.want)
+		}
 	}
 }

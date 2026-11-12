@@ -49,7 +49,11 @@ var (
 	envNamePattern = regexp.MustCompile(`^JAD_REMOTE_[A-Za-z0-9_]+$`)
 	// SessionPattern is a session id as the remote's routes take it.
 	SessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	tokenPattern   = regexp.MustCompile(`^[\x21-\x7e]+$`)
+	// SessionRefPattern is a session as a remote reference names it: a session id, or
+	// <workspace>:<session> where the workspace is the root id the remote server lists for it
+	// (/api/workspaces), for a session id that more than one workspace of that server holds.
+	SessionRefPattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,63}:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	tokenPattern      = regexp.MustCompile(`^[\x21-\x7e]+$`)
 )
 
 // Entry is one remote file: <remotes>/<name>.json. It holds where to reach the remote and
@@ -145,8 +149,8 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	if r.TokenFile != "" {
 		entry.TokenFile = resolveFrom(base, r.TokenFile)
 	}
-	if r.DefaultSession != "" && !SessionPattern.MatchString(r.DefaultSession) {
-		return Entry{}, fmt.Errorf("%s: remote.default_session is not a valid session id", path)
+	if r.DefaultSession != "" && !SessionRefPattern.MatchString(r.DefaultSession) {
+		return Entry{}, fmt.Errorf("%s: remote.default_session is not a valid session id (or <workspace>:<session>)", path)
 	}
 	for _, glob := range r.Profiles {
 		if strings.TrimSpace(glob) == "" || strings.ContainsAny(glob, "\x00\\[") {

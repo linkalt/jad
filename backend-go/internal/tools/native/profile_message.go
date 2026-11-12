@@ -407,10 +407,10 @@ func profileMessageListText(targets, sessions, remotes []string) string {
 		text = " Profiles: " + strings.Join(targets, ", ") + "."
 	}
 	if len(sessions) > 0 {
-		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + ")."
+		text += " Profiles of other existing sessions (in the workspace layout, only those of your own workspace) are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + ")."
 	}
 	if len(remotes) > 0 {
-		text += " Remote profiles on other JAD servers are written remote:<name>/<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach."
+		text += " Remote profiles on other JAD servers are written remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach, and <workspace>: is needed only when the remote holds that session id in several workspaces."
 	}
 	return text
 }
