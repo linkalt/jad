@@ -107,6 +107,10 @@ type NativeBashSettings struct {
 	// such backend exists (neither Linux nor macOS), when a sandbox covers exec, and for
 	// tool_smith.
 	PlanSandbox *SandboxSettings
+	// ProfileOwnRoots are the profile-own folders (workspace layout) this tool's spill files
+	// and function library may not land in; each call judges them where its workspace root
+	// resolves them, after links (a worktree run resolves them against its worktree). Nil in v1.
+	ProfileOwnRoots []string
 }
 
 // nativeBashStyleKeys are the settings of a tool that runs a child process: native.exec and

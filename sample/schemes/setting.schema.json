@@ -698,7 +698,7 @@
     },
     "checkpoint": {
       "type": "object",
-      "description": "Run checkpoints: before a run changes the workspace the harness snapshots it in a private git directory under the session staging path, and again when the run ends, so a run can be undone through the checkpoints API. Off by default; while disabled nothing is snapshotted and behaviour is unchanged. Covers files in the workspace (cwd) that are not git-ignored; it does not cover files outside cwd, ignored files, git history, or anything a background process changes later. A snapshot that fails or is skipped never blocks a tool call.",
+      "description": "Run checkpoints: before a run changes the workspace the harness snapshots it in a private git directory under the session staging path, and again when the run ends, so a run can be undone through the checkpoints API. Off by default; while disabled nothing is snapshotted and behaviour is unchanged. Covers files in the workspace (cwd) that are not git-ignored; it does not cover files outside cwd, ignored files, git history, or anything a background process changes later; in the workspace layout it does not cover what profile self-edit owns (every workspace's .jad/profile-own and the workspace's .jad/profiles): those are never snapshotted or restored, even from an older checkpoint, and a self-edit is undone with the profile tool's revert. A snapshot that fails or is skipped never blocks a tool call.",
       "properties": {
         "enabled": {"type": "boolean", "default": false, "description": "Master switch."},
         "git_binary": {"type": "string", "minLength": 1, "default": "git", "description": "git executable: a PATH name or an absolute path."},

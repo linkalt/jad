@@ -24,8 +24,10 @@ type toolSmithListEntry struct {
 	line        string
 }
 
-// resolveToolSmithFunctionsDir returns the real functions directory, which must lie inside the real workspace root.
-func resolveToolSmithFunctionsDir(configured, workspaceRoot string) (dir, realRoot string, err error) {
+// resolveToolSmithFunctionsDir returns the real functions directory, which must lie inside the
+// real workspace root and outside every folder of profileOwnRoots (NativeBashSettings.ProfileOwnRoots:
+// a worktree run resolves the library against its own worktree).
+func resolveToolSmithFunctionsDir(configured, workspaceRoot string, profileOwnRoots []string) (dir, realRoot string, err error) {
 	if strings.TrimSpace(configured) == "" {
 		return "", "", fmt.Errorf("functions_dir is empty")
 	}
@@ -52,6 +54,9 @@ func resolveToolSmithFunctionsDir(configured, workspaceRoot string) (dir, realRo
 	}
 	if !toolSmithInside(realRoot, dir) {
 		return "", "", fmt.Errorf("functions_dir %q resolves outside the workspace", configured)
+	}
+	if resolved, root := sessionfs.ProfileOwnTarget(profileOwnRoots, dir); root != "" {
+		return "", "", fmt.Errorf("functions_dir %q writes %s, in a profile-own folder (%s): the files there change only through the profile tool's edit", configured, resolved, root)
 	}
 	info, err := os.Stat(viewPath(dir))
 	if err != nil {
@@ -85,7 +90,7 @@ func executeToolSmithList(arguments map[string]any, settings sessionfs.NativeToo
 		}
 	}
 
-	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot)
+	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot, settings.Child.ProfileOwnRoots)
 	var files []string
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

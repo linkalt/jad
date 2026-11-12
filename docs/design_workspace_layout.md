@@ -778,9 +778,37 @@ checked where the loader resolves the write targets, not on the setting's text.
   documents, the `profile-own` root, through `..` or a link, or the whole `W/.jad`, opens
   nothing: `sandboxProfileRules` are bound after the writable paths and hide or keep read-only
   as before (real bwrap test). No bind order change was needed.
-- **Limits:** a worktree run resolves `functions_dir` and `{cwd}` spill files against its own
-  worktree, which is not judged (a worktree holds no `profile-own` unless that folder is
-  tracked by git); a link made after the load (by `exec` without a sandbox) is not seen;
-  checkpoint restore, a user action, can still rewrite files under `profile-own` when the cwd
-  covers it, without the lock or the history; hooks and MCP servers run as their own
-  processes and are not in-process writers.
+- **Limits:** a link made after the load (by `exec` without a sandbox) is not seen; hooks and
+  MCP servers run as their own processes and are not in-process writers. Worktree runs and
+  checkpoint restore were open here and are closed by 3b.2 (section 16).
+
+## 16. Phase 3b.2 as built: checkpoints and worktree runs
+
+Decider 3b.2 closes the two 3b.1 gaps that could change what self-edit owns without its lock and
+history.
+
+- **What self-edit owns** (`SessionConfig.SelfEditPaths`, v2 only, from what the writer
+  writes): the `profile-own` folder of every known workspace (own documents and the edit
+  history) and the workspace's profile catalog `W/.jad/profiles` (every profile file there is
+  edited by its own profile's self-edit). `workspace.json`, toolsets, models and sessions are
+  not in it, so the decider's stop condition did not apply.
+- **Checkpoints leave it out:** the paths are checkpoint harness paths (excluded from new
+  snapshots, also under the name the workspace gives them when it is reached through a link),
+  each snapshot first drops them from the snapshot index (an exclusion alone keeps only
+  untracked files out), and a restore drops every planned path at, below or above them (a
+  file or link that would replace the folder) in both modes, also from a checkpoint taken
+  before they were left out. The result's warning says how many paths were left. A self-edit is
+  undone with the profile tool's `revert`; this is a deliberate change of what v2 checkpoints
+  keep. v1 has no `SelfEditPaths` and is unchanged.
+- **Worktree runs:** they do not resolve their configuration again; they move the run's
+  workspace root to the worktree and each tool resolves its relative targets per call. The two
+  per-call resolvers are the guarded points: `planBashSpill` (the spill folder and the
+  `stdout_full`/`stderr_full` files of exec and tool_smith, one call site) and
+  `resolveToolSmithFunctionsDir` (every reader and writer of the function library). The load
+  gives exec and tool_smith (and each agent toolset's) `NativeBashSettings.ProfileOwnRoots`;
+  a target there after links (through `..` or a link committed in the repository) fails that
+  call, naming the setting, before the command runs or a spill folder is pruned or written
+  (`write_target_refused`); a refused library is treated like a missing one. The session is
+  not failed. A normal worktree run is unchanged.
+- **Limits:** an overlay run's paths are judged on the host path, not through its holder; the
+  links race after the check stays (not inside bwrap).

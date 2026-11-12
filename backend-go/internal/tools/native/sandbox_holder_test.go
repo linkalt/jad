@@ -472,7 +472,7 @@ func TestOverlayRunIsReadAndWrittenByJadThroughItsHolder(t *testing.T) {
 		t.Fatalf("changes reported = %q", changed)
 	}
 
-	dir, realRoot, err := resolveToolSmithFunctionsDir("fns", tree.Workspace)
+	dir, realRoot, err := resolveToolSmithFunctionsDir("fns", tree.Workspace, nil)
 	if err != nil || dir != filepath.Join(tree.Workspace, "fns") {
 		t.Fatalf("functions dir %q: %v", dir, err)
 	}
@@ -491,7 +491,7 @@ func TestOverlayRunIsReadAndWrittenByJadThroughItsHolder(t *testing.T) {
 		t.Fatalf("nearest go.mod = %q, %v", cwd, found)
 	}
 
-	plan := planBashSpill(sessionfs.NativeBashSpillSettings{Enabled: true, Keep: "always", CapBytes: 1 << 20, StorageDir: filepath.Join(tree.Workspace, ".spill")}, tree.Workspace, t.TempDir(), "spill-call")
+	plan := planBashSpill(sessionfs.NativeBashSpillSettings{Enabled: true, Keep: "always", CapBytes: 1 << 20, StorageDir: filepath.Join(tree.Workspace, ".spill")}, nil, tree.Workspace, t.TempDir(), "spill-call")
 	writer := plan.writers[bashStdout].(*bashSpillWriter)
 	writer.write([]byte("spilled\n"))
 	outcome := writer.close()

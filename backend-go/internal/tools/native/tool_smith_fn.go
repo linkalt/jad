@@ -26,7 +26,7 @@ type toolSmithFunctionsManifest struct {
 // An unusable library is reported in the manifest, not as an error.
 func stageToolSmithFunctions(workDir string, settings sessionfs.NativeToolSmithSettings, workspaceRoot string) error {
 	manifest := toolSmithFunctionsManifest{Available: []string{}, Callable: []string{}, Malformed: map[string]string{}}
-	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot)
+	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot, settings.Child.ProfileOwnRoots)
 	if err != nil {
 		manifest.LibraryError = err.Error()
 		return writeToolSmithManifest(workDir, manifest)

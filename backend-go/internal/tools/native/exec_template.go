@@ -51,7 +51,7 @@ func execTemplatePath(lang sessionfs.NativeExecLang, dir string) string {
 // execTemplateText is the runner's template: the file functions_dir/<runner>/_template<ext>
 // when the library has one (a regular file inside the library), else the built-in.
 func execTemplateText(settings sessionfs.NativeExecSettings, lang sessionfs.NativeExecLang, runner, workspaceRoot string) ([]byte, error) {
-	if root, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot); err == nil {
+	if root, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot, settings.Child.ProfileOwnRoots); err == nil {
 		ext := lang.Ext
 		if ext == "" {
 			ext = ".txt"

@@ -3,6 +3,7 @@ package sessionfs
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -108,5 +109,34 @@ func TestWriteTargetsOfV1AreNotJudged(t *testing.T) {
 	config := loadFixtureSession(t, fixture)
 	if !strings.Contains(config.StoragePaths.ToolStorage, filepath.Join("profile-own", "dev", "coder", "documents")) {
 		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
+	}
+	// Nothing is left out of checkpoints and no tool gets profile-own roots.
+	if config.SelfEditPaths != nil || (config.NativeExec != nil && config.NativeExec.Child.ProfileOwnRoots != nil) {
+		t.Fatalf("v1 self-edit paths %v, exec %+v", config.SelfEditPaths, config.NativeExec)
+	}
+}
+
+// A v2 load names what profile self-edit owns for checkpoints (every workspace's profile-own and
+// this workspace's profile catalog), and gives exec its profile-own roots for the per-call check
+// of a worktree run (3b.2); agent toolsets get them too.
+func TestAWorkspaceLoadNamesSelfEditPathsAndGuardsChildWrites(t *testing.T) {
+	e := newWriteTargetFixture(t)
+	wsPut(t, filepath.Join(e.w, ".jad", "tools", "t", "exec.json"), `{"native":{"exec":{"spill":{"storage_dir":".jad/state/spill"}}}}`)
+	wsPut(t, e.file, editBase+`,"toolset":["t/exec"]}`)
+	config, err := LoadSessionSettings(e.location, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(e.w, ".jad", "profile-own")
+	if !slices.Contains(config.SelfEditPaths, own) || !slices.Contains(config.SelfEditPaths, filepath.Join(e.w, ".jad", "profiles")) {
+		t.Fatalf("SelfEditPaths = %v", config.SelfEditPaths)
+	}
+	if config.NativeExec == nil || !slices.Contains(config.NativeExec.Child.ProfileOwnRoots, own) {
+		t.Fatalf("exec roots = %+v", config.NativeExec)
+	}
+	derived := SessionConfig{NativeToolSmith: &NativeToolSmithSettings{}, AgentToolsets: map[string]SessionConfig{"a": {NativeExec: &NativeExecSettings{}}}}
+	derived.guardChildWrites([]string{own})
+	if !slices.Equal(derived.NativeToolSmith.Child.ProfileOwnRoots, []string{own}) || !slices.Equal(derived.AgentToolsets["a"].NativeExec.Child.ProfileOwnRoots, []string{own}) {
+		t.Fatalf("guarded = %+v", derived)
 	}
 }

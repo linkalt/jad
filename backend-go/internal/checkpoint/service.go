@@ -134,6 +134,12 @@ type Options struct {
 	// HarnessPaths are absolute paths owned by the harness that may sit inside the
 	// workspace and must never be snapshotted.
 	HarnessPaths []string
+	// RestoreKeep are absolute paths a restore never writes or deletes, even from a checkpoint
+	// taken before they were left out of snapshots: in the workspace layout (v2) the folders
+	// profile self-edit owns (SessionConfig.SelfEditPaths), which change only through the
+	// profile tool's edit and revert, under its lock and with its history. They are among
+	// HarnessPaths as well, so new snapshots leave them out.
+	RestoreKeep []string
 	// Durability is the session's persistence durability: process, turn or strict.
 	Durability string
 	Logger     *slog.Logger
@@ -217,6 +223,7 @@ func ForSession(config sessionfs.SessionConfig, logger *slog.Logger) *Service {
 		Workspace:    config.WorkingDir,
 		StagingDir:   config.StagingDir,
 		HarnessPaths: HarnessPaths(config),
+		RestoreKeep:  selfEditPaths(config),
 		Durability:   config.Persistence.Durability,
 		Logger:       logger,
 	})
@@ -255,17 +262,58 @@ func ExclusionPatterns(workspace string, harnessPaths []string) []string {
 	patterns := []string{backupFilePattern}
 	seen := map[string]bool{backupFilePattern: true}
 	for _, path := range harnessPaths {
-		inside, err := filepath.Rel(workspace, path)
-		if err != nil || inside == "" || inside == "." || strings.HasPrefix(inside, "..") || filepath.IsAbs(inside) {
+		inside, ok := insideWorkspace(workspace, path)
+		if !ok {
 			continue
 		}
-		pattern := "/" + escapeGitPattern(filepath.ToSlash(inside))
+		pattern := "/" + escapeGitPattern(inside)
 		if !seen[pattern] {
 			seen[pattern] = true
 			patterns = append(patterns, pattern)
 		}
 	}
 	return patterns
+}
+
+// insideWorkspace is path relative to workspace with slashes, as a tree names it; false when
+// path is the workspace itself or lies outside it.
+func insideWorkspace(workspace, path string) (string, bool) {
+	inside, err := filepath.Rel(workspace, path)
+	if err != nil || inside == "" || inside == "." || strings.HasPrefix(inside, "..") || filepath.IsAbs(inside) {
+		return "", false
+	}
+	return filepath.ToSlash(inside), true
+}
+
+// selfEditPaths are the session's SelfEditPaths, each also as the workspace names it when the
+// workspace is reached through a link: snapshots and restores name paths relative to the
+// workspace as written, so a folder known only by its real path would not be left out.
+func selfEditPaths(config sessionfs.SessionConfig) []string {
+	if len(config.SelfEditPaths) == 0 || config.WorkingDir == "" {
+		return nil
+	}
+	workspace := filepath.Clean(config.WorkingDir)
+	realWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		realWorkspace = workspace
+	}
+	var paths []string
+	for _, path := range config.SelfEditPaths {
+		path = filepath.Clean(path)
+		paths = append(paths, path)
+		real := path
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			real = resolved
+		} else if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+			real = filepath.Join(parent, filepath.Base(path))
+		}
+		if inside, ok := insideWorkspace(realWorkspace, real); ok {
+			if named := filepath.Join(workspace, filepath.FromSlash(inside)); named != path {
+				paths = append(paths, named)
+			}
+		}
+	}
+	return paths
 }
 
 // HarnessPaths are the absolute harness-owned paths of a session that may fall inside its workspace.
@@ -295,6 +343,8 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 	if config.NativeToolSmith != nil {
 		candidates = append(candidates, config.NativeToolSmith.Child.Spill.StorageDir)
 	}
+	// What profile self-edit owns (v2) is not snapshotted: its own history and revert undo it.
+	candidates = append(candidates, selfEditPaths(config)...)
 	// The session's state folder is harness-owned unless the workspace is that folder.
 	if config.StateDir != "" && filepath.Clean(config.StateDir) != filepath.Clean(config.WorkingDir) {
 		candidates = append(candidates, config.StateDir)
@@ -468,7 +518,7 @@ func (s *Service) capture(ctx context.Context) (capture, error) {
 	}
 	// The snapshot writes objects, so the cached size is stale until re-measured below.
 	s.size.known = false
-	tree, fileCount, err := s.git.snapshot(ctx, nested)
+	tree, fileCount, err := s.git.snapshot(ctx, nested, workspacePaths(s.options.Workspace, s.options.RestoreKeep))
 	if err != nil {
 		return capture{}, err
 	}
@@ -674,6 +724,58 @@ type plan struct {
 	conflicts []string
 }
 
+// workspacePaths are those of paths inside workspace, relative with slashes as a tree names them.
+func workspacePaths(workspace string, paths []string) []string {
+	var inside []string
+	for _, path := range paths {
+		if relative, ok := insideWorkspace(workspace, filepath.Clean(path)); ok {
+			inside = append(inside, relative)
+		}
+	}
+	return inside
+}
+
+// keep drops from the plan every path at, below or above (a file or link that would replace
+// the folder) one of keepPaths inside workspace, and returns how many it dropped. A checkpoint
+// taken before those paths were left out of snapshots still holds them; a restore leaves them.
+func (p *plan) keep(workspace string, keepPaths []string) int {
+	prefixes := workspacePaths(workspace, keepPaths)
+	if len(prefixes) == 0 {
+		return 0
+	}
+	touches := func(path string) bool {
+		for _, prefix := range prefixes {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") || strings.HasPrefix(prefix, path+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	dropped := 0
+	filter := func(changes []TreeChange) []TreeChange {
+		left := changes[:0]
+		for _, change := range changes {
+			if touches(change.Path) {
+				dropped++
+				continue
+			}
+			left = append(left, change)
+		}
+		return left
+	}
+	p.restore, p.remove = filter(p.restore), filter(p.remove)
+	conflicts := p.conflicts[:0]
+	for _, path := range p.conflicts {
+		if touches(path) {
+			dropped++
+			continue
+		}
+		conflicts = append(conflicts, path)
+	}
+	p.conflicts = conflicts
+	return dropped
+}
+
 func paths(changes []TreeChange) []string {
 	listed := make([]string, 0, len(changes))
 	for _, change := range changes {
@@ -744,6 +846,7 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 	if err != nil {
 		return RestoreResult{}, err
 	}
+	kept := changes.keep(s.options.Workspace, s.options.RestoreKeep)
 	result := RestoreResult{
 		CheckpointID: record.ID, Mode: mode, DryRun: dryRun,
 		Restored: paths(changes.restore), Deleted: paths(changes.remove), Conflicts: changes.conflicts,
@@ -753,6 +856,13 @@ func (s *Service) restore(ctx context.Context, record Record, mode string, dryRu
 	}
 	if len(current.nested) > 0 {
 		result.Warning = fmt.Sprintf("Not restored: nested git repositories are not checkpointed (%s)", strings.Join(current.nested, ", "))
+	}
+	if kept > 0 {
+		note := fmt.Sprintf("Not restored: %d path(s) that profile self-edit owns; the profile tool's revert undoes a self-edit", kept)
+		if result.Warning != "" {
+			note = result.Warning + "; " + note
+		}
+		result.Warning = note
 	}
 	if dryRun || (len(changes.restore) == 0 && len(changes.remove) == 0) {
 		return result, nil

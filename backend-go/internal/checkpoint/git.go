@@ -276,7 +276,18 @@ func (g *shadowGit) exceedsFiles(ctx context.Context, limit int64) (bool, []stri
 // and its file count. Nested git repositories are not staged: git would record one
 // as a single gitlink that checkout cannot restore, and fails the whole add for one
 // without a commit.
-func (g *shadowGit) snapshot(ctx context.Context, nested []string) (string, int, error) {
+func (g *shadowGit) snapshot(ctx context.Context, nested, untrack []string) (string, int, error) {
+	// An exclusion keeps untracked files out, not ones the index already holds: paths left
+	// out after earlier snapshots took them (Options.RestoreKeep) are dropped from it first.
+	if len(untrack) > 0 {
+		remove := []string{"rm", "-r", "--cached", "--ignore-unmatch", "--quiet", "--"}
+		for _, path := range untrack {
+			remove = append(remove, ":(literal)"+path)
+		}
+		if _, err := g.run(ctx, remove, runOptions{index: snapshotIndex}); err != nil {
+			return "", 0, err
+		}
+	}
 	add := []string{"add", "--all", "--", "."}
 	for _, dir := range nested {
 		add = append(add, ":(exclude,literal)"+dir)

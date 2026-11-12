@@ -132,7 +132,10 @@ func runShellChildDetailed(
 	}
 
 	timeoutMs := effectiveBashTimeoutMs(run.timeoutMs, settings)
-	spillPlan := planBashSpill(settings.Spill, execution.WorkspaceRoot, execution.SessionDir, execution.CallID)
+	spillPlan := planBashSpill(settings.Spill, settings.ProfileOwnRoots, execution.WorkspaceRoot, execution.SessionDir, execution.CallID)
+	if spillPlan != nil && spillPlan.refused != "" {
+		return shellRunResult{text: tools.ExecutionError(execution.CallID, tools.StatusError, "write_target_refused", run.settingsSection()+"."+spillPlan.refused)}
+	}
 	var spillWriters map[bashStream]bashSpillSink
 	if spillPlan != nil {
 		spillWriters = spillPlan.writers

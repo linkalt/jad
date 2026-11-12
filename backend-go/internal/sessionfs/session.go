@@ -169,6 +169,11 @@ type SessionConfig struct {
 	ProfileDataDir string
 	// ProfileSelfEdit is the profile_self_edit level of the workspace (off, on, full); empty in v1.
 	ProfileSelfEdit string
+	// SelfEditPaths are the folders profile self-edit writes, which change only through the
+	// profile tool (its lock, history and revert): the profile-own folder of every known
+	// workspace and this workspace's profile catalog (each profile file is edited by its own
+	// profile). Checkpoints leave them out and a restore never writes them (3b.2). Empty in v1.
+	SelfEditPaths []string
 	// SettingSources are the setting layers of a catalog-layout session and the settings they
 	// composed to, for the profile tool's config action; nil otherwise.
 	SettingSources *SettingSources

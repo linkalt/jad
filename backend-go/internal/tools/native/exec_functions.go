@@ -31,7 +31,7 @@ type execFunction struct {
 // JAD_FUNCTIONS_DIR to the real library root. Both are empty when the library does not exist;
 // prepend is empty when the runner's directory is missing or does not resolve inside the library.
 func execHelperEnvironment(settings sessionfs.NativeExecSettings, runner sessionfs.NativeExecLang, name, workspaceRoot string) (prepend map[string]string, extra map[string]string) {
-	root, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot)
+	root, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, workspaceRoot, settings.Child.ProfileOwnRoots)
 	if err != nil {
 		return nil, nil
 	}
@@ -251,7 +251,7 @@ func executeExecList(arguments map[string]any, settings sessionfs.NativeExecSett
 			filters = append(filters, newToolSmithFilter(text))
 		}
 	}
-	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot)
+	dir, realRoot, err := resolveToolSmithFunctionsDir(settings.FunctionsDir, execution.WorkspaceRoot, settings.Child.ProfileOwnRoots)
 	var files, scanned []execHelperFile
 	var strays []string
 	switch {

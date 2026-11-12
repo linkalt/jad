@@ -48,13 +48,13 @@ func TestPlanBashSpillPrunesOncePerInterval(t *testing.T) {
 	writeSpillFixtures(t, storage, 4, 30*24*time.Hour)
 	policy := sessionfs.NativeBashSpillSettings{Enabled: true, CapBytes: 1024, RetentionDays: 14, PruneIntervalSeconds: 3600, StorageDir: storage}
 
-	planBashSpill(policy, workspace, workspace, "first")
+	planBashSpill(policy, nil, workspace, workspace, "first")
 	if got := countSpillFiles(t, storage); got != 0 {
 		t.Fatalf("first plan left %d expired files, want 0", got)
 	}
 
 	writeSpillFixtures(t, storage, 4, 30*24*time.Hour)
-	planBashSpill(policy, workspace, workspace, "second")
+	planBashSpill(policy, nil, workspace, workspace, "second")
 	if got := countSpillFiles(t, storage); got != 4 {
 		t.Fatalf("second plan inside the interval left %d files, want the 4 new expired files untouched", got)
 	}
@@ -87,7 +87,7 @@ func TestPlanBashSpillScansEveryCommandWhenIntervalIsZero(t *testing.T) {
 	policy := sessionfs.NativeBashSpillSettings{Enabled: true, CapBytes: 1024, RetentionDays: 14, PruneIntervalSeconds: 0, StorageDir: storage}
 	for round := 0; round < 3; round++ {
 		writeSpillFixtures(t, storage, 4, 30*24*time.Hour)
-		planBashSpill(policy, workspace, workspace, fmt.Sprintf("call%d", round))
+		planBashSpill(policy, nil, workspace, workspace, fmt.Sprintf("call%d", round))
 		if got := countSpillFiles(t, storage); got != 0 {
 			t.Fatalf("round %d left %d expired files, want 0", round, got)
 		}
@@ -101,7 +101,7 @@ func TestPlanBashSpillKeepsDirectoriesIndependent(t *testing.T) {
 	writeSpillFixtures(t, first, 2, 30*24*time.Hour)
 	writeSpillFixtures(t, second, 2, 30*24*time.Hour)
 	for _, storage := range []string{first, second} {
-		planBashSpill(sessionfs.NativeBashSpillSettings{Enabled: true, CapBytes: 1024, RetentionDays: 14, PruneIntervalSeconds: 3600, StorageDir: storage}, workspace, workspace, "call")
+		planBashSpill(sessionfs.NativeBashSpillSettings{Enabled: true, CapBytes: 1024, RetentionDays: 14, PruneIntervalSeconds: 3600, StorageDir: storage}, nil, workspace, workspace, "call")
 		if got := countSpillFiles(t, storage); got != 0 {
 			t.Fatalf("%s left %d expired files, want 0", storage, got)
 		}
@@ -118,7 +118,7 @@ func BenchmarkPlanBashSpillLargeDirectory(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for index := 0; index < b.N; index++ {
-				planBashSpill(policy, workspace, workspace, "call")
+				planBashSpill(policy, nil, workspace, workspace, "call")
 			}
 		})
 	}

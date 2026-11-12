@@ -83,11 +83,8 @@ func (l Layout) checkWriteTargets(where string, config SessionConfig) error {
 			}
 			path = filepath.Join(config.WorkingDir, path)
 		}
-		resolved := resolveExisting(filepath.Clean(path))
-		for _, root := range l.ProfileOwnRoots {
-			if within(resolved, root) {
-				return configError("%s: %s writes %s, in a profile-own folder (%s): the files there change only through the profile tool's edit", where, target.setting, resolved, root)
-			}
+		if resolved, root := ProfileOwnTarget(l.ProfileOwnRoots, path); root != "" {
+			return configError("%s: %s writes %s, in a profile-own folder (%s): the files there change only through the profile tool's edit", where, target.setting, resolved, root)
 		}
 	}
 	for _, derived := range config.AgentToolsets {
@@ -96,4 +93,55 @@ func (l Layout) checkWriteTargets(where string, config SessionConfig) error {
 		}
 	}
 	return nil
+}
+
+// ProfileOwnTarget is the profile-own folder of roots that the absolute path writes into, judged
+// after the links of the part of path that exists, with path so resolved; root is "" when path
+// lands in none. The rule of checkWriteTargets, also applied per call where a run resolves a
+// write target against its own workspace root (a worktree run: NativeBashSettings.ProfileOwnRoots).
+func ProfileOwnTarget(roots []string, path string) (resolved, root string) {
+	if len(roots) == 0 || path == "" {
+		return "", ""
+	}
+	resolved = resolveExisting(filepath.Clean(path))
+	for _, root := range roots {
+		if within(resolved, root) {
+			return resolved, root
+		}
+	}
+	return resolved, ""
+}
+
+// selfEditPaths are the folders profile self-edit writes (SessionConfig.SelfEditPaths): the
+// profile-own folder of every known workspace (documents and history) and this workspace's
+// profile catalog. Workspace layout only.
+func (l Layout) selfEditPaths() []string {
+	if l.Workspace == "" {
+		return nil
+	}
+	paths := append([]string(nil), l.ProfileOwnRoots...)
+	if l.Profiles != "" {
+		paths = appendNewStrings(paths, l.Profiles)
+	}
+	return paths
+}
+
+// guardChildWrites gives exec and tool_smith (of the configuration and of each agent toolset)
+// the profile-own folders their per-call write targets may not land in: a worktree run
+// resolves its spill files and function library against its own worktree, after this load
+// judged them against the session's cwd (3b.2).
+func (c *SessionConfig) guardChildWrites(roots []string) {
+	if len(roots) == 0 {
+		return
+	}
+	if c.NativeExec != nil {
+		c.NativeExec.Child.ProfileOwnRoots = roots
+	}
+	if c.NativeToolSmith != nil {
+		c.NativeToolSmith.Child.ProfileOwnRoots = roots
+	}
+	for key, derived := range c.AgentToolsets {
+		derived.guardChildWrites(roots)
+		c.AgentToolsets[key] = derived
+	}
 }

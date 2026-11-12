@@ -3,6 +3,7 @@ package native
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,6 +43,9 @@ func resolveNativeBashSpillTemplate(template, workspaceRoot, sessionDir, callID,
 
 type bashSpillPlan struct {
 	writers map[bashStream]bashSpillSink
+	// refused names the spill setting whose file would land in a profile-own folder; the call
+	// is refused before anything is pruned or written (ProfileOwnRoots).
+	refused string
 }
 
 type bashSpillWriter struct {
@@ -73,6 +77,7 @@ type bashSpillDecision struct {
 
 func planBashSpill(
 	policy sessionfs.NativeBashSpillSettings,
+	profileOwnRoots []string,
 	workspaceRoot, sessionDir, callID string,
 ) *bashSpillPlan {
 	if !policy.Enabled {
@@ -107,6 +112,13 @@ func planBashSpill(
 				"{call_id}", encodeBashSpillCallID(callID),
 				"{stream}", string(stream),
 			).Replace(pruneTemplate))
+		}
+		if resolved, root := sessionfs.ProfileOwnTarget(profileOwnRoots, path); root != "" {
+			setting := "spill.storage_dir"
+			if legacy {
+				setting = "spill." + string(stream) + "_full"
+			}
+			return &bashSpillPlan{refused: fmt.Sprintf("%s writes %s, in a profile-own folder (%s): the files there change only through the profile tool's edit", setting, resolved, root)}
 		}
 		template := pruneTemplate
 		pruneBashSpillFilesThrottled(viewPath(filepath.Dir(path)), template+"\x00"+workspaceRoot+"\x00"+sessionDir, func() *regexp.Regexp {

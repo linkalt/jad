@@ -108,6 +108,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	config.ProfileOwnDir, config.ProfileDataDir = layout.ProfileOwnDir(entry.ID()), layout.ProfileDataDir(entry.ID())
 	if layout.Workspace != "" {
 		config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
+		config.SelfEditPaths = layout.selfEditPaths()
 	}
 	if err := built.finishSandbox(&config); err != nil {
 		return SessionConfig{}, err
@@ -118,6 +119,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := layout.checkWriteTargets(sessionPath, config); err != nil {
 		return SessionConfig{}, err
 	}
+	config.guardChildWrites(layout.ProfileOwnRoots)
 	if roots := layout.profilePrivateRoots(); len(roots) > 0 {
 		// The in-process readers answer other profiles' private and data folders as missing,
 		// with or without a sandbox; the profile's own stay readable (decider S3).
