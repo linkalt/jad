@@ -347,7 +347,8 @@ the audit record and `off` are the mitigations.
   never moves: models and tools to `G`, the workspace keeps profiles, sessions and `state`
   (paths unchanged). It rewrites relative `env_file` paths, refuses when an id already exists
   in `G`, writes a manifest, leaves the old `setting.json`, never deletes or edits ignored
-  files, and only prints `.gitignore` advice.
+  files, and only prints `.gitignore` advice. The planner (dry run, phase 4a) is built
+  (section 23); `--apply` (phase 4b) is not.
 
 ## 6. Security boundaries: what is and is not enforced
 
@@ -407,7 +408,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
    is built (section 17); 3c.2 (self-edit of own models) is built (sections 18 to 20); 3c.3
    (own toolsets, written by hand and through `edit`) is built (section 21); 3c.3b (a load reads
    one revision of each profile) is built (section 22).
-4. **Migration command.**
+4. **Migration command.** 4a (the planner and the dry run, `jad migrate workspace`) is built
+   (section 23); 4b (`--apply`, the journal, the v1/v2 check and the cleanup) is not.
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
 **Acceptance** (the designers' test plans, designer1 §7 and designer2 §8, plus):
@@ -1122,3 +1124,76 @@ checks instead:
   - **Trial loads:** a trial is not checked, so a publish of another profile in the session's
     scope during the trial can make that profile's verdict in the trial one of two revisions;
     the edited profile is read from the candidate.
+
+## 23. Phase 4a as built: the migration planner (dry run)
+
+`jad migrate workspace [--root NAME] [--json]` (`cmd/jad/migrate.go`) plans the migration of the
+one v1 setting the exact current folder W loads today and **writes nothing**: no file, folder,
+lock or temporary (pinned by a before-and-after snapshot of the whole temporary tree, including G
+and `$HOME`). `--apply` is refused ("not built yet"). A blocked plan exits 1. The planner is
+`sessionfs.PlanWorkspaceMigration` (`migrate_plan.go`); it reads v1 through the v1 loader
+(`Load`, the root's `Layout`, `LoadLayoutSessionSettings`), never from assumed defaults.
+
+**Blockers** (the plan stops instead of guessing):
+
+- `workspace_exists`: `W/.jad/workspace.json` exists; `no_v1_setting`; `v1_setting_invalid`.
+- `global_folder_place`: G is `W/.jad` or inside W.
+- `path_base_changes`: the v1 setting is not in `W/.jad`. Relative paths of sessions, profiles,
+  toolsets and defaults resolve from the v1 setting's folder in v1 and from `W/.jad` in v2, and
+  the loader resolves them in each tool's normalizer with no one list of path keys (the decider's
+  M3 stop condition). The planner therefore plans only a setting at `W/.jad/setting.json`, where
+  both bases are the same folder and no workspace-side path moves.
+- `unknown_key`: a top-level or `libraries` key the migration does not map.
+- `root_required` / `unknown_root`: several session roots and no (or an unknown) `--root`; every
+  root is listed with its sessions, and the sessions of other roots are listed as not migrated.
+- `name_clash`: a destination in W or G holds other content; the same content is `same` (skipped).
+- `ambiguous_id`: a model or toolset ID would exist in G and in `W/.jad/models|tools`, so every
+  bare reference would be ambiguous in v2.
+- `global_json_conflict`: `G/global.json` exists and its `server`, `cli` or global library keys
+  differ from v1's (compared as JSON after the path rewrites; a relative path that means the same
+  file is still a conflict, which fails safe); the migration never edits `global.json`.
+- `symlink`: a link at or below a source folder; links are never followed or copied.
+- `storage_outside`: with the state copied, a write target of a migrated session's profile
+  (`SessionConfig.writeTargets`, also of agent toolsets, from the v1 load) lies outside
+  `<v1 state>/<session>`, so v1 and v2 would share live data.
+- `sandbox_catalog_cwd`: `catalogs.sandbox` is `{cwd}/...`; `unreadable`.
+
+**Where things go** (each file is `copy` with size and sha256, `in_place`, or `same`):
+
+- **Sessions** of the root into `W/.jad/sessions`, **profiles** into `W/.jad/profiles`, **state**
+  `<v1 state>/<session>/...` into `W/.jad/state/<session>/...`. v1 (catalog layout) and v2 key a
+  profile's state the same way, `<state>/<session>/<category>/<name>` (`profileStateDir`; the
+  legacy `profiles/<key>` form of `selectProfileStorageDir` is not reachable for a layout
+  session), so the mapping is one to one and the "state key cannot be mapped" stop condition
+  cannot occur. Lock files and `<state>/.mcp-oauth` (MCP sign-ins, credentials) are not copied.
+  A folder already where v2 reads it is `in_place` (this repository: everything in `W/.jad`).
+- **mcp, remotes, sandbox** into G (`global.json` catalogs or `G/<kind>`), listed as additions
+  every workspace sees.
+- **models and tools** into G, except when the v1 folder already is `W/.jad/models|tools`: v2
+  reads that folder as the workspace's own catalog, so the files stay `in_place`,
+  workspace-private, with a warning (a G copy would make every bare ID ambiguous; the decider's
+  same-content rule). A model or toolset that `W/.jad` already holds with the same content is
+  not copied to G either.
+- **workspace.json**: `schema_version` 2, `id` and `label` of the v1 root (so `root:session`
+  references keep their meaning), the v1 `defaults` unchanged, and the four library folder keys
+  (each v1 fallback folder written out, since v2 has no workspace fallback).
+- **global.json** (only when missing): v1 `server`, `cli`, `libraries.tool_definition_paths` and
+  `libraries.max_asset_bytes`.
+
+**Path rewrites** (each names the place it named in v1, recorded with key, old and new value):
+a moved toolset through `absoluteGlobalToolsetPaths` with the v1 base (the loader's own list for
+a global toolset: `env_file` of exec and tool_smith, the path rules of exec, read_image, lsp and
+code_context, `hooks.env_file`); a remote's `token_file` from its v1 folder; `server.log_file`,
+`server.remote_api.tokens_file` and `libraries.tool_definition_paths` from the v1 setting's
+folder. Model, MCP and sandbox files have no path the move changes. A rewritten G file that points
+into `W/.jad` is warned as tied to this workspace. `defaults.cwd` is copied as is: v1 requires an
+absolute (or `~`) cwd, so the decider's `"."` example cannot occur.
+
+**Secrets**: keys that look like secrets (key, token, secret, password, authorization, credential,
+cookie; every value inside `env` or `headers`) are named by file and key, never by value. `_env`,
+`_file`, `*tokens*` and `*cache_key` keys are not named (variable names, paths, counts). State
+files (transcripts) are not scanned.
+
+On this repository (read-only run, 2026-11-12): not blocked; sessions, profiles, models and
+tools `in_place`; one MCP server copied to G; `global.json` and `workspace.json` created; 16
+`tool_definition_paths` rewritten to absolute paths in `W/.jad` (tied to this workspace).

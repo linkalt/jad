@@ -67,12 +67,14 @@ func dispatchCommand(args []string, streams commandStreams) error {
 		return runPluginCommand(args[1:], streams)
 	case "transcript":
 		return runTranscriptCommand(args[1:], streams)
+	case "migrate":
+		return runMigrateCommand(args[1:], streams)
 	case "check":
 		if len(args) == 1 {
 			return runCheckCommand(streams.stdout)
 		}
 	}
-	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\", \"plugin\" and \"transcript\"", args)
+	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\", \"plugin\", \"transcript\" and \"migrate\"", args)
 }
 
 // runCheckCommand runs "jad check": it reads the root setting and every catalog and session

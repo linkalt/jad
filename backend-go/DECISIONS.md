@@ -4493,3 +4493,21 @@ Open gaps:
 - **Stamp merge after a retry is untested:** a recording view gets the returned load's stamps added to those of the failed attempt; no constructible case tells it apart (mutation not caught), the extra stamps only make a cached config look stale sooner.
 - **Accepted, docs only (decider):** the deletion guard covers only served workspaces; hand edits are not locked; seatbelt is untested.
 - **v2 load cost:** about ten times a v1 load; not investigated (no limit was set).
+
+## Workspace layout v2: phase 4a, the migration planner (dry run) (T-028, Go, 2026-11-12)
+
+Decider phase 4 (M1 to M6), design section 23. `jad migrate workspace [--root NAME] [--json]` plans the copy of the v1 setting W loads into the workspace layout and writes nothing; `--apply` is refused until 4b. It reads v1 through the v1 loader and stops with blockers rather than guessing. On this repository the read-only dry run is not blocked: everything is already in `W/.jad` (in place), one MCP server would be copied to G, and `global.json` and `workspace.json` would be created.
+
+Choices made here (for the decider to confirm or change before 4b):
+- **Setting outside `W/.jad` is blocked (M3 stop condition, partly hit):** relative paths of sessions, profiles, toolsets and defaults resolve from the v1 setting's folder in v1 and from `W/.jad` in v2, and the loader resolves them in each tool's normalizer with no one list of path keys. The planner plans only a setting in `W/.jad`, where the bases are the same folder. A setting at `W/setting.json` or `$HOME/.jad/setting.json` is `path_base_changes` until there is one list of setting path keys.
+- **Models and tools already in `W/.jad/models|tools` stay workspace-private:** v2 reads that folder as the workspace's own catalog, and a G copy would make every bare ID ambiguous (the decider's same-content rule). This is the common v1 shape, so most migrations add no shared models or tools to G; sharing them means moving them by hand later.
+- **State maps one to one:** v1 (catalog layout) and v2 key state as `<state>/<session>/<category>/<name>`; the legacy `profiles/<key>` form is not reachable for a layout session. The "state key cannot be mapped" blocker therefore has no constructible case and no test.
+- **`defaults.cwd` is copied unchanged:** v1 refuses a relative cwd, so the decider's `"."` to `".jad"` example cannot occur.
+- **Secrets are named by heuristic:** key names with key, token, secret, password, authorization, credential or cookie, and every value inside `env` or `headers`; `_env`, `_file`, `*tokens*` and `*cache_key` are not named. Only JSON settings files are scanned, not transcripts.
+
+Open gaps:
+- **4b not built:** `--apply`, the journal, the source re-hash, the no-replace publish helper, the v1/v2 side-by-side check and the cleanup.
+- **Rewritten bytes:** a rewritten toolset's changed tool object is re-encoded with sorted keys (`absoluteGlobalToolsetPaths`), so it is not byte-identical apart from the path values; the plan records values, and 4b must write and verify the bytes.
+- **`global.json` conflicts fail safe:** an existing `global.json` whose relative path means the same file as v1's absolute one is still a conflict.
+- **Write-nothing is tested on the fixtures:** the before-and-after tree snapshot covers the planner's v1 loads in the tests; a loader path that creates folders for settings the fixtures do not use is not covered.
+- **v1 bug confirmed, not fixed (#287):** a setting in `W/.jad` without `catalogs` resolves its catalogs to `W/.jad/.jad/<catalog>` (reproduced with a scratch test, not committed). The planner follows what v1 reads. Fixing it changes v1, so it is the decider's call.
