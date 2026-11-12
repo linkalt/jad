@@ -94,7 +94,7 @@ func (r *CheckReport) addSandbox(id string, config SessionConfig) {
 	// The session's own read-only paths differ per session and change no trial start, so
 	// sandboxes that differ only there are started once.
 	probed := *config.Sandbox
-	probed.ReadOnlyPaths = nil
+	probed.ReadOnlyPaths, probed.SealedPaths, probed.SealedInner = nil, nil, nil
 	key, _ := json.Marshal(probed)
 	if r.seenSandbox[string(key)] {
 		return

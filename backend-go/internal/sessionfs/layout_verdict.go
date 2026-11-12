@@ -168,7 +168,7 @@ func (j *scopeJudgement) judgeDefaultToolsetSettings(layout Layout, location Loc
 			if err != nil {
 				return err
 			}
-			_, err = loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[id], "")
+			_, err = loadSessionSettingsFrom(location, setting, sessionPath, location.Root.pathBase(), keys[id], "")
 			return err
 		}
 		err := attempt(false)

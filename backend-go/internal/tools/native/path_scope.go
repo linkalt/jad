@@ -28,6 +28,7 @@ func pathScopePolicy(policy sessionfs.NativePathPolicy, execution tools.Executio
 		Paths:             append([]sessionfs.NativePathRule(nil), policy.Paths...),
 		UnrestrictedPaths: policy.UnrestrictedPaths,
 		Within:            append([]string(nil), policy.Within...),
+		Hidden:            policy.Hidden,
 	}
 	if len(scope.Allow) > 0 {
 		allowed := make([]string, 0, len(scope.Allow))
@@ -82,6 +83,7 @@ func workspacePolicy(policy sessionfs.NativePathPolicy, execution tools.Executio
 		Paths:             make([]sessionfs.NativePathRule, 0, len(policy.Paths)),
 		UnrestrictedPaths: policy.UnrestrictedPaths,
 		Within:            make([]string, 0, len(policy.Within)),
+		Hidden:            policy.Hidden,
 	}
 	for _, rule := range policy.Paths {
 		moved.Paths = append(moved.Paths, sessionfs.NativePathRule{Action: rule.Action, Path: movePath(origins, root, rule.Path)})
@@ -182,6 +184,7 @@ func environmentPolicy(policy sessionfs.NativePathPolicy, execution tools.Execut
 		Paths:             append([]sessionfs.NativePathRule(nil), policy.Paths...),
 		UnrestrictedPaths: policy.UnrestrictedPaths,
 		Within:            append([]string(nil), policy.Within...),
+		Hidden:            policy.Hidden,
 	}
 	deny := func(path string) {
 		if path != "" {

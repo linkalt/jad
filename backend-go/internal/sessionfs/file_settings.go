@@ -40,6 +40,20 @@ type NativePathPolicy struct {
 	// Within, when not empty, is a second condition on top of Paths: a path must also
 	// lie inside one of these absolute roots. It can only narrow what Paths allow.
 	Within []string
+	// Hidden (workspace layout only, Layout.FixedHidePaths: G/auth and the other workspaces'
+	// .jad folders) are answered by the in-process readers as if absent, also when a link
+	// leads there, with or without a sandbox. The loader sets it; no setting does.
+	Hidden []string `json:",omitempty"`
+}
+
+// Hides reports whether path lies in a Hidden path.
+func (p NativePathPolicy) Hides(path string) bool {
+	for _, hidden := range p.Hidden {
+		if PathWithin(hidden, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultSessionFileListingSettings() SessionFileListingSettings {

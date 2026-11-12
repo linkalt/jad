@@ -3,6 +3,7 @@ package sessionfs
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"jad/backend-go/internal/catalog"
@@ -37,8 +38,14 @@ func validateToolsetFile(layout Layout, roots []Root, path string, data []byte) 
 	if len(roots) > 0 {
 		globalRoot = roots[0].GlobalJadRoot
 	}
-	location := Location{SessionID: "toolset-check", Root: Root{GlobalJadRoot: globalRoot, Layout: &Layout{State: scratch}}}
-	_, err = loadSessionSettingsFrom(location, setting, path, globalRoot, "", "")
+	// A workspace toolset reads its relative paths from W/.jad, as a session of the workspace
+	// does; a global one has them made absolute from G by applyToolset.
+	base := globalRoot
+	if layout.Workspace != "" {
+		base = filepath.Join(layout.Workspace, ".jad")
+	}
+	location := Location{SessionID: "toolset-check", Root: Root{GlobalJadRoot: base, Layout: &Layout{State: scratch}}}
+	_, err = loadSessionSettingsFrom(location, setting, path, base, "", "")
 	return err
 }
 

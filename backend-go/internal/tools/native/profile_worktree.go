@@ -142,6 +142,8 @@ func (d *DelegatedWorktree) Sandbox(sandbox *sessionfs.SandboxSettings, origin s
 	}
 	copied.HidePaths = alsoMoved(sandbox.HidePaths)
 	copied.ReadOnlyPaths = alsoMoved(sandbox.ReadOnlyPaths)
+	copied.SealedPaths = alsoMoved(sandbox.SealedPaths)
+	copied.SealedInner = alsoMoved(sandbox.SealedInner)
 	return &copied
 }
 

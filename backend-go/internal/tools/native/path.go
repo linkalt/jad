@@ -75,6 +75,10 @@ func resolveExistingTarget(requestedPath, workspaceRoot string, policy sessionfs
 		}
 		return resolvedTarget{}, tools.ExecutionError(callID, status, code, summary, tools.Information{Key: "path", Value: candidateErrorPath})
 	}
+	if policy.Hides(candidate) || policy.Hides(realPath) {
+		// Answered as a missing file at the requested path, links followed (design §6, fix C).
+		return resolvedTarget{}, tools.ExecutionError(callID, tools.StatusNotFound, "not_found", "Could not find "+candidateErrorPath, tools.Information{Key: "path", Value: candidateErrorPath})
+	}
 	realPath, err = filepath.Abs(realPath)
 	if err != nil {
 		return resolvedTarget{}, tools.ExecutionError(callID, tools.StatusError, "path_resolution_failed", "The requested path could not be resolved", tools.Information{Key: "path", Value: candidateErrorPath})

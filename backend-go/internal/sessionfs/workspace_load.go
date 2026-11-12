@@ -185,6 +185,10 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 			return Config{}, err
 		}
 		layout.FixedHidePaths = slices.Clone(auth)
+		ownJad := filepath.Join(spec.dir, ".jad")
+		layout.SealedPaths = appendNewStrings(appendNewStrings([]string{global}, globalReal), appendNewStrings([]string{ownJad}, realPath(ownJad))...)
+		// The default functions_dir of each tool when the session works in W (cwd W/.jad/<dir>).
+		layout.SealedHelpers = map[string]string{"exec": filepath.Join(ownJad, "exec"), "tool_smith": filepath.Join(ownJad, "functions")}
 		for _, workspace := range workspaces {
 			if workspace.ID != spec.id {
 				layout.FixedHidePaths = appendNewStrings(layout.FixedHidePaths, jadFolders[workspace.ID]...)
@@ -271,6 +275,12 @@ func globalLayout(setting map[string]json.RawMessage, where, global string) (Lay
 			if err := json.Unmarshal(rawValue, &layout.ToolDefinitionPaths); err != nil {
 				return Layout{}, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
 			}
+			// From G, the folder of this file: a session reads its settings from W/.jad.
+			for index, path := range layout.ToolDefinitionPaths {
+				if trimmed := strings.TrimSpace(path); trimmed != "" {
+					layout.ToolDefinitionPaths[index] = resolveFrom(global, trimmed)
+				}
+			}
 		}
 	}
 	return layout, nil
@@ -301,6 +311,26 @@ func workspaceDefaults(setting map[string]json.RawMessage, where, base, cwdBase,
 			return nil, configError("%s: defaults.%s must be a non-empty string", where, key)
 		}
 		defaults[key] = mustJSON(resolveFrom(from, expandHomeWith(strings.TrimSpace(path), home)))
+	}
+	// The other relative paths a defaults object can hold (hooks.env_file, the path rules of
+	// session_files) resolve from base too; the session reads its settings with W/.jad as the
+	// base, which is not the folder of the global setting.
+	if raw, ok := defaults["hooks"]; ok {
+		var hooks map[string]json.RawMessage
+		if json.Unmarshal(raw, &hooks) == nil && hooks != nil && absoluteEnvFile(hooks, base) {
+			defaults["hooks"] = mustJSON(hooks)
+		}
+	}
+	if raw, ok := defaults["session_files"]; ok {
+		var files map[string]json.RawMessage
+		if json.Unmarshal(raw, &files) == nil && files != nil {
+			if paths, ok := files["paths"]; ok {
+				if rewritten, did := absolutePolicyPaths(paths, base); did {
+					files["paths"] = rewritten
+					defaults["session_files"] = mustJSON(files)
+				}
+			}
+		}
 	}
 	return defaults, nil
 }

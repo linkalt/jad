@@ -37,7 +37,7 @@ func planSandboxWorks(sandbox *sessionfs.SandboxSettings) bool {
 		return false
 	}
 	probed := *sandbox.ForPlanMode()
-	probed.ReadOnlyPaths = nil
+	probed.ReadOnlyPaths, probed.SealedPaths, probed.SealedInner = nil, nil, nil
 	key, err := json.Marshal(probed)
 	if err != nil {
 		return false

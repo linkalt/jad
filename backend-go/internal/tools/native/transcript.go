@@ -442,6 +442,9 @@ func (t *transcriptTool) render(execution tools.ExecutionContext, summary, path 
 // the call's scope does not reach it. Unlike a read it does not require the workspace, because
 // the state of a session lives outside it.
 func transcriptDenied(policy sessionfs.NativePathPolicy, target string) bool {
+	if policy.Hides(target) {
+		return true
+	}
 	for _, rule := range policy.Paths {
 		if rule.Action == "deny" && sessionfs.PathWithin(rule.Path, target) {
 			return true

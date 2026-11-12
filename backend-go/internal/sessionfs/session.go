@@ -305,7 +305,8 @@ func LoadSessionSettingsScoped(location Location, requestedProfile, requestedMod
 // it a map composed from the catalogs, so both layouts share every normalizer.
 // envFileBase is the folder a relative tools.native.*.env_file is
 // resolved against: the session folder for a legacy session, the global root for a
-// catalog-layout session, whose toolset many sessions share.
+// catalog-layout session, whose toolset many sessions share, and W/.jad in the workspace
+// layout (Root.pathBase; a global toolset's relative paths are made absolute from G first).
 func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessage, settingPath, envFileBase, requestedProfile, requestedModel string) (SessionConfig, error) {
 	if err := validateSchemaVersion(setting, settingPath); err != nil {
 		return SessionConfig{}, err
@@ -448,7 +449,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	toolDefinitionPaths, err := normalizeToolDefinitionPaths(setting["tool_definition_paths"], location.Root.GlobalJadRoot, settingPath)
+	toolDefinitionPaths, err := normalizeToolDefinitionPaths(setting["tool_definition_paths"], location.Root.pathBase(), settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -456,15 +457,15 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	filePolicy, err := normalizeSessionFilesPolicy(setting["session_files"], location.Root.GlobalJadRoot, settingPath)
+	filePolicy, err := normalizeSessionFilesPolicy(setting["session_files"], location.Root.pathBase(), settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeReadImage, err := normalizeNativeReadImageSettings(setting, location.Root.GlobalJadRoot, settingPath)
+	nativeReadImage, err := normalizeNativeReadImageSettings(setting, location.Root.pathBase(), settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeLSP, err := normalizeNativeLSPSettings(setting, location.Root.GlobalJadRoot, settingPath)
+	nativeLSP, err := normalizeNativeLSPSettings(setting, location.Root.pathBase(), settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -472,7 +473,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
+	nativeExec, err := normalizeNativeExecSettings(setting, location.Root.pathBase(), settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -480,7 +481,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeCodeContext, err := normalizeNativeCodeContextSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, storagePaths.ToolStorage)
+	nativeCodeContext, err := normalizeNativeCodeContextSettings(setting, location.Root.pathBase(), settingPath, cwd, storagePaths.ToolStorage)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -508,7 +509,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	nativeToolSmith, err := normalizeNativeToolSmithSettings(setting, location.Root.GlobalJadRoot, settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
+	nativeToolSmith, err := normalizeNativeToolSmithSettings(setting, location.Root.pathBase(), settingPath, cwd, location.StateDir(), storagePaths.ToolStorage, envFileBase)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -628,7 +629,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	return SessionConfig{
+	config := SessionConfig{
 		SessionName:              sessionName,
 		Profile:                  profile,
 		DefaultProfile:           defaultProfile,
@@ -701,7 +702,11 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		Model:                   Model{PromptRole: promptRole, PromptText: promptText},
 		PromptDocuments:         promptDocuments,
 		ProjectInstructionFiles: instructionFiles,
-	}, nil
+	}
+	if location.Root.Layout != nil {
+		config.hideFixedPaths(location.Root.Layout.FixedHidePaths)
+	}
+	return config, nil
 }
 
 // LoadSessionConfig loads the session settings and the selected model file. Use

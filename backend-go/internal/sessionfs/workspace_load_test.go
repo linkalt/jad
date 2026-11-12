@@ -397,6 +397,18 @@ func TestFixedHiddenAndReadOnlyPathsOfAWorkspaceSandbox(t *testing.T) {
 			t.Errorf("hidden %q lacks %s", session.Sandbox.HidePaths, want)
 		}
 	}
+	// G and the own W/.jad are sealed; the helper folders stay writable for the tools covered.
+	for _, want := range []string{f.global, filepath.Join(a, ".jad")} {
+		if !slices.Contains(session.Sandbox.SealedPaths, want) {
+			t.Errorf("sealed %q lacks %s", session.Sandbox.SealedPaths, want)
+		}
+	}
+	if slices.Contains(session.Sandbox.SealedPaths, filepath.Join(b, ".jad")) {
+		t.Errorf("sealed %q holds the other workspace", session.Sandbox.SealedPaths)
+	}
+	if !slices.Equal(session.Sandbox.SealedInner, []string{filepath.Join(a, ".jad", "exec"), filepath.Join(a, ".jad", "functions")}) {
+		t.Errorf("sealed inner = %q", session.Sandbox.SealedInner)
+	}
 	// A profile that turns a sandbox on itself may set hide_paths, but not drop the fixed ones.
 	wsPut(t, filepath.Join(b, ".jad", "profiles", "dev", "own.json"), `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"`+wsTrue()+`","hide_paths":[]}}}`)
 	f.globalJSON(t, `{"workspaces":[{"id":"a","path":"`+a+`"},{"id":"b","path":"`+b+`"}]}`)

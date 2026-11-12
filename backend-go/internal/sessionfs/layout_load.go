@@ -96,7 +96,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if fault != nil && requestedModel != "" {
 		loadModelName = ""
 	}
-	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.GlobalJadRoot, keys[entry.ID()], loadModelName)
+	config, err := loadSessionSettingsFrom(location, setting, sessionPath, location.Root.pathBase(), keys[entry.ID()], loadModelName)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -222,7 +222,7 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 		setting, _, err := c.compose(selected, agent.Toolset)
 		if err == nil {
 			var derived SessionConfig
-			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.GlobalJadRoot, c.keys[selected.ID()], ""); err == nil && derived.NativeProfileMessage != nil {
+			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.pathBase(), c.keys[selected.ID()], ""); err == nil && derived.NativeProfileMessage != nil {
 				err = configError("%s: tools.native.profile_message is not allowed in a toolset used by an agent (toolset %s); a sub-agent cannot message a profile", c.sessionPath, strings.Join(agent.Toolset, ", "))
 			} else if err == nil {
 				derived.NativeSubagent = nil
@@ -278,15 +278,24 @@ func (c *layoutCompose) setPlanSandboxReadOnlyPaths(config SessionConfig, readOn
 	}
 }
 
-// addFixedHidePaths adds the layout's fixed hidden paths (workspace layout only: G/auth and the
-// other workspaces' .jad folders) to a sandbox after its hide_paths were read, so neither a
-// profile's hide_paths nor a template can remove them. The list is copied, never appended to
-// in place, because sandboxes may share it.
+// addFixedHidePaths adds the layout's fixed paths (workspace layout only) to a sandbox after
+// its hide_paths were read, so neither a profile's hide_paths nor a template can remove them:
+// the hidden G/auth and other workspaces' .jad folders, and the sealed G and W/.jad with the
+// helper folders of the tools the sandbox covers. The lists are copied, never appended to in
+// place, because sandboxes may share them.
 func (c *layoutCompose) addFixedHidePaths(sandbox *SandboxSettings) {
-	if sandbox == nil || len(c.layout.FixedHidePaths) == 0 {
+	if sandbox == nil || c.layout.Workspace == "" {
 		return
 	}
 	sandbox.HidePaths = appendNewStrings(append([]string(nil), sandbox.HidePaths...), c.layout.FixedHidePaths...)
+	sandbox.SealedPaths = appendNewStrings(append([]string(nil), sandbox.SealedPaths...), c.layout.SealedPaths...)
+	inner := append([]string(nil), sandbox.SealedInner...)
+	for _, tool := range slices.Sorted(maps.Keys(c.layout.SealedHelpers)) {
+		if sandbox.Covers(tool) {
+			inner = appendNewStrings(inner, c.layout.SealedHelpers[tool])
+		}
+	}
+	sandbox.SealedInner = inner
 }
 
 // sessionConfigPaths are the files and folders the session's configuration comes from: the
@@ -741,6 +750,10 @@ func (c *layoutCompose) applyToolsets(setting map[string]json.RawMessage, loaded
 	var hooks json.RawMessage
 	hooksOwner := ""
 	for _, item := range loaded {
+		if c.layout.globalToolset(item.path) {
+			// Its relative paths resolve from G, not from the workspace base the session reads with.
+			item.toolset = absoluteGlobalToolsetPaths(item.toolset, c.layout.GlobalDir)
+		}
 		if len(item.toolset.Native) > 0 {
 			withEnv, err := withDefaultEnvFile(item.toolset.Native, defaultEnvFile, item.path)
 			if err != nil {

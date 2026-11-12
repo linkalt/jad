@@ -247,11 +247,13 @@ type sandboxKeep struct {
 }
 
 // sandboxFixedRules are the fixed rules for one call, given the folders the sandbox binds
-// read-write (sandboxWritableRoots) and the session's configuration paths (the sandbox's
-// ReadOnlyPaths). The configuration rules come first: they bind writable folders inside them
-// again, which the rules after them then narrow as usual.
-func sandboxFixedRules(place sandboxPlace, writable, configuration, candidates []string) []sandboxRule {
-	rules := sandboxConfigurationRules(place, writable, configuration, candidates)
+// read-write (sandboxWritableRoots) and the sandbox, whose ReadOnlyPaths are the session's
+// configuration paths. The configuration rules come first: they bind writable folders inside
+// them again, which the rules after them then narrow as usual. The sealed folders follow them
+// and cover those again (sandboxSealedRules).
+func sandboxFixedRules(place sandboxPlace, writable []string, sandbox *sessionfs.SandboxSettings, candidates []string) []sandboxRule {
+	rules := sandboxConfigurationRules(place, writable, sandbox.ReadOnlyPaths, candidates)
+	rules = append(rules, sandboxSealedRules(writable, sandbox.SealedPaths, sandbox.SealedInner)...)
 	if root, err := filepath.EvalSymlinks(sandboxTempRoot()); err == nil {
 		var keep []sandboxKeep
 		if place.tmp != "" {
@@ -614,4 +616,62 @@ func seatbeltRuleProfile(rules []sandboxRule) string {
 		}
 	}
 	return profile.String()
+}
+
+// sandboxSealedRules keep each sealed folder (SandboxSettings.SealedPaths: G and W/.jad in the
+// workspace layout) read-only as a whole where a writable path covers it. Unlike a
+// configuration path, no writable path is bound again inside it, only the engine's helper
+// folders of inner that a writable path covers too (made when missing, so a covered tool can
+// keep its helpers); a missing sealed folder whose parent exists becomes an empty read-only
+// folder, so nothing can be made there. A sealed folder whose parent is missing too is left
+// out (docs/design_workspace_layout.md §6).
+func sandboxSealedRules(writable, sealed, inner []string) []sandboxRule {
+	var rules []sandboxRule
+	var done []string
+	for _, path := range sealed {
+		real, err := filepath.EvalSymlinks(path)
+		missing := false
+		if err != nil {
+			parent, parentErr := filepath.EvalSymlinks(filepath.Dir(path))
+			if !errors.Is(err, os.ErrNotExist) || parentErr != nil {
+				continue
+			}
+			real, missing = filepath.Join(parent, filepath.Base(path)), true
+		}
+		if containsString(done, real) || !insideAny(real, writable) {
+			continue
+		}
+		done = append(done, real)
+		rule := sandboxRule{kind: sandboxReadOnly, path: real, dir: true, missing: missing}
+		if !missing {
+			if info, err := os.Stat(real); err != nil {
+				continue
+			} else if !info.IsDir() {
+				rule.dir = false
+			}
+		}
+		if rule.dir && !missing {
+			for _, helper := range inner {
+				parent, err := filepath.EvalSymlinks(filepath.Dir(helper))
+				if err != nil {
+					continue
+				}
+				helper = filepath.Join(parent, filepath.Base(helper))
+				if !pathInside(helper, real) || helper == real || !insideAny(helper, writable) || containsString(rule.inner, helper) {
+					continue
+				}
+				if info, err := os.Lstat(helper); err != nil {
+					if !errors.Is(err, os.ErrNotExist) || os.Mkdir(helper, 0o755) != nil {
+						continue
+					}
+				} else if !info.IsDir() {
+					// A link or a file in its place: nothing is bound writable.
+					continue
+				}
+				rule.inner = append(rule.inner, helper)
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
 }

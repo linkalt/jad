@@ -50,6 +50,12 @@ type Layout struct {
 	// profile's hide_paths: G/auth and the .jad folder of every other listed workspace. A
 	// profile or template can add hidden paths but cannot remove these.
 	FixedHidePaths []string
+	// SealedPaths are G and W/.jad, as written and with links resolved: read-only as a whole
+	// in every sandbox of the workspace (SandboxSettings.SealedPaths). SealedHelpers are the
+	// helper folders of exec and tool_smith inside W/.jad that stay writable to the tool that
+	// owns them when the sandbox covers it.
+	SealedPaths   []string
+	SealedHelpers map[string]string
 }
 
 // ScanModels is the model catalog of the layout: the models folder, and in the workspace

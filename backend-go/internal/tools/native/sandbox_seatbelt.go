@@ -47,7 +47,7 @@ func seatbeltProfile(sandbox *sessionfs.SandboxSettings, place sandboxPlace, exp
 		}
 	}
 	profile.WriteString(")\n")
-	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(writes, expand))))
+	profile.WriteString(seatbeltRuleProfile(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand))))
 	for _, path := range sandbox.HidePaths {
 		path = seatbeltPath(expand(path))
 		if path == "" {

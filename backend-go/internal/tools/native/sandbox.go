@@ -171,7 +171,7 @@ func bwrapArguments(sandbox *sessionfs.SandboxSettings, place sandboxPlace, expa
 	for _, path := range writable {
 		arguments = append(arguments, "--bind-try", path, path)
 	}
-	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox.ReadOnlyPaths, sandboxWritableCandidates(writes, expand)))...)
+	arguments = append(arguments, bwrapRuleArguments(sandboxFixedRules(place, writable, sandbox, sandboxWritableCandidates(writes, expand)))...)
 	for _, path := range sandbox.HidePaths {
 		path = expand(path)
 		info, err := statInRun(path)

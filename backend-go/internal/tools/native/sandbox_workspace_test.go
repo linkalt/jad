@@ -68,3 +68,84 @@ func TestWorkspaceSandboxHidesFixedPathsAndKeepsConfigReadOnly(t *testing.T) {
 		}
 	}
 }
+
+// Decider fix A for phase 1b: in the workspace layout G and W/.jad are sealed, so a sandboxed
+// call cannot change the configuration a later load reads, even when the profile makes $HOME
+// and W/.jad/profiles writable: no edited profile, no new toolset, no change under G/models and
+// no new G/global.json. The exec helper folder W/.jad/exec stays writable, and so does the
+// project (docs/design_workspace_layout.md §4.6).
+func TestWorkspaceSandboxSealsTheGlobalAndWorkspaceConfiguration(t *testing.T) {
+	requireBwrap(t)
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	global := filepath.Join(home, ".jad")
+	a := filepath.Join(base, "a")
+	model := filepath.Join(global, "models", "openai", "default.json")
+	writeWorkspaceFile(t, model, `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY"}`)
+	writeWorkspaceFile(t, filepath.Join(a, ".jad", "workspace.json"), `{}`)
+	writeWorkspaceFile(t, filepath.Join(a, ".jad", "sessions", "s1.json"), `{"schema_version":1}`)
+	profile := filepath.Join(a, ".jad", "profiles", "dev", "coder.json")
+	writeWorkspaceFile(t, profile, `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap",`+
+		`"writable_paths":["{workspace}","{tmp}","`+home+`","{workspace}/.jad/profiles"]}}}`)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: a, Environment: map[string]string{"HOME": home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := bashTestSettings(t, a)
+	settings.Sandbox = config.Sandbox
+	useOwnTempDir(t)
+	attempt := func(name, command string) string {
+		return `if ( ` + command + ` ) 2>/dev/null; then echo "` + name + `=written"; else echo "` + name + `=refused"; fi; `
+	}
+	command := attempt("profile", `echo '{"hooks":{}}' > .jad/profiles/dev/coder.json`) +
+		attempt("newprofile", `echo '{}' > .jad/profiles/dev/evil.json`) +
+		attempt("toolset", `mkdir -p .jad/tools/dev && echo '{}' > .jad/tools/dev/evil.json`) +
+		attempt("setting", `echo '{}' > .jad/setting.json`) +
+		attempt("gmodel", `echo '{}' > `+model) +
+		attempt("gtool", `mkdir -p `+global+`/tools/dev && echo '{}' > `+global+`/tools/dev/evil.json`) +
+		attempt("gglobal", `echo '{}' > `+global+`/global.json`) +
+		attempt("home", `echo hi > `+home+`/note.txt`) +
+		attempt("helper", `mkdir -p .jad/exec && echo 'echo hi' > .jad/exec/hello.sh`) +
+		attempt("project", `echo hi > project.txt`)
+	output := executeSandboxBashTest(t, a, "seal-call", command, "", settings)
+	for _, want := range []string{"profile=refused", "newprofile=refused", "toolset=refused", "setting=refused", "gmodel=refused", "gtool=refused", "gglobal=refused",
+		"home=written", "helper=written", "project=written"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("want %s in:\n%s", want, output)
+		}
+	}
+	for _, path := range []string{filepath.Join(a, ".jad", "profiles", "dev", "evil.json"), filepath.Join(a, ".jad", "tools"), filepath.Join(a, ".jad", "setting.json"), filepath.Join(global, "tools"), filepath.Join(global, "global.json")} {
+		if _, err := os.Lstat(path); err == nil {
+			t.Errorf("%s was made from the sandbox", path)
+		}
+	}
+	if data, _ := os.ReadFile(profile); strings.Contains(string(data), "hooks") {
+		t.Error("the profile was changed from the sandbox")
+	}
+}
+
+// A sealed folder that does not exist yet becomes an empty read-only folder where a writable
+// path covers its parent, so a call cannot make G (and a G/global.json in it); one whose parent
+// is missing too, or that no writable path covers, needs no rule.
+func TestSealedRulesKeepAMissingFolderFromBeingMade(t *testing.T) {
+	home := t.TempDir()
+	if real, err := filepath.EvalSymlinks(home); err == nil {
+		home = real
+	}
+	global := filepath.Join(home, ".jad")
+	rules := sandboxSealedRules([]string{home}, []string{global, filepath.Join(home, "no", "such"), "/elsewhere/.jad"}, []string{filepath.Join(global, "exec")})
+	if len(rules) != 1 || rules[0].path != global || !rules[0].missing || !rules[0].dir || len(rules[0].inner) != 0 {
+		t.Fatalf("rules = %+v", rules)
+	}
+	if _, err := os.Lstat(filepath.Join(global, "exec")); err == nil {
+		t.Fatal("a helper folder was made inside a missing sealed folder")
+	}
+}

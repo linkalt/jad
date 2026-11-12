@@ -194,9 +194,15 @@ command can come later).
   resolves from `W` (a cwd inside `.jad` would run tools there), of the global setting from
   `G`; without any cwd a session works in `W`. Everything cwd-relative today stays so
   (`prompt_documents`, `agents_dir`, MCP config paths, `project_instructions`,
-  `tool_storage_dir`). Other relative paths in session, profile and toolset files resolve
-  from `G` (the root's `GlobalJadRoot`), as they did from the v1 setting folder, so shared
-  toolsets behave as before. `{workspace}` as a path placeholder is not built yet.
+  `tool_storage_dir`). Other relative paths resolve from the folder their file came from
+  (decider ruling on phase 1a, built in 1b): `W/.jad` for the files of a workspace (sessions,
+  profiles, workspace toolsets), `G` for global ones (global toolsets, `global.json`). The
+  composed settings are read with `W/.jad` as the base (`Root.pathBase`); a global toolset's
+  `env_file` (exec, tool_smith, hooks) and path rules (exec, read_image, lsp, code_context) and
+  `global.json`'s `libraries.tool_definition_paths`, `defaults.hooks.env_file` and
+  `defaults.session_files.paths` are made absolute from `G` before they are merged. Sandbox
+  paths must already be absolute or start with a placeholder. `{workspace}` as a path
+  placeholder is not built yet.
 - Plugins stay global; libraries see Q3.
 
 ### 4.5 Prompt documents (decider D1 to D3)
@@ -237,12 +243,26 @@ sandbox that hides other profiles' `profile-own/`, a profile can still read them
 
 ### 4.6 Sandbox rules (when a sandbox is enabled)
 
-- **Read-only:** the global setting and global catalog folders; `workspace.json`, `sessions/`,
-  `profiles/`, `models/`, `tools/`, `mcp/`, `remotes/`, `sandbox/`, `profile-own/`, `state/` of
-  the workspace. Listed exactly, not the whole `W/.jad`, because exec helpers and tool storage
-  live there too.
-- **Writable inside them** (existing inner-writable rule): tool storage, and the running
-  profile's `{profile_data}` folder. Other profiles' data stays read-only.
+- **Sealed (built in phase 1b, decider fix A):** `G` and the own `W/.jad` are read-only as a
+  whole in every bwrap or seatbelt sandbox of a v2 session (`SandboxSettings.SealedPaths`, set
+  with the fixed hidden list so no profile or template removes them). Unlike the v1 read-only
+  configuration paths, no writable path is bound again inside a sealed folder: a
+  `writable_paths` entry such as `{workspace}/.jad/profiles` or `{home}` does not open it, and
+  no new file (a profile, a toolset, `G/global.json`, `W/.jad/setting.json`) can be made. A
+  missing sealed folder whose parent is writable becomes an empty read-only folder (bwrap makes
+  the mount point, so an empty `G` can appear on the host); one whose parent is missing too is
+  not covered. The v1 read-only list (global setting, session file, profiles, catalogs, state,
+  sandbox templates, `workspace.json`, `W/.jad/sessions`, `models`, `tools`) still applies.
+- **Writable inside the sealed `W/.jad`:** only the engine's helper folders `W/.jad/exec` (when
+  the sandbox covers `exec`) and `W/.jad/functions` (when it covers `tool_smith`), the default
+  `functions_dir` of each tool for a session working in `W`; made when missing. A
+  `functions_dir` configured elsewhere in `W/.jad` is read-only. Tool storage under `W/.jad/state`
+  was already read-only to sandboxed calls (the session state folder is a configuration path),
+  so nothing that worked before needs `W/.jad` writable. Phase 2 adds the running profile's
+  `{profile_data}` folder.
+- **Consequences:** a sandboxed call can no longer edit files a project keeps in `W/.jad`, such
+  as this repository's `.jad/prompts` library; a worktree run's copy of a tracked `.jad` is
+  sealed too.
 - **Hidden, not removable by a profile (Q4, built in phase 1a):** `G/auth` and the `.jad/` of
   every other listed workspace (skipped ones and nested ones included), as written and with
   links resolved. `Layout.FixedHidePaths` is added after `hide_paths` is read, to the session
@@ -252,8 +272,13 @@ sandbox that hides other profiles' `profile-own/`, a profile can still read them
   defaults enable none; the fixed part applies to it too.
 - Own state and transcript readable; other profiles' state readable as today (the
   `transcript` tool), never writable.
-- In-process readers follow the same hidden set (`environmentPolicy`). No deny-write rules were
-  added: the audit (section 2) found no in-process writer that takes a model-chosen path.
+- In-process readers follow the same hidden set (`environmentPolicy`) when a sandbox is on. In
+  v2 they also answer the fixed hidden paths as not found without a sandbox (phase 1b, decider
+  fix C): the loader puts them in `NativePathPolicy.Hidden` of code_context, lsp, read_image,
+  transcript (also `path:`), transcripts, profile, the UI file list and the cwd checks of exec
+  and tool_smith; `resolveExistingTarget` and `transcriptDenied` check the requested path and
+  the path after links, and give the answer of a missing file. No deny-write rules were added:
+  the audit (section 2) found no in-process writer that takes a model-chosen path.
 - Built in phase 1a: the read-only list adds `workspace.json`, `W/.jad/sessions`, `W/.jad/models`
   and `W/.jad/tools` to the v1 list (global setting, session file, profiles, global models,
   tools, mcp, remotes, state, sandbox templates). `profile-own/` and `{profile_data}` come with
@@ -305,8 +330,10 @@ the audit record and `off` are the mitigations.
 | A profile cannot raise a ceiling key through the `profile` tool | the `profile` tool | yes, but without a sandbox `exec` can still rewrite the profile file |
 | A profile cannot put another profile's private document in its prompt | the loader (symlink-resolved check) | yes |
 | A tool call cannot write config, sessions or state | bwrap/seatbelt read-only paths | **no** |
-| A tool call cannot read another workspace or another profile's private files | hidden paths (Q4) | **no** |
+| A tool call cannot read another workspace's `.jad` or another profile's private files | hidden paths (Q4) | **no** |
 | `G/auth` unreadable to tool calls | fixed hidden path | **no** |
+| A sandboxed call cannot change `G` or `W/.jad` (but the helper folders) | sealed paths (fix A), bwrap tested | **no** |
+| The in-process readers (code_context, lsp, read_image, transcript `path:`, transcripts, profile) answer `G/auth` and other workspaces' `.jad` as not found | `NativePathPolicy.Hidden` (fix C) | yes; not other workspaces' project files, and not `exec` |
 
 Not covered at all: other processes of the same OS user; children that the sandbox does not
 cover (by default it covers only `exec` and `tool_smith`: hooks, MCP stdio servers and the
@@ -437,3 +464,27 @@ put to the decider follow.
   (Q6 for transcript, transcripts listing, profile list and actions, profile_message).
 - Interface change: `native.ProfileActions` and `native.TranscriptSessions` take the caller's
   session key, so the app can look sessions up as the caller sees them.
+
+## 11. Phase 1b as built
+
+**Step 1, safety (decider fixes and ruling, first 1b commit):**
+
+- Paths resolve from the folder of their file (section 4.4): `Root.pathBase`,
+  `absoluteGlobalToolsetPaths` and the `global.json` rewrites in `workspaceDefaults` and
+  `globalLayout` (`sessionfs/workspace_paths.go`, `workspace_load.go`). The toolset check of the
+  catalog routes reads a workspace toolset from `W/.jad` too. v1 keeps the setting folder.
+- Fix A, sealed `G` and `W/.jad` (section 4.6): `Layout.SealedPaths` and `SealedHelpers`,
+  `SandboxSettings.SealedPaths` and `SealedInner` (kept by `NarrowSandbox`, which keeps a helper
+  folder only where the parent lets it, by the worktree move and cleared for sandbox probes),
+  `sandboxSealedRules` after the configuration rules and before the hidden paths.
+- Fix C, in-process readers (section 4.6): `NativePathPolicy.Hidden` set by
+  `SessionConfig.hideFixedPaths`, kept by every policy copy of `scopedPolicy`.
+- Tests: `sessionfs/workspace_paths_test.go` (two workspaces with `env_file: ".env"` read their
+  own file, global toolset and `global.json` paths from `G`, workspace toolset from `W/.jad`;
+  narrowed sealed lists; reader policies get the hidden list),
+  `tools/native/sandbox_workspace_test.go` (real bwrap: with `$HOME` and
+  `{workspace}/.jad/profiles` writable, editing a profile, a new profile, a new toolset,
+  `W/.jad/setting.json`, a `G/models` file, a new `G/tools` toolset and a new `G/global.json` all
+  fail, while `$HOME`, `W/.jad/exec` and the project stay writable; a missing sealed folder),
+  `tools/native/path_hidden_test.go` (a hidden file by name and through a link gets exactly the
+  missing-file answer; the policy copies keep the list).

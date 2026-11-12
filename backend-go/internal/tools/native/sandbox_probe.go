@@ -65,6 +65,6 @@ func ProbePlanFallback(ctx context.Context) error {
 		return errors.New("neither bwrap nor seatbelt runs on this system")
 	}
 	probed := *fallback.ForPlanMode()
-	probed.ReadOnlyPaths = nil
+	probed.ReadOnlyPaths, probed.SealedPaths, probed.SealedInner = nil, nil, nil
 	return ProbeSandbox(ctx, &probed, os.TempDir())
 }

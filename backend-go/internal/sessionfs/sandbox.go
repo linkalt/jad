@@ -166,6 +166,13 @@ type SandboxSettings struct {
 	// sets them and every bwrap or seatbelt sandbox keeps them read-only, so a sandboxed call
 	// cannot widen the environment of the next one by editing it.
 	ReadOnlyPaths []string `json:",omitempty"`
+	// SealedPaths (workspace layout only: G and W/.jad) are kept read-only as a whole by every
+	// bwrap or seatbelt sandbox, missing ones too: unlike ReadOnlyPaths, no writable path is
+	// bound again inside them, so neither a writable_paths entry nor a new file can change
+	// the configuration the next run loads. SealedInner are the engine's own folders inside
+	// them a covered tool still writes (W/.jad/exec, W/.jad/functions); the loader sets both.
+	SealedPaths []string `json:",omitempty"`
+	SealedInner []string `json:",omitempty"`
 	// Isolation is how a delegated run that uses this sandbox works (sandbox.isolation).
 	Isolation SandboxIsolation `json:",omitzero"`
 }

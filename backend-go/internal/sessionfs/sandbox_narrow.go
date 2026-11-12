@@ -81,6 +81,15 @@ func NarrowSandbox(parent, child *SandboxSettings, parentExpand, childExpand San
 	narrowed.Tools = appendNewStrings(append([]string(nil), parent.Tools...), child.Tools...)
 	narrowed.HidePaths = appendNewStrings(append([]string(nil), child.HidePaths...), expandedPaths(parent.HidePaths, parentExpand)...)
 	narrowed.ReadOnlyPaths = appendNewStrings(append([]string(nil), child.ReadOnlyPaths...), parent.ReadOnlyPaths...)
+	narrowed.SealedPaths = appendNewStrings(append([]string(nil), child.SealedPaths...), parent.SealedPaths...)
+	// A helper folder stays writable only where the parent lets it: the parent may seal its
+	// folder without it (a tool it does not cover, whose helpers would then run unconfined).
+	narrowed.SealedInner = nil
+	for _, inner := range child.SealedInner {
+		if containsString(parent.SealedInner, inner) || !slices.ContainsFunc(parent.SealedPaths, func(sealed string) bool { return PathWithin(sealed, inner) }) {
+			narrowed.SealedInner = append(narrowed.SealedInner, inner)
+		}
+	}
 	if len(child.NetworkAllow) == 0 && !child.Network && len(parent.NetworkAllow) > 0 {
 		// A child that names no host gets none: no network is narrower than the parent's.
 		narrowed.NetworkAllow = nil
