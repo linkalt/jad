@@ -4297,3 +4297,18 @@ Open gaps:
 - **Hidden is not a read barrier for `exec`, hooks, MCP stdio or lsp servers** without a sandbox, and covers only `G/auth` and other workspaces' `.jad`, not their project files.
 - **Still to come in phase 1b:** fix B (libraries and `skill`/commands on the v2 layout, Q3), fix D (`scope` on catalog routes and `jad plugin`), `/api/workspaces`, the `global:`/`workspace:` prefixes, `{workspace}`, and the Q7 additions.
 - **Known flaky test seen again.** The first `verify-go.sh` of this step failed only in `internal/worktree` `TestBaseCacheSurvivesServersChurningTogether` (`git worktree add ... Invalid path`), already recorded above as a suite-load race; it passed 3 of 3 alone and the second gate exited 0. This step does not touch that package.
+
+## Workspace layout v2: phase 1b step 2, content libraries on the workspace layout (T-028, Go, 2026-11-12)
+
+Decider fix B with Q3 (design sections 4.4 and 11). Closes the 1a gap "the prompt library, `skill` and commands still find their setting as in v1".
+
+- **No `setting.json` in v2.** The HTTP library, the `skill` tool and `jad plugin` take their folders from `global.json` and `workspace.json`, read once at start (`sessionfs.Libraries` on each workspace's layout and on every session config); the library files themselves are still read per request, as in v1. Decider stop condition (re-reading settings while running) not hit.
+- **Keys.** `global.json` `libraries`: `prompt_dirs`, `template_dirs`, `skill_dirs`, `command_dirs` (from G; a kind not set uses the built-in `.agent/<kind>` under G, a kind set to `[]` has none), `max_asset_bytes` (range checked when the library is used, 1024 to 8 MiB, as in v1), `tool_definition_paths`. `workspace.json` `libraries`: the four folder keys only, from `W/.jad`, none by default; `max_asset_bytes` and `tool_definition_paths` are refused there.
+- **A name in both scopes is never picked.** A skill (by name) or command (by word) in the global and the workspace library is left out of every list and named in `Catalog.ambiguous`; reading it is `AmbiguousError` (the `skill` tool answers `skill_ambiguous` naming both folders, the HTTP routes 422). Inside one scope the first folder still wins, as in v1. Prompts and templates are picked by a path-derived ID, so the two scopes are listed side by side (the menu's `-2` slugs, as for two v1 folders).
+- **HTTP.** `/api/library` and its item and command-expand routes take `?workspace=<id>`; without it the start workspace; an unknown one, or any in v1, is 404. `httpapi.RootLibrary` methods take the workspace argument. `Catalog.ambiguous` is new, omitted when empty.
+- **Plugins stay global.** In v2 `jad plugin` installs skills and commands into the first global folders.
+
+Open gaps:
+- **The web client and `jad run` do not pass `workspace` yet**, so they show and expand the start workspace's library; a headless run in another served workspace sees the start workspace's commands. Closes with the phase 5 workspace picker and a `jad run` change that passes the session's workspace.
+- **Library folders are not sealed beyond `W/.jad` and G.** A workspace library folder outside `W/.jad` (or a global one outside G) stays as writable as the sandbox makes it.
+- **Flaky test seen in the first gate of this step.** `internal/tools/native` `TestAPanicInsideFinishOfABackgroundRunEndsItsHandleAndGivesEverythingBack` failed once under suite load ("no run id": the background writer finished before the handoff); it passed 5 of 5 alone and the second `verify-go.sh` exited 0. This step does not touch the sub-agent run code. Closes when that test waits for the handoff instead of racing it.

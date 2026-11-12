@@ -27,7 +27,7 @@ func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segm
 	}
 	switch len(segments) {
 	case 2:
-		catalog, err := h.library.List(r.Context())
+		catalog, err := h.library.List(r.Context(), r.URL.Query().Get("workspace"))
 		if err != nil {
 			writeRootLibraryError(w, err)
 			return
@@ -42,7 +42,7 @@ func (h *Handler) handleRootLibrary(w http.ResponseWriter, r *http.Request, segm
 			writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "not found"})
 			return
 		}
-		asset, found, err := h.library.Read(r.Context(), kind, segments[3])
+		asset, found, err := h.library.Read(r.Context(), kind, segments[3], r.URL.Query().Get("workspace"))
 		if err != nil {
 			writeRootLibraryError(w, err)
 			return
@@ -83,7 +83,7 @@ func (h *Handler) handleCommandExpand(w http.ResponseWriter, r *http.Request, id
 	if body.Arguments != nil {
 		arguments = *body.Arguments
 	}
-	asset, found, err := h.library.Read(r.Context(), contentlibrary.Command, id)
+	asset, found, err := h.library.Read(r.Context(), contentlibrary.Command, id, r.URL.Query().Get("workspace"))
 	if err != nil {
 		writeRootLibraryError(w, err)
 		return
@@ -110,6 +110,10 @@ func (h *Handler) handleCommandExpand(w http.ResponseWriter, r *http.Request, id
 }
 
 func writeRootLibraryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, contentlibrary.ErrUnknownWorkspace) {
+		writeJSONError(w, &StatusError{Code: http.StatusNotFound, Message: "workspace not found"})
+		return
+	}
 	var configErr *contentlibrary.ConfigError
 	if errors.As(err, &configErr) {
 		writeJSONError(w, &StatusError{Code: http.StatusUnprocessableEntity, Message: configErr.Error()})

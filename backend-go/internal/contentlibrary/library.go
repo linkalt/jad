@@ -87,6 +87,9 @@ type Catalog struct {
 	// CommandsError says why the commands could not be listed (a command folder that is a
 	// file, a read error); Commands is then empty and the other kinds are still listed.
 	CommandsError string `json:"commands_error,omitempty"`
+	// Ambiguous (workspace layout only) names the skills and commands found in both the
+	// global and the workspace library, which are left out of the lists.
+	Ambiguous []string `json:"ambiguous,omitempty"`
 }
 
 // Library reads the configured root-library directories. Configuration and
@@ -102,12 +105,28 @@ func New(options Options) *Library {
 }
 
 // List reads summaries from the configured prompt, template, and skill trees.
-func (l *Library) List(ctx context.Context) (Catalog, error) {
+// In the workspace layout, workspace names whose library is listed ("" for the start
+// workspace); a v1 library has none and refuses any other.
+func (l *Library) List(ctx context.Context, workspace string) (Catalog, error) {
 	if l == nil {
 		return Catalog{}, errors.New("root library is unavailable")
 	}
 	if ctx == nil {
 		return Catalog{}, errors.New("root library request context is required")
+	}
+	if l.options.Workspaces != nil {
+		libraries, err := l.options.workspaceLibraries(workspace)
+		if err != nil {
+			return Catalog{}, err
+		}
+		dirs, err := scopedDirectoriesOf(libraries)
+		if err != nil {
+			return Catalog{}, err
+		}
+		return listScoped(ctx, dirs)
+	}
+	if workspace != "" {
+		return Catalog{}, ErrUnknownWorkspace
 	}
 	directories, err := loadDirectories(l.options)
 	if err != nil {
@@ -147,19 +166,39 @@ func (l *Library) List(ctx context.Context) (Catalog, error) {
 	return catalog, nil
 }
 
-// Read returns one current asset by its opaque, path-derived identifier.
-func (l *Library) Read(ctx context.Context, kind Kind, id string) (Asset, bool, error) {
+// Read returns one current asset by its opaque, path-derived identifier, of workspace's
+// library in the workspace layout (see List).
+func (l *Library) Read(ctx context.Context, kind Kind, id, workspace string) (Asset, bool, error) {
 	if l == nil || !validKind(kind) || !assetIDPattern.MatchString(id) {
 		return Asset{}, false, nil
 	}
 	if ctx == nil {
 		return Asset{}, false, errors.New("root library request context is required")
 	}
+	if l.options.Workspaces != nil {
+		libraries, err := l.options.workspaceLibraries(workspace)
+		if err != nil {
+			return Asset{}, false, err
+		}
+		dirs, err := scopedDirectoriesOf(libraries)
+		if err != nil {
+			return Asset{}, false, err
+		}
+		return readScoped(ctx, dirs, kind, id)
+	}
+	if workspace != "" {
+		return Asset{}, false, ErrUnknownWorkspace
+	}
 	directories, err := loadDirectories(l.options)
 	if err != nil {
 		return Asset{}, false, err
 	}
-	files, err := filesForKind(ctx, kind, directoryList(directories, kind))
+	return readByID(ctx, kind, directoryList(directories, kind), id, directories.maxAssetBytes)
+}
+
+// readByID finds the asset of kind whose path-derived ID is id in directories.
+func readByID(ctx context.Context, kind Kind, directories []string, id string, maxBytes int64) (Asset, bool, error) {
+	files, err := filesForKind(ctx, kind, directories)
 	if err != nil {
 		return Asset{}, false, err
 	}
@@ -170,7 +209,7 @@ func (l *Library) Read(ctx context.Context, kind Kind, id string) (Asset, bool, 
 		if assetID(kind, file.path) != id {
 			continue
 		}
-		asset, err := readAsset(kind, file.root, file.path, directories.maxAssetBytes)
+		asset, err := readAsset(kind, file.root, file.path, maxBytes)
 		if err != nil {
 			return Asset{}, false, err
 		}

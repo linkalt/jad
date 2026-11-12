@@ -203,7 +203,19 @@ command can come later).
   `defaults.session_files.paths` are made absolute from `G` before they are merged. Sandbox
   paths must already be absolute or start with a placeholder. `{workspace}` as a path
   placeholder is not built yet.
-- Plugins stay global; libraries see Q3.
+- Plugins stay global: `jad plugin` installs skills and commands into the first global
+  folders of `global.json`.
+- **Content libraries (Q3, built in phase 1b step 2):** `global.json` `libraries`
+  (`prompt_dirs`, `template_dirs`, `skill_dirs`, `command_dirs`, `max_asset_bytes`,
+  `tool_definition_paths`) from G, each kind not set using the built-in `.agent/<kind>` under
+  G; `workspace.json` `libraries` (the four folder keys only, none by default) from `W/.jad`,
+  seen only in that workspace. Both are read once at start (`sessionfs.Libraries`); no
+  `setting.json` is read by the HTTP library, the `skill` tool or `jad plugin` in v2. A skill
+  (by name) or command (by word) found in both scopes is left out of every list, named in the
+  catalog's `ambiguous`, and reading it is an error naming both (`skill_ambiguous` for the
+  tool, 422 for the HTTP routes); inside one scope the first folder still wins, as in v1.
+  Prompts and templates are picked by a path-derived ID, so both scopes are listed side by
+  side. The HTTP library takes `?workspace=<id>` (default the start workspace; unknown is 404).
 
 ### 4.5 Prompt documents (decider D1 to D3)
 
@@ -488,3 +500,14 @@ put to the decider follow.
   fail, while `$HOME`, `W/.jad/exec` and the project stay writable; a missing sealed folder),
   `tools/native/path_hidden_test.go` (a hidden file by name and through a link gets exactly the
   missing-file answer; the policy copies keep the list).
+
+**Step 2, libraries (fix B with Q3):** `sessionfs/workspace_libraries.go` (parsing,
+`Layout.Libraries`, `SessionConfig.Libraries`), `contentlibrary/scopes.go` (scoped listing and
+reads, `ListWorkspaceSkills`, `ReadWorkspaceSkill`, `GlobalInstallFolders`), the `workspace`
+parameter of `httpapi.RootLibrary`, `native.NewSkillTool(…, libraries)`, `app.LoadConfig`
+(`Options.Workspaces`), `cmd/jad/plugin.go`; schemas `global.schema.json` and
+`workspace.schema.json`. Tests: `sessionfs/workspace_libraries_test.go`,
+`contentlibrary/scopes_test.go`, `app/workspace_library_test.go` (HTTP: own and global
+library, another workspace does not see it, no `setting.json` read, ambiguous names left out,
+unknown workspace 404), `tools/native/skill_test.go`
+(`TestWorkspaceSkillToolRefusesANameInBothLibraries`).

@@ -37,7 +37,10 @@
             "pattern": "\\S"
           }
         },
-        "required": ["id", "path"],
+        "required": [
+          "id",
+          "path"
+        ],
         "additionalProperties": false
       }
     },
@@ -45,10 +48,22 @@
       "type": "object",
       "description": "Folders of the shared catalogs, relative to G. Defaults: models, tools, mcp, remotes, sandbox. Profiles, sessions and state belong to each workspace (W/.jad/profiles, W/.jad/sessions, W/.jad/state); a workspace's private models and tools are W/.jad/models and W/.jad/tools, and a name found in both the global and the workspace folder is an error naming both files.",
       "properties": {
-        "models": {"type": "string", "pattern": "\\S"},
-        "tools": {"type": "string", "pattern": "\\S"},
-        "mcp": {"type": "string", "pattern": "\\S"},
-        "remotes": {"type": "string", "pattern": "\\S"},
+        "models": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "tools": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "mcp": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "remotes": {
+          "type": "string",
+          "pattern": "\\S"
+        },
         "sandbox": {
           "type": "string",
           "pattern": "\\S",
@@ -63,10 +78,25 @@
     },
     "libraries": {
       "type": "object",
-      "description": "Only tool_definition_paths is read in the workspace layout so far; any other key is refused until the prompt library follows the workspace layout (T-028 phase 1b).",
+      "description": "The global content library, shared by every workspace: folders relative to this file's folder (G), read once at start. A kind not set uses the built-in default folder under G (.agent/prompts, .agent/templates, .agent/skills, .agent/commands). A skill or command name also found in a workspace's own library is left out and naming it is an error (docs/design_workspace_layout.md Q3).",
       "properties": {
+        "prompt_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/prompt_dirs"
+        },
+        "template_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/template_dirs"
+        },
+        "skill_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/skill_dirs"
+        },
+        "command_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/command_dirs"
+        },
         "tool_definition_paths": {
           "$ref": "root-setting.schema.json#/properties/libraries/properties/tool_definition_paths"
+        },
+        "max_asset_bytes": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/max_asset_bytes"
         }
       },
       "additionalProperties": false

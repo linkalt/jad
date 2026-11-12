@@ -433,7 +433,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot)
+		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot, config.Libraries)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

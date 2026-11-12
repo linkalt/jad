@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -55,9 +56,27 @@ func (l rootSkillLibrary) Read(ctx context.Context, directories []string, name s
 	return contentlibrary.ReadSkill(ctx, directories, name, maxBytes)
 }
 
-// NewSkillTool creates the read-only bridge from the global root's skill
-// libraries to the model.
-func NewSkillTool(settings sessionfs.NativeSkillSettings, globalJadRoot string) (tools.Tool, error) {
+// workspaceSkillLibrary is the skill library of a workspace-layout session: the global and
+// the workspace's skill folders read once at start (sessionfs.Libraries), a name in both an
+// error. The directories the tool passes are not used.
+type workspaceSkillLibrary struct{ libraries *sessionfs.Libraries }
+
+func (l workspaceSkillLibrary) Directories() ([]string, error) { return nil, nil }
+
+func (l workspaceSkillLibrary) List(ctx context.Context, _ []string) ([]contentlibrary.Asset, error) {
+	return contentlibrary.ListWorkspaceSkills(ctx, l.libraries)
+}
+
+func (l workspaceSkillLibrary) Read(ctx context.Context, _ []string, name string) (contentlibrary.LoadedSkill, bool, error) {
+	return contentlibrary.ReadWorkspaceSkill(ctx, l.libraries, name)
+}
+
+// NewSkillTool creates the read-only bridge from the skill libraries to the model: the global
+// root's (v1), or with libraries those of the session's workspace (workspace layout).
+func NewSkillTool(settings sessionfs.NativeSkillSettings, globalJadRoot string, libraries *sessionfs.Libraries) (tools.Tool, error) {
+	if libraries != nil {
+		return newSkillTool(settings, workspaceSkillLibrary{libraries: libraries})
+	}
 	return newSkillTool(settings, rootSkillLibrary{globalJadRoot: globalJadRoot})
 }
 
@@ -177,6 +196,12 @@ func executeNativeSkill(ctx context.Context, arguments map[string]any, settings 
 	}
 
 	found, exists, err := library.Read(ctx, directories, name)
+	var ambiguous *contentlibrary.AmbiguousError
+	if errors.As(err, &ambiguous) {
+		// A name in both the global and the workspace library (workspace layout): the model
+		// cannot fix it, the person can, so the call says which files.
+		return tools.ExecutionError(callID, tools.StatusInvalidInput, "skill_ambiguous", ambiguous.Error()), nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("read skill: %w", err)
 	}

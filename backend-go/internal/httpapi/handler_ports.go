@@ -263,7 +263,9 @@ type ProfileReset interface {
 }
 
 // RootLibrary provides the optional, read-only global Markdown library.
+// The last argument names the workspace (the "workspace" query parameter; "" is the start
+// workspace); a server outside the workspace layout refuses any other.
 type RootLibrary interface {
-	List(context.Context) (contentlibrary.Catalog, error)
-	Read(context.Context, contentlibrary.Kind, string) (contentlibrary.Asset, bool, error)
+	List(ctx context.Context, workspace string) (contentlibrary.Catalog, error)
+	Read(ctx context.Context, kind contentlibrary.Kind, id, workspace string) (contentlibrary.Asset, bool, error)
 }

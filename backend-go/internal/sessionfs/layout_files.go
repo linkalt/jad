@@ -56,6 +56,8 @@ type Layout struct {
 	// owns them when the sandbox covers it.
 	SealedPaths   []string
 	SealedHelpers map[string]string
+	// Libraries are the content libraries of the workspace (global and own folders).
+	Libraries *Libraries
 }
 
 // ScanModels is the model catalog of the layout: the models folder, and in the workspace

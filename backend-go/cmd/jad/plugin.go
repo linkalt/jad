@@ -195,6 +195,16 @@ func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 			return nil
 		},
 	}
+	target.ReadCommands = contentlibrary.CheckCommands
+	if root.Layout.Libraries != nil {
+		// Workspace layout: plugins are global, so skills and commands go to the first global
+		// folders of global.json (no setting.json is read).
+		var err error
+		if target.SkillDir, target.CommandDir, target.SkillMaxBytes, err = contentlibrary.GlobalInstallFolders(root.Layout.Libraries); err != nil {
+			return plugins.Target{}, sessionfs.CLISettings{}, err
+		}
+		return target, loaded.CLI, nil
+	}
 	directories, err := contentlibrary.SkillDirectories(root.GlobalJadRoot)
 	if err != nil {
 		return plugins.Target{}, sessionfs.CLISettings{}, err
@@ -209,7 +219,6 @@ func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 	if len(commandDirectories) > 0 {
 		target.CommandDir = commandDirectories[0]
 	}
-	target.ReadCommands = contentlibrary.CheckCommands
 	if target.SkillMaxBytes, err = contentlibrary.AssetByteLimit(root.GlobalJadRoot); err != nil {
 		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}

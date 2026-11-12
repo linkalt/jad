@@ -73,7 +73,7 @@ func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "second/empty.md"), "---\ndescription: nothing\n---\n")
 
 	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-	catalog, err := library.List(context.Background())
+	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 	if len(catalog.Prompts) != 0 {
 		t.Fatalf("a command was listed as a prompt: %+v", catalog.Prompts)
 	}
-	asset, found, err := library.Read(context.Background(), Command, review.ID)
+	asset, found, err := library.Read(context.Background(), Command, review.ID, "")
 	if err != nil || !found || asset.Content != "Review $ARGUMENTS carefully." || asset.Command != "review" {
 		t.Fatalf("read = %+v %v %v", asset, found, err)
 	}
@@ -117,7 +117,7 @@ func TestCommandFolderThatIsAFileIsReportedWithoutFailingTheList(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDefaultCommandFolderThatIsAFileKeepsTheOtherKinds(t *testing.T) {
 	root := t.TempDir()
 	writeLibraryTestFile(t, filepath.Join(root, ".agent", "prompts", "hello.md"), "Say hello.")
 	writeLibraryTestFile(t, filepath.Join(root, ".agent", "commands"), "not a folder")
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
 	if err != nil || len(catalog.Prompts) != 1 || catalog.CommandsError == "" {
 		t.Fatalf("catalog = %+v, err %v", catalog, err)
 	}
@@ -146,7 +146,7 @@ func TestDefaultCommandFolderThatIsAFileKeepsTheOtherKinds(t *testing.T) {
 
 // Without a problem there is no commands_error in the JSON.
 func TestCatalogWithoutCommandProblemHasNoCommandsError(t *testing.T) {
-	catalog, err := New(Options{WorkingDir: t.TempDir(), Environment: map[string]string{}}).List(context.Background())
+	catalog, err := New(Options{WorkingDir: t.TempDir(), Environment: map[string]string{}}).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestCommandRunOptions(t *testing.T) {
 	} {
 		writeLibraryTestFile(t, filepath.Join(root, "commands", name), text)
 	}
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

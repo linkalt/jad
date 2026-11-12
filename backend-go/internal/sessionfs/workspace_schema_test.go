@@ -35,7 +35,7 @@ func TestWorkspaceSchemasAgreeWithTheLoader(t *testing.T) {
 		}
 	}
 	global := compileSchema(t, "global.schema.json")
-	if !schemaAccepts(t, global, `{"schema_version":2,"workspaces":[{"id":"a","path":"~/a"}],"catalogs":{"models":"m"},"defaults":{"max_run_tokens":10}}`) {
+	if !schemaAccepts(t, global, `{"schema_version":2,"workspaces":[{"id":"a","path":"~/a"}],"catalogs":{"models":"m"},"defaults":{"max_run_tokens":10},"libraries":{"prompt_dirs":["p"],"max_asset_bytes":2048}}`) {
 		t.Error("a valid global.json is refused")
 	}
 	for _, refused := range []string{`{"session_roots":[]}`, `{"workspaces":[{"id":"a","path":"rel"}]}`, `{"catalogs":{"profiles":"p"}}`, `{"schema_version":1}`} {
@@ -44,10 +44,10 @@ func TestWorkspaceSchemasAgreeWithTheLoader(t *testing.T) {
 		}
 	}
 	workspace := compileSchema(t, "workspace.schema.json")
-	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"}}`) {
+	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"},"libraries":{"prompt_dirs":["prompts"],"skill_dirs":["skills"]}}`) {
 		t.Error("a valid workspace.json is refused")
 	}
-	for _, refused := range []string{`{"catalogs":{}}`, `{"libraries":{}}`, `{"id":"bad id"}`} {
+	for _, refused := range []string{`{"catalogs":{}}`, `{"libraries":{"max_asset_bytes":2048}}`, `{"libraries":{"tool_definition_paths":[]}}`, `{"id":"bad id"}`} {
 		if schemaAccepts(t, workspace, refused) {
 			t.Errorf("workspace.json %s is accepted", refused)
 		}

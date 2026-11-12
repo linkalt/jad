@@ -211,8 +211,8 @@ func TestBrokenStartWorkspaceIsRefused(t *testing.T) {
 	f.workspace(t, "a", `{}`)
 	f.globalJSON(t, `{"session_roots":[]}`)
 	wsMustRefuse(t, f, a, "session_roots is not a key")
-	f.globalJSON(t, `{"libraries":{"prompt_dirs":["p"]}}`)
-	wsMustRefuse(t, f, a, "libraries.prompt_dirs is not read in the workspace layout yet")
+	f.globalJSON(t, `{"libraries":{"agent_dirs":["p"]}}`)
+	wsMustRefuse(t, f, a, "libraries.agent_dirs is not a key here")
 }
 
 // Design Q2, row 5: a listed workspace that is missing or broken is skipped with a warning and

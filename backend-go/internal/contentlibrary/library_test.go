@@ -21,7 +21,7 @@ func TestLibraryListsMarkdownAssetsAndReadsFullContent(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "library/skills/invalid/SKILL.md"), "# Not a valid skill\n")
 
 	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-	catalog, err := library.List(context.Background())
+	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +47,14 @@ func TestLibraryListsMarkdownAssetsAndReadsFullContent(t *testing.T) {
 		t.Errorf("skill metadata = %+v", catalog.Skills[0])
 	}
 
-	asset, found, err := library.Read(context.Background(), Prompt, catalog.Prompts[1].ID)
+	asset, found, err := library.Read(context.Background(), Prompt, catalog.Prompts[1].ID, "")
 	if err != nil || !found {
 		t.Fatalf("Read(prompt) = found %v, error %v", found, err)
 	}
 	if asset.Content != "# Prompt heading\n\nPrompt body." || asset.Name != catalog.Prompts[1].Name {
 		t.Errorf("full prompt asset = %+v", asset)
 	}
-	if _, found, err := library.Read(context.Background(), Prompt, "not-an-asset-id"); err != nil || found {
+	if _, found, err := library.Read(context.Background(), Prompt, "not-an-asset-id", ""); err != nil || found {
 		t.Errorf("Read(invalid id) = found %v, error %v; want missing", found, err)
 	}
 }
@@ -74,7 +74,7 @@ func TestLibraryReloadsRootSettingsOnEachRequest(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "second/two.md"), "Second prompt.")
 	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
 
-	first, err := library.List(context.Background())
+	first, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestLibraryReloadsRootSettingsOnEachRequest(t *testing.T) {
 		t.Fatalf("first catalog = %v", got)
 	}
 	writeLibraryTestFile(t, setting, `{"libraries":{"prompt_dirs":["second"]}}`)
-	second, err := library.List(context.Background())
+	second, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestLibrarySettingResolutionMatchesRootOptions(t *testing.T) {
 		SessionsDir: "sessions",
 		Environment: map[string]string{},
 	})
-	defaultCatalog, err := withoutSetting.List(context.Background())
+	defaultCatalog, err := withoutSetting.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestLibrarySettingResolutionMatchesRootOptions(t *testing.T) {
 		RootSettingPath: "setting.json",
 		Environment:     map[string]string{},
 	})
-	customCatalog, err := withExplicitSetting.List(context.Background())
+	customCatalog, err := withExplicitSetting.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestLibraryRejectsInvalidSettingsAndMissingExplicitSetting(t *testing.T) {
 			root := t.TempDir()
 			writeLibraryTestFile(t, filepath.Join(root, "setting.json"), test.setting)
 			library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-			_, err := library.List(context.Background())
+			_, err := library.List(context.Background(), "")
 			var configErr *ConfigError
 			if !errors.As(err, &configErr) {
 				t.Fatalf("List() error = %v, want ConfigError", err)
@@ -148,7 +148,7 @@ func TestLibraryRejectsInvalidSettingsAndMissingExplicitSetting(t *testing.T) {
 
 	root := t.TempDir()
 	library := New(Options{WorkingDir: root, RootSettingPath: "missing.json", Environment: map[string]string{}})
-	_, err := library.List(context.Background())
+	_, err := library.List(context.Background(), "")
 	var configErr *ConfigError
 	if !errors.As(err, &configErr) {
 		t.Fatalf("missing explicit setting error = %v, want ConfigError", err)
@@ -163,7 +163,7 @@ func TestLibrarySkipsAssetsOverTheSizeLimit(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "prompts/big.md"), oversized)
 
 	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-	catalog, err := library.List(context.Background())
+	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestLibrarySkipsAssetsOverTheSizeLimit(t *testing.T) {
 		t.Fatalf("prompt count = %d (names %q), want only Small", len(catalog.Prompts), catalog.Prompts[0].Name)
 	}
 	bigID := assetID(Prompt, filepath.Join(root, "prompts/big.md"))
-	if _, found, err := library.Read(context.Background(), Prompt, bigID); err != nil || found {
+	if _, found, err := library.Read(context.Background(), Prompt, bigID, ""); err != nil || found {
 		t.Fatalf("Read(oversized) = found %v, error %v; want missing", found, err)
 	}
 }
@@ -211,7 +211,7 @@ func TestLibraryMaxAssetBytesDefaultsAndBounds(t *testing.T) {
 func TestLibraryEmptyCatalogUsesArrays(t *testing.T) {
 	root := t.TempDir()
 	library := New(Options{WorkingDir: root, SessionsDir: "sessions", Environment: map[string]string{}})
-	catalog, err := library.List(context.Background())
+	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 		t.Skipf("directory symlinks are unavailable: %v", err)
 	}
 
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestLibraryErrorDoesNotNameTheAbsoluteDirectory(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["notes.txt"]}}`)
 	writeLibraryTestFile(t, filepath.Join(root, "notes.txt"), "not a directory")
 
-	_, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background())
+	_, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
 	if err == nil {
 		t.Fatal("a file named as a prompt directory was accepted")
 	}
@@ -286,7 +286,7 @@ func TestLibraryFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
 
 	names := func(workingDir string) []string {
 		t.Helper()
-		catalog, err := New(Options{WorkingDir: workingDir, Environment: map[string]string{"HOME": home}}).List(context.Background())
+		catalog, err := New(Options{WorkingDir: workingDir, Environment: map[string]string{"HOME": home}}).List(context.Background(), "")
 		if err != nil {
 			t.Fatal(err)
 		}

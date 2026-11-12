@@ -28,7 +28,7 @@ const (
 
 var (
 	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries"}
-	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults"}
+	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries"}
 	workspaceEntryKeys   = []string{"id", "label", "path"}
 	// globalCatalogKeys are the catalogs global.json may move; profiles and state belong to
 	// each workspace and have fixed folders there.
@@ -262,24 +262,30 @@ func globalLayout(setting map[string]json.RawMessage, where, global string) (Lay
 	if err := layout.setSandboxCatalog(folders["sandbox"], global, where); err != nil {
 		return Layout{}, err
 	}
-	if raw, exists := setting["libraries"]; exists {
-		var libraries map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &libraries); err != nil || libraries == nil {
-			return Layout{}, configError("%s: libraries must be an object", where)
+	libraries, err := librariesObject(setting, where)
+	if err != nil {
+		return Layout{}, err
+	}
+	libraryFolders, err := parseLibraryFolders(libraries, where, global, "tool_definition_paths", "max_asset_bytes")
+	if err != nil {
+		return Layout{}, err
+	}
+	layout.Libraries = &Libraries{GlobalDir: global, Global: libraryFolders}
+	if raw, exists := libraries["max_asset_bytes"]; exists {
+		value, ok := configSafeInteger(raw)
+		if !ok || value <= 0 {
+			return Layout{}, configError("%s: libraries.max_asset_bytes must be a positive integer", where)
 		}
-		for key, rawValue := range libraries {
-			if key != "tool_definition_paths" {
-				// Never ignored silently: the prompt library does not follow the workspace layout yet.
-				return Layout{}, configError("%s: libraries.%s is not read in the workspace layout yet (T-028 phase 1b); only libraries.tool_definition_paths is", where, key)
-			}
-			if err := json.Unmarshal(rawValue, &layout.ToolDefinitionPaths); err != nil {
-				return Layout{}, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
-			}
-			// From G, the folder of this file: a session reads its settings from W/.jad.
-			for index, path := range layout.ToolDefinitionPaths {
-				if trimmed := strings.TrimSpace(path); trimmed != "" {
-					layout.ToolDefinitionPaths[index] = resolveFrom(global, trimmed)
-				}
+		layout.Libraries.MaxAssetBytes = value
+	}
+	if rawValue, exists := libraries["tool_definition_paths"]; exists {
+		if err := json.Unmarshal(rawValue, &layout.ToolDefinitionPaths); err != nil {
+			return Layout{}, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
+		}
+		// From G, the folder of this file: a session reads its settings from W/.jad.
+		for index, path := range layout.ToolDefinitionPaths {
+			if trimmed := strings.TrimSpace(path); trimmed != "" {
+				layout.ToolDefinitionPaths[index] = resolveFrom(global, trimmed)
 			}
 		}
 	}
@@ -530,6 +536,16 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	layout.Workspace = spec.dir
 	layout.WorkspaceSetting = where
 	layout.ToolDefinitionPaths = append([]string(nil), base.ToolDefinitionPaths...)
+	ownLibraries, err := workspaceLibraries(spec.setting, where, jad)
+	if err != nil {
+		return nil, err
+	}
+	libraries := Libraries{GlobalDir: base.GlobalDir}
+	if base.Libraries != nil {
+		libraries = *base.Libraries
+	}
+	libraries.Workspace = ownLibraries
+	layout.Libraries = &libraries
 	return &layout, nil
 }
 

@@ -22,6 +22,25 @@
     "defaults": {
       "$ref": "setting.schema.json#/$defs/layout_settings",
       "description": "Setting values every session of this workspace starts from, over global.json defaults. A relative env_file is relative to W/.jad, a relative cwd to W; without any cwd a session works in W. A profile may tighten, never loosen, the caps and an enabled sandbox set here or in global.json."
+    },
+    "libraries": {
+      "type": "object",
+      "description": "The workspace's own content library, seen only by this workspace: folders relative to this file's folder (W/.jad), read once at start, listed after the global ones. None by default. A skill or command name also in the global library is left out and naming it is an error; prompts and templates of both are listed side by side.",
+      "properties": {
+        "prompt_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/prompt_dirs"
+        },
+        "template_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/template_dirs"
+        },
+        "skill_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/skill_dirs"
+        },
+        "command_dirs": {
+          "$ref": "root-setting.schema.json#/properties/libraries/properties/command_dirs"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

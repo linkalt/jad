@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"jad/backend-go/internal/rootsetting"
+	"jad/backend-go/internal/sessionfs"
 )
 
 //go:embed library_defaults.json
@@ -32,6 +33,11 @@ type Options struct {
 	RootSettingPath string
 	SessionsDir     string
 	Environment     map[string]string
+	// Workspaces, set in the workspace layout (v2), are the libraries of each served
+	// workspace by id, read once at start; no setting.json is read then. StartWorkspace is the
+	// one a request that names none gets.
+	Workspaces     map[string]*sessionfs.Libraries
+	StartWorkspace string
 }
 
 // ConfigError is a safe, user-correctable root-library configuration error.

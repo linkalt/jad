@@ -211,8 +211,11 @@ type SessionConfig struct {
 	// the toolsets name, where the first listed won). The resolver logs them.
 	Warnings []string
 	// GlobalJadRoot is the global root whose setting.json names the skill
-	// directories the skill tool reads.
-	GlobalJadRoot       string
+	// directories the skill tool reads (v1).
+	GlobalJadRoot string
+	// Libraries are the content libraries of the session's workspace (workspace layout only;
+	// nil in v1, where GlobalJadRoot's setting.json names them).
+	Libraries           *Libraries
 	MCPServers          []MCPServerReference
 	StateContext        StateContextSettings
 	HTTPDebug           HTTPDebugSettings
@@ -705,6 +708,7 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	}
 	if location.Root.Layout != nil {
 		config.hideFixedPaths(location.Root.Layout.FixedHidePaths)
+		config.Libraries = location.Root.Layout.Libraries
 	}
 	return config, nil
 }

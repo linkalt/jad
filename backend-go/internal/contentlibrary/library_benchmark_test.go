@@ -27,7 +27,7 @@ func BenchmarkLibraryList1000MarkdownFiles(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := library.List(context.Background()); err != nil {
+		if _, err := library.List(context.Background(), ""); err != nil {
 			b.Fatal(err)
 		}
 	}

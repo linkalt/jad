@@ -18,7 +18,7 @@ func TestLibraryIgnoresTheRemovedSessionsDirVariable(t *testing.T) {
 		WorkingDir:  root,
 		Environment: map[string]string{"JAD_SESSIONS_DIR": "sessions"},
 	})
-	catalog, err := library.List(context.Background())
+	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

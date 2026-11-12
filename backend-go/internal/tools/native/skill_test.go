@@ -30,7 +30,7 @@ func newSkillFixture(t *testing.T, settings sessionfs.NativeSkillSettings) skill
 		}
 	}
 	writeSkillRootSetting(t, root, `{"libraries":{"skill_dirs":["skills-a","skills-b"]}}`)
-	tool, err := NewSkillTool(settings, root)
+	tool, err := NewSkillTool(settings, root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestSkillToolUnreadableRootSettingIsARecoverableError(t *testing.T) {
 
 func TestSkillToolDefaultsToTheEmbeddedDirectoryWithoutARootSetting(t *testing.T) {
 	root := t.TempDir()
-	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, root)
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestSkillToolDefinitionMatchesTypeScriptFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &expected); err != nil {
 		t.Fatal(err)
 	}
-	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, t.TempDir())
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,5 +386,33 @@ func TestSkillToolDefinitionMatchesTypeScriptFixture(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("inputSchema = %s, want %s", tool.Definition.InputSchema, expected.InputSchema)
+	}
+}
+
+// In the workspace layout the skill tool reads the session's libraries: a skill in both the
+// global and the workspace library is a skill_ambiguous error naming both folders, and is not
+// listed; a skill in one scope loads (Q3, decider fix B).
+func TestWorkspaceSkillToolRefusesANameInBothLibraries(t *testing.T) {
+	root := t.TempDir()
+	global, own := filepath.Join(root, "g", "skills"), filepath.Join(root, "w", ".jad", "skills")
+	addSkill(t, global, "both", "Global copy.", "G.")
+	addSkill(t, own, "both", "Workspace copy.", "W.")
+	addSkill(t, own, "mine", "Mine.", "Only here.")
+	// A setting.json in the root is never read in the workspace layout.
+	writeSkillRootSetting(t, root, `{"libraries":{"skill_dirs":["nothing"]}}`)
+	libraries := &sessionfs.Libraries{GlobalDir: filepath.Join(root, "g"), Global: sessionfs.LibraryFolders{Skills: []string{global}}, Workspace: sessionfs.LibraryFolders{Skills: []string{own}}}
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, root, libraries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := skillFixture{root: root, tool: tool}
+	if output := fixture.run(t, `{"name":"both"}`); !strings.Contains(output, "skill_ambiguous") || !strings.Contains(output, global) || !strings.Contains(output, own) {
+		t.Fatalf("both:\n%s", output)
+	}
+	if output := fixture.run(t, `{"name":"mine"}`); !strings.Contains(output, "Only here.") {
+		t.Fatalf("mine:\n%s", output)
+	}
+	if output := fixture.run(t, `{}`); !strings.Contains(output, "mine") || strings.Contains(output, "both") {
+		t.Fatalf("list:\n%s", output)
 	}
 }
