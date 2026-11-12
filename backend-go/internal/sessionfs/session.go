@@ -167,6 +167,8 @@ type SessionConfig struct {
 	// data folder in the workspace layout (Layout.ProfileOwnDir, ProfileDataDir); empty in v1.
 	ProfileOwnDir  string
 	ProfileDataDir string
+	// ProfileSelfEdit is the profile_self_edit level of the workspace (off, on, full); empty in v1.
+	ProfileSelfEdit string
 	// SettingSources are the setting layers of a catalog-layout session and the settings they
 	// composed to, for the profile tool's config action; nil otherwise.
 	SettingSources *SettingSources

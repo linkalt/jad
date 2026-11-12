@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -375,4 +376,68 @@ func TestEnsureProfileRootsRefusesLinksAndOtherPaths(t *testing.T) {
 			t.Fatalf("root %s = %v, %v", root, info, err)
 		}
 	}
+}
+
+// The history a self-edit keeps (W/.jad/profile-own/<cat>/<name>/history) cannot be changed by
+// the profile's own sandboxed calls, even with all of W writable, and another profile does not
+// see it (decider S6). The edit itself is the engine's write, outside the sandbox.
+func TestProfileSandboxKeepsTheHistoryReadOnlyAndPrivate(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{workspace}","{tmp}"`)
+	useOwnTempDir(t)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.a, Environment: map[string]string{"HOME": f.home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := sessionfs.ReadProfileConfig(f.config, sessionfs.ProfileRun{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents map[string]json.RawMessage
+	if err := json.Unmarshal(view.Contents, &contents); err != nil {
+		t.Fatal(err)
+	}
+	contents["description"] = json.RawMessage(`"edited"`)
+	encoded, _ := json.Marshal(contents)
+	result, err := sessionfs.EditProfile(location, "dev/coder", sessionfs.ProfileEditRequest{Action: sessionfs.ProfileEditActionEdit, IfMatch: view.Revision, Contents: encoded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyDir := filepath.Join(f.a, ".jad", "profile-own", "dev", "coder", "history")
+	entryPath := filepath.Join(historyDir, result.HistoryID+".json")
+	kept, err := os.ReadFile(entryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := ".jad/profile-own/dev/coder/history"
+	command := profileAttempt("read", `grep -q '"action"' `+history+`/`+result.HistoryID+`.json`) +
+		profileAttempt("add", `echo '{}' > `+history+`/000099-0123456789ab.json`) +
+		profileAttempt("change", `echo x > `+history+`/`+result.HistoryID+`.json`) +
+		profileAttempt("remove", `rm -f `+history+`/`+result.HistoryID+`.json && test ! -e `+history+`/`+result.HistoryID+`.json`) +
+		profileAttempt("replace", `mv `+history+` .jad/profile-own/dev/coder/old`) +
+		profileAttempt("profile", `echo '{}' > .jad/profiles/dev/coder.json`)
+	config, err := sessionfs.LoadSessionSettings(location, "dev/coder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "own run", f.run(t, command, tools.ExecutionContext{}, config.Sandbox), "read=yes", "add=no", "change=no", "remove=no", "replace=no", "profile=no")
+	if now, err := os.ReadFile(entryPath); err != nil || string(now) != string(kept) {
+		t.Fatalf("the history entry changed on the host: %v", err)
+	}
+	if entries, _ := os.ReadDir(historyDir); len(entries) != 1 {
+		t.Fatalf("history folder holds %d entries", len(entries))
+	}
+
+	// Another profile of the workspace, sandboxed the same way, does not see the history.
+	other := filepath.Join(f.a, ".jad", "profiles", "dev", "other.json")
+	writeWorkspaceFile(t, other, `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	otherConfig, err := sessionfs.LoadSessionSettings(location, "dev/other", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "other profile", f.run(t, profileAttempt("read", `cat `+history+`/`+result.HistoryID+`.json`)+profileAttempt("list", `ls `+history), tools.ExecutionContext{}, otherConfig.Sandbox), "read=no", "list=no")
 }

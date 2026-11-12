@@ -83,6 +83,12 @@ func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability,
 	if verdict := judged.verdicts[profile]; verdict.err != nil {
 		return ModelDefaultUpdate{}, configError("%s: profile %s cannot be used: %v", sessionPath, profile, verdict.err)
 	}
+	// The writers of a profile file share one lock (a profile's own edit included).
+	unlock, err := lockProfileFile(entry.Path)
+	if err != nil {
+		return ModelDefaultUpdate{}, err
+	}
+	defer unlock()
 	before, err := os.Stat(entry.Path)
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: could not be read: %v", entry.Path, err)

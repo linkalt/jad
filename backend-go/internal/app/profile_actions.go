@@ -87,6 +87,44 @@ func (m profileMessenger) ProfileConfig(_ context.Context, ownerKey string, run 
 	return sessionfs.ReadProfileConfig(config, run)
 }
 
+// EditProfile implements native.ProfileActions: an edit or revert of the caller's own profile
+// file. The session and the profile are those of ownerKey. No gate or run lock is taken: the
+// edit comes from inside the caller's run, which holds them, and changes only the next run.
+func (m profileMessenger) EditProfile(_ context.Context, ownerKey string, request sessionfs.ProfileEditRequest) (sessionfs.ProfileEditResult, error) {
+	location, profile, err := m.ownProfile(ownerKey)
+	if err != nil {
+		return sessionfs.ProfileEditResult{}, err
+	}
+	request.Audit.Session = location.Reference
+	return sessionfs.EditProfile(location, profile, request)
+}
+
+// ProfileHistory implements native.ProfileActions: the history of the caller's own profile file.
+func (m profileMessenger) ProfileHistory(_ context.Context, ownerKey string, limit int) (sessionfs.ProfileHistory, error) {
+	location, profile, err := m.ownProfile(ownerKey)
+	if err != nil {
+		return sessionfs.ProfileHistory{}, err
+	}
+	return sessionfs.ReadProfileHistory(location, profile, limit)
+}
+
+// ownProfile is the session location and profile of ownerKey, looked up as the caller sees it.
+func (m profileMessenger) ownProfile(ownerKey string) (sessionfs.Location, string, error) {
+	session, profile, found := strings.Cut(ownerKey, "\x00")
+	if !found || session == "" || profile == "" {
+		return sessionfs.Location{}, "", errors.New("a profile change needs the caller's session and profile")
+	}
+	reference, name, err := m.profileTarget(ownerKey, session, profile)
+	if err != nil {
+		return sessionfs.Location{}, "", err
+	}
+	location, err := sessionfs.Resolve(m.resolver.roots, reference)
+	if err != nil {
+		return sessionfs.Location{}, "", mapSessionError(err)
+	}
+	return location, name, nil
+}
+
 // profileConfig loads the settings of a profile of a session for a read.
 func (m profileMessenger) profileConfig(ownerKey, session, profile string) (sessionfs.SessionConfig, error) {
 	reference, name, err := m.profileTarget(ownerKey, session, profile)

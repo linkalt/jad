@@ -240,6 +240,14 @@ func WriteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id string, 
 	if err != nil {
 		return CatalogFileInfo{}, false, err
 	}
+	if kind == CatalogProfiles {
+		// The writers of a profile file share one lock (a profile's own edit included).
+		unlock, err := lockProfileFile(path)
+		if err != nil {
+			return CatalogFileInfo{}, false, err
+		}
+		defer unlock()
+	}
 	exists, before, err := checkWritePrecondition(path, string(kind), id, condition)
 	if err != nil {
 		return CatalogFileInfo{}, false, err
@@ -297,6 +305,13 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 	path, err := layout.catalogPath(kind, id)
 	if err != nil {
 		return err
+	}
+	if kind == CatalogProfiles {
+		unlock, err := lockProfileFile(path)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
 	current, err := ReadCatalogFile(layout, kind, id)
 	if err != nil {

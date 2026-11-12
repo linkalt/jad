@@ -106,6 +106,9 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	config.SettingSources = sources
 	config.ProfileOwnDir, config.ProfileDataDir = layout.ProfileOwnDir(entry.ID()), layout.ProfileDataDir(entry.ID())
+	if layout.Workspace != "" {
+		config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
+	}
 	if err := built.finishSandbox(&config); err != nil {
 		return SessionConfig{}, err
 	}

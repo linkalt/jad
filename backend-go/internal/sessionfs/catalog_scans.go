@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"path/filepath"
 	"sync"
 
 	"jad/backend-go/internal/catalog"
@@ -27,6 +28,9 @@ type scanMemo struct {
 	checks map[scanKey]fileCheck
 	// templates are the sandbox template folders listed, by folder.
 	templates map[string]templateFolder
+	// overlay holds the contents a trial load reads in place of a profile file on disk, by
+	// cleaned path (profile edit, decider S4): the candidate is judged before it is written.
+	overlay map[string][]byte
 }
 
 // templateFolder is a listed sandbox template folder: the files its listing left out for their
@@ -55,6 +59,28 @@ type scanResult struct {
 // NewCatalogScans returns an empty memo.
 func NewCatalogScans() *CatalogScans {
 	return &CatalogScans{memo: &scanMemo{results: make(map[scanKey]scanResult), checks: make(map[scanKey]fileCheck), templates: make(map[string]templateFolder)}}
+}
+
+// newTrialScans is a memo whose loads read contents in place of the profile file at path.
+func newTrialScans(path string, contents []byte) *CatalogScans {
+	scans := NewCatalogScans()
+	scans.memo.overlay = map[string][]byte{filepath.Clean(path): contents}
+	return scans
+}
+
+// readProfileOf is readProfileOf with the overlay of a trial load: the profile at path is
+// read from the overlay when it holds that file. A nil scans reads the disk.
+func (s *CatalogScans) readProfileOf(path string, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
+	if s != nil && s.memo.overlay != nil {
+		if contents, found := s.memo.overlay[filepath.Clean(path)]; found {
+			var profile layoutProfileFile
+			if err := parseLayoutFile(path, contents, &profile); err != nil {
+				return layoutProfileFile{}, nil, err
+			}
+			return checkProfileWith(path, profile, allModels, checkModelEffortOnly)
+		}
+	}
+	return readProfileOf(path, allModels)
 }
 
 // recorder is a view that shares the memo and records what its own load reads: a

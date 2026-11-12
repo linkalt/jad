@@ -100,6 +100,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "profile_self_edit": {
+      "enum": [
+        "off",
+        "on",
+        "full"
+      ],
+      "description": "Whether a profile may change its own profile file with the profile tool (edit, revert): off refuses it; on (the default) lets a profile change its instructions, prompt documents (within the workspace or its own {profile_own}/documents), models, tools and tuning settings (compaction, front_compaction, max_parallel_tool_calls, tool_call_scheduling, max_tool_rounds, provider_retry, provider_stream, provider_network, image_resize, model_fallback); full also lets it change every other setting (ceilings, sandbox, budget, hooks, env_file, cwd, tool_storage_dir and the rest) and name prompt documents outside the workspace. Every change must still load: no level lets a profile pass a ceiling the defaults or the session set, and G/auth is never named. A workspace.json may lower this level, never raise it."
     }
   },
   "additionalProperties": false

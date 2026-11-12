@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,6 +36,16 @@ func (f *fakeProfileActions) ResetProfile(_ context.Context, _, session, profile
 func (f *fakeProfileActions) ProfileConfig(_ context.Context, ownerKey string, _ sessionfs.ProfileRun) (sessionfs.ProfileConfig, error) {
 	f.calls = append(f.calls, "config "+strings.ReplaceAll(ownerKey, "\x00", " "))
 	return sessionfs.ProfileConfig{Profile: "own"}, f.failErr
+}
+
+func (f *fakeProfileActions) EditProfile(_ context.Context, ownerKey string, request sessionfs.ProfileEditRequest) (sessionfs.ProfileEditResult, error) {
+	f.calls = append(f.calls, request.Action+" "+strings.ReplaceAll(ownerKey, "\x00", " ")+" "+request.IfMatch+" "+request.HistoryID+" "+string(request.Contents))
+	return sessionfs.ProfileEditResult{Profile: "own", Action: request.Action}, f.failErr
+}
+
+func (f *fakeProfileActions) ProfileHistory(_ context.Context, ownerKey string, limit int) (sessionfs.ProfileHistory, error) {
+	f.calls = append(f.calls, "history "+strings.ReplaceAll(ownerKey, "\x00", " ")+" "+strconv.Itoa(limit))
+	return sessionfs.ProfileHistory{Profile: "own"}, f.failErr
 }
 
 func newProfileActionsTool(t *testing.T, settings sessionfs.NativeProfileSettings, actions ProfileActions) tools.Tool {

@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries"}
-	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries"}
+	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries", profileSelfEditKey}
+	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries", profileSelfEditKey}
 	workspaceEntryKeys   = []string{"id", "label", "path"}
 	// globalCatalogKeys are the catalogs global.json may move; profiles and state belong to
 	// each workspace and have fixed folders there.
@@ -153,6 +153,9 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 	globalDefaults, err := workspaceDefaults(setting, where, global, global, home)
 	base.RootSetting = globalPath
 	if err != nil {
+		return Config{}, err
+	}
+	if base.ProfileSelfEdit, err = readProfileSelfEdit(setting, where); err != nil {
 		return Config{}, err
 	}
 
@@ -529,7 +532,12 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	if err != nil {
 		return nil, err
 	}
+	ownSelfEdit, err := readProfileSelfEdit(spec.setting, where)
+	if err != nil {
+		return nil, err
+	}
 	layout := base
+	layout.ProfileSelfEdit = effectiveSelfEdit(base.ProfileSelfEdit, ownSelfEdit)
 	builtIn := map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}
 	layout.Defaults = mergeSettings(mergeSettings(builtIn, globalDefaults), own)
 	layout.DefaultLayers = []SettingLayer{{Name: SettingLayerBuiltIn, Values: builtIn}, {Name: SettingLayerGlobal, Values: globalDefaults}, {Name: SettingLayerWorkspace, Values: own}}

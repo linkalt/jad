@@ -99,7 +99,7 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 		scans.noteFile(entry.Path)
 		verdict := &profileVerdict{entry: entry}
 		judgement.verdicts[entry.ID()] = verdict
-		file, narrowed, err := readProfileOf(entry.Path, models)
+		file, narrowed, err := scans.readProfileOf(entry.Path, models)
 		if err == nil {
 			err = checkUnselectedProfile(entry.Path, file)
 		}

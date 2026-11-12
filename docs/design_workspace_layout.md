@@ -352,6 +352,8 @@ the audit record and `off` are the mitigations.
 | Same ids in two workspaces share no cache, lock or state | keys (4.3) | yes |
 | An ambiguous name never resolves silently | the loader | yes |
 | A profile cannot raise a ceiling key through the `profile` tool | the `profile` tool | yes, but without a sandbox `exec` can still rewrite the profile file |
+| A profile edits only its own file, only from its own top-level run, not in plan mode, and every edit passes the level and a trial load | the `profile` tool and `sessionfs.EditProfile` (phase 3a) | yes, but without a sandbox `exec` can still rewrite the file |
+| The history of self-edits cannot be changed by the profile's own calls and is not seen by other profiles | sealed `W/.jad` and the hidden `profile-own` (phase 3a), bwrap tested | **no** |
 | A profile cannot put another profile's private document in its prompt | the loader (symlink-resolved check) | yes |
 | A tool call cannot write config, sessions or state | bwrap/seatbelt read-only paths | **no** |
 | A tool call cannot read another workspace's `.jad` or another profile's private and data folders | hidden paths (Q4, phase 2b `ProfileHidden`), bwrap tested | **no** |
@@ -394,7 +396,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
    reading own config and state, `profile config`. Built in two commits (2a backend, 2b
    sandbox), section 12.
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
-   `profile_self_edit`, the D3 path limits.
+   `profile_self_edit`, the D3 path limits. 3a (the profile file, history, revert, the level) is
+   built (section 13); 3b (own documents) and 3c (own models and tools) are not.
 4. **Migration command.**
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
@@ -625,3 +628,61 @@ writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlo
   by design.
 - Not changed: without a sandbox, `exec` reads and writes every profile's folders; seatbelt is
   not run on a Mac (its profile text is tested only).
+
+## 13. Phase 3a as built
+
+Decider phase 3 decisions S1 to S7; 3b (own documents) and 3c (own models and tools) follow.
+
+- **S1, `profile_self_edit`:** a top-level key (`off`, `on`, `full`) of `G/global.json` and
+  `workspace.json` (schemas updated). The effective level is the lower of the global one (`on`
+  when unset) and the workspace's, so a workspace can lower it and never raise it; it is read
+  once at start (`Layout.ProfileSelfEdit`, `SessionConfig.ProfileSelfEdit`). A profile or
+  toolset file cannot carry it. `off` refuses `edit` and `revert`; `config` and `history` still
+  work. `profile config` shows the level and `editable`.
+- **S2, who may edit:** `edit` and `revert` are refused to sub-agents and toolset agents
+  (`AgentDepth > 0`), to another profile or session, in plan mode (`PlanMode` or `PlanGuarded`),
+  and in runs another run or server started (`ChainDepth > 0`, a `RunNode`, `RemoteHops > 0`);
+  no `allow_*` flag and no `plan_mode.allow` entry lifts these. `history` is refused only to
+  sub-agents and other profiles, like `config`. The owner is always the execution context's
+  owner key. A remote path keeps its `profile_remote_denied`.
+- **S3, revisions and writers:** `if_match` is required and compared with `CatalogETag`, a
+  SHA-256 of the bytes (with or without its quotes; `*` is no revision). One in-process lock
+  per profile file is shared by `edit`, `revert`, the model-default route and the catalog write
+  and delete of profiles; a held lock answers a conflict at once, as a file changed meanwhile already did (409 on the
+  model-default route, 412 on the catalog write and delete routes, `profile_edit_conflict` in
+  the tool). The edit takes no session gate or run lock: it is
+  called from inside the run that holds them. The file is written through a temporary file,
+  fsync, a rename that refuses a file whose size or mtime changed, and an fsync of the folder.
+- **S4, trial load:** the candidate is never written before it passes. The whole load of the
+  caller's session with this profile selected runs with the candidate in an in-memory overlay
+  of the catalog scans (`judgeScope` is the one place a load reads a profile file), so the
+  profile checks, the ceilings, the private-document check, the toolsets, composition and the
+  prompt documents all judge it; a failure is the selected profile's error.
+- **S5, policy (old file against candidate, key by key):** at every level but `off`:
+  `description`, `name`, `prompt_role`, `instructions`, `prompt_documents`, `models`,
+  `model_default`, `toolset`, `tools`, `schema_version` (the load still checks them). Under
+  `on` the settings a profile may change are the tuning ones: `compaction`,
+  `front_compaction`, `max_parallel_tool_calls`, `tool_call_scheduling`, `max_tool_rounds`,
+  `provider_retry`, `provider_stream`, `provider_network`, `image_resize`, `model_fallback`;
+  every other setting (ceilings, `sandbox`, `budget`, `hooks`, `env_file`, `cwd`,
+  `tool_storage_dir`, `plan_mode`, `session_files`, `statecontext`, `checkpoint`,
+  `persistence`, `image_store`, `http_debug`, `project_instructions`) needs `full`, and under
+  `full` the trial load still refuses passing a ceiling. A new prompt document passes D3 after
+  links (documents the file already names are left as the user wrote them); an `env_file` in
+  `G/auth` (settings or hooks) and a document there are refused at every level. The size limit
+  is that of every catalog file. `revert` passes the same check against the current file.
+- **S6, history:** `W/.jad/profile-own/<cat>/<name>/history/<seq>-<hash12>.json` (folders made
+  0700 by the engine, any link on the way refused), holding the file as it was and the
+  metadata (time, session, profile, call id, origin, action, old and new revision, changed
+  keys, level, the reverted entry). It is written and fsynced before the change is published.
+  Only self-edits and reverts add entries; admin writes and hand edits do not, which is why
+  `revert` needs `if_match`. No pruning. The tool result (old and new revision, changed keys,
+  history id) is the audit record in the transcript; compaction can remove it, the history file
+  stays. With a sandbox the history is read-only to the profile's own calls (sealed `W/.jad`)
+  and hidden from other profiles (hidden `profile-own`), tested in a real bwrap run; without
+  one `exec` can change it.
+- **S7, running runs:** a run keeps the settings its `Resolve` loaded (`boundRunner.config` is
+  used by `prepareRun`, compaction, sub-agents and model fallback; no code path reloads the
+  profile file during a run), so an edit applies from the next run.
+- Workspace layout only: in v1 the actions answer that self-edit needs `workspace.json`; no v1
+  path or golden changed.

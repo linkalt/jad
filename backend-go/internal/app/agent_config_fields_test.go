@@ -42,7 +42,7 @@ var agentConfigFields = map[string]agentConfigField{
 	// Profile identity and the caller's selection.
 	"Profile": fieldCallerOnly, "DefaultProfile": fieldCallerOnly, "Profiles": fieldCallerOnly,
 	"ProfileNames": fieldCallerOnly, "ProfilePath": fieldCallerOnly, "Category": fieldCallerOnly,
-	"ProfileOwnDir": fieldCallerOnly, "ProfileDataDir": fieldCallerOnly, "SettingSources": fieldCallerOnly,
+	"ProfileOwnDir": fieldCallerOnly, "ProfileDataDir": fieldCallerOnly, "SettingSources": fieldCallerOnly, "ProfileSelfEdit": fieldCallerOnly,
 	"RemotesDir": fieldCallerOnly, "Warnings": fieldCallerOnly,
 	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
 

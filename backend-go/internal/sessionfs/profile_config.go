@@ -136,6 +136,10 @@ type ProfileConfig struct {
 	// DataAccess why (ProfileDataAccess).
 	DataWritable bool   `json:"data_writable"`
 	DataAccess   string `json:"data_access,omitempty"`
+	// SelfEdit is the profile_self_edit level (workspace layout only) and Editable what the
+	// edit action may change at it.
+	SelfEdit string   `json:"profile_self_edit,omitempty"`
+	Editable []string `json:"editable,omitempty"`
 }
 
 // ProfileRun is what the profile tool knows of the run that asks for its config.
@@ -203,5 +207,7 @@ func ReadProfileConfig(config SessionConfig, run ProfileRun) (ProfileConfig, err
 		Layers:       layers,
 		OwnDir:       config.ProfileOwnDir,
 		DataDir:      config.ProfileDataDir,
+		SelfEdit:     config.ProfileSelfEdit,
+		Editable:     SelfEditableKeys(config.ProfileSelfEdit),
 	}, nil
 }

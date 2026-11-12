@@ -65,6 +65,10 @@ type Layout struct {
 	// workspace, this one too, as written: a prompt document that resolves into one of them,
 	// after links, and not into the profile's own folder is a load error (design D1).
 	ProfileOwnRoots []string
+	// ProfileSelfEdit is the profile_self_edit level of the profiles of the workspace (off, on
+	// or full): the lower of the level of global.json (on when unset) and of workspace.json.
+	// While the global layout is read it holds the value of global.json ("" when unset).
+	ProfileSelfEdit string
 
 	// scope and scopeUsers are set by ScopedCatalogLayout for the catalog routes only.
 	scope      catalogScope

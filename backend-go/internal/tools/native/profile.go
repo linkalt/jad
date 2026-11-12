@@ -23,9 +23,12 @@ var profileInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
     "path":{"type":"string","minLength":1,"description":"What to act on. Omit it, or give self, for your own profile. profile:<category>/<name> (or profile:<session>/<category>/<name>) names another profile; session:<id> names a session, whose profiles action list shows. remote:<name>/profile:<session>/<category>/<name> asks a remote JAD server for info; only when allow_remote is on."},
-    "action":{"type":"string","enum":["list","info","compact","reset","config"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, and its private and data folders. compact and reset are refused to a sub-agent and to your own profile; config is refused to a sub-agent and to another profile. reset is refused while a run of the profile is active; compact waits for a live run to end."},
+    "action":{"type":"string","enum":["list","info","compact","reset","config","edit","history","revert"],"description":"list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, its private and data folders, its profile_self_edit level and what edit may change. edit: your own profile only: replace your profile file with contents, given the revision config showed as if_match; the change must pass profile_self_edit and load, the old file is kept in your history, and it applies from your next run. history: your own profile's changes, newest first. revert: restore the file a history entry kept (history_id), with if_match, under the same rules as edit. compact and reset are refused to a sub-agent and to your own profile; config and history are refused to a sub-agent and to another profile; edit and revert are refused to a sub-agent, to another profile, in plan mode and in a run another profile, a sub-agent or a remote server started. reset is refused while a run of the profile is active; compact waits for a live run to end."},
+    "contents":{"type":"object","description":"The whole new profile file, as config shows it under contents with your changes. Only with action edit."},
+    "if_match":{"type":"string","minLength":1,"description":"The revision of your profile file that config (or the last edit) showed. Only with actions edit and revert."},
+    "history_id":{"type":"string","minLength":1,"description":"The history entry whose kept file revert restores, as history lists it. Only with action revert."},
     "filters":{"type":"array","items":{"type":"string"},"description":"Only profiles whose name matches every filter, case-insensitive. A filter with * or ? is a wildcard pattern (dev*, *coder); any other is a substring. Only with action list."},
-    "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration. Only with action list."},
+    "limit":{"type":"integer","minimum":1,"description":"Most items in this response; capped by the configuration. Only with actions list and history."},
     "cursor":{"type":"string","minLength":1,"description":"Continue where the previous list response stopped; use the cursor it gave. Only with action list."}
   },
   "required":["action"],
@@ -47,6 +50,11 @@ type ProfileActions interface {
 	// ProfileConfig describes the caller's own profile: the session and profile come from
 	// ownerKey only, never from the model's input.
 	ProfileConfig(ctx context.Context, ownerKey string, run sessionfs.ProfileRun) (sessionfs.ProfileConfig, error)
+	// EditProfile edits or reverts the caller's own profile file (sessionfs.EditProfile); the
+	// session and profile come from ownerKey only.
+	EditProfile(ctx context.Context, ownerKey string, request sessionfs.ProfileEditRequest) (sessionfs.ProfileEditResult, error)
+	// ProfileHistory lists the history of the caller's own profile file, newest first.
+	ProfileHistory(ctx context.Context, ownerKey string, limit int) (sessionfs.ProfileHistory, error)
 }
 
 // profileNoUsage is what info prints when no response has completed.
@@ -112,7 +120,7 @@ func NewProfileToolWithRemotes(settings sessionfs.NativeProfileSettings, own Tra
 	}, nil
 }
 
-const profileDescription = "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, or show your own profile's configuration (config)."
+const profileDescription = "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, show your own profile's configuration (config), change your own profile file (edit), list its changes (history) or restore an earlier version (revert)."
 
 func (t *profileTool) fail(execution tools.ExecutionContext, status tools.Status, code, summary string, information ...tools.Information) string {
 	return tools.ExecutionError(execution.CallID, status, code, summary, information...)
@@ -129,6 +137,9 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 	}
 	if action == "config" {
 		return t.config(ctx, path, execution)
+	}
+	if action == "edit" || action == "revert" || action == "history" {
+		return t.selfChange(ctx, action, path, arguments, execution)
 	}
 	if action == "list" && path != "" && !strings.HasPrefix(path, "session:") {
 		// list takes a session (session:<id>) or nothing; a profile path lists one profile's info.
@@ -192,7 +203,7 @@ func (t *profileTool) execute(ctx context.Context, arguments map[string]any, exe
 		}
 		return "reset profile " + profile
 	}
-	return t.fail(execution, tools.StatusInvalidInput, "invalid_input", "action must be list, info, compact, reset or config")
+	return t.fail(execution, tools.StatusInvalidInput, "invalid_input", "action must be list, info, compact, reset, config, edit, history or revert")
 }
 
 // config shows the caller its own profile's configuration. Only the caller's own profile, from

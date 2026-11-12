@@ -41,6 +41,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "profile_self_edit": {
+      "enum": [
+        "off",
+        "on",
+        "full"
+      ],
+      "description": "The profile_self_edit level of this workspace: off, on or full (see global.schema.json). It can only lower the level of G/global.json (on when unset): a workspace that sets full while global.json does not stays on."
     }
   },
   "additionalProperties": false

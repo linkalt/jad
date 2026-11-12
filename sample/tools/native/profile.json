@@ -5,7 +5,7 @@
       "id": "native.profile",
       "source": "native",
       "name": "profile",
-      "description": "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, or show your own profile's configuration (config).",
+      "description": "Work on the profiles of a session: list them, show what a profile holds with its context tokens (info), compact its transcript or reset it, show your own profile's configuration (config), change your own profile file (edit), list its changes (history) or restore an earlier version (revert).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -21,9 +21,26 @@
               "info",
               "compact",
               "reset",
-              "config"
+              "config",
+              "edit",
+              "history",
+              "revert"
             ],
-            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, and its private and data folders. compact and reset are refused to a sub-agent and to your own profile; config is refused to a sub-agent and to another profile. reset is refused while a run of the profile is active; compact waits for a live run to end."
+            "description": "list: the profiles of the session. info: what the profile holds, with its context tokens. compact: compact the profile's transcript now. reset: delete the profile's transcript and history. config: your own profile only: its file, its revision, the settings it runs with and which layer set each, its private and data folders, its profile_self_edit level and what edit may change. edit: your own profile only: replace your profile file with contents, given the revision config showed as if_match; the change must pass profile_self_edit and load, the old file is kept in your history, and it applies from your next run. history: your own profile's changes, newest first. revert: restore the file a history entry kept (history_id), with if_match, under the same rules as edit. compact and reset are refused to a sub-agent and to your own profile; config and history are refused to a sub-agent and to another profile; edit and revert are refused to a sub-agent, to another profile, in plan mode and in a run another profile, a sub-agent or a remote server started. reset is refused while a run of the profile is active; compact waits for a live run to end."
+          },
+          "contents": {
+            "type": "object",
+            "description": "The whole new profile file, as config shows it under contents with your changes. Only with action edit."
+          },
+          "if_match": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The revision of your profile file that config (or the last edit) showed. Only with actions edit and revert."
+          },
+          "history_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The history entry whose kept file revert restores, as history lists it. Only with action revert."
           },
           "filters": {
             "type": "array",
@@ -35,7 +52,7 @@
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Most items in this response; capped by the configuration. Only with action list."
+            "description": "Most items in this response; capped by the configuration. Only with actions list and history."
           },
           "cursor": {
             "type": "string",
