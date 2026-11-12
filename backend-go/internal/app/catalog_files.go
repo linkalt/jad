@@ -18,24 +18,23 @@ var catalogFileKinds = map[string]sessionfs.CatalogKind{
 	"sandbox":  sessionfs.CatalogSandboxes,
 }
 
-func (r *Resolver) catalogLayout(ctx context.Context, kind string) (sessionfs.Layout, sessionfs.CatalogKind, error) {
+func (r *Resolver) catalogLayout(ctx context.Context, kind, scope string) (sessionfs.Layout, []sessionfs.Root, sessionfs.CatalogKind, error) {
 	if err := requireSettingsContext(ctx); err != nil {
-		return sessionfs.Layout{}, "", err
+		return sessionfs.Layout{}, nil, "", err
 	}
 	known, ok := catalogFileKinds[kind]
 	if !ok {
-		return sessionfs.Layout{}, "", &httpapi.StatusError{Code: http.StatusNotFound, Message: "unknown catalog"}
+		return sessionfs.Layout{}, nil, "", &httpapi.StatusError{Code: http.StatusNotFound, Message: "unknown catalog"}
 	}
-	for _, root := range r.roots {
-		if root.Layout != nil {
-			return *root.Layout, known, nil
-		}
+	layout, roots, err := sessionfs.ScopedCatalogLayout(r.roots, scope, known)
+	if err != nil {
+		return sessionfs.Layout{}, nil, "", mapCatalogFileError(err)
 	}
-	return sessionfs.Layout{}, "", &httpapi.StatusError{Code: http.StatusNotFound, Message: "no catalog layout is configured"}
+	return layout, roots, known, nil
 }
 
-func (r *Resolver) ListCatalogFiles(ctx context.Context, kind string) ([]httpapi.CatalogFileInfo, error) {
-	layout, known, err := r.catalogLayout(ctx, kind)
+func (r *Resolver) ListCatalogFiles(ctx context.Context, kind, scope string) ([]httpapi.CatalogFileInfo, error) {
+	layout, roots, known, err := r.catalogLayout(ctx, kind, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +44,7 @@ func (r *Resolver) ListCatalogFiles(ctx context.Context, kind string) ([]httpapi
 	}
 	var bySession map[string][]sessionfs.SessionRef
 	if known == sessionfs.CatalogProfiles {
-		if bySession, err = sessionfs.ProfileSessions(layout, r.roots); err != nil {
+		if bySession, err = sessionfs.ProfileSessions(layout, roots); err != nil {
 			return nil, mapCatalogFileError(err)
 		}
 	}
@@ -60,8 +59,8 @@ func (r *Resolver) ListCatalogFiles(ctx context.Context, kind string) ([]httpapi
 	return listing, nil
 }
 
-func (r *Resolver) ReadCatalogFile(ctx context.Context, kind, id string) (httpapi.CatalogFile, error) {
-	layout, known, err := r.catalogLayout(ctx, kind)
+func (r *Resolver) ReadCatalogFile(ctx context.Context, kind, id, scope string) (httpapi.CatalogFile, error) {
+	layout, _, known, err := r.catalogLayout(ctx, kind, scope)
 	if err != nil {
 		return httpapi.CatalogFile{}, err
 	}
@@ -72,28 +71,28 @@ func (r *Resolver) ReadCatalogFile(ctx context.Context, kind, id string) (httpap
 	return httpapi.CatalogFile{CatalogFileInfo: httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag}, Data: file.Data}, nil
 }
 
-func (r *Resolver) WriteCatalogFile(ctx context.Context, kind, id string, data []byte, ifMatch, ifNoneMatch string) (httpapi.CatalogFileInfo, bool, error) {
-	layout, known, err := r.catalogLayout(ctx, kind)
+func (r *Resolver) WriteCatalogFile(ctx context.Context, kind, id, scope string, data []byte, ifMatch, ifNoneMatch string) (httpapi.CatalogFileInfo, bool, error) {
+	layout, roots, known, err := r.catalogLayout(ctx, kind, scope)
 	if err != nil {
 		return httpapi.CatalogFileInfo{}, false, err
 	}
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	info, created, err := sessionfs.WriteCatalogFile(layout, r.roots, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true, mcpclient.ValidateServerFile)
+	info, created, err := sessionfs.WriteCatalogFile(layout, roots, known, id, data, sessionfs.WriteCondition{IfMatch: ifMatch, IfNoneMatch: ifNoneMatch}, true, mcpclient.ValidateServerFile)
 	if err != nil {
 		return httpapi.CatalogFileInfo{}, false, mapCatalogFileError(err)
 	}
 	return httpapi.CatalogFileInfo{ID: info.ID, ETag: info.ETag}, created, nil
 }
 
-func (r *Resolver) DeleteCatalogFile(ctx context.Context, kind, id, ifMatch string) error {
-	layout, known, err := r.catalogLayout(ctx, kind)
+func (r *Resolver) DeleteCatalogFile(ctx context.Context, kind, id, scope, ifMatch string) error {
+	layout, roots, known, err := r.catalogLayout(ctx, kind, scope)
 	if err != nil {
 		return err
 	}
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	return mapCatalogFileError(sessionfs.DeleteCatalogFile(layout, r.roots, known, id, ifMatch))
+	return mapCatalogFileError(sessionfs.DeleteCatalogFile(layout, roots, known, id, ifMatch))
 }
 
 func mapCatalogFileError(err error) error {

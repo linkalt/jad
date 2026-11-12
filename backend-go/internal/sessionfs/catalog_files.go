@@ -107,6 +107,9 @@ func IfMatchSatisfied(header, etag string) bool {
 }
 
 func (l Layout) catalogDir(kind CatalogKind) (string, error) {
+	if directory, scoped, err := l.scopedCatalogDir(kind); scoped || err != nil {
+		return directory, err
+	}
 	switch kind {
 	case CatalogProfiles:
 		return l.Profiles, nil
@@ -305,51 +308,19 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 	if !IfMatchSatisfied(ifMatch, current.ETag) {
 		return &CatalogError{Kind: CatalogPreconditionFailed, Message: fmt.Sprintf("%s %q changed since it was read; read it again", kind, id)}
 	}
-	if kind == CatalogProfiles {
-		users, err := profileUsers(layout, roots, id)
+	var users []string
+	for _, target := range layout.usersOf(roots) {
+		found, err := catalogUsers(target.layout, target.roots, kind, id)
 		if err != nil {
 			return err
 		}
-		if len(users) > 0 {
-			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("profile %q is needed by session %s", id, strings.Join(users, ", "))}
-		}
+		users = appendNewStrings(users, found...)
 	}
-	if kind == CatalogModels {
-		users, err := modelUsers(layout, id)
-		if err != nil {
-			return err
-		}
-		if len(users) > 0 {
-			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("model %q is needed by profile %s", id, strings.Join(users, ", "))}
-		}
-	}
-	if kind == CatalogToolsets {
-		users, err := toolsetUsers(layout, id)
-		if err != nil {
-			return err
-		}
-		if len(users) > 0 {
-			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("toolset %q is needed by profile %s", id, strings.Join(users, ", "))}
-		}
+	if len(users) > 0 {
+		return &CatalogError{Kind: CatalogInUse, Message: inUseMessage(kind, id, users)}
 	}
 	if kind == CatalogSandboxes {
-		users, err := sandboxUsers(layout, roots, id)
-		if err != nil {
-			return err
-		}
-		if len(users) > 0 {
-			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("sandbox template %q is named by %s", id, strings.Join(users, ", "))}
-		}
 		return os.Remove(path)
-	}
-	if kind == CatalogMCP {
-		users, err := serverUsers(layout, id)
-		if err != nil {
-			return err
-		}
-		if len(users) > 0 {
-			return &CatalogError{Kind: CatalogInUse, Message: fmt.Sprintf("MCP server %q is needed by toolset %s", id, strings.Join(users, ", "))}
-		}
 	}
 	if err := os.Remove(path); err != nil {
 		return err
@@ -564,4 +535,38 @@ func createFileExclusive(path string, data []byte, syncWrite bool) error {
 		return err
 	}
 	return nil
+}
+
+// catalogUsers lists what still needs the file id of kind in one layout: the sessions for a
+// profile, the profiles for a model or toolset, the toolsets for an MCP server, the
+// defaults, sessions and profiles for a sandbox template.
+func catalogUsers(layout Layout, roots []Root, kind CatalogKind, id string) ([]string, error) {
+	switch kind {
+	case CatalogProfiles:
+		return profileUsers(layout, roots, id)
+	case CatalogModels:
+		return modelUsers(layout, id)
+	case CatalogToolsets:
+		return toolsetUsers(layout, id)
+	case CatalogSandboxes:
+		return sandboxUsers(layout, roots, id)
+	case CatalogMCP:
+		return serverUsers(layout, id)
+	}
+	return nil, nil
+}
+
+func inUseMessage(kind CatalogKind, id string, users []string) string {
+	switch kind {
+	case CatalogProfiles:
+		return fmt.Sprintf("profile %q is needed by session %s", id, strings.Join(users, ", "))
+	case CatalogModels:
+		return fmt.Sprintf("model %q is needed by profile %s", id, strings.Join(users, ", "))
+	case CatalogToolsets:
+		return fmt.Sprintf("toolset %q is needed by profile %s", id, strings.Join(users, ", "))
+	case CatalogSandboxes:
+		return fmt.Sprintf("sandbox template %q is named by %s", id, strings.Join(users, ", "))
+	default:
+		return fmt.Sprintf("MCP server %q is needed by toolset %s", id, strings.Join(users, ", "))
+	}
 }

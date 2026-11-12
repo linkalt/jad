@@ -13,6 +13,10 @@ import (
 // (Root.pathBase) and the relative paths of a global toolset are made absolute from G before
 // they are merged in (absoluteGlobalToolsetPaths). A v1 root keeps its setting folder.
 
+// workspacePlaceholder starts a prompt document path that always means the workspace W, also
+// for a session or profile working in a worktree or another cwd (design D1, D2).
+const workspacePlaceholder = "{workspace}"
+
 // pathBase is the folder relative paths of a session's settings resolve from: the root
 // setting's folder in v1, W/.jad in the workspace layout.
 func (r Root) pathBase() string {

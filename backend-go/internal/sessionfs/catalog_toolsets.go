@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"jad/backend-go/internal/catalog"
 )
@@ -62,7 +63,8 @@ func toolsetUsers(layout Layout, id string) ([]string, error) {
 		if err := readLayoutFile(entry.Path, &profile); err != nil {
 			continue
 		}
-		if slices.Contains(profile.Toolset, id) {
+		// A scope-prefixed reference counts too (it may name this file; refusing is the safe side).
+		if slices.ContainsFunc(profile.Toolset, func(ref string) bool { return ref == id || strings.HasSuffix(ref, ":"+id) }) {
 			users = append(users, entry.ID())
 		}
 	}

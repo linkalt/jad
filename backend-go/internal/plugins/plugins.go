@@ -108,6 +108,9 @@ type Target struct {
 	// ReadSkill checks an installed skill folder the way the skill tool reads it.
 	ReadSkill func(ctx context.Context, directory, name string, maxBytes int64) error
 	Now       func() time.Time
+	// NoProfiles, when set, is why a plugin with profiles cannot be installed here (the
+	// workspace layout has no global profiles); nothing is written then.
+	NoProfiles string
 }
 
 func (t Target) recordPath(name string) string {

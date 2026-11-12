@@ -140,6 +140,8 @@ func routeTemplate(escapedPath string) string {
 		return "/api/health"
 	case len(segments) == 2 && segments[0] == "api" && segments[1] == "server":
 		return "/api/server"
+	case len(segments) == 2 && segments[0] == "api" && segments[1] == "workspaces":
+		return "/api/workspaces"
 	case len(segments) >= 2 && segments[0] == "api" && segments[1] == "library":
 		switch len(segments) {
 		case 2:

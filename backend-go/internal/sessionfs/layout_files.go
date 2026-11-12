@@ -58,6 +58,10 @@ type Layout struct {
 	SealedHelpers map[string]string
 	// Libraries are the content libraries of the workspace (global and own folders).
 	Libraries *Libraries
+
+	// scope and scopeUsers are set by ScopedCatalogLayout for the catalog routes only.
+	scope      catalogScope
+	scopeUsers []scopeUser
 }
 
 // ScanModels is the model catalog of the layout: the models folder, and in the workspace

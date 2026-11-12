@@ -41,10 +41,12 @@ type CatalogFile struct {
 // a configuration catalog (profiles). The kind is the URL word ("profiles"). Writes and
 // deletes carry the HTTP preconditions; the extension checks them.
 type CatalogFiles interface {
-	ListCatalogFiles(ctx context.Context, kind string) ([]CatalogFileInfo, error)
-	ReadCatalogFile(ctx context.Context, kind, id string) (CatalogFile, error)
-	WriteCatalogFile(ctx context.Context, kind, id string, data []byte, ifMatch, ifNoneMatch string) (info CatalogFileInfo, created bool, err error)
-	DeleteCatalogFile(ctx context.Context, kind, id, ifMatch string) error
+	// scope is the "scope" query parameter (workspace layout: global or workspace:<id>; empty
+	// keeps the v1 target).
+	ListCatalogFiles(ctx context.Context, kind, scope string) ([]CatalogFileInfo, error)
+	ReadCatalogFile(ctx context.Context, kind, id, scope string) (CatalogFile, error)
+	WriteCatalogFile(ctx context.Context, kind, id, scope string, data []byte, ifMatch, ifNoneMatch string) (info CatalogFileInfo, created bool, err error)
+	DeleteCatalogFile(ctx context.Context, kind, id, scope, ifMatch string) error
 }
 
 // handleCatalogFiles serves /api/catalog/{kind} and /api/catalog/{kind}/{category}/{name}.
@@ -62,12 +64,13 @@ func (h *Handler) handleCatalogFiles(w http.ResponseWriter, r *http.Request, seg
 		return
 	}
 	kind := segments[2]
+	scope := r.URL.Query().Get("scope")
 	if len(segments) == 3 {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, &StatusError{Code: http.StatusMethodNotAllowed, Message: "method not allowed"})
 			return
 		}
-		files, err := h.catalogFiles.ListCatalogFiles(r.Context(), kind)
+		files, err := h.catalogFiles.ListCatalogFiles(r.Context(), kind, scope)
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -81,7 +84,7 @@ func (h *Handler) handleCatalogFiles(w http.ResponseWriter, r *http.Request, seg
 	id := segments[3] + "/" + segments[4]
 	switch r.Method {
 	case http.MethodGet:
-		file, err := h.catalogFiles.ReadCatalogFile(r.Context(), kind, id)
+		file, err := h.catalogFiles.ReadCatalogFile(r.Context(), kind, id, scope)
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -101,7 +104,7 @@ func (h *Handler) handleCatalogFiles(w http.ResponseWriter, r *http.Request, seg
 			writeJSONError(w, &StatusError{Code: http.StatusBadRequest, Message: "request body could not be read"})
 			return
 		}
-		info, created, err := h.catalogFiles.WriteCatalogFile(r.Context(), kind, id, data, strings.TrimSpace(r.Header.Get("If-Match")), strings.TrimSpace(r.Header.Get("If-None-Match")))
+		info, created, err := h.catalogFiles.WriteCatalogFile(r.Context(), kind, id, scope, data, strings.TrimSpace(r.Header.Get("If-Match")), strings.TrimSpace(r.Header.Get("If-None-Match")))
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -113,7 +116,7 @@ func (h *Handler) handleCatalogFiles(w http.ResponseWriter, r *http.Request, seg
 		}
 		writeJSON(w, status, info)
 	case http.MethodDelete:
-		if err := h.catalogFiles.DeleteCatalogFile(r.Context(), kind, id, strings.TrimSpace(r.Header.Get("If-Match"))); err != nil {
+		if err := h.catalogFiles.DeleteCatalogFile(r.Context(), kind, id, scope, strings.TrimSpace(r.Header.Get("If-Match"))); err != nil {
 			writeJSONError(w, err)
 			return
 		}

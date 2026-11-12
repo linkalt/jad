@@ -120,6 +120,7 @@ type Handler struct {
 	mcpResources              SessionMCPResources
 	settings                  SessionSettings
 	catalogFiles              CatalogFiles
+	workspaces                WorkspaceLister
 	catalogSessions           CatalogSessions
 	images                    SessionImages
 	messageImages             MessageImages
@@ -257,6 +258,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 	mcpResources, _ := resolver.(SessionMCPResources)
 	settings, _ := resolver.(SessionSettings)
 	catalogFiles, _ := resolver.(CatalogFiles)
+	workspaces, _ := resolver.(WorkspaceLister)
 	catalogSessions, _ := resolver.(CatalogSessions)
 	images, _ := resolver.(SessionImages)
 	messageImages, _ := resolver.(MessageImages)
@@ -279,6 +281,7 @@ func newHandler(config Config, resolver SessionResolver, library RootLibrary) (*
 		mcpResources:              mcpResources,
 		settings:                  settings,
 		catalogFiles:              catalogFiles,
+		workspaces:                workspaces,
 		catalogSessions:           catalogSessions,
 		maintenance:               maintenance,
 		library:                   library,
@@ -358,6 +361,15 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleCatalogFiles(w, r, segments)
+		return
+	}
+	if len(segments) == 2 && segments[0] == "api" && segments[1] == "workspaces" {
+		if !h.authorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="jad"`)
+			writeJSONError(w, &StatusError{Code: http.StatusUnauthorized, Message: "API token required"})
+			return
+		}
+		h.handleWorkspaces(w, r)
 		return
 	}
 	if len(segments) == 2 && segments[0] == "api" && segments[1] == "server" {

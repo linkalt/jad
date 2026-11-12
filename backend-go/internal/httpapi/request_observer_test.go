@@ -126,6 +126,7 @@ func TestRouteTemplate(t *testing.T) {
 		"/api/sessions/abc/messages/m1":                "/api/sessions/{session}/messages/{message}",
 		"/api/sessions/abc/front-compact":              "/api/sessions/{session}/front-compact",
 		"/api/library":                                 "/api/library",
+		"/api/workspaces":                              "/api/workspaces",
 		"/api/library/skill":                           "/api/library/{kind}",
 		"/api/library/skill/agent-tool-design":         "/api/library/{kind}/{id}",
 		"/api/library/command/c1/expand":               "/api/library/{kind}/{id}/expand",

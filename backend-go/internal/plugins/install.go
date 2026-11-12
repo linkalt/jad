@@ -291,6 +291,9 @@ func (t Target) install(ctx context.Context, source, label string, force bool) (
 	var planned []Entry
 	for index := range found.catalog {
 		file := &found.catalog[index]
+		if file.kind == sessionfs.CatalogProfiles && t.NoProfiles != "" {
+			return InstallResult{}, fmt.Errorf("plugin %s has profiles: %s", name, t.NoProfiles)
+		}
 		file.data = []byte(strings.ReplaceAll(string(file.data), FilesPlaceholder, replacement))
 		planned = append(planned, Entry{Kind: string(file.kind), ID: file.id, Path: t.catalogPath(file.kind, file.id), SHA256: hashBytes(file.data)})
 	}

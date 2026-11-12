@@ -57,6 +57,8 @@ type Config struct {
 	HTTP               httpapi.Config
 	Environment        map[string]string
 	RootLibraryOptions contentlibrary.Options
+	// Workspaces are the workspaces of the workspace layout, served or skipped; nil in v1.
+	Workspaces []sessionfs.Workspace
 }
 
 // LoadConfig reads root settings and server environment overrides. A supplied
@@ -105,6 +107,7 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 		SessionStoreIdle:           loaded.Server.SessionStoreIdle,
 		RecoverSubagentRunsAtStart: loaded.Server.RecoverSubagentRunsAtStart,
 		Roots:                      append([]sessionfs.Root(nil), loaded.Roots...),
+		Workspaces:                 append([]sessionfs.Workspace(nil), loaded.Workspaces...),
 		RootSettingWarnings:        loaded.Warnings,
 		RemoteAPI:                  loaded.Server.RemoteAPI,
 		Tracing:                    loaded.Server.Tracing,

@@ -66,7 +66,7 @@ func (s *CatalogScans) recorder() *CatalogScans {
 // scanScopes scans the folder of each scope ("" is no scope) and merges them; one folder is
 // Scan as it is.
 func (s *CatalogScans) scanScopes(kind string, dirs ...string) (*catalog.Catalog, error) {
-	scopes := make([]*catalog.Catalog, 0, len(dirs))
+	scopes := make([]catalog.Scope, 0, len(dirs))
 	for index, dir := range dirs {
 		if dir == "" && index > 0 {
 			continue
@@ -75,9 +75,11 @@ func (s *CatalogScans) scanScopes(kind string, dirs ...string) (*catalog.Catalog
 		if err != nil {
 			return nil, err
 		}
-		scopes = append(scopes, scanned)
+		// The first folder is G's, the second the workspace's: "global:" and "workspace:"
+		// pick them (catalog.ScopePrefixes).
+		scopes = append(scopes, catalog.Scope{Name: catalog.ScopePrefixes[min(index, len(catalog.ScopePrefixes)-1)], Catalog: scanned})
 	}
-	return catalog.Merge(kind, scopes...), nil
+	return catalog.MergeScopes(kind, scopes...), nil
 }
 
 // Scan is catalog.Scan, remembered. Scan errors are remembered too, so every session of

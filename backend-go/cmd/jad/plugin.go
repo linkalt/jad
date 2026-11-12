@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"jad/backend-go/internal/contentlibrary"
 	"jad/backend-go/internal/plugins"
@@ -196,6 +197,19 @@ func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 		},
 	}
 	target.ReadCommands = contentlibrary.CheckCommands
+	if sessionfs.WorkspaceLayout(loaded.Roots) {
+		// Plugins are global in the workspace layout: their models, toolsets and MCP servers go
+		// to G, their records and files to G/state/.plugins, so every workspace sees the same
+		// install; a global delete checks every workspace's profiles. There are no global
+		// profiles, so a plugin that ships some is refused.
+		layout, roots, err := sessionfs.ScopedCatalogLayout(loaded.Roots, sessionfs.CatalogScopeGlobal, sessionfs.CatalogModels)
+		if err != nil {
+			return plugins.Target{}, sessionfs.CLISettings{}, err
+		}
+		layout.State = filepath.Join(loaded.GlobalDir, "state")
+		target.Layout, target.Roots = layout, roots
+		target.NoProfiles = "the workspace layout has no global profiles; copy them into a workspace's .jad/profiles by hand"
+	}
 	if root.Layout.Libraries != nil {
 		// Workspace layout: plugins are global, so skills and commands go to the first global
 		// folders of global.json (no setting.json is read).

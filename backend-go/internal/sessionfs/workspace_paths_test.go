@@ -114,3 +114,24 @@ func TestWorkspaceReadersGetTheFixedHiddenPaths(t *testing.T) {
 		}
 	}
 }
+
+// Q7 addition: sandbox paths are compared cleaned, without following links, so a profile that
+// spells an allowed path differently is not refused, and one that climbs out of a placeholder
+// still is.
+func TestCeilingComparesSandboxPathsCleaned(t *testing.T) {
+	for path, want := range map[string]string{
+		"/a/b/": "/a/b", "/a/./b": "/a/b", "/a/c/../b": "/a/b", "{workspace}": "{workspace}", "{workspace}/": "{workspace}",
+		"{workspace}/./src/": "{workspace}/src", "{workspace}/a/../b": "{workspace}/b", "{workspace}/../x": "{workspace}/../x",
+		"{workspace}/../xy": "{workspace}/../xy", "{workspace}x": "{workspace}x", " /a ": "/a",
+	} {
+		if got := sandboxPathKey(path); got != want {
+			t.Errorf("sandboxPathKey(%q) = %q, want %q", path, got, want)
+		}
+	}
+	if missingPathFrom([]string{"{workspace}/", "/tmp/x/"}, []string{"{workspace}", "/tmp/x"}) != "" {
+		t.Error("cleaned paths must be equal")
+	}
+	if got := missingPathFrom([]string{"{workspace}"}, []string{"{workspace}/../etc"}); got != "{workspace}/../etc" {
+		t.Errorf("a climbing path must differ: %q", got)
+	}
+}

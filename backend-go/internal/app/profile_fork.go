@@ -48,7 +48,12 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 	if err != nil {
 		return httpapi.ForkResult{}, err
 	}
-	sourceFile, err := r.ReadCatalogFile(ctx, "profiles", config.Profile)
+	// The profile lives in the session's workspace in the workspace layout.
+	scope := ""
+	if sessionfs.WorkspaceLayout(r.roots) {
+		scope = sessionfs.CatalogScopeWorkspacePrefix + source.Root.ID
+	}
+	sourceFile, err := r.ReadCatalogFile(ctx, "profiles", config.Profile, scope)
 	if err != nil {
 		return httpapi.ForkResult{}, err
 	}
@@ -58,10 +63,10 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 			return httpapi.ForkResult{}, fmt.Errorf("copy the profile file: %w", err)
 		}
 	}
-	if _, _, err := r.WriteCatalogFile(ctx, "profiles", newProfile, data, "", "*"); err != nil {
+	if _, _, err := r.WriteCatalogFile(ctx, "profiles", newProfile, scope, data, "", "*"); err != nil {
 		return httpapi.ForkResult{}, err
 	}
-	undo := []func(){func() { _ = r.DeleteCatalogFile(context.WithoutCancel(ctx), "profiles", newProfile, "*") }}
+	undo := []func(){func() { _ = r.DeleteCatalogFile(context.WithoutCancel(ctx), "profiles", newProfile, scope, "*") }}
 	fail := func(err error) (httpapi.ForkResult, error) {
 		for index := len(undo) - 1; index >= 0; index-- {
 			undo[index]()

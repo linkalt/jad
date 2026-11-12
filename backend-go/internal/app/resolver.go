@@ -84,6 +84,7 @@ type Resolver struct {
 	warned       warnedConfigs
 	misnamed     sessionfs.MisnamedSessions
 	roots        []sessionfs.Root
+	workspaces   []sessionfs.Workspace
 	environment  map[string]string
 	catalog      CatalogConfig
 
@@ -356,6 +357,7 @@ func NewResolver(roots []sessionfs.Root, environment map[string]string, catalog 
 	return &Resolver{
 		logger:            resolverOptions.logger,
 		roots:             copyRoots,
+		workspaces:        resolverOptions.workspaces,
 		environment:       copyEnvironment,
 		catalog:           catalog,
 		stores:            make(map[string]*storeEntry),

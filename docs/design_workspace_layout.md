@@ -159,9 +159,16 @@ command can come later).
   worktree never moves the session's catalogs or state (consistent with D28).
 - Caches, locks, settings fingerprints and run registries are keyed by workspace id and
   qualified id, never by session or profile name alone.
-- The catalog HTTP routes take a `scope` parameter (`global`, `workspace:<id>`,
-  `profile:<id>/<cat>/<name>`); without it the v1 target is kept. `/api/workspaces` lists the
-  workspaces.
+- The catalog HTTP routes take a `scope` parameter (built in phase 1b step 3: `global` for
+  G's models, toolsets, MCP servers and sandbox templates, `workspace:<id>` for that
+  workspace's profiles, models and toolsets; `profile:…` comes with phase 3). Without it the v1
+  target is kept: in v2 the start workspace's profiles and the global rest. A kind the scope
+  has no folder for, an unknown workspace, and any scope in v1 are 404. A global delete is
+  refused while a profile or session of any served workspace still needs the file; a
+  workspace delete looks at that workspace only. A profile fork writes into the session's
+  workspace. `/api/workspaces` lists the workspaces (served and skipped, the start first).
+  `jad plugin` in v2 installs into the global scope (records and files in `G/state/.plugins`)
+  and refuses a plugin that ships profiles, since there are no global profiles.
 
 ### 4.4 Names and values
 
@@ -169,8 +176,12 @@ command can come later).
   (profile, workspace, global). In more than one, it is an error listing the candidates;
   `global:`, `workspace:`, `profile:` prefixes pick one. **No silent override.** Built in phase
   1a for models and toolsets (`catalog.Merge`): a name in both is left out of the offered list
-  with a warning and naming it is an error listing both files. The prefixes are not built yet
-  (selectors still refuse `:`), so today the fix is renaming one file.
+  with a warning and naming it is an error listing both files. The prefixes `global:` and
+  `workspace:` (phase 1b step 3) pick one scope in a profile's `models`, `model_default` and
+  `toolset` (tested); `catalog.Selector`, `Catalog.Lookup` and `Narrow` take them, so a
+  sub-agent's model ID, resolved with `Lookup`, should too (not tested); a prefix in v1 matches
+  nothing. After narrowing, a `model_default` is stored by its bare
+  ID. A toolset reference keeps its prefix; the in-use guard counts a prefixed reference too.
 - The existing in-use guard refuses deleting an entry a reference still uses.
 - Settings layers, lowest first: built-in < global `defaults` < workspace `defaults` < session <
   profile, with `mergeSettings`.
@@ -201,8 +212,9 @@ command can come later).
   `env_file` (exec, tool_smith, hooks) and path rules (exec, read_image, lsp, code_context) and
   `global.json`'s `libraries.tool_definition_paths`, `defaults.hooks.env_file` and
   `defaults.session_files.paths` are made absolute from `G` before they are merged. Sandbox
-  paths must already be absolute or start with a placeholder. `{workspace}` as a path
-  placeholder is not built yet.
+  paths must already be absolute or start with a placeholder. `{workspace}` (phase 1b step 3)
+  starts a session or profile `prompt_documents` path and always means W, also when the cwd is
+  elsewhere; it must be alone or followed by `/`; in v1 the text stays a path as written.
 - Plugins stay global: `jad plugin` installs skills and commands into the first global
   folders of `global.json`.
 - **Content libraries (Q3, built in phase 1b step 2):** `global.json` `libraries`
@@ -367,7 +379,7 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
      list and Q2 checks, per-workspace Layout and state, scoped model and toolset names,
      ordered ceilings (Q7), sandbox read-only and fixed hidden paths (Q4), cross-workspace
      tool limits (Q6), schemas `sample/schemes/global.schema.json` and `workspace.schema.json`.
-   - **1b (not built):** prompt libraries following the mode (global `libraries` from
+   - **1b (built, section 11):** prompt libraries following the mode (global `libraries` from
      `global.json`, workspace `libraries` in `workspace.json` from `W/.jad`, visible only in that
      workspace, a name in both an error; the HTTP library, the `skill` tool and commands),
      `/api/workspaces` (from `Config.Workspaces`), `scope` on catalog routes, the `global:` and
@@ -511,3 +523,16 @@ parameter of `httpapi.RootLibrary`, `native.NewSkillTool(…, libraries)`, `app.
 library, another workspace does not see it, no `setting.json` read, ambiguous names left out,
 unknown workspace 404), `tools/native/skill_test.go`
 (`TestWorkspaceSkillToolRefusesANameInBothLibraries`).
+
+**Step 3, scope, workspaces, prefixes, `{workspace}`, Q7 additions (fix D):**
+`sessionfs/workspace_scope.go` (`ScopedCatalogLayout`, scoped `catalogDir`, in-use checks over
+every workspace for a global delete), the `scope` argument of `httpapi.CatalogFiles`,
+`app/profile_fork.go`, `GET /api/workspaces` (`app/workspaces.go`, `httpapi/workspaces.go`),
+`cmd/jad/plugin.go` and `plugins.Target.NoProfiles`; `catalog.MergeScopes`, `Entry.Scope`,
+selector and lookup prefixes; `{workspace}` in `loadPrompt`; `sandboxPathKey` for the Q7 path
+comparison. Depth limits stay unchecked: they live in toolsets, which no lower layer
+(defaults, session) can set, so there is nothing to compare against until a profile can write
+its own toolsets (phase 3). Tests: `sessionfs/workspace_scope_test.go`, `catalog/scope_test.go`,
+`app/workspace_routes_test.go` (`/api/workspaces`, a scoped PUT lands in b, 404s, a fork in b
+writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlobalOnes`),
+`sessionfs/workspace_paths_test.go` (`TestCeilingComparesSandboxPathsCleaned`).

@@ -497,3 +497,16 @@ func TestListReportKeepsTheOtherPluginsWhenARecordIsBroken(t *testing.T) {
 		t.Fatalf("after the repair: %+v %v %v", statuses, problems, err)
 	}
 }
+
+// In the workspace layout plugins are global and there are no global profiles: a plugin that
+// ships profiles is refused before anything is written (NoProfiles).
+func TestInstallRefusesProfilesWhereThereAreNoGlobalOnes(t *testing.T) {
+	target, _ := testTarget(t)
+	target.NoProfiles = "the workspace layout has no global profiles"
+	if _, err := target.Install(context.Background(), writePlugin(t, acmePlugin("1.0.0")), false); err == nil || !strings.Contains(err.Error(), "has profiles: the workspace layout has no global profiles") {
+		t.Fatalf("install = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target.Layout.MCP, "acme")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a refused install wrote a catalog file")
+	}
+}

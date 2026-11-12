@@ -555,7 +555,11 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	promptRole, promptText, promptDocuments, err := loadPrompt(setting, profileSettings, cwd, settingPath)
+	workspaceDir := ""
+	if location.Root.Layout != nil {
+		workspaceDir = location.Root.Layout.Workspace
+	}
+	promptRole, promptText, promptDocuments, err := loadPrompt(setting, profileSettings, cwd, workspaceDir, settingPath)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -1150,7 +1154,10 @@ func hostedToolsField(fields map[string]json.RawMessage, path string) ([]json.Ra
 	return tools, nil
 }
 
-func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (string, string, []string, error) {
+// loadPrompt reads the prompt. workspace is W in the workspace layout, where a prompt
+// document may start with {workspace} (design D1, D2); empty in v1, where the text is a path
+// as written.
+func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, path string) (string, string, []string, error) {
 	role := "system"
 	if raw, ok := setting["prompt_role"]; ok {
 		if err := json.Unmarshal(raw, &role); err != nil || (role != "system" && role != "developer") {
@@ -1180,6 +1187,14 @@ func loadPrompt(setting, profile map[string]json.RawMessage, cwd, path string) (
 	}
 	var paths []string
 	for index, document := range documents {
+		if workspace != "" {
+			if rest, found := strings.CutPrefix(document, workspacePlaceholder); found {
+				if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, string(filepath.Separator)) {
+					return "", "", nil, configError("%s: prompt_documents[%d]: %s may only be followed by a / and a path", path, index, workspacePlaceholder)
+				}
+				document = workspace + rest
+			}
+		}
 		contents, resolved, err := readPromptDocument(document, index, "prompt_documents", cwd, path, maxPromptDocumentBytes)
 		if err != nil {
 			return "", "", nil, err

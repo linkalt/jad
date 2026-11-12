@@ -19,6 +19,9 @@ type Entry struct {
 	Category string
 	Name     string
 	Path     string
+	// Scope is the name of the scope MergeScopes found the entry in ("global", "workspace");
+	// empty for a catalog of one folder.
+	Scope string
 }
 
 // ID is "<category>/<name>".
@@ -31,9 +34,9 @@ type Catalog struct {
 	index   map[string]int
 	// skipped are the files and folders the scan left out for their names; only a scan sets it.
 	skipped []Skipped
-	// ambiguous are the IDs Merge found in more than one scope, with their files; naming one
-	// is an error. Narrow and Without keep them.
-	ambiguous map[string][]string
+	// ambiguous are the IDs Merge found in more than one scope, with their entries; naming one
+	// without a scope prefix is an error. Narrow and Without keep them.
+	ambiguous map[string][]Entry
 }
 
 // Skipped is a file or category folder a scan left out because its name is not an identifier
@@ -103,13 +106,25 @@ func (c *Catalog) Get(id string) (Entry, bool) {
 	return c.entries[position], true
 }
 
-// Lookup returns the entry a "<category>/<name>" reference names. A reference of any
-// other shape, and one that is not in this catalog, is an error that says what is
-// available.
+// Lookup returns the entry a "<category>/<name>" reference names; "<scope>:<category>/<name>"
+// picks the entry of that scope (workspace layout). A reference of any other shape, and one
+// that is not in this catalog, is an error that says what is available.
 func (c *Catalog) Lookup(id string) (Entry, error) {
-	category, name, ok := strings.Cut(id, "/")
+	scope, bare, err := splitScope(id)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%s %q: %w", c.kind, id, err)
+	}
+	category, name, ok := strings.Cut(bare, "/")
 	if !ok || ValidateIdentifier(category) != nil || ValidateIdentifier(name) != nil {
 		return Entry{}, fmt.Errorf("%s %q must be written <category>/<name>", c.kind, id)
+	}
+	if scope != "" {
+		for _, entry := range c.scoped() {
+			if entry.Scope == scope && entry.ID() == bare {
+				return entry, nil
+			}
+		}
+		return Entry{}, fmt.Errorf("%s %q is not available here (available: %s)", c.kind, id, availableText(c.IDs()))
 	}
 	if entry, found := c.Get(id); found {
 		return entry, nil
@@ -123,29 +138,37 @@ func (c *Catalog) Lookup(id string) (Entry, error) {
 // Narrow returns the entries a selection keeps. An absent selection keeps all of
 // them. Every item must exist: a category with no entry here, or a file that is not
 // here, is an error naming it, so a typo or a reference outside the level above is
-// reported and never dropped. "*" matches all and cannot fail.
+// reported and never dropped. "*" matches all and cannot fail. A scope-prefixed item
+// (workspace layout) matches the entries of that scope, an ambiguous one too; picking the
+// same ID from two scopes is an error.
 func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 	if sel.IsAll() {
 		return c, nil
 	}
-	categories := make(map[string]bool, len(c.entries))
-	for _, entry := range c.entries {
-		categories[entry.Category] = true
+	candidates := c.entries
+	for _, item := range sel.items {
+		if item.scope != "" {
+			candidates = c.scoped()
+			break
+		}
 	}
 	var missing []string
 	for _, item := range sel.items {
 		if id := c.ambiguousIn(item); id != "" {
 			return nil, c.ambiguityError(id)
 		}
-		switch item.kind {
-		case selectCategory:
-			if !categories[item.category] {
-				missing = append(missing, item.String())
+		if item.kind == selectAll {
+			continue
+		}
+		found := false
+		for _, entry := range candidates {
+			if item.matches(entry) {
+				found = true
+				break
 			}
-		case selectFile:
-			if _, ok := c.index[item.category+"/"+item.name]; !ok {
-				missing = append(missing, item.String())
-			}
+		}
+		if !found {
+			missing = append(missing, item.String())
 		}
 	}
 	if len(missing) > 0 {
@@ -153,10 +176,16 @@ func (c *Catalog) Narrow(sel Selection) (*Catalog, error) {
 			c.kind, quoteList(missing), availableText(append(c.Categories(), c.IDs()...)))
 	}
 	var kept []Entry
-	for _, entry := range c.entries {
-		if sel.matches(entry) {
-			kept = append(kept, entry)
+	picked := map[string]string{}
+	for _, entry := range candidates {
+		if !sel.matches(entry) {
+			continue
 		}
+		if other, taken := picked[entry.ID()]; taken {
+			return nil, fmt.Errorf("%s %q is selected from two scopes (%s and %s); name one", c.kind, entry.ID(), other, entry.Path)
+		}
+		picked[entry.ID()] = entry.Path
+		kept = append(kept, entry)
 	}
 	narrowed := newCatalog(c.kind, kept)
 	narrowed.ambiguous = c.ambiguous

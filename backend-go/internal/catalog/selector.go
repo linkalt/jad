@@ -21,18 +21,30 @@ type Selector struct {
 	kind     selectorKind
 	category string
 	name     string // only for selectFile
+	// scope, when set, is the scope prefix ("global", "workspace"): only entries of that
+	// scope match (workspace layout).
+	scope string
 }
 
 // ParseSelector parses one selector. Whitespace is never trimmed: a padded
-// entry is an error, so a typo cannot silently select nothing.
+// entry is an error, so a typo cannot silently select nothing. A selector may start with a
+// scope prefix, "global:" or "workspace:", which only the workspace layout's merged
+// catalogs have.
 func ParseSelector(text string) (Selector, error) {
-	if text == "*" {
+	scope, bare, err := splitScope(text)
+	if err != nil {
+		return Selector{}, fmt.Errorf("selector %q: %w", text, err)
+	}
+	selector, err := parseBareSelector(text, bare)
+	selector.scope = scope
+	return selector, err
+}
+
+func parseBareSelector(text, bare string) (Selector, error) {
+	if bare == "*" {
 		return Selector{kind: selectAll}, nil
 	}
-	if strings.Contains(text, ":") {
-		return Selector{}, fmt.Errorf("selector %q: write a category as its bare name and a file as <category>/<name>; no prefix is used", text)
-	}
-	if category, name, ok := strings.Cut(text, "/"); ok {
+	if category, name, ok := strings.Cut(bare, "/"); ok {
 		if err := ValidateIdentifier(category); err != nil {
 			return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
 		}
@@ -41,24 +53,49 @@ func ParseSelector(text string) (Selector, error) {
 		}
 		return Selector{kind: selectFile, category: category, name: name}, nil
 	}
-	if err := ValidateIdentifier(text); err != nil {
+	if err := ValidateIdentifier(bare); err != nil {
 		return Selector{}, fmt.Errorf("selector %q: category %w", text, err)
 	}
-	return Selector{kind: selectCategory, category: text}, nil
+	return Selector{kind: selectCategory, category: bare}, nil
+}
+
+// splitScope splits a scope prefix off a reference; a ':' that does not end a known scope
+// name is an error.
+func splitScope(text string) (scope, bare string, err error) {
+	prefix, rest, found := strings.Cut(text, ":")
+	if !found {
+		return "", text, nil
+	}
+	for _, known := range ScopePrefixes {
+		if prefix == known {
+			if strings.Contains(rest, ":") {
+				return "", "", fmt.Errorf("only one scope prefix may be given")
+			}
+			return prefix, rest, nil
+		}
+	}
+	return "", "", fmt.Errorf("write a category as its bare name and a file as <category>/<name>; no prefix is used but a scope (%s:) in the workspace layout", strings.Join(ScopePrefixes, ":, "))
 }
 
 // String returns the selector text that ParseSelector accepts.
 func (s Selector) String() string {
+	prefix := ""
+	if s.scope != "" {
+		prefix = s.scope + ":"
+	}
 	switch s.kind {
 	case selectAll:
-		return "*"
+		return prefix + "*"
 	case selectFile:
-		return s.category + "/" + s.name
+		return prefix + s.category + "/" + s.name
 	}
-	return s.category
+	return prefix + s.category
 }
 
 func (s Selector) matches(entry Entry) bool {
+	if s.scope != "" && entry.Scope != s.scope {
+		return false
+	}
 	switch s.kind {
 	case selectAll:
 		return true

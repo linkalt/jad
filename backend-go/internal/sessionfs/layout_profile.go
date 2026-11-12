@@ -56,6 +56,14 @@ func checkProfileWith(path string, profile layoutProfileFile, allModels *catalog
 		if err := effortCheck(entry.Path, effort); err != nil {
 			return layoutProfileFile{}, nil, configError("%s: model_default: %v", path, err)
 		}
+		if id != entry.ID() {
+			// A scope prefix (workspace layout) picked the entry; in the narrowed models its
+			// bare ID names it alone, and that is the ID the session's model choice uses.
+			profile.ModelDefault = entry.ID()
+			if effort != "" {
+				profile.ModelDefault += "@" + effort
+			}
+		}
 	}
 	return profile, models, nil
 }

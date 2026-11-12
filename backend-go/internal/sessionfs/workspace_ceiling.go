@@ -2,6 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -67,7 +68,8 @@ func settingNumber(settings map[string]json.RawMessage, path []string) (float64,
 // checkSandboxCeiling compares the sandbox the lower layers give with the one the profile's
 // layer makes of it. When the lower one is enabled, the profile may not turn it off, change
 // its program, cover fewer tools, hide fewer paths, or widen what it writes, reads or reaches
-// on the network. Paths are compared as written: an equal path spelled differently is refused.
+// on the network. Paths are compared cleaned (sandboxPathKey), without following links: a
+// path spelled with a trailing slash, "." or ".." inside is the same path, a link to it is not.
 // A composition that fails is left to the load, which reports it.
 func checkSandboxCeiling(layout Layout, sessionLayer, full map[string]json.RawMessage, profilePath string, profileSandbox json.RawMessage, scans *CatalogScans) error {
 	var cwd string
@@ -108,20 +110,20 @@ func checkSandboxCeiling(layout Layout, sessionLayer, full map[string]json.RawMe
 	if missing := missingFrom(above.Tools, below.Tools); missing != "" {
 		return refuse("stop covering tool " + missing)
 	}
-	if missing := missingFrom(above.HidePaths, below.HidePaths); missing != "" {
+	if missing := missingPathFrom(above.HidePaths, below.HidePaths); missing != "" {
 		return refuse("stop hiding " + missing)
 	}
-	if extra := missingFrom(below.WritablePaths, above.WritablePaths); extra != "" {
+	if extra := missingPathFrom(below.WritablePaths, above.WritablePaths); extra != "" {
 		return refuse("make " + extra + " writable")
 	}
-	if extra := missingFrom(below.PlanWritablePaths, above.PlanWritablePaths); extra != "" {
+	if extra := missingPathFrom(below.PlanWritablePaths, above.PlanWritablePaths); extra != "" {
 		return refuse("make " + extra + " writable in plan mode")
 	}
 	if !below.WholeFileSystemReadable() {
 		if above.WholeFileSystemReadable() {
 			return refuse("make the whole file system readable")
 		}
-		if extra := missingFrom(below.ReadPaths, above.ReadPaths); extra != "" {
+		if extra := missingPathFrom(below.ReadPaths, above.ReadPaths); extra != "" {
 			return refuse("make " + extra + " readable")
 		}
 	}
@@ -145,4 +147,60 @@ func missingFrom(have, want []string) string {
 		}
 	}
 	return ""
+}
+
+// missingPathFrom is missingFrom for sandbox paths, compared by sandboxPathKey.
+func missingPathFrom(have, want []string) string {
+	keys := make([]string, 0, len(have))
+	for _, entry := range have {
+		keys = append(keys, sandboxPathKey(entry))
+	}
+	for _, entry := range want {
+		if !slices.Contains(keys, sandboxPathKey(entry)) {
+			return entry
+		}
+	}
+	return ""
+}
+
+// sandboxPathKey is a sandbox path cleaned for comparison (decider Q7 addition): an absolute
+// path through filepath.Clean, a placeholder path as its placeholder and the cleaned rest. A
+// rest that climbs above its placeholder is kept as written, so it equals only itself. Links
+// are not followed: the sandbox binds the path as written.
+func sandboxPathKey(path string) string {
+	path = strings.TrimSpace(path)
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if !strings.HasPrefix(path, "{") {
+		return path
+	}
+	end := strings.Index(path, "}")
+	if end < 0 {
+		return path
+	}
+	placeholder, rest := path[:end+1], path[end+1:]
+	if rest == "" {
+		return placeholder
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return path
+	}
+	depth := 0
+	for _, segment := range strings.Split(rest, "/") {
+		switch segment {
+		case "", ".":
+		case "..":
+			if depth--; depth < 0 {
+				return path
+			}
+		default:
+			depth++
+		}
+	}
+	cleaned := filepath.Clean(rest)
+	if cleaned == "/" {
+		return placeholder
+	}
+	return placeholder + cleaned
 }
