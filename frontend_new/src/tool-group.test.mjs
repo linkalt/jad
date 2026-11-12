@@ -89,9 +89,9 @@ test('collapsed header expands before it can open a result', () => {
 
 test('group and activity styles use semantic tokens and tight row spacing', () => {
   assert.match(source, /backgroundColor: colorVars\['--color-accent-muted'\]/);
-  assert.match(source, /groupIcon: \{color: colorVars\['--color-icon-accent'\]\}/);
-  assert.match(source, /':hover': colorVars\['--color-overlay-hover'\]/);
-  assert.match(source, /':active': colorVars\['--color-overlay-hover'\]/);
+  assert.match(source, /groupIcon: \{color: colorVars\['--color-icon-blue'\]\}/);
+  assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:hover \{ background-color: var\(--color-overlay-hover\)/);
+  assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:active \{ background-color: var\(--color-overlay-hover\)/);
   assert.match(row, /<VStack gap=\{0\} width="100%" xstyle=\{styles\.groupedActivity\}>/);
   assert.match(row, /<VStack gap=\{0\} width="100%">\s*\{listed\.map/);
 });
@@ -162,6 +162,8 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     const panel = () => document.querySelector('[data-testid="panel"]').textContent;
     const click = el => act(() => el.dispatchEvent(new window.MouseEvent('click', {bubbles:true})));
     const key = (el, value) => act(() => el.dispatchEvent(new window.KeyboardEvent('keydown', {key:value, bubbles:true, cancelable:true})));
+    assert.ok(button('tool-a').classList.contains('jad-activity-trigger'), 'the actual interactive row receives hover styling');
+    assert.ok(toggle().classList.contains('jad-activity-trigger'), 'the group toggle receives hover styling');
     assert.equal(button('tool-a').getAttribute('tabindex'), '0');
     assert.equal(button('tool-a').getAttribute('aria-expanded'), 'false');
     assert.equal(button('tool-a').getAttribute('aria-label'), 'tool-a: Show more tool calls');
@@ -236,7 +238,7 @@ test('neutral theme tool rows retain text and icon contrast in each interaction 
   const luminance = rgb => rgb.slice(0, 3).map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
   const contrast = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const group = token('accent-muted'), surface = token('background-surface'), body = token('background-body');
-  const secondary = token('text-secondary'), icon = token('icon-accent'), overlay = token('overlay-hover');
+  const secondary = token('text-secondary'), icon = token('icon-blue'), overlay = token('overlay-hover');
   for (const mode of [0, 1]) for (const background of [group, surface, body]) {
     for (const state of ['idle', 'hover', 'active']) {
       const bg = state === 'idle' ? background[mode] : compose(overlay[mode], background[mode]);
@@ -244,4 +246,15 @@ test('neutral theme tool rows retain text and icon contrast in each interaction 
       if (background === group) assert.ok(contrast(icon[mode], bg) >= 3, `group icon: mode ${mode}, ${state}`);
     }
   }
+});
+
+// Exercise CSS parsing/minification, not just the TSX style declaration. The
+// DOM test above checks that these selectors reach the interactive elements.
+test('compiled activity CSS paints hover and press on the interactive row', async () => {
+  const {transform} = await import('lightningcss');
+  const css = readFileSync(new URL('./index.css', import.meta.url));
+  const compiled = transform({filename: 'index.css', code: css, minify: true}).code.toString();
+  assert.match(compiled, /\.jad-activity-trigger:hover\{[^}]*background-color:var\(--color-overlay-hover\)/);
+  assert.match(compiled, /\.jad-activity-trigger:active\{[^}]*background-color:var\(--color-overlay-hover\)/);
+  assert.match(compiled, /box-shadow:inset/);
 });

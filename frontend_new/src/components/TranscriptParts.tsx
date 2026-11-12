@@ -56,7 +56,6 @@ const styles = stylex.create({
   },
   activityTrigger: {
     cursor: 'pointer',
-    backgroundColor: {default: 'transparent', ':hover': colorVars['--color-overlay-hover'], ':active': colorVars['--color-overlay-hover']},
     borderRadius: radiusVars['--radius-inner'],
     outlineStyle: {default: 'none', ':focus-visible': 'solid'},
     outlineWidth: '2px',
@@ -67,7 +66,7 @@ const styles = stylex.create({
     backgroundColor: colorVars['--color-accent-muted'],
     borderRadius: radiusVars['--radius-inner'],
   },
-  groupIcon: {color: colorVars['--color-icon-accent']},
+  groupIcon: {color: colorVars['--color-icon-blue']},
   traceCopy: {
     minWidth: 0,
     flex: 1,
@@ -201,6 +200,7 @@ function ActivityRow({
       onClick={handleClick}
       onKeyDown={handleKeyDown}
       {...stylex.props(styles.activityTrigger)}
+      className={[stylex.props(styles.activityTrigger).className, 'jad-activity-trigger'].filter(Boolean).join(' ')}
     >
       {children}
     </div>
@@ -747,6 +747,7 @@ function ToolGroupRow({
             }
           }}
           {...stylex.props(styles.activityTrigger, styles.groupToggle, styles.groupIcon)}
+          className={[stylex.props(styles.activityTrigger, styles.groupToggle, styles.groupIcon).className, 'jad-activity-trigger'].filter(Boolean).join(' ')}
         >
           <HStack gap={1} align="center">
             <Icon icon="wrench" size="xsm" color="inherit" />
