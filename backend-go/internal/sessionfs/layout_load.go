@@ -115,6 +115,9 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if err := built.loadAgentToolsets(&config, entry); err != nil {
 		return SessionConfig{}, err
 	}
+	if err := layout.checkWriteTargets(sessionPath, config); err != nil {
+		return SessionConfig{}, err
+	}
 	if roots := layout.profilePrivateRoots(); len(roots) > 0 {
 		// The in-process readers answer other profiles' private and data folders as missing,
 		// with or without a sandbox; the profile's own stay readable (decider S3).

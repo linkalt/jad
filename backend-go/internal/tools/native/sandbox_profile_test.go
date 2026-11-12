@@ -501,3 +501,44 @@ func TestProfileSandboxKeepsTheDocumentsReadOnlyAndPrivate(t *testing.T) {
 		t.Fatal("another profile planted a document")
 	}
 }
+
+// A writable path a profile lists into a profile-own folder (its own documents, another
+// profile's, the profile-own root, through .. or a link, or the whole W/.jad) opens nothing: the
+// fixed read-only and hidden rules are bound after it and win (3b.1).
+func TestProfileSandboxWritablePathsDoNotOpenProfileOwn(t *testing.T) {
+	requireBwrap(t)
+	for _, writable := range []string{
+		`"{workspace}/.jad/profile-own/dev/coder/documents","{workspace}/.jad/profile-own/dev/other/documents"`,
+		`"{workspace}/.jad/profile-own"`,
+		`"{workspace}/.jad/profile-own/dev/../dev/coder/documents"`,
+		`"{workspace}/own","{workspace}/theirs"`,
+		`"{workspace}/.jad"`,
+	} {
+		f := newProfileSandboxFixture(t, writable+`,"{tmp}"`)
+		useOwnTempDir(t)
+		for link, target := range map[string]string{"own": "coder", "theirs": "other"} {
+			if err := os.Symlink(filepath.Join(f.a, ".jad", "profile-own", "dev", target, "documents"), filepath.Join(f.a, link)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		own, theirs := ".jad/profile-own/dev/coder/documents", ".jad/profile-own/dev/other/documents"
+		command := profileAttempt("read", `grep -q coder-doc `+own+`/doc.md`) +
+			profileAttempt("create", `echo x > `+own+`/new.md`) +
+			profileAttempt("change", `echo x > `+own+`/doc.md`) +
+			profileAttempt("history", `mkdir -p .jad/profile-own/dev/coder/history/x`) +
+			profileAttempt("linkwrite", `echo x > own/new.md`) +
+			profileAttempt("other", `cat `+theirs+`/doc.md`) +
+			profileAttempt("plant", `echo x > `+theirs+`/planted.md`) +
+			profileAttempt("linkplant", `echo x > theirs/planted.md`)
+		wantProfileOutput(t, writable, f.run(t, command, tools.ExecutionContext{}, f.config.Sandbox),
+			"read=yes", "create=no", "change=no", "history=no", "linkwrite=no", "other=no", "plant=no", "linkplant=no")
+		for _, path := range []string{filepath.Join(f.a, own, "new.md"), filepath.Join(f.a, theirs, "planted.md"), filepath.Join(f.a, ".jad", "profile-own", "dev", "coder", "history")} {
+			if _, err := os.Stat(path); err == nil {
+				t.Errorf("%s: %s was made on the host", writable, path)
+			}
+		}
+		if got, err := os.ReadFile(filepath.Join(f.a, own, "doc.md")); err != nil || string(got) != "coder-doc" {
+			t.Errorf("%s: the own document changed: %q, %v", writable, got, err)
+		}
+	}
+}

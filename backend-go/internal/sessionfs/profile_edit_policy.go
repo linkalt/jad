@@ -225,7 +225,9 @@ func checkSelfEditEnvFiles(raw json.RawMessage, place selfEditPlace) error {
 // paths and the like would let an in-process writer or a sandbox bind reach the history and
 // the documents around the lock and the history. Every string of the setting is judged as a
 // path ({profile_own}, {workspace} and ~ expanded, a relative one from the session cwd and from
-// W/.jad), so a string that is not a path is refused only if it lands there.
+// W/.jad), so a string that is not a path is refused only if it lands there. This is the early,
+// clearer refusal; the rule itself is enforced where the loader resolves each write target
+// (Layout.checkWriteTargets, 3b.1), which the trial load and every later load run.
 func checkSelfEditSettingPaths(raw json.RawMessage, changed []string, place selfEditPlace) error {
 	var settings map[string]json.RawMessage
 	if len(changed) == 0 || json.Unmarshal(raw, &settings) != nil {

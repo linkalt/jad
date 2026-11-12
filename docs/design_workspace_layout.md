@@ -751,3 +751,36 @@ Decider phase 3b D1 to D7: a profile writes its own documents through the `profi
 - With a sandbox on, the own `exec` cannot create, change, delete or move documents and other
   profiles cannot see them (real bwrap test); without one nothing here is private or
   tamper-proof, and the link checks race with `exec`.
+
+## 15. Phase 3b.1 as built: where configured writers may write
+
+Decider 3b.1: the rule that no configured in-process writer reaches a `profile-own` folder is
+checked where the loader resolves the write targets, not on the setting's text.
+
+- **One point:** after the selected profile's configuration and its agent toolsets are loaded
+  (`loadLayoutSessionSettings`), `Layout.checkWriteTargets` takes every in-process write target
+  of the resolved `SessionConfig` (`SessionConfig.writeTargets`): transcript, backup, caches,
+  staging, HTTP debug, tool storage (`tool_storage_dir`), the `storage_dir` of task, records,
+  code_context and subagent, the subagent worktree folder, the spill folder and the folders of
+  the `stdout_full`/`stderr_full` files of exec and tool_smith, `image_store.dir`, and the
+  `functions_dir` of exec and tool_smith (relative from the cwd, as a top-level run resolves
+  it). Each is taken as the loader resolved it (placeholders, relative base, `Clean`), then the
+  links of its existing part are followed; one inside the `profile-own` folder of any known
+  workspace (as written or after links) fails the load with the setting's name.
+- **Who meets it:** a self-edit through its trial load (so a toolset switch whose storage
+  points there is refused too; the text check of 3b stays as the earlier, clearer refusal) and
+  every load of a hand-written profile, session, workspace default or toolset. v1 has no
+  `profile-own`, so nothing changes there.
+- **Not a write target:** `session_files` is the read and listing policy of the UI file list
+  and the transcript tools; it writes nothing and is still covered by the 3b text check for
+  self-edits. `env_file`, MCP `config_path` and agent folders are read, not written.
+- **Sandbox writable paths:** a listed writable path into the own documents, another profile's
+  documents, the `profile-own` root, through `..` or a link, or the whole `W/.jad`, opens
+  nothing: `sandboxProfileRules` are bound after the writable paths and hide or keep read-only
+  as before (real bwrap test). No bind order change was needed.
+- **Limits:** a worktree run resolves `functions_dir` and `{cwd}` spill files against its own
+  worktree, which is not judged (a worktree holds no `profile-own` unless that folder is
+  tracked by git); a link made after the load (by `exec` without a sandbox) is not seen;
+  checkpoint restore, a user action, can still rewrite files under `profile-own` when the cwd
+  covers it, without the lock or the history; hooks and MCP servers run as their own
+  processes and are not in-process writers.
