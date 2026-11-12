@@ -56,12 +56,18 @@ const styles = stylex.create({
   },
   activityTrigger: {
     cursor: 'pointer',
+    backgroundColor: {default: 'transparent', ':hover': colorVars['--color-overlay-hover'], ':active': colorVars['--color-overlay-hover']},
     borderRadius: radiusVars['--radius-inner'],
     outlineStyle: {default: 'none', ':focus-visible': 'solid'},
     outlineWidth: '2px',
     outlineColor: colorVars['--color-accent'],
     outlineOffset: '-2px',
   },
+  groupedActivity: {
+    backgroundColor: colorVars['--color-accent-muted'],
+    borderRadius: radiusVars['--radius-inner'],
+  },
+  groupIcon: {color: colorVars['--color-icon-accent']},
   traceCopy: {
     minWidth: 0,
     flex: 1,
@@ -132,8 +138,10 @@ function ActivityRow({
   detail,
   refs,
   children,
+  expandGroup,
 }: {
   detail: ActivityDetail;
+  expandGroup?: {expand: () => void; listId: string};
   /** The values `detail` is built from; a change refreshes the open panel. */
   refs: unknown[];
   children: ReactNode;
@@ -155,10 +163,13 @@ function ActivityRow({
     }
   });
 
-  if (control === null) {
+  if (control === null && expandGroup === undefined) {
     return <>{children}</>;
   }
-  const open = (element: HTMLElement) => control.toggle(detail, element);
+  const open = (element: HTMLElement) => {
+    if (expandGroup) expandGroup.expand();
+    else control?.toggle(detail, element);
+  };
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     // Dragging across the row's text selects it; that is not a request to open.
     const selection = window.getSelection();
@@ -181,7 +192,9 @@ function ActivityRow({
     <div
       role="button"
       tabIndex={0}
-      aria-expanded={isOpen}
+      aria-expanded={expandGroup ? false : isOpen}
+      aria-controls={expandGroup?.listId}
+      aria-label={expandGroup ? (detail.kind === 'tool' ? detail.name + ': ' : '') + 'Show more tool calls' : undefined}
       // Part of the panel's own toggle set: pressing the open block must not
       // dismiss the panel on pointerdown and then reopen it on click.
       data-panel-toggle=""
@@ -692,7 +705,8 @@ export function toolActivityForParts(
 /**
  * A tool group with several calls: the first call is the header row, followed
  * directly by the wrench, the call count and a chevron, all left aligned. The
- * first call opens the panel like any call row; pressing the wrench, count or
+ * first call expands the group while collapsed and opens its panel when expanded;
+ * pressing the wrench, count or
  * chevron (or the empty space after them) only expands or collapses the list of
  * the remaining calls, each a row of its own. While the panel shows one of the
  * listed calls the list stays expanded, so the row that opened the panel stays
@@ -704,7 +718,7 @@ function ToolGroupRow({
   renderCall,
 }: {
   calls: {call: WebUiToolCall; result: WebUiToolResult | undefined}[];
-  renderCall: (call: WebUiToolCall, result: WebUiToolResult | undefined) => ReactNode;
+  renderCall: (call: WebUiToolCall, result: WebUiToolResult | undefined, expandGroup?: {expand: () => void; listId: string}) => ReactNode;
 }) {
   const control = useContext(ActivityPanelContext);
   const [isToggled, setIsToggled] = useState(false);
@@ -716,9 +730,9 @@ function ToolGroupRow({
   const toggle = () => setIsToggled(!isExpanded);
   const listId = useId();
   return (
-    <VStack gap={1} width="100%">
+    <VStack gap={0} width="100%" xstyle={styles.groupedActivity}>
       <HStack gap={2} align="center" width="100%">
-        <div {...stylex.props(styles.groupHeaderCall)}>{renderCall(header.call, header.result)}</div>
+        <div {...stylex.props(styles.groupHeaderCall)}>{renderCall(header.call, header.result, isExpanded ? undefined : {expand: () => setIsToggled(true), listId})}</div>
         <div
           role="button"
           tabIndex={0}
@@ -732,7 +746,7 @@ function ToolGroupRow({
               toggle();
             }
           }}
-          {...stylex.props(styles.activityTrigger, styles.groupToggle)}
+          {...stylex.props(styles.activityTrigger, styles.groupToggle, styles.groupIcon)}
         >
           <HStack gap={1} align="center">
             <Icon icon="wrench" size="xsm" color="inherit" />
@@ -748,7 +762,7 @@ function ToolGroupRow({
       </HStack>
       <div id={listId} hidden={!isExpanded}>
         {isExpanded && (
-          <VStack gap={1} width="100%">
+          <VStack gap={0} width="100%">
             {listed.map(({call, result}) => renderCall(call, result))}
           </VStack>
         )}
@@ -859,6 +873,7 @@ function WebUiActivityGroup({
   const callRow = (
     call: WebUiToolCall,
     result: WebUiToolResult | undefined,
+    expandGroup?: {expand: () => void; listId: string},
   ) => {
     const item = toolCallItem(call, result, rowWidthPx);
     return (
@@ -874,6 +889,7 @@ function WebUiActivityGroup({
           source,
         }}
         refs={[call, result]}
+        expandGroup={expandGroup}
       >
         <ChatToolCalls calls={[item]} xstyle={styles.toolCallsFlush} />
       </ActivityRow>

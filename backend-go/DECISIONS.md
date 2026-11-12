@@ -4192,3 +4192,11 @@ Choices for the decider: (1) `Done` appears only in the no-tool case, to preserv
 - A steps-only count in the label can read lower than the child's real count when steps are omitted; the real count is unknown.
 - `Done` replaces the text before a reader can see it, so a user cannot expand the summary in the transcript; it is in the tool result above.
 - `composer-triggers.test.mjs` "every built-in path ... exists" still fails (`MEMORY_DESIGN.md`, known and unrelated).
+
+## T-022 tool group interaction and visual review (Go, 2026-05-20)
+
+The collapsed first call expands the group; once expanded, it opens its own panel. This supersedes the T-021 statement that the first call always opens its panel. Group rows use semantic background and icon tokens, with tight spacing. Hover and active use the same overlay: the stronger pressed overlay reduced dark-theme secondary-text contrast below 4.5:1.
+
+The group test renders the actual group and activity-row bodies with React and jsdom, stubbing layout/icon wrappers and the panel controller. It exercises clicks, Enter, Space, selection, ARIA, focus on toggle-close and panel state. A contrast regression calculates the shipped neutral light/dark token colors, including composited interaction overlays, for group, body and surface backgrounds. Touch presses use the CSS active state.
+
+Open: jsdom does not validate browser layout or physical touch behavior, and the test does not render the complete app or real panel controller. Visual/browser testing and arbitrary custom theme contrast remain unverified. The existing full-suite `composer-triggers.test.mjs` check fails because `MEMORY_DESIGN.md` is absent. No Go verification was run for this frontend-only work.
