@@ -1360,3 +1360,73 @@ and rolls back. No key other than `libraries.tool_definition_paths` was added.
 - A v1 process does not see `profile-own`, the checkpoint exclusions or the sealed sandbox.
 
 **Not built:** the UI (phase 5), `promote`, seatbelt runs.
+
+## 26. Phase 5 as built: the session rail groups by workspace
+
+Decider (phase 5 ruling). "Session category" is gone from the UI; a session's **workspace** takes
+its place. Nothing in the backend, the API, a session file or an id changed.
+
+**What a workspace is in the UI.** The session root a session is stored in: `root_id` and
+`root_label` of every list record. In the workspace layout each served workspace is one root, in
+the old layout the roots of the setting are the workspaces, so one rule serves both. The UI shows
+labels (a workspace's label defaults to its id, the old default root keeps "Local sessions") and
+never a directory: `GET /api/workspaces` still sends `directory`, `parseWorkspaces` drops it.
+`sessionRef` is unchanged (`root:name` with more than one root, the bare name with one), so stored
+views and pinned panes keep working. A session's `category` is still accepted, listed and part of
+the list ETag; the UI neither shows nor checks it (`session.schema.json` calls it legacy). The
+profile `<category>/<name>` of a profile id is another thing and is untouched (fork and
+duplicate of a profile still take it from the id).
+
+**Rail.** With more than one workspace: a "Workspace" switcher on top and one heading per
+workspace, the start workspace first, then the others by label, sessions in list order under their
+heading, a heading with a running run shows the spinner. With one workspace: a flat list, no
+heading and no switcher. "Others" and its config key are gone. A session whose root is not among
+the known workspaces gets a heading of its own (an older server that names no root: "Unknown
+workspace") instead of vanishing. A listed workspace the server does not serve is left out: it can
+hold no session and cannot be chosen. Collapse state of a heading is per workspace and, as before,
+not stored.
+
+**The chosen workspace** is the switcher's pick and follows the session the user opens. It decides
+where a new session is created and which workspace the catalog dialog and the library act on. It
+is not stored: after a reload it follows the restored session, else the start workspace.
+
+**Catalog dialog (`catalogScope`).** In the workspace layout every request carries an explicit
+scope, so no file goes to the server's start workspace without the screen saying so:
+profiles `workspace:<chosen>`; models and toolsets `global` or, with the "Files of" choice,
+`workspace:<chosen>`; MCP servers `global`. Sessions carry no scope (their reference names the
+workspace). Outside the layout no scope is sent (the server refuses one). The dialog does not list
+or write anything until `GET /api/workspaces` answered; a failed read shows the error and a Retry,
+and the lists are dropped whenever the workspace or the scope changes, so a row of one scope is
+never opened or written under another. The workspace choice is locked while a file is open (a new
+session may still change it: only its name depends on it).
+
+**New session.** The name is created as `<chosen>:<name>` when more than one workspace exists
+(`newSessionRef`), a name typed with its own root (`other:name`) is used as typed, and the line
+under the name says where it will be created. The server enforces the rest: a bare name with
+several workspaces is refused (`newLayoutSession`) and nothing is written, a qualified name lands in
+that workspace only (`TestWorkspaceSessionsAreCreatedInTheNamedWorkspaceAndABareNameIsRefused`).
+Fork and duplicate of a session stay in the source's root (`sessionRefInRootOf`), as before.
+
+**Session catalog and profile filter.** The category column and filter of the session list became a
+workspace column and filter (shown only when sessions span several workspaces); the profile list's
+session filter is sectioned by workspace (a plain list with one). A session's category text is not
+read there either.
+
+**Library.** The prompt library panel and the composer's slash menu ask for the workspace of the
+pane's session (`?workspace=`), in the workspace layout only; before this a pane of any workspace
+read the start workspace's library. If the workspace list could not be read the UI cannot tell the
+layouts apart and names the workspace anyway, so an old layout refuses the request loudly instead of
+the start workspace's library being shown silently.
+
+**Limits.**
+- In the old layout the workspaces are read from the session list, so a root with no session is
+  unknown to the UI: with one known root a new bare name is sent bare and the server refuses it when
+  the setting has more roots (an error naming the fix, nothing written). Writing `<root>:<name>`
+  works.
+- Not stored: the chosen workspace and the collapse of a heading.
+- Verified in a real browser against a temporary two-workspace server (rail, switcher, catalog
+  scopes, session create, model scope choice, library panel); the layout was checked by eye in one
+  small viewport only, and there is no automated rendering test: the frontend tests cover the pure
+  rules, the request URLs and source-text wiring.
+- A profile row whose profile the session does not offer is refused by the server (422) if a stale
+  stored view names it; the UI does not clean such a view up.

@@ -114,6 +114,8 @@ export type ComposerInsertActions = {
 type ComposerPaneProps = {
   /** The session reference used for session-scoped features such as @ file search. */
   activeSessionId: string;
+  /** The workspace whose library the slash menu reads; see ViewPane. */
+  libraryWorkspace?: string;
   /** The profile the view is pinned to, for its MCP prompts; undefined is the session's default. */
   activeProfile?: string;
   /** The row identity used to keep each profile view's draft independent. */
@@ -515,6 +517,7 @@ const DROP_HIGHLIGHT = {
  */
 export function ComposerPane({
   activeSessionId,
+  libraryWorkspace,
   activeProfile,
   draftKey,
   inputHistory,
@@ -591,7 +594,7 @@ export function ComposerPane({
       ? {
           source: createSlashSource({
             commands: slashCommands ?? [],
-            loadCatalog: () => fetchRootLibrary(),
+            loadCatalog: () => fetchRootLibrary(undefined, libraryWorkspace),
             loadMCPPrompts: appConfig.slash_menu_mcp_prompts_enabled
               ? () => fetchSessionMCPPrompts(activeSessionId, activeProfile).then(listed => listed.prompts)
               : undefined,
@@ -617,7 +620,7 @@ export function ComposerPane({
           : undefined,
       slash,
     });
-  }, [activeSessionId, activeProfile, slashCommands]);
+  }, [activeSessionId, activeProfile, slashCommands, libraryWorkspace]);
 
   const imageLimits = useMemo(
     () => ({
@@ -923,7 +926,7 @@ export function ComposerPane({
   // The server fills a custom command, as jad run has it filled; the text is inserted
   // like a library prompt, as a badge named /<command> past the length rule.
   const insertCommand = (command: RootLibraryCommand, args: string) => {
-    expandRootLibraryCommand(command.id, args).then(
+    expandRootLibraryCommand(command.id, args, libraryWorkspace).then(
       expanded => {
         insertPrompt(expanded.text, `/${command.command}`);
         applyCommandOptions(command.command, expanded.options);
@@ -962,7 +965,7 @@ export function ComposerPane({
       else setArgumentPrompt(selection.prompt);
       return;
     }
-    fetchRootLibraryAsset(selection.kind, selection.id).then(
+    fetchRootLibraryAsset(selection.kind, selection.id, undefined, libraryWorkspace).then(
       asset => {
         if (asset.kind === 'prompt') insertPrompt(asset.content, asset.name);
         else if (asset.kind === 'template') insertText(asset.content);

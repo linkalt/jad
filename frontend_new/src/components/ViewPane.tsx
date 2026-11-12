@@ -190,6 +190,11 @@ export type ViewPaneProps = {
   composer?: ReactNode;
   /** The session reference the composer's session-scoped features use. */
   composerSessionId: string;
+  /**
+   * The workspace whose library the composer and the prompt panel read: the session's own, in
+   * the workspace layout; absent elsewhere, where a server refuses the parameter.
+   */
+  libraryWorkspace?: string;
   onSubmitComposer: (
     value: string,
     images: AttachedImage[],
@@ -275,6 +280,7 @@ export function ViewPane({
   isHidden,
   isDivided,
   composerSessionId,
+  libraryWorkspace,
   onSubmitComposer,
   onStopComposer,
   isComposerDisabled,
@@ -419,6 +425,7 @@ export function ViewPane({
     <ComposerErrorBoundary onError={onComposerError}>
       <ComposerPane
         activeSessionId={composerSessionId}
+        libraryWorkspace={libraryWorkspace}
         activeProfile={profile}
         draftKey={viewKey}
         inputHistory={inputHistory}
@@ -756,6 +763,7 @@ export function ViewPane({
           onUsePrompt={onUsePrompt}
           onUseTemplate={onUseTemplate}
           onUseSkill={onUseSkill}
+          workspace={libraryWorkspace}
         />
       )}
       {appConfig.resource_watch_enabled && panel === 'resources' && (

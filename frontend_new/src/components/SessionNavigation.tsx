@@ -2,14 +2,15 @@ import {Button, Divider, HStack, Icon, IconButton, SideNav, SideNavItem, Spinner
 import {useAppShellMobile} from '@astryxdesign/core/AppShell';
 import {useSideNavRenderMode} from '@astryxdesign/core/SideNav';
 import {Popover} from '@astryxdesign/core/Popover';
+import {Selector} from '@astryxdesign/core/Selector';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {Fragment, useCallback, useMemo, useRef, useState} from 'react';
 import {type Session} from '../app-types';
 import {type ColorScheme} from '../color-scheme';
-import appConfig from '../config.json';
 import {type LeftPanelId} from '../left-panel';
 import {paneCountLabel} from '../pane-count';
-import {type SessionListGroup, categorySectionLabel, groupByCategory, groupHasRunningRun} from '../session-views';
+import {type SessionListGroup, groupHasRunningRun} from '../session-views';
+import {type Workspace, groupByWorkspace} from '../workspaces';
 import {NotificationBellIcon} from './AppIcons';
 import {MoonIcon, SunIcon} from './ColorSchemeIcon';
 import {FolderIcon} from './FolderIcon';
@@ -37,6 +38,9 @@ function closeHoverFlyout(anchor: HTMLElement): void {
 
 export function SessionNavigation({
   groups,
+  workspaces,
+  selectedWorkspace,
+  onSelectWorkspace,
   collapsedRefs,
   onCollapsedChange,
   rowTurns,
@@ -65,6 +69,11 @@ export function SessionNavigation({
 }: {
   /** Every session as a group, with a child row for each of its profiles. */
   groups: SessionListGroup[];
+  /** The workspaces the list is grouped by (see workspacesOf); one or none means a flat list. */
+  workspaces: readonly Workspace[];
+  /** The workspace new sessions and catalog files go to; absent before the list is known. */
+  selectedWorkspace: string | undefined;
+  onSelectWorkspace: (workspace: string) => void;
   /** The sessions whose group the user collapsed. */
   collapsedRefs: readonly string[];
   onCollapsedChange: (sessionRef: string, isCollapsed: boolean) => void;
@@ -101,7 +110,7 @@ export function SessionNavigation({
   activePaneIndex: number;
   onFocusPane: (viewKey: string) => void;
 }) {
-  const categorySections = useMemo(() => groupByCategory(groups), [groups]);
+  const sections = useMemo(() => groupByWorkspace(groups, workspaces), [groups, workspaces]);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const {isMobile} = useAppShellMobile();
@@ -109,9 +118,11 @@ export function SessionNavigation({
   // rendered once more inside the mobile drawer, and a second copy of the
   // switcher there would be a duplicate set of controls.
   const sideNavRenderMode = useSideNavRenderMode();
-  const [collapsedCategories, setCollapsedCategories] = useState<readonly string[]>([]);
-  const toggleCategory = useCallback((key: string) => {
-    setCollapsedCategories(current =>
+  // Collapsed workspace headings, by workspace id. Like the heading itself it is not stored:
+  // only the session groups' collapse is persisted.
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<readonly string[]>([]);
+  const toggleWorkspace = useCallback((key: string) => {
+    setCollapsedWorkspaces(current =>
       current.includes(key) ? current.filter(entry => entry !== key) : [...current, key],
     );
   }, []);
@@ -281,9 +292,43 @@ export function SessionNavigation({
       }
       collapsible={{isCollapsed, onCollapsedChange: setIsCollapsed}}
     >
-      {categorySections.map(section => {
-        const key = section.category ?? '';
-        const label = categorySectionLabel(section, appConfig.session_uncategorized_title);
+      {workspaces.length > 1 && !isCollapsed && (
+        <VStack paddingInline={2} paddingBlock={1}>
+          <Selector
+            label="Workspace"
+            options={workspaces.map(workspace => ({value: workspace.id, label: workspace.label}))}
+            value={selectedWorkspace}
+            onChange={onSelectWorkspace}
+          />
+        </VStack>
+      )}
+      {sections.map(section => {
+        const list = (
+          <SessionGroupList
+            groups={section.groups}
+            sessions={sessions}
+            rowTurns={rowTurns}
+            runningViewKeys={runningViewKeys}
+            activeViewKey={activeViewKey}
+            collapsedRefs={collapsedRefs}
+            onCollapsedChange={onCollapsedChange}
+            onSelect={onSelect}
+            onOpenPane={onOpenPane}
+            canOpenPane={canOpenPane}
+            paneLimit={paneLimit}
+            onDuplicate={onDuplicate}
+            canDuplicate={canDuplicate}
+            onRowContextMenu={openRowMenu}
+            rowMenuTarget={rowMenuTarget}
+            rowMenuAnchorRef={rowMenuAnchorRef}
+            onRowMenuOpenChange={handleRowMenuOpenChange}
+          />
+        );
+        // One workspace is a flat list: the switcher and the pane already say where you are.
+        if (section.workspace === undefined) {
+          return <Fragment key="">{list}</Fragment>;
+        }
+        const {id: key, label} = section.workspace;
         const hasRunning = section.groups.some(group =>
           groupHasRunningRun(group, sessions.find(candidate => candidate.id === group.sessionRef), runningViewKeys),
         );
@@ -292,44 +337,27 @@ export function SessionNavigation({
             <SideNavItem
               label={label}
               icon={hasRunning ? <Spinner size="sm" aria-label={`${label} running`} /> : FolderIcon}
+              isSelected={key === selectedWorkspace}
               endContent={
-                <VisuallyHidden>{collapsedCategories.includes(key) ? 'collapsed' : 'expanded'}</VisuallyHidden>
+                <VisuallyHidden>{collapsedWorkspaces.includes(key) ? 'collapsed' : 'expanded'}</VisuallyHidden>
               }
-              onClick={() => toggleCategory(key)}
+              onClick={() => toggleWorkspace(key)}
               onContextMenu={event => {
                 event.preventDefault();
                 event.stopPropagation();
-                openRowMenu({kind: 'category', id: key, label}, event.currentTarget);
+                openRowMenu({kind: 'workspace', id: key, label}, event.currentTarget);
               }}
             />
             <Divider />
-            {collapsedCategories.includes(key) ? null : (
+            {collapsedWorkspaces.includes(key) ? null : (
               <VStack gap={0} paddingInlineStart={2}>
-                <SessionGroupList
-                  groups={section.groups}
-                  sessions={sessions}
-                  rowTurns={rowTurns}
-                  runningViewKeys={runningViewKeys}
-                  activeViewKey={activeViewKey}
-                  collapsedRefs={collapsedRefs}
-                  onCollapsedChange={onCollapsedChange}
-                  onSelect={onSelect}
-                  onOpenPane={onOpenPane}
-                  canOpenPane={canOpenPane}
-                  paneLimit={paneLimit}
-                  onDuplicate={onDuplicate}
-                  canDuplicate={canDuplicate}
-                  onRowContextMenu={openRowMenu}
-                  rowMenuTarget={rowMenuTarget}
-                  rowMenuAnchorRef={rowMenuAnchorRef}
-                  onRowMenuOpenChange={handleRowMenuOpenChange}
-                />
+                {list}
               </VStack>
             )}
           </Fragment>
         );
       })}
-      {/* Profile rows host their own menu inside their group; a category or
+      {/* Profile rows host their own menu inside their group; a workspace or
           session row's menu lives here, beside the rail it belongs to. */}
       <RowContextMenu
         target={rowMenuTarget?.kind === 'profile' ? null : rowMenuTarget}

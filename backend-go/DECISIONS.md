@@ -605,6 +605,8 @@ An agent's `tools` list accepts `mcp:<server>:*` besides `mcp:<server>:<tool>`, 
 
 ## Session category in the session list (2026-10-10)
 
+*Superseded for the UI by "Workspace layout v2: phase 5" (2026-11-13): the list field and the ETag below stay, the frontend no longer groups by category and `session_uncategorized_title` is gone.*
+
 `session.json` `category` was read by the loader and ignored. The session list (`GET /api/sessions`) now carries it as `category` (omitted when the session has none), and it is part of the list ETag, so editing it is not answered with a 304. It is a display grouping only: it does not change the session id, the state path or the tool-storage path. The frontend shows one section per category, in the order the list first meets them, with the sessions that have none in a final section titled by `session_uncategorized_title` in `frontend/src/config.json`.
 
 ## The model route writes the profile; `instructions` belong to the profile (Go only, catalog layout)
@@ -4556,3 +4558,45 @@ Open gaps:
 - **This repository:** its `.jad` already holds a `workspace.json` and `G/global.json` (created 2026-11-12 23:00, not by this work) with the tool definitions in `G/tools_definition`, so a dry run now reports only `workspace_exists`; a dry run on a v1 copy was not possible (no `setting.json`). A loader check of the real v2 start with the new code read 16 tool definition paths and no error.
 - **Not built:** the UI (phase 5), `promote`, seatbelt runs.
 - **Flaky test in another package:** `TestBaseCacheSurvivesServersChurningTogether` (`internal/worktree`, several processes making git worktrees at once) failed once in the first full run of this step ("could not open .git/worktrees/pbb-2/gitdir") and passed in three reruns and in the second full run; this work does not touch that package. Not investigated.
+
+## Workspace layout v2: phase 5, the session rail groups by workspace (T-028, 2026-11-13)
+
+Decider phase 5 ruling (design section 26). The UI replaces the session category by the session's
+workspace (its root). Backend, API, session files and ids are unchanged; this supersedes the
+2026-10-10 entry "Session category in the session list" for the UI only.
+
+- **Kept on purpose:** `category` in `session.json`, the list record and the list ETag, the eval
+  runner's `category: "eval"`. Removing the struct field would make every session file that sets it
+  fail the strict loader. `session.schema.json` now calls it legacy. Profile categories are
+  unrelated and stay.
+- **Workspace = root.** From `root_id` and `root_label`; labels only, never a path. The privacy
+  note: workspace labels were already on every list record, so showing them adds no exposure.
+  `/api/workspaces` still carries `directory` for authenticated clients; the UI drops it.
+- **Routing safety.** In the workspace layout the catalog dialog sends an explicit scope on every
+  request and does nothing until the workspace list is read (profiles `workspace:<id>`, models and
+  toolsets global or workspace by choice, MCP global, sessions by their reference); a new session is
+  created as `<workspace>:<name>`; the library is asked for the pane's own workspace. The server
+  already refused a bare session name with several workspaces and a scope outside the layout; both
+  are pinned by tests now.
+- **Stop conditions:** none hit. Creation and catalog routes could target any served workspace with
+  the existing 1b routes (no new API), `remote:<name>/<category>/<name>` is the profile category
+  (nothing to change), and `ProfileSearchPanel` reads no category.
+- **Beyond the ruling:** the library calls take the pane's workspace (before, a pane of any
+  workspace read the start workspace's library); the catalog's session column and filter show
+  workspaces instead of being removed; the model and toolset choice "Files of: global / workspace".
+
+Open gaps:
+- **Old layout, empty roots:** workspaces are read from the session list, so a root without a
+  session is not known; a new bare name may be refused by the server (clear message, nothing
+  written). Closing it needs the old layout to list its roots too (a backend change the ruling did
+  not ask for).
+- **Not stored:** the chosen workspace and a heading's collapse.
+- **Unavailable workspaces** (listed but not served) are not shown, so their reason is only in the
+  server log and `GET /api/workspaces`.
+- **No automated rendering test:** the frontend tests cover pure rules, request URLs and source-text
+  wiring; the rail, switcher and dialog were exercised by hand in a browser against a temporary
+  two-workspace server in one small viewport.
+- **Stale stored view:** a pinned view naming a profile the session no longer offers gets a 422 from
+  the server and is not cleaned up.
+- **Sandbox templates** have no catalog kind in the dialog, so there is no scope choice for them.
+- **Still not built:** `promote`, seatbelt runs.

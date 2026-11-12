@@ -43,20 +43,15 @@ test('fetchCatalogFiles keeps a session name, trims it, and drops a blank or non
   await assert.rejects(fetchCatalogFiles('sessions'), /invalid catalog list/);
 });
 
-test('fetchCatalogFiles keeps a trimmed session category and drops a blank or non-string one', async () => {
-  reply = () => json({files: [{id: 'a', etag: '"1"', category: ' work '}, {id: 'b', etag: '"2"', category: '  '}]});
-  assert.deepEqual(await fetchCatalogFiles('sessions'), [
-    {id: 'a', etag: '"1"', category: 'work'},
-    {id: 'b', etag: '"2"'},
-  ]);
-  reply = () => json({files: [{id: 'a', etag: '"1"', category: 7}]});
-  await assert.rejects(fetchCatalogFiles('sessions'), /invalid catalog list/);
+test('fetchCatalogFiles never exposes a session category: the legacy text is neither kept nor checked', async () => {
+  reply = () => json({files: [{id: 'a', etag: '"1"', category: ' work '}, {id: 'b', etag: '"2"', category: 7}]});
+  assert.deepEqual(await fetchCatalogFiles('sessions'), [{id: 'a', etag: '"1"'}, {id: 'b', etag: '"2"'}]);
 });
 
 test('fetchCatalogFiles keeps the sessions of a profile, trimmed, and rejects a malformed list of them', async () => {
   reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{id: 's', name: ' S ', category: ' c '}, {id: 't', name: '  '}]}, {id: 'c/d', etag: '"2"', sessions: []}]});
   assert.deepEqual(await fetchCatalogFiles('profiles'), [
-    {id: 'a/b', etag: '"1"', sessions: [{id: 's', name: 'S', category: 'c'}, {id: 't'}]},
+    {id: 'a/b', etag: '"1"', sessions: [{id: 's', name: 'S'}, {id: 't'}]},
     {id: 'c/d', etag: '"2"'},
   ]);
   reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{name: 'x'}]}]});
@@ -181,4 +176,35 @@ test('fetchCatalogFiles keeps the efforts of a model and rejects a non-string on
   ]);
   reply = () => json({files: [{id: 'openai/deep', etag: '"1"', efforts: [1]}]});
   await assert.rejects(fetchCatalogFiles('models'), /invalid catalog list/);
+});
+
+test('a catalog request names its scope when the caller has one, and never for a session', async () => {
+  requests.length = 0;
+  reply = () => json({files: []});
+  await fetchCatalogFiles('profiles', undefined, 'workspace:proj b');
+  await fetchCatalogFiles('models', undefined, 'global');
+  await fetchCatalogFiles('sessions', undefined, 'workspace:p');
+  await fetchCatalogFiles('profiles');
+  assert.deepEqual(requests.map(request => request.url.replace(/^.*\/api/, '')), [
+    '/catalog/profiles?scope=workspace%3Aproj%20b',
+    '/catalog/models?scope=global',
+    '/catalog/sessions',
+    '/catalog/profiles',
+  ]);
+});
+
+test('a file read, write and delete carry the same scope, and a session delete keeps its state flag', async () => {
+  requests.length = 0;
+  reply = () => json({id: 'a/b', etag: '"1"'}, 200, {etag: '"1"'});
+  await fetchCatalogFile('profiles', 'a/b', undefined, 'workspace:w');
+  await saveCatalogFile('toolsets', 'a/b', '{}', null, 'workspace:w');
+  reply = () => new Response(null, {status: 204});
+  await deleteCatalogFile('models', 'a/b', '"1"', {scope: 'global'});
+  await deleteCatalogFile('sessions', 'w:s', '"1"', {deleteState: true, scope: 'workspace:w'});
+  assert.deepEqual(requests.map(request => [request.init.method ?? 'GET', request.url.replace(/^.*\/api/, '')]), [
+    ['GET', '/catalog/profiles/a/b?scope=workspace%3Aw'],
+    ['PUT', '/catalog/toolsets/a/b?scope=workspace%3Aw'],
+    ['DELETE', '/catalog/models/a/b?scope=global'],
+    ['DELETE', '/catalog/sessions/w%3As?state=delete'],
+  ]);
 });

@@ -152,7 +152,6 @@
   "pane_keyboard_shortcuts_enabled": true,
   "pane_title_part_max_chars": 48,
   "session_groups_storage_key": "jad.session-groups",
-  "session_uncategorized_title": "Others",
   "storage_key_migrations": [
     {"from": "agent-harness.api-token", "to": "jad.api-token", "area": "session"},
     {"from": "agent-harness.row-heights", "to": "jad.row-heights", "area": "local"},

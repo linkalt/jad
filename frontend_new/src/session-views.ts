@@ -440,8 +440,8 @@ export function parseStoredViews(value: unknown): StoredViews {
 export type SessionListGroup = {
   sessionRef: string;
   title: string;
-  /** The session's category; absent when it has none. */
-  category?: string;
+  /** The session's workspace (its root id); absent when the server names none. */
+  workspace?: string;
   /**
    * The profile the session stores as its default, by id. The own row follows
    * it, so this is the id that row actually shows: `Default · jad/default`.
@@ -469,7 +469,7 @@ export function sessionListGroups(
   sessions: readonly {
     id: string;
     title: string;
-    category?: string;
+    rootId?: string;
     profiles?: readonly string[];
     profileNames?: Readonly<Record<string, string>>;
     activeProfile?: string;
@@ -477,13 +477,13 @@ export function sessionListGroups(
   }[],
 ): SessionListGroup[] {
   return sessions.map(session => {
-    const category = session.category === undefined || session.category === '' ? {} : {category: session.category};
+    const workspace = session.rootId === undefined || session.rootId === '' ? {} : {workspace: session.rootId};
     const defaultProfile =
       session.defaultProfile === undefined ? {} : {defaultProfile: session.defaultProfile};
     const ownRow: SessionListRow = {key: session.id, sessionRef: session.id, label: session.title};
     const profiles = [...new Set(session.profiles ?? [])];
     if (profiles.length === 0) {
-      return {sessionRef: session.id, title: session.title, ...category, ...defaultProfile, children: [], ownRow};
+      return {sessionRef: session.id, title: session.title, ...workspace, ...defaultProfile, children: [], ownRow};
     }
     const labelOf = (profile: string) => profileLabel(profile, session.profileNames);
     const children: SessionListRow[] = [];
@@ -501,7 +501,7 @@ export function sessionListGroups(
           : {key: viewKey(session.id, name), sessionRef: session.id, profile: name, label: labelOf(name)},
       );
     }
-    return {sessionRef: session.id, title: session.title, ...category, ...defaultProfile, children, ownRow};
+    return {sessionRef: session.id, title: session.title, ...workspace, ...defaultProfile, children, ownRow};
   });
 }
 
@@ -526,49 +526,6 @@ export function parseCollapsedGroups(value: unknown): string[] {
     return [];
   }
   return [...new Set(value.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0))];
-}
-
-/** The sessions of one category, in list order. */
-export type CategorySection = {
-  /** The category name; absent for the sessions that have none. */
-  category?: string;
-  groups: SessionListGroup[];
-};
-
-/**
- * Splits the grouped list by category.
- *
- * Categories keep the order in which the list first meets them, so the list's own
- * order decides, and sessions inside a category keep their list order. Sessions
- * without a category form one section, after the named ones.
- */export function groupByCategory(groups: readonly SessionListGroup[]): CategorySection[] {
-  const named = new Map<string, SessionListGroup[]>();
-  const unnamed: SessionListGroup[] = [];
-  for (const group of groups) {
-    if (group.category === undefined) {
-      unnamed.push(group);
-      continue;
-    }
-    const section = named.get(group.category);
-    if (section === undefined) {
-      named.set(group.category, [group]);
-    } else {
-      section.push(group);
-    }
-  }
-  const sections: CategorySection[] = [...named].map(([category, items]) => ({category, groups: items}));
-  if (unnamed.length > 0) {
-    sections.push({groups: unnamed});
-  }
-  return sections;
-}
-
-/**
- * The rail's heading for one section: the category's own name, or the configured
- * name for the sessions that have none — "Others" unless the file says otherwise.
- */
-export function categorySectionLabel(section: CategorySection, uncategorizedTitle: string): string {
-  return section.category ?? uncategorizedTitle;
 }
 
 /**

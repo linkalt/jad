@@ -53,7 +53,7 @@ export const CATALOG_KIND_VIEWS: Record<CatalogKind, CatalogKindView> = {
   sessions: {
     noun: 'session',
     plural: 'Sessions',
-    idHint: 'Written <name>, or <root>:<name> when there is more than one session root.',
+    idHint: 'Written <name>. With more than one workspace it is created in the selected one; write <workspace>:<name> to name another.',
     idForm: 'session',
     deleteNote: 'A run in progress is stopped first.',
     // One state folder per session, and only this kind's route can remove it.

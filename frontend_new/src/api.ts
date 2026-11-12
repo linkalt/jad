@@ -275,7 +275,7 @@ export interface SessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
-  /** The session's category (session.json); absent when it has none. */
+  /** Legacy session.json grouping text: still sent, never read or shown by the UI (the workspace groups the list). */
   category?: string;
   active_profile?: string;
   /** The session's stored default profile (the first by id); the own row follows it. */
@@ -592,7 +592,7 @@ export async function fetchSessionMessage(
   if (profile !== undefined && profile.length > 0) {
     query.set('profile', profile);
   }
-  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  const suffix = query.toString() === '' ? '' : `?${query.toString()}`;
   const response = await authenticatedFetch(
     apiUrl(
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}${suffix}`,
@@ -773,8 +773,17 @@ function isRootLibraryAssetSummary(
     typeof value.source === 'string';
 }
 
-export async function fetchRootLibrary(signal?: AbortSignal): Promise<RootLibraryCatalog> {
-  const response = await authenticatedFetch(apiUrl('/library'), {signal, cache: 'no-store'});
+/** `?workspace=<id>` for a library request; empty when none is named (the server's start workspace). */
+function workspaceQuery(workspace: string | undefined): string {
+  return workspace === undefined || workspace === '' ? '' : `?workspace=${encodeURIComponent(workspace)}`;
+}
+
+/**
+ * The shared library as one workspace sees it. `workspace` is the session's workspace in the
+ * workspace layout; a server outside it refuses any workspace, so callers pass it only there.
+ */
+export async function fetchRootLibrary(signal?: AbortSignal, workspace?: string): Promise<RootLibraryCatalog> {
+  const response = await authenticatedFetch(apiUrl(`/library${workspaceQuery(workspace)}`), {signal, cache: 'no-store'});
   if (!response.ok) throw new Error(await readError(response));
   const value: unknown = await response.json();
   if (!isRecord(value)) throw new Error('the server returned invalid library data');
@@ -821,10 +830,53 @@ export async function fetchServerInfo(signal?: AbortSignal): Promise<ServerInfo>
   return {forkNameMaxBytes: value.fork_name_max_bytes};
 }
 
+/**
+ * One workspace of the workspace layout (GET /api/workspaces). The server also sends the
+ * workspace's directory; it is not read here, so no path can reach the screen.
+ */
+export interface Workspace {
+  id: string;
+  label: string;
+  /** The workspace the server was started in: the default of a request that names none. */
+  start?: boolean;
+  /** Why a listed workspace is not served; set, it cannot hold sessions or be chosen. */
+  unavailable?: string;
+}
+
+/**
+ * Reads GET /api/workspaces. A server outside the workspace layout answers an empty list; an
+ * older server without the route answers 404, which is the same thing for the client.
+ */
+export async function fetchWorkspaces(signal?: AbortSignal): Promise<Workspace[]> {
+  const response = await authenticatedFetch(apiUrl('/workspaces'), {signal, cache: 'no-store'});
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(await readError(response));
+  return parseWorkspaces(await response.json());
+}
+
+/** The workspaces of a GET /api/workspaces body; entries without an id are dropped. */
+export function parseWorkspaces(value: unknown): Workspace[] {
+  if (!isRecord(value) || !Array.isArray(value.workspaces)) {
+    throw new Error('the server returned invalid workspaces');
+  }
+  const workspaces: Workspace[] = [];
+  for (const item of value.workspaces) {
+    if (!isRecord(item) || typeof item.id !== 'string' || item.id === '') continue;
+    const label = typeof item.label === 'string' && item.label.trim() !== '' ? item.label.trim() : item.id;
+    workspaces.push({
+      id: item.id,
+      label,
+      ...(item.start === true ? {start: true} : {}),
+      ...(typeof item.unavailable === 'string' && item.unavailable !== '' ? {unavailable: item.unavailable} : {}),
+    });
+  }
+  return workspaces;
+}
+
 /** A custom command's text, filled with the arguments typed for it. */
-export async function expandRootLibraryCommand(id: string, args: string): Promise<ExpandedCommand> {
+export async function expandRootLibraryCommand(id: string, args: string, workspace?: string): Promise<ExpandedCommand> {
   const response = await authenticatedFetch(
-    apiUrl(`/library/command/${encodeURIComponent(id)}/expand`),
+    apiUrl(`/library/command/${encodeURIComponent(id)}/expand${workspaceQuery(workspace)}`),
     {
       method: 'POST',
       headers: {'content-type': 'application/json'},
@@ -844,9 +896,10 @@ export async function fetchRootLibraryAsset(
   kind: RootLibraryKind,
   id: string,
   signal?: AbortSignal,
+  workspace?: string,
 ): Promise<RootLibraryAsset> {
   const response = await authenticatedFetch(
-    apiUrl(`/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
+    apiUrl(`/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}${workspaceQuery(workspace)}`),
     {signal, cache: 'no-store'},
   );
   if (!response.ok) throw new Error(await readError(response));
@@ -952,7 +1005,7 @@ export async function fetchMessageImage(
   if (profile !== undefined && profile.length > 0) {
     query.set('profile', profile);
   }
-  const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+  const suffix = query.toString() === '' ? '' : `?${query.toString()}`;
   const response = await authenticatedFetch(
     apiUrl(
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/images/${encodeURIComponent(callId)}/${index}${suffix}`,
@@ -2666,8 +2719,6 @@ export interface CatalogFileInfo {
   etag?: string;
   /** Display name the file sets; absent when unset. */
   name?: string;
-  /** Folder a session file sets to group its listing; other kinds are grouped by the ID. */
-  category?: string;
   /** The sessions whose scope selects this profile; set for profiles only. */
   sessions?: CatalogSessionRef[];
   /** The reasoning efforts a model file lists; set for models only, absent when none. */
@@ -2677,7 +2728,6 @@ export interface CatalogFileInfo {
 export interface CatalogSessionRef {
   id: string;
   name?: string;
-  category?: string;
 }
 
 export interface CatalogFileContent extends CatalogFileInfo {
@@ -2696,18 +2746,27 @@ export class CatalogRequestError extends Error {
   }
 }
 
-function catalogFilePath(kind: CatalogKind, id: string): string {
+/**
+ * The route of one catalog file. `scope` is the workspace layout's `global` or
+ * `workspace:<id>`; it is sent as given and never for a session, whose own reference
+ * (`<root>:<name>`) names the workspace. Without it the server picks its start workspace
+ * for profiles, so a caller that knows the layout always passes one.
+ */
+function catalogFilePath(kind: CatalogKind, id: string, scope?: string, extra: Record<string, string> = {}): string {
+  const query = new URLSearchParams(extra);
+  if (scope !== undefined && kind !== 'sessions') query.set('scope', scope);
+  const suffix = query.toString() === '' ? '' : `?${query.toString()}`;
   if (kind === 'sessions') {
     if (id === '' || id.includes('/')) {
       throw new Error(`"${id}" must be written <name> or <root>:<name>`);
     }
-    return `/catalog/sessions/${encodeURIComponent(id)}`;
+    return `/catalog/sessions/${encodeURIComponent(id)}${suffix}`;
   }
   const [category, name, ...rest] = id.split('/');
   if (!category || !name || rest.length > 0) {
     throw new Error(`"${id}" must be written <category>/<name>`);
   }
-  return `/catalog/${kind}/${encodeURIComponent(category)}/${encodeURIComponent(name)}`;
+  return `/catalog/${kind}/${encodeURIComponent(category)}/${encodeURIComponent(name)}${suffix}`;
 }
 
 async function catalogFailure(response: Response): Promise<CatalogRequestError> {
@@ -2718,22 +2777,21 @@ function isSessionRef(value: unknown): boolean {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
-    (value.name === undefined || typeof value.name === 'string') &&
-    (value.category === undefined || typeof value.category === 'string')
+    (value.name === undefined || typeof value.name === 'string')
   );
 }
 
 function toSessionRef(value: unknown): CatalogSessionRef {
-  const ref = value as {id: string; name?: string; category?: string};
+  const ref = value as {id: string; name?: string};
   return {
     id: ref.id,
     ...(typeof ref.name === 'string' && ref.name.trim() !== '' ? {name: ref.name.trim()} : {}),
-    ...(typeof ref.category === 'string' && ref.category.trim() !== '' ? {category: ref.category.trim()} : {}),
   };
 }
 
-export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal): Promise<CatalogFileInfo[]> {
-  const response = await authenticatedFetch(apiUrl(`/catalog/${kind}`), signal === undefined ? {} : {signal});
+export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal, scope?: string): Promise<CatalogFileInfo[]> {
+  const query = scope !== undefined && kind !== 'sessions' ? `?scope=${encodeURIComponent(scope)}` : '';
+  const response = await authenticatedFetch(apiUrl(`/catalog/${kind}${query}`), signal === undefined ? {} : {signal});
   if (!response.ok) {
     throw await catalogFailure(response);
   }
@@ -2747,7 +2805,6 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
         typeof file.id === 'string' &&
         (file.etag === undefined || typeof file.etag === 'string') &&
         (file.name === undefined || typeof file.name === 'string') &&
-        (file.category === undefined || typeof file.category === 'string') &&
         (file.sessions === undefined || (Array.isArray(file.sessions) && file.sessions.every(isSessionRef))) &&
         (file.efforts === undefined || (Array.isArray(file.efforts) && file.efforts.every(effort => typeof effort === 'string'))),
     )
@@ -2758,7 +2815,6 @@ export async function fetchCatalogFiles(kind: CatalogKind, signal?: AbortSignal)
     id: file.id as string,
     ...(typeof file.etag === 'string' ? {etag: file.etag} : {}),
     ...(typeof file.name === 'string' && file.name.trim() !== '' ? {name: file.name.trim()} : {}),
-    ...(typeof file.category === 'string' && file.category.trim() !== '' ? {category: file.category.trim()} : {}),
     ...(Array.isArray(file.sessions) && file.sessions.length > 0 ? {sessions: (file.sessions as unknown[]).map(toSessionRef)} : {}),
     ...(Array.isArray(file.efforts) && file.efforts.length > 0 ? {efforts: [...(file.efforts as string[])]} : {}),
   }));
@@ -2768,8 +2824,9 @@ export async function fetchCatalogFile(
   kind: CatalogKind,
   id: string,
   signal?: AbortSignal,
+  scope?: string,
 ): Promise<CatalogFileContent> {
-  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), signal === undefined ? {} : {signal});
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id, scope)), signal === undefined ? {} : {signal});
   if (!response.ok) {
     throw await catalogFailure(response);
   }
@@ -2786,8 +2843,9 @@ export async function saveCatalogFile(
   id: string,
   text: string,
   etag: string | null,
+  scope?: string,
 ): Promise<{info: CatalogFileInfo & {etag: string}; created: boolean}> {
-  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id)), {
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id, scope)), {
     method: 'PUT',
     headers: etag === null ? {'If-None-Match': '*'} : {'If-Match': etag},
     body: text,
@@ -2813,10 +2871,10 @@ export async function deleteCatalogFile(
   kind: CatalogKind,
   id: string,
   etag: string,
-  options: {deleteState?: boolean} = {},
+  options: {deleteState?: boolean; scope?: string} = {},
 ): Promise<void> {
-  const query = kind === 'sessions' && options.deleteState === true ? '?state=delete' : '';
-  const response = await authenticatedFetch(apiUrl(`${catalogFilePath(kind, id)}${query}`), {
+  const extra: Record<string, string> = kind === 'sessions' && options.deleteState === true ? {state: 'delete'} : {};
+  const response = await authenticatedFetch(apiUrl(catalogFilePath(kind, id, options.scope, extra)), {
     method: 'DELETE',
     headers: {'If-Match': etag},
   });

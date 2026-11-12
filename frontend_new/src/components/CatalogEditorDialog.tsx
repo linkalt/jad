@@ -21,6 +21,7 @@ import {Divider} from '@astryxdesign/core/Divider';
 import {Item} from '@astryxdesign/core/Item';
 import {Breadcrumbs, BreadcrumbItem} from '@astryxdesign/core/Breadcrumbs';
 import {Tab, TabList} from '@astryxdesign/core/TabList';
+import {Selector} from '@astryxdesign/core/Selector';
 import * as stylex from '@stylexjs/stylex';
 import {colorVars, fontWeightVars} from '@astryxdesign/core/theme/tokens.stylex';
 
@@ -33,6 +34,14 @@ import {
   type CatalogKind,
 } from '../api';
 import {FILTER_ALL, type SortEntry} from '../catalog-list-view';
+import {
+  catalogScope,
+  hasSharedScopeChoice,
+  newSessionNote,
+  newSessionRef,
+  type SharedScope,
+  type Workspace,
+} from '../workspaces';
 import {bodyDefaultHeight, bodyHeightBound, centredEdgeDelta, dialogMaxHeight, dialogWidthBound, regionFloor} from '../catalog-layout';
 import appConfig from '../config.json' with {type: 'json'};
 import {createCatalogValidator} from '../catalog-validation';
@@ -122,9 +131,32 @@ export interface CatalogEditorDialogProps {
   onClose: () => void;
   /** Called after a file is created, replaced or deleted, so the app re-reads session data. */
   onChanged: () => void;
+  /** The workspaces new sessions can go to (see workspacesOf). */
+  workspaces: readonly Workspace[];
+  /** Whether the server runs the workspace layout: only then does a catalog request carry a scope. */
+  isWorkspaceLayout: boolean;
+  /** False until the server's workspace list is read; no catalog request is made before, so none goes to a workspace by default. */
+  isWorkspaceReady: boolean;
+  /** Why the workspace list could not be read; set, nothing is listed or written. */
+  workspaceError: string | null;
+  onRetryWorkspaces: () => void;
+  /** The workspace profiles, new sessions and the workspace's own models and toolsets belong to. */
+  selectedWorkspace: string | undefined;
+  onSelectWorkspace: (workspace: string) => void;
 }
 
-export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorDialogProps) {
+export function CatalogEditorDialog({
+  isOpen,
+  onClose,
+  onChanged,
+  workspaces,
+  isWorkspaceLayout,
+  isWorkspaceReady,
+  workspaceError,
+  onRetryWorkspaces,
+  selectedWorkspace,
+  onSelectWorkspace,
+}: CatalogEditorDialogProps) {
   const [kind, setKind] = useState<CatalogKind>('profiles');
   const [lists, setLists] = useState<Partial<Record<CatalogKind, CatalogList>>>({});
   const [draft, setDraft] = useState<Draft>({mode: 'none'});
@@ -139,6 +171,8 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const [filter, setFilter] = useState(FILTER_ALL);
   const [sort, setSort] = useState<SortEntry[]>(DEFAULT_CATALOG_SORT);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  // Models and toolsets exist globally and per workspace; global is what the dialog always read.
+  const [sharedScope, setSharedScope] = useState<SharedScope>('global');
   const [tab, setTab] = useState<EditorTab>('editor');
   const panelBaseId = useId();
   const panelId = (value: EditorTab) => `${panelBaseId}-${value}`;
@@ -204,43 +238,60 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const widthDragProps = centredProps(widthRegion);
   const heightDragProps = centredProps(heightRegion);
 
+  /** The scope a request for `target` carries: explicit in the workspace layout, none elsewhere. */
+  const scopeOf = useCallback(
+    (target: CatalogKind) => catalogScope(target, isWorkspaceLayout, selectedWorkspace, sharedScope),
+    [isWorkspaceLayout, selectedWorkspace, sharedScope],
+  );
+  const workspaceLabels = useMemo(() => new Map(workspaces.map(workspace => [workspace.id, workspace.label])), [workspaces]);
+  const selectedLabel = selectedWorkspace === undefined ? undefined : workspaceLabels.get(selectedWorkspace) ?? selectedWorkspace;
+  // The workspace and scope choices: every kind in the workspace layout, and the sessions of any
+  // layout with several workspaces (a new session is named from the chosen one).
+  const showScopeBar = isWorkspaceReady && (kind === 'sessions' ? workspaces.length > 1 : isWorkspaceLayout);
   const list = lists[kind];
   const files = list?.files ?? NO_FILES;
   const ids = useMemo(() => sortedIds(files.map(file => file.id)), [files]);
   const savedText = draft.mode === 'existing' ? draft.savedText : draft.mode === 'new' ? view.template : '';
   const unsaved = hasUnsavedWork(draft.mode, text, savedText, newId, view.template);
-  const idProblem = draft.mode === 'new' ? newIdProblem(newId, ids, view.noun, view.idForm) : null;
+  // A new session goes to the chosen workspace unless its name says another one.
+  const createdId = kind === 'sessions' ? newSessionRef(newId, selectedWorkspace, workspaces.length) : newId.trim();
+  const idProblem = draft.mode === 'new' ? newIdProblem(createdId, ids, view.noun, view.idForm) : null;
   const isChecked = checked.text === text;
   // The editor keeps the last result while a new check is pending, so squiggles do not blink while typing.
   const problems = checked.problems;
 
   const loadList = useCallback(async (target: CatalogKind, signal?: AbortSignal): Promise<void> => {
     try {
-      const next = await fetchCatalogFiles(target, signal);
+      const next = await fetchCatalogFiles(target, signal, scopeOf(target));
       setLists(previous => ({...previous, [target]: {files: next, error: null}}));
     } catch (caught) {
       if (signal?.aborted) return;
       const message = caught instanceof Error ? caught.message : String(caught);
       setLists(previous => ({...previous, [target]: {files: previous[target]?.files ?? NO_FILES, error: message}}));
     }
-  }, []);
+  }, [scopeOf]);
 
   // A profile's Session column is read from the session files, so a session change refreshes profiles too.
   const reloadList = useCallback(async (): Promise<void> => {
     await Promise.all(kind === 'sessions' ? [loadList('sessions'), loadList('profiles')] : [loadList(kind)]);
   }, [kind, loadList]);
 
-  // Every kind is fetched when the dialog opens, so the menu switches without waiting.
+  // Every kind is fetched when the dialog opens, so the menu switches without waiting. A change
+  // of workspace or scope changes what each list means, so the lists are dropped first: a row of
+  // the old scope must not be opened or written under the new one. Nothing is fetched until the
+  // server's workspace list is known.
   useEffect(() => {
-    if (!isOpen) return undefined;
+    setLists({});
+    if (!isOpen || !isWorkspaceReady) return undefined;
     const controller = new AbortController();
     for (const target of MENU_KINDS) void loadList(target, controller.signal);
     return () => controller.abort();
-  }, [isOpen, loadList]);
+  }, [isOpen, isWorkspaceReady, loadList]);
 
   useEffect(() => {
     if (!isOpen) {
       setKind('profiles');
+      setSharedScope('global');
       setLists({});
       setQuery('');
       setFilter(FILTER_ALL);
@@ -290,7 +341,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setTab('editor');
     setNotice(null);
     try {
-      const file = await fetchCatalogFile(kind, id);
+      const file = await fetchCatalogFile(kind, id, undefined, scopeOf(kind));
       if (token !== loadToken.current) return;
       const loaded = normalizeLineBreaks(file.text);
       setText(loaded);
@@ -301,7 +352,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
       setText('');
       setNotice({kind: 'error', title: `Could not open the ${view.noun}`, message: caught instanceof Error ? caught.message : String(caught)});
     }
-  }, [kind, view.noun]);
+  }, [kind, scopeOf, view.noun]);
 
   const startNew = useCallback((): void => {
     loadToken.current += 1;
@@ -399,11 +450,11 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
   const save = async (): Promise<void> => {
     if (draft.mode !== 'existing' && draft.mode !== 'new') return;
     const isCreate = draft.mode === 'new';
-    const id = isCreate ? newId.trim() : draft.id;
+    const id = isCreate ? createdId : draft.id;
     setIsBusy(true);
     setNotice(null);
     try {
-      const result = await saveCatalogFile(kind, id, text, isCreate ? null : draft.mode === 'existing' ? draft.etag : null);
+      const result = await saveCatalogFile(kind, id, text, isCreate ? null : draft.mode === 'existing' ? draft.etag : null, scopeOf(kind));
       setDraft({mode: 'existing', id, etag: result.info.etag, savedText: text});
       setNotice({kind: 'success', title: 'Done', message: isCreate ? `Created ${id}.` : `Saved ${id}.`});
       await reloadList();
@@ -421,7 +472,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setIsBusy(true);
     setNotice(null);
     try {
-      await deleteCatalogFile(kind, draft.id, draft.etag, {deleteState});
+      await deleteCatalogFile(kind, draft.id, draft.etag, {deleteState, scope: scopeOf(kind)});
       const removed = draft.id;
       setDraft({mode: 'none'});
       setText('');
@@ -444,7 +495,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
     setIsBusy(true);
     setNotice(null);
     try {
-      await deleteCatalogFile(kind, id, etag, {deleteState});
+      await deleteCatalogFile(kind, id, etag, {deleteState, scope: scopeOf(kind)});
       setNotice({kind: 'success', title: 'Done', message: `Deleted ${id}.`});
       await reloadList();
       onChanged();
@@ -527,11 +578,50 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                       onDismiss={() => setNotice(null)}
                     />
                   )}
+                  {workspaceError !== null && (
+                    <Banner
+                      status="error"
+                      title="Could not read the workspaces"
+                      description={`${workspaceError} Nothing is listed or changed until they are known, so no file goes to a workspace you did not choose.`}
+                      collapsible={false}
+                      endContent={<Button label="Retry" size="sm" onClick={onRetryWorkspaces} />}
+                    />
+                  )}
+                  {showScopeBar && (
+                    <HStack gap={2} align="center">
+                      {kind !== 'mcp' && (kind === 'profiles' || workspaces.length > 1) ? (
+                        <Selector
+                          label="Workspace"
+                          options={workspaces.map(workspace => ({value: workspace.id, label: workspace.label}))}
+                          value={selectedWorkspace}
+                          onChange={onSelectWorkspace}
+                          // A new session may still change its workspace: only its name is built from
+                          // it. Every other open file keeps the scope it was read under.
+                          isDisabled={isBusy || (draft.mode !== 'none' && !(kind === 'sessions' && draft.mode === 'new')) || workspaces.length < 2}
+                        />
+                      ) : null}
+                      {hasSharedScopeChoice(kind) ? (
+                        <Selector
+                          label="Files of"
+                          options={[
+                            {value: 'global', label: 'Global (every workspace)'},
+                            {value: 'workspace', label: `Workspace ${selectedLabel ?? ''}`.trim()},
+                          ]}
+                          value={sharedScope}
+                          onChange={value => setSharedScope(value === 'workspace' ? 'workspace' : 'global')}
+                          isDisabled={isBusy || draft.mode !== 'none'}
+                        />
+                      ) : kind === 'mcp' ? (
+                        <Text type="supporting" color="secondary">Global: shared by every workspace.</Text>
+                      ) : null}
+                    </HStack>
+                  )}
                   {draft.mode === 'none' && (
                     <CatalogListPane
                       kind={kind}
                       view={view}
                       files={files}
+                      workspaceLabels={workspaceLabels}
                       isLoading={list === undefined}
                       error={list?.error ?? null}
                       isDisabled={isBusy}
@@ -569,7 +659,7 @@ export function CatalogEditorDialog({isOpen, onClose, onChanged}: CatalogEditorD
                   {draft.mode === 'new' && (
                     <TextInput
                       label="ID"
-                      description={view.idHint}
+                      description={kind === 'sessions' ? newSessionNote(newId, selectedWorkspace, workspaces) ?? view.idHint : view.idHint}
                       value={newId}
                       onChange={setNewId}
                       hasAutoFocus

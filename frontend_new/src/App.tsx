@@ -8,7 +8,7 @@ import {colorVars, spacingVars} from '@astryxdesign/core/theme/tokens.stylex';
 import * as stylex from '@stylexjs/stylex';
 import {Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {type ActivityNotification, type NewActivityNotification, hasUnreadActivityError, isRunOutcomeUnknown, markActivityNotificationsRead, prependActivityNotification, runOutcomeUnknownNotification, unreadActivityNotificationCount} from './activity-notifications';
-import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, type ForkTarget, fetchServerInfo, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
+import {type RootLibraryAsset, type RunStreamReconnectState, type SessionPage, type SessionRunFailure, type SessionSnapshot, type WebUiInteraction, type WebUiMessage, type WebUiPart, answerSessionRunInteraction, attachSessionRun, compactSession, extendSessionRunInteraction, fetchSession, fetchSessionHistory, fetchSessionMessage, fetchSessions, type ForkTarget, fetchServerInfo, fetchWorkspaces, type Workspace, forkSession, frontCompactSessionFromMessage, resetSession, SettingsRequestError, stopSessionRun, streamSessionRun, updateSessionProfileModelDefault, writeSessionStateContext} from './api';import {type InteractionUiState, type MessageRecord, type RunInteractionState, type RunRetryState, type Session} from './app-types';
 import {createCoalescedRefresh} from './coalesced-refresh';
 import {type ColorScheme} from './color-scheme';
 import {FrontCompactionIcon, ResetChatIcon, StateContextIcon} from './components/AppIcons';
@@ -38,6 +38,7 @@ import {type DraftDecision} from './draft-answer';
 import {EMPTY_HISTORY_BLOCKS, type HistoryBlock, type HistoryBlocks, forgetHistoryBlock, forgetHistoryBlocks, historyBlockFor, historyEtagFromHeader, putHistoryBlock} from './history-blocks';
 import {type HookReport, hookReportNotification} from './hook-report-view';
 import {type AttachedFile, type AttachedImage, buildRunInput, userMessageImages} from './image-attachments';
+import {effectiveWorkspace, isWorkspaceLayout, libraryWorkspace, workspacesOf} from './workspaces';
 import {forkProfileName, forkSessionRef, isForkableProfile, sessionIdOf, sessionRefInRootOf, setForkProfileNameMax} from './session-fork';
 import {ForkDialog, type ForkDialogAnswer, type ForkDialogRequest} from './components/ForkDialog';
 import type {RowMenuTarget} from './components/RowContextMenu';
@@ -212,6 +213,26 @@ function App({
     fetchServerInfo(controller.signal).then(info => setForkProfileNameMax(info.forkNameMaxBytes), () => undefined);
     return () => controller.abort();
   }, []);
+  // The workspaces the server lists (workspace layout only; an old layout answers none). Until
+  // the list is read, and after a failed read, the catalog is not targeted at all: a request
+  // without a workspace would go to the server's start workspace without saying so.
+  const [workspaceList, setWorkspaceList] = useState<{workspaces: Workspace[]; isReady: boolean; error: string | null}>(
+    {workspaces: [], isReady: false, error: null},
+  );
+  const loadWorkspaces = useCallback((signal?: AbortSignal) => {
+    fetchWorkspaces(signal).then(
+      workspaces => setWorkspaceList({workspaces, isReady: true, error: null}),
+      (caught: unknown) => {
+        if (signal?.aborted) return;
+        setWorkspaceList(current => ({...current, isReady: false, error: caught instanceof Error ? caught.message : String(caught)}));
+      },
+    );
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    loadWorkspaces(controller.signal);
+    return () => controller.abort();
+  }, [loadWorkspaces]);
   const [sessions, setSessions] = useState<Session[]>([]);
   // The configured live session is a preference, not a row: the sidebar lists
   // whatever the backend reports, and this id is only used to choose which of
@@ -906,7 +927,7 @@ function App({
       sessions.map(session => ({
         id: session.id,
         title: session.title,
-        ...(session.category === undefined ? {} : {category: session.category}),
+        ...(session.rootId === undefined ? {} : {rootId: session.rootId}),
         ...(session.profiles === undefined ? {} : {profiles: session.profiles}),
         ...(session.profileNames === undefined ? {} : {profileNames: session.profileNames}),
         ...(session.activeProfile === undefined ? {} : {activeProfile: session.activeProfile}),
@@ -915,6 +936,20 @@ function App({
     ),
     [sessions],
   );
+  // A session's workspace is its root. The rail groups by it, and new sessions and catalog
+  // files go to the chosen one, which follows the session the user opens.
+  const workspaces = useMemo(() => workspacesOf(workspaceList.workspaces, sessions), [workspaceList.workspaces, sessions]);
+  const workspaceLayout = isWorkspaceLayout(workspaceList.workspaces);
+  // A library request names its session's workspace only in the workspace layout. If the list
+  // could not be read the layout is unknown: name it anyway, so an old layout refuses the
+  // request loudly where leaving it out would read the start workspace's library silently.
+  const libraryLayout = workspaceList.isReady ? workspaceLayout : workspaceList.error !== null;
+  const [pickedWorkspace, setPickedWorkspace] = useState<string | undefined>(undefined);
+  const openedWorkspace = sessions.find(session => session.id === activeSessionId)?.rootId;
+  useEffect(() => {
+    if (openedWorkspace !== undefined) setPickedWorkspace(openedWorkspace);
+  }, [openedWorkspace]);
+  const selectedWorkspace = effectiveWorkspace(workspaces, pickedWorkspace)?.id;
   /**
    * The rows the list shows, flattened from the same grouped model the rail
    * renders: the session's own row and one row per profile. Panes and the active
@@ -3663,6 +3698,9 @@ function App({
       sideNav={
         <SessionNavigation
           groups={listGroups}
+          workspaces={workspaces}
+          selectedWorkspace={selectedWorkspace}
+          onSelectWorkspace={setPickedWorkspace}
           collapsedRefs={collapsedGroups}
           onCollapsedChange={changeGroupCollapsed}
           rowTurns={rowTurns}
@@ -3770,6 +3808,7 @@ function App({
                         // run, whether one pane or four are on screen.
                         showHeader
                         composerSessionId={sessionRefOfViewKey(paneViewKey)}
+                        libraryWorkspace={libraryWorkspace(libraryLayout, pane.session?.rootId)}
                         onSubmitComposer={(value, images, files, options) =>
                           submitMessage(
                             {
@@ -3982,6 +4021,13 @@ function App({
               isOpen={isProfileEditorOpen}
               onClose={() => setIsProfileEditorOpen(false)}
               onChanged={() => refreshSessionsRef.current?.()}
+              workspaces={workspaces}
+              isWorkspaceLayout={workspaceLayout}
+              isWorkspaceReady={workspaceList.isReady}
+              workspaceError={workspaceList.error}
+              onRetryWorkspaces={() => loadWorkspaces()}
+              selectedWorkspace={selectedWorkspace}
+              onSelectWorkspace={setPickedWorkspace}
             />
           </Suspense>
         </LazyLoadBoundary>

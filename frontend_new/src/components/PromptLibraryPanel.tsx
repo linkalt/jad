@@ -32,6 +32,8 @@ type PromptLibraryPanelProps = {
   onUsePrompt: (asset: RootLibraryAsset) => void;
   onUseTemplate: (asset: RootLibraryAsset) => void;
   onUseSkill: (asset: RootLibraryAsset) => void;
+  /** The workspace whose library is shown (the session's, in the workspace layout). */
+  workspace?: string;
 };
 
 // The icon registry has no name for these four glyphs, and Astryx accepts a
@@ -104,6 +106,7 @@ export function PromptLibraryPanel({
   onUsePrompt,
   onUseTemplate,
   onUseSkill,
+  workspace,
 }: PromptLibraryPanelProps) {
   const [catalog, setCatalog] = useState<RootLibraryCatalog | null>(null);
   const [tab, setTab] = useState<LibraryTab>('prompts');
@@ -119,7 +122,7 @@ export function PromptLibraryPanel({
     requestRef.current = request;
     setIsLoading(true);
     try {
-      const next = await fetchRootLibrary(request.signal);
+      const next = await fetchRootLibrary(request.signal, workspace);
       if (!request.signal.aborted) {
         setCatalog(next);
         setError(null);
@@ -131,7 +134,7 @@ export function PromptLibraryPanel({
     } finally {
       if (!request.signal.aborted) setIsLoading(false);
     }
-  }, []);
+  }, [workspace]);
 
   useEffect(() => {
     void refresh();
@@ -159,7 +162,7 @@ export function PromptLibraryPanel({
     setError(null);
     try {
       // Detail is read separately so selecting an item always picks up the latest file contents.
-      const asset = await fetchRootLibraryAsset(summary.kind, summary.id);
+      const asset = await fetchRootLibraryAsset(summary.kind, summary.id, undefined, workspace);
       if (asset.kind === 'prompt') onUsePrompt(asset);
       else if (asset.kind === 'template') onUseTemplate(asset);
       else onUseSkill(asset);
@@ -168,7 +171,7 @@ export function PromptLibraryPanel({
     } finally {
       setUsingId(null);
     }
-  }, [onUsePrompt, onUseSkill, onUseTemplate]);
+  }, [onUsePrompt, onUseSkill, onUseTemplate, workspace]);
 
   const subtitle = catalog === null
     ? 'Shared Markdown library'

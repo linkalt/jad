@@ -20,7 +20,9 @@ import {
   filterOptions,
   filterValues,
   filtersBySession,
+  groupsByWorkspace,
   sortCatalogRows,
+  type WorkspaceLabels,
   type CatalogRow,
   type CatalogRowTarget,
   type SortEntry,
@@ -33,6 +35,8 @@ export interface CatalogListPaneProps {
   kind: CatalogKind;
   view: CatalogKindView;
   files: readonly CatalogFileInfo[];
+  /** Workspace labels by id, for the sessions' workspace column and filter. */
+  workspaceLabels?: WorkspaceLabels;
   isLoading: boolean;
   error: string | null;
   isDisabled: boolean;
@@ -51,6 +55,7 @@ export interface CatalogListPaneProps {
   onDelete: (target: CatalogRowTarget) => void;
 }
 
+/** Sorting by a column the table does not show (a session list in one workspace has no workspace column) is ignored. */
 export const DEFAULT_CATALOG_SORT: SortEntry[] = [
   {sortKey: 'category', direction: 'ascending'},
   {sortKey: 'id', direction: 'ascending'},
@@ -78,14 +83,25 @@ const actionColumnWidth = proportional(appConfig.catalog_action_column_weight, {
   minWidth: appConfig.catalog_action_column_min_width_px,
 });
 
-function tableColumns(showSession: boolean, showEfforts: boolean, onDelete: (target: CatalogRowTarget) => void, isDisabled: boolean): TableColumn<CatalogRow>[] {
+function tableColumns(
+  kind: CatalogKind,
+  showSession: boolean,
+  showEfforts: boolean,
+  showWorkspace: boolean,
+  onDelete: (target: CatalogRowTarget) => void,
+  isDisabled: boolean,
+): TableColumn<CatalogRow>[] {
   const columns: TableColumn<CatalogRow>[] = [
-    {key: 'category', header: 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.category}</Text>},
     {key: 'id', header: 'ID', sortable: true, width: textColumnWidth, renderCell: row => <Link isStandalone>{row.id}</Link>},
     {key: 'name', header: 'Name', sortable: true, width: textColumnWidth, renderCell: row => <Text type="body" maxLines={1}>{row.name}</Text>},
   ];
   if (showEfforts) {
     columns.push({key: 'efforts', header: 'Efforts', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.efforts}</Text>});
+  }
+  // Sessions are grouped by workspace, which says something only with more than one; the other
+  // kinds keep their category column.
+  if (kind !== 'sessions' || showWorkspace) {
+    columns.unshift({key: 'category', header: kind === 'sessions' ? 'Workspace' : 'Category', sortable: true, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.category}</Text>});
   }
   if (showSession) {
     columns.unshift({key: 'sessions', header: 'Session', sortable: true, width: textColumnWidth, renderCell: row => <Text type="supporting" color="secondary" maxLines={1}>{row.sessions}</Text>});
@@ -123,6 +139,7 @@ export function CatalogListPane({
   kind,
   view,
   files,
+  workspaceLabels,
   isLoading,
   error,
   isDisabled,
@@ -139,15 +156,18 @@ export function CatalogListPane({
   onRetry,
   onDelete,
 }: CatalogListPaneProps) {
-  const options = useMemo(() => filterOptions(kind, files), [kind, files]);
+  const options = useMemo(() => filterOptions(kind, files, workspaceLabels), [kind, files, workspaceLabels]);
   const known = useMemo(() => filterValues(options), [options]);
   const activeFilter = known.includes(filter) ? filter : known[0];
-  const matched = useMemo(() => filterCatalogFiles(kind, files, query, activeFilter), [kind, files, query, activeFilter]);
-  const rows = useMemo(() => sortCatalogRows(catalogRows(kind, matched), sort), [kind, matched, sort]);
+  const matched = useMemo(() => filterCatalogFiles(kind, files, query, activeFilter, workspaceLabels), [kind, files, query, activeFilter, workspaceLabels]);
+  const rows = useMemo(() => sortCatalogRows(catalogRows(kind, matched, workspaceLabels), sort), [kind, matched, sort, workspaceLabels]);
   const plural = view.plural.toLowerCase();
   const showSession = filtersBySession(kind);
   const showEfforts = kind === 'models';
-  const columns = useMemo(() => tableColumns(showSession, showEfforts, onDelete, isDisabled), [showSession, showEfforts, onDelete, isDisabled]);
+  const showWorkspace = useMemo(() => groupsByWorkspace(kind, files), [kind, files]);
+  // A session list in one workspace has nothing to filter by.
+  const showFilter = kind !== 'sessions' || showWorkspace;
+  const columns = useMemo(() => tableColumns(kind, showSession, showEfforts, showWorkspace, onDelete, isDisabled), [kind, showSession, showEfforts, showWorkspace, onDelete, isDisabled]);
   const sortPlugin = useTableSortable<CatalogRow>({sort, onSortChange: next => onSortChange([...next])});
   const resizePlugin = useTableColumnResize({
     columnWidths,
@@ -177,21 +197,27 @@ export function CatalogListPane({
           <TextInput
             label={`Search ${plural}`}
             isLabelHidden
-            placeholder={showSession ? `Search ${plural} by session, category, ID or name` : `Search ${plural} by category, ID or name`}
+            placeholder={
+              showSession
+                ? `Search ${plural} by session, category, ID or name`
+                : kind === 'sessions' ? `Search ${plural} by workspace, ID or name` : `Search ${plural} by category, ID or name`
+            }
             startIcon="search"
             hasClear
             value={query}
             onChange={onQueryChange}
           />
         </StackItem>
-        <Selector
-          label={showSession ? 'Session' : 'Category'}
-          isLabelHidden
-          options={options}
-          value={activeFilter}
-          onChange={onFilterChange}
-          width={appConfig.catalog_category_filter_width_px}
-        />
+        {showFilter && (
+          <Selector
+            label={showSession ? 'Session' : kind === 'sessions' ? 'Workspace' : 'Category'}
+            isLabelHidden
+            options={options}
+            value={activeFilter}
+            onChange={onFilterChange}
+            width={appConfig.catalog_category_filter_width_px}
+          />
+        )}
         <Button label={`New ${view.noun}`} variant="primary" onClick={onNew} isDisabled={isDisabled} />
       </HStack>
       <StackItem size="fill" isScrollable>

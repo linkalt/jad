@@ -5,7 +5,6 @@ import {
   addPinnedView,
   profileLabel,
   hasPinnedView,
-  groupByCategory,
   groupHasRunningRun,
   isGroupExpanded,
   parseCollapsedGroups,
@@ -370,29 +369,22 @@ test('a profile listed twice is one child row', () => {
   assert.deepEqual(group.children.map(child => child.label), ['p1', 'p2']);
 });
 
-const inCategory = (id, category) => ({...grouped(id, id, ['p'], 'p'), category});
+const inRoot = (id, rootId) => ({...grouped(id, id, ['p'], 'p'), rootId});
 
-test('a session carries its category into the group, and an empty one counts as none', () => {
-  const groups = sessionListGroups([inCategory('a', 'work'), inCategory('b', ''), grouped('c', 'c', ['p'], 'p')]);
-  assert.deepEqual(groups.map(group => group.category), ['work', undefined, undefined]);
+test('a session carries its root into the group as its workspace, and an empty one counts as none', () => {
+  const groups = sessionListGroups([inRoot('a', 'proj'), inRoot('b', ''), grouped('c', 'c', ['p'], 'p')]);
+  assert.deepEqual(groups.map(group => group.workspace), ['proj', undefined, undefined]);
 });
 
-test('sessions are split by category in first-seen order, uncategorised last', () => {
-  const groups = sessionListGroups(
-    [inCategory('a', 'work'), grouped('n', 'n', ['p'], 'p'), inCategory('b', 'test'), inCategory('c', 'work')],
-  );
-  assert.deepEqual(
-    groupByCategory(groups).map(section => [section.category, section.groups.map(group => group.sessionRef)]),
-    [['work', ['a', 'c']], ['test', ['b']], [undefined, ['n']]],
-  );
+test('a session with no profile rows carries its workspace too', () => {
+  const [group] = sessionListGroups([{id: 'a', title: 'a', rootId: 'proj'}]);
+  assert.equal(group.workspace, 'proj');
+  assert.deepEqual(group.children, []);
 });
 
-test('no sessions give no sections, and no categories give a single unnamed section', () => {
-  assert.deepEqual(groupByCategory([]), []);
-  const [only, ...rest] = groupByCategory(sessionListGroups([grouped('a', 'a', ['p'], 'p')]));
-  assert.equal(only.category, undefined);
-  assert.equal(only.groups.length, 1);
-  assert.equal(rest.length, 0);
+test('a session group never carries a category, even when the list row has one', () => {
+  const [group] = sessionListGroups([{...inRoot('a', 'proj'), category: 'work'}]);
+  assert.equal('category' in group, false);
 });
 
 test('a profile is labelled by the name its file sets, else by its ID', () => {

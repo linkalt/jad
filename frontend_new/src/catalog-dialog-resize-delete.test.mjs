@@ -316,15 +316,15 @@ test('only the sessions route is told the answer, and the gap is written where i
   // id and the version, and ignores a query. The value is therefore dropped here, and
   // the drop says so — a silent no-op is the one thing this must not be.
   const api = readFileSync(new URL('./api.ts', import.meta.url), 'utf8');
-  assert.match(api, /const query = kind === 'sessions' && options\.deleteState === true \? '\?state=delete' : '';/);
+  assert.match(api, /const extra: Record<string, string> = kind === 'sessions' && options\.deleteState === true \? \{state: 'delete'\} : \{\};/);
   assert.match(api, /The profile side is not wired server-side yet/);
 });
 
 test('the ticked answer reaches the request, from either path', () => {
   const editor = dialog.slice(dialog.indexOf('const performDelete'), dialog.indexOf('const performRowDelete'));
   const row = dialog.slice(dialog.indexOf('const performRowDelete'), dialog.indexOf('const reloadCurrent'));
-  assert.match(editor, /await deleteCatalogFile\(kind, draft\.id, draft\.etag, \{deleteState\}\)/, 'the editor sends the answer');
-  assert.match(row, /await deleteCatalogFile\(kind, id, etag, \{deleteState\}\)/, 'so does the row, which used to hard-code false');
+  assert.match(editor, /await deleteCatalogFile\(kind, draft\.id, draft\.etag, \{deleteState, scope: scopeOf\(kind\)\}\)/, 'the editor sends the answer');
+  assert.match(row, /await deleteCatalogFile\(kind, id, etag, \{deleteState, scope: scopeOf\(kind\)\}\)/, 'so does the row, which used to hard-code false');
   assert.equal(/deleteState: (true|false)/.test(dialog), false, 'neither path decides for the user');
   assert.match(dialog, /const confirmPending = \(deleteState: boolean\): void =>/, 'the answer arrives from the confirm');
   assert.match(confirm, /onConfirm\(deleteState\)/, 'and the confirm reports the box it shows');

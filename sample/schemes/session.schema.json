@@ -24,7 +24,7 @@
     "category": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Optional folder name used to group sessions in listings. It does not change the session id."
+      "description": "Legacy: accepted and kept, but the UI no longer reads it. The session list groups sessions by workspace (the session root), not by this text. It does not change the session id."
     },
     "scope": {
       "type": "object",

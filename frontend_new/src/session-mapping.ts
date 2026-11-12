@@ -16,8 +16,8 @@ export function sessionFromSnapshot(snapshot: SessionSnapshot, id: string): Sess
     ...(snapshot.runs_by_profile === undefined
       ? {}
       : {runsByProfile: snapshot.runs_by_profile}),
+    ...(snapshot.root_id ? {rootId: snapshot.root_id} : {}),
     ...(snapshot.root_label ? {rootLabel: snapshot.root_label} : {}),
-    ...(snapshot.category ? {category: snapshot.category} : {}),
     ...(snapshot.active_profile === undefined ? {} : {activeProfile: snapshot.active_profile}),
     ...(snapshot.default_profile === undefined ? {} : {defaultProfile: snapshot.default_profile}),
     ...(snapshot.profiles === undefined ? {} : {profiles: snapshot.profiles}),

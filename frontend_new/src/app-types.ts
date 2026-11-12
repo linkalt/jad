@@ -42,9 +42,9 @@ export interface Session {
   profileTurns?: Record<string, number>;
   state: SessionState;
   sessionRef?: string;
+  /** The session root it is stored in: its workspace. Absent from an older server. */
+  rootId?: string;
   rootLabel?: string;
-  /** Groups sessions in the list; absent when the session has none. */
-  category?: string;
   activeProfile?: string;
   /** The session's stored default profile by id; absent when the server names none. */
   defaultProfile?: string;

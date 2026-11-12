@@ -5,12 +5,12 @@ import {useEffect, useRef, type RefObject} from 'react';
 import {PencilIcon, PlusIcon, TrashIcon} from './AppIcons';
 export type RowMenuTarget = {
   /** Which left-panel row the menu was opened for. */
-  kind: 'category' | 'session' | 'profile';
-  /** The row id (category key, session ref, or row key). */
+  kind: 'workspace' | 'session' | 'profile';
+  /** The row id (workspace id, session ref, or row key). */
   id: string;
   /**
    * The session whose list owns the row. Present for session and profile rows,
-   * absent for a category, and it is what lets a group host its own rows' menu.
+   * absent for a workspace, and it is what lets a group host its own rows' menu.
    */
   sessionRef?: string;
   /** The visible row label, used to name the placeholder actions. */
@@ -18,7 +18,7 @@ export type RowMenuTarget = {
 };
 
 /**
- * Placeholder right-click menu for a category, session or profile row.
+ * Placeholder right-click menu for a workspace, session or profile row.
  *
  * A row's `onContextMenu` anchors it to that row and it opens beside the row
  * (`placement="end"`, `alignment="start"`, so its top aligns with the row
@@ -32,7 +32,7 @@ export type RowMenuTarget = {
  * Each group in `SessionGroupList` renders the menu for its own profile rows,
  * so that in the collapsed rail the menu is part of the hover flyout's DOM
  * subtree rather than a second layer outside it; `SessionNavigation` keeps one
- * instance at rail level for category and session rows.
+ * instance at rail level for workspace and session rows.
  *
  * The menu dismisses itself rather than leaving it to the Popover's light
  * dismiss, which is the native `popover="auto"` one. Firefox counts the mouseup
@@ -127,9 +127,9 @@ export function RowContextMenu({
       onOpenChange={onOpenChange}
       content={
         <VStack ref={menuRef} gap={1}>
-          {/* A pane is what this menu can create: a category has no conversation
-              of its own, so a category row gets no entry for it. */}
-          {target.kind === 'category' ? null : (
+          {/* A pane is what this menu can create: a workspace has no conversation
+              of its own, so a workspace row gets no entry for it. */}
+          {target.kind === 'workspace' ? null : (
             <Tooltip
               content={canOpenPane ? 'Open in a new pane' : `At most ${paneLimit} panes`}
               placement="end"
@@ -160,7 +160,7 @@ export function RowContextMenu({
               />
             </Tooltip>
           )}
-          {target.kind === 'category' || onDuplicate === undefined || canDuplicate?.(target) === false ? null : (
+          {target.kind === 'workspace' || onDuplicate === undefined || canDuplicate?.(target) === false ? null : (
             <Tooltip content="Duplicate" placement="end">
               <IconButton
                 label={`Duplicate ${target.label}`}

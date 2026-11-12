@@ -86,7 +86,7 @@ export type SessionGroupListProps = {
   onRowMenuOpenChange: (isOpen: boolean) => void;
 };
 
-/** The children of a category `SideNavItem`: one collapsible group per session, one row per profile. */
+/** The children of a workspace `SideNavItem` (or the whole rail when there is one workspace): one collapsible group per session, one row per profile. */
 export function SessionGroupList({
   groups,
   sessions,
