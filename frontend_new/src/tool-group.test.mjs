@@ -89,7 +89,8 @@ test('collapsed header expands before it can open a result', () => {
 
 test('group and activity styles use semantic tokens and tight row spacing', () => {
   assert.match(source, /backgroundColor: colorVars\['--color-accent-muted'\]/);
-  assert.match(source, /groupIcon: \{color: colorVars\['--color-icon-blue'\]\}/);
+  assert.doesNotMatch(source, /groupIcon/);
+  assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-group-header-call\[data-status='complete'\] svg \{ color: var\(--color-icon-purple\)/);
   assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:hover \{ background-color: var\(--color-overlay-hover\)/);
   assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:active \{ background-color: var\(--color-overlay-hover\)/);
   assert.match(row, /<VStack gap=\{0\} width="100%" xstyle=\{styles\.groupedActivity\}>/);
@@ -116,11 +117,12 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     import {toolGroupLayout} from ${JSON.stringify(new URL('./tool-group.ts', import.meta.url).href)};
     export const ActivityPanelContext = React.createContext(null);
     const activityRefsChanged = (a, b) => !a || a.length !== b.length || a.some((x, i) => x !== b[i]);
-    const styles = {activityTrigger:{}, groupedActivity:{}, groupHeaderCall:{}, groupToggle:{}, groupIcon:{}};
+    const styles = {activityTrigger:{}, groupedActivity:{}, groupHeaderCall:{}, groupToggle:{}};
+    const toolCallStatus = result => result ? (result.status === 'error' ? 'error' : 'complete') : 'running';
     const stylex = {props: () => ({})};
     const VStack = ({children}) => <div>{children}</div>;
     const HStack = ({children}) => <div>{children}</div>;
-    const Icon = () => null;
+    const Icon = ({icon}) => <svg data-icon={icon} />;
     const Text = ({children}) => <span>{children}</span>;
     ${activity}
     ${group}
@@ -135,7 +137,7 @@ test('rendered group routes pointer and keyboard actions without opening a colla
         },
         update: () => {},
       };
-      const calls = ['a', 'b', 'c'].map(id => ({call: {callId:id, name:'tool-'+id}, result:undefined}));
+      const calls = ['a', 'b', 'c'].map(id => ({call: {callId:id, name:'tool-'+id}, result:{status:'success'}}));
       const renderCall = (call, result, expandGroup) => <ActivityRow key={call.callId}
         detail={{key:'tool-'+call.callId, kind:'tool', name:call.name}} refs={[call.callId]} expandGroup={expandGroup}>
         <span>{call.name}</span></ActivityRow>;
@@ -163,7 +165,19 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     const click = el => act(() => el.dispatchEvent(new window.MouseEvent('click', {bubbles:true})));
     const key = (el, value) => act(() => el.dispatchEvent(new window.KeyboardEvent('keydown', {key:value, bubbles:true, cancelable:true})));
     assert.ok(button('tool-a').classList.contains('jad-activity-trigger'), 'the actual interactive row receives hover styling');
-    assert.ok(toggle().classList.contains('jad-activity-trigger'), 'the group toggle receives hover styling');
+    assert.ok(!toggle().classList.contains('jad-activity-trigger'), 'the expand/count control has no hover background');
+    assert.ok(!toggle().closest('.jad-activity-trigger'));
+    const headerCall = document.querySelector('.jad-group-header-call');
+    assert.equal(headerCall.getAttribute('data-status'), 'complete');
+    assert.ok(headerCall.contains(button('tool-a')));
+    const style = document.createElement('style');
+    style.textContent = readFileSync(new URL('./index.css', import.meta.url), 'utf8').replace(/var\(--color-icon-purple\)/, 'rgb(1, 2, 3)');
+    document.head.appendChild(style);
+    headerCall.insertAdjacentHTML('beforeend', '<svg id="probe"></svg>');
+    assert.equal(window.getComputedStyle(document.getElementById('probe')).color, 'rgb(1, 2, 3)', 'the first call status icon is recolored');
+    assert.equal(window.getComputedStyle(toggle().querySelector('svg')).color === 'rgb(1, 2, 3)', false, 'the wrench/chevron are not recolored');
+    assert.ok(button('tool-a').matches('.jad-activity-trigger'));
+    document.getElementById('probe').remove();
     assert.equal(button('tool-a').getAttribute('tabindex'), '0');
     assert.equal(button('tool-a').getAttribute('aria-expanded'), 'false');
     assert.equal(button('tool-a').getAttribute('aria-label'), 'tool-a: Show more tool calls');
@@ -238,7 +252,7 @@ test('neutral theme tool rows retain text and icon contrast in each interaction 
   const luminance = rgb => rgb.slice(0, 3).map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
   const contrast = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const group = token('accent-muted'), surface = token('background-surface'), body = token('background-body');
-  const secondary = token('text-secondary'), icon = token('icon-blue'), overlay = token('overlay-hover');
+  const secondary = token('text-secondary'), icon = token('icon-purple'), overlay = token('overlay-hover');
   for (const mode of [0, 1]) for (const background of [group, surface, body]) {
     for (const state of ['idle', 'hover', 'active']) {
       const bg = state === 'idle' ? background[mode] : compose(overlay[mode], background[mode]);
@@ -257,4 +271,5 @@ test('compiled activity CSS paints hover and press on the interactive row', asyn
   assert.match(compiled, /\.jad-activity-trigger:hover\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /\.jad-activity-trigger:active\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /box-shadow:inset/);
+  assert.match(compiled, /\.jad-group-header-call\[data-status=complete\] svg\{color:var\(--color-icon-purple\)\}/);
 });

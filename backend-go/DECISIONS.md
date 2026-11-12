@@ -4204,3 +4204,10 @@ Open: jsdom does not validate browser layout or physical touch behavior, and the
 ## T-023 activity hover and group icon visibility (Go, 2026-11-12)
 
 The neutral theme makes `--color-icon-accent` monochrome, so grouped icons use `--color-icon-blue`. Activity triggers use an unlayered hover/press rule on the actual interactive row, with a theme-token inset outline; the existing subtle hover tint preserves secondary-text contrast. An isolated development-browser fixture rendering `WebUiParts` verified actual computed hover backgrounds on tool and reasoning rows and blue SVG colors in light and dark. The old hover invisibility cause was not proven. Open: the browser fixture was manual rather than an automated end-to-end test, no authenticated session or physical touch was tested, and arbitrary custom themes remain unverified. The full frontend suite still has the unrelated missing `MEMORY_DESIGN.md` failure.
+
+## T-024 grouped tool header: icon colour and hover scope (Go, 2026-10-09)
+
+- The "checklist" glyph at the start of a grouped tool header is the first call's Astryx status icon (the circled check, `success`, for a finished call). It is now `--color-icon-purple` through `.jad-group-header-call[data-status='complete'] svg` in `index.css`. Running and failed calls keep Astryx's own colours. The earlier T-023 blue colour had been applied to the wrench/count/chevron control; that is removed.
+- The expand/count control no longer carries `jad-activity-trigger`, so it has no hover/press background. Tool and reasoning rows keep it. Focus outline, ARIA and keyboard handling of the control are unchanged.
+- Evidence: jsdom renders the real ToolGroupRow/ActivityRow bodies with the real `index.css` (selector match and computed colour of the status svg, not of the wrench/chevron), lightningcss compiles the new rule, and the neutral-theme contrast test uses the purple token on the grouped background in both modes.
+- Not verified: a real browser pixel check, jsdom cannot evaluate `:hover` or `light-dark()`; other themes' purple contrast; the colour of the icon is a design choice, easy to change in one CSS line.

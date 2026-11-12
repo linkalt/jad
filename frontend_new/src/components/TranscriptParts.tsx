@@ -66,7 +66,6 @@ const styles = stylex.create({
     backgroundColor: colorVars['--color-accent-muted'],
     borderRadius: radiusVars['--radius-inner'],
   },
-  groupIcon: {color: colorVars['--color-icon-blue']},
   traceCopy: {
     minWidth: 0,
     flex: 1,
@@ -732,7 +731,11 @@ function ToolGroupRow({
   return (
     <VStack gap={0} width="100%" xstyle={styles.groupedActivity}>
       <HStack gap={2} align="center" width="100%">
-        <div {...stylex.props(styles.groupHeaderCall)}>{renderCall(header.call, header.result, isExpanded ? undefined : {expand: () => setIsToggled(true), listId})}</div>
+        <div
+          {...stylex.props(styles.groupHeaderCall)}
+          className={[stylex.props(styles.groupHeaderCall).className, 'jad-group-header-call'].filter(Boolean).join(' ')}
+          data-status={toolCallStatus(header.result)}
+        >{renderCall(header.call, header.result, isExpanded ? undefined : {expand: () => setIsToggled(true), listId})}</div>
         <div
           role="button"
           tabIndex={0}
@@ -746,8 +749,7 @@ function ToolGroupRow({
               toggle();
             }
           }}
-          {...stylex.props(styles.activityTrigger, styles.groupToggle, styles.groupIcon)}
-          className={[stylex.props(styles.activityTrigger, styles.groupToggle, styles.groupIcon).className, 'jad-activity-trigger'].filter(Boolean).join(' ')}
+          {...stylex.props(styles.activityTrigger, styles.groupToggle)}
         >
           <HStack gap={1} align="center">
             <Icon icon="wrench" size="xsm" color="inherit" />
