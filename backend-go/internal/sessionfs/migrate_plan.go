@@ -174,22 +174,40 @@ type migrationPlanner struct {
 	globalFolders map[string]string
 	// stateInPlace: the v1 state folder is W/.jad/state, so state is not copied.
 	stateInPlace bool
+	// config, root and sessions are the v1 load, the migrated root and its session IDs, kept
+	// for the applier's v1 and v2 comparison.
+	config   Config
+	root     Root
+	sessions []string
 }
 
 // PlanWorkspaceMigration plans the migration of the v1 setting W loads into the workspace
 // layout. It reads files only. An error is an unexpected failure; anything the migration
 // cannot do faithfully is a blocker of the plan.
 func PlanWorkspaceMigration(options MigrateOptions) (MigrationPlan, error) {
+	p, err := newMigrationPlanner(options)
+	if err != nil {
+		return MigrationPlan{}, err
+	}
+	p.run()
+	sort.SliceStable(p.plan.Files, func(i, j int) bool { return p.plan.Files[i].Destination < p.plan.Files[j].Destination })
+	return *p.plan, nil
+}
+
+// newMigrationPlanner resolves W, G and the environment; run then fills the plan. The applier
+// (migrate_apply.go) keeps the planner for what the plan holds besides its report: the v1
+// configuration and the candidate bytes of rewritten files.
+func newMigrationPlanner(options MigrateOptions) (*migrationPlanner, error) {
 	workspace := strings.TrimSpace(options.WorkspaceDir)
 	if workspace == "" {
 		var err error
 		if workspace, err = os.Getwd(); err != nil {
-			return MigrationPlan{}, fmt.Errorf("get working directory: %w", err)
+			return nil, fmt.Errorf("get working directory: %w", err)
 		}
 	}
 	workspace, err := filepath.Abs(workspace)
 	if err != nil {
-		return MigrationPlan{}, fmt.Errorf("resolve workspace folder: %w", err)
+		return nil, fmt.Errorf("resolve workspace folder: %w", err)
 	}
 	env := options.Environment
 	if env == nil {
@@ -197,13 +215,10 @@ func PlanWorkspaceMigration(options MigrateOptions) (MigrationPlan, error) {
 	}
 	global, err := globalDir(workspace, options.GlobalDir, env)
 	if err != nil {
-		return MigrationPlan{}, err
+		return nil, err
 	}
 	plan := &MigrationPlan{Workspace: workspace, Global: global}
-	p := &migrationPlanner{plan: plan, options: options, env: env, home: strings.TrimSpace(env["HOME"]), workspace: workspace, jad: filepath.Join(workspace, ".jad"), global: global}
-	p.run()
-	sort.SliceStable(plan.Files, func(i, j int) bool { return plan.Files[i].Destination < plan.Files[j].Destination })
-	return *plan, nil
+	return &migrationPlanner{plan: plan, options: options, env: env, home: strings.TrimSpace(env["HOME"]), workspace: workspace, jad: filepath.Join(workspace, ".jad"), global: global}, nil
 }
 
 func (p *migrationPlanner) block(kind, path, format string, args ...any) {
@@ -270,9 +285,11 @@ func (p *migrationPlanner) run() {
 	if !ok {
 		return
 	}
+	p.config, p.root = config, root
 	p.planGlobalSetting(raw)
 	p.planWorkspaceSetting(raw, root)
 	sessions := p.planSessions(root)
+	p.sessions = sessions
 	p.planProfiles()
 	p.planState(sessions)
 	p.planGlobalCatalogs()

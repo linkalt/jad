@@ -85,17 +85,17 @@ func TestMigrateWorkspacePrintsThePlanAndWritesNothing(t *testing.T) {
 	}
 }
 
-func TestMigrateWorkspaceRefusesApplyAndOtherArguments(t *testing.T) {
+func TestMigrateWorkspaceRefusesOtherArguments(t *testing.T) {
 	workspace, _ := writeMigrateSource(t)
 	var stdout, stderr bytes.Buffer
 	streams := commandStreams{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr}
-	for _, args := range [][]string{{"migrate"}, {"migrate", "other"}, {"migrate", "workspace", "extra"}, {"migrate", "workspace", "--apply"}} {
+	for _, args := range [][]string{{"migrate"}, {"migrate", "other"}, {"migrate", "workspace", "extra"}, {"migrate", "workspace", "--apply", "--rollback", "x"}} {
 		if err := dispatchCommand(args, streams); !isExit(err, exitFailed) {
 			t.Fatalf("%q: %v", args, err)
 		}
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".jad", "workspace.json")); !os.IsNotExist(err) {
-		t.Fatal("--apply wrote workspace.json")
+		t.Fatal("a refused command wrote workspace.json")
 	}
 }
 
@@ -109,5 +109,48 @@ func TestMigrateWorkspaceExitsOneWhenBlocked(t *testing.T) {
 	err := dispatchCommand([]string{"migrate", "workspace"}, streams)
 	if !isExit(err, exitFailed) || !strings.Contains(stdout.String(), "[workspace_exists]") {
 		t.Fatalf("blocked plan: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestMigrateWorkspaceApplyThenRollback(t *testing.T) {
+	workspace, home := writeMigrateSource(t)
+	var stdout, stderr bytes.Buffer
+	streams := commandStreams{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr}
+	if err := dispatchCommand([]string{"migrate", "workspace", "--apply"}, streams); err != nil {
+		t.Fatalf("apply: %v\n%s", err, stdout.String())
+	}
+	text := stdout.String()
+	if !strings.Contains(text, "applied:") || strings.Contains(text, "cli-secret-value") {
+		t.Fatalf("apply output:\n%s", text)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".jad", "workspace.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".jad", "mcp", "web", "search.json")); err != nil {
+		t.Fatal(err)
+	}
+	journals, _ := filepath.Glob(filepath.Join(workspace, ".jad", "migrations", "*.jsonl"))
+	if len(journals) != 1 {
+		t.Fatalf("journals: %v", journals)
+	}
+
+	// Applying again is blocked: an existing workspace is never changed.
+	stdout.Reset()
+	if err := dispatchCommand([]string{"migrate", "workspace", "--apply"}, streams); !isExit(err, exitFailed) || !strings.Contains(stdout.String(), "[workspace_exists]") {
+		t.Fatalf("second apply: %v\n%s", err, stdout.String())
+	}
+
+	stdout.Reset()
+	if err := dispatchCommand([]string{"migrate", "workspace", "--rollback", journals[0]}, streams); err != nil {
+		t.Fatalf("rollback: %v\n%s", err, stdout.String())
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".jad", "workspace.json")); !os.IsNotExist(err) {
+		t.Fatal("workspace.json is still there")
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".jad", "mcp")); !os.IsNotExist(err) {
+		t.Fatal("the folders the run made in G are still there")
+	}
+	if err := dispatchCommand([]string{"migrate", "workspace", "--rollback", filepath.Join(workspace, "nope.jsonl")}, streams); !isExit(err, exitFailed) {
+		t.Fatalf("a missing journal: %v", err)
 	}
 }

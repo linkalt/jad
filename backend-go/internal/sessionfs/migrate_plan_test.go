@@ -44,6 +44,7 @@ func newMigrateFixture(t *testing.T) *migrateFixture {
 	f.put(t, "profiles/dev/coder.json", map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": "coding/default"})
 	f.put(t, "sessions/work.json", map[string]any{"schema_version": 1, "cwd": f.workspace})
 	f.write(t, "state/work/dev/coder/messages.jsonl", "{}\n")
+	f.write(t, "env", "")
 	f.writeSetting(t)
 	return f
 }

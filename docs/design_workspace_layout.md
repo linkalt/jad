@@ -347,8 +347,8 @@ the audit record and `off` are the mitigations.
   never moves: models and tools to `G`, the workspace keeps profiles, sessions and `state`
   (paths unchanged). It rewrites relative `env_file` paths, refuses when an id already exists
   in `G`, writes a manifest, leaves the old `setting.json`, never deletes or edits ignored
-  files, and only prints `.gitignore` advice. The planner (dry run, phase 4a) is built
-  (section 23); `--apply` (phase 4b) is not.
+  files, and only prints `.gitignore` advice. The planner (dry run, phase 4a) is section 23;
+  `--apply`, the journal and `--rollback` (phase 4b) are section 24.
 
 ## 6. Security boundaries: what is and is not enforced
 
@@ -409,7 +409,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
    (own toolsets, written by hand and through `edit`) is built (section 21); 3c.3b (a load reads
    one revision of each profile) is built (section 22).
 4. **Migration command.** 4a (the planner and the dry run, `jad migrate workspace`) is built
-   (section 23); 4b (`--apply`, the journal, the v1/v2 check and the cleanup) is not.
+   (section 23); 4b (`--apply`, the journal, the v1/v2 check and the cleanup, `--rollback`) is built
+   (section 24), tested only in temporary folders.
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
 **Acceptance** (the designers' test plans, designer1 §7 and designer2 §8, plus):
@@ -1130,7 +1131,7 @@ checks instead:
 `jad migrate workspace [--root NAME] [--json]` (`cmd/jad/migrate.go`) plans the migration of the
 one v1 setting the exact current folder W loads today and **writes nothing**: no file, folder,
 lock or temporary (pinned by a before-and-after snapshot of the whole temporary tree, including G
-and `$HOME`). `--apply` is refused ("not built yet"). A blocked plan exits 1. The planner is
+and `$HOME`). `--apply` (phase 4b, section 24) writes. A blocked plan exits 1. The planner is
 `sessionfs.PlanWorkspaceMigration` (`migrate_plan.go`); it reads v1 through the v1 loader
 (`Load`, the root's `Layout`, `LoadLayoutSessionSettings`), never from assumed defaults.
 
@@ -1210,3 +1211,75 @@ blocker: the 16 `libraries.tool_definition_paths` resolve into `W/.jad/tools_def
 `workspace.json` has no key for them. Everything else is as before: sessions, profiles, models
 and tools `in_place`, one MCP server copied to G. Migrating this repository needs a choice: move
 the tool definitions outside W, or add a `workspace.json` key for them (a decider decision).
+
+## 24. Phase 4b as built: `--apply`, the journal and `--rollback`
+
+`jad migrate workspace --apply` plans again (section 23), refuses a plan with blockers (nothing
+is written, exit 1) and otherwise applies it. `ApplyWorkspaceMigration` is in
+`sessionfs/migrate_apply.go`, the v1 and v2 comparison in `migrate_compare.go`. It was run only in
+temporary workspaces, G and `$HOME`; it was never applied to this repository's data.
+
+**What it writes.** Only what the plan lists as `copy` or `create`: files of `G` (mcp, remotes,
+sandbox templates, models and tools that are not already where v2 reads them, `global.json` when it
+is missing), sessions, profiles and state copied into `W/.jad`, and `workspace.json`. Folders it makes
+are mode 0700, settings files 0600, copies keep the source's permission bits and modification time.
+Rewritten toolsets and remote files are rebuilt from the source bytes (`globalCandidate`); every other
+copy is byte for byte. **No source file is changed, replaced or deleted.** The only things written
+next to a source are the lock files jad makes itself (`.messages.jsonl.jad-lock`, below).
+
+**Publish without replacing.** A file is written to `.migrate-<run>-<n>.tmp` in its destination
+folder (hashed as it is written, synced), then hard-linked to its name: a destination that exists, or
+that appears between the check and the link, is an error and keeps its content (the same primitive as
+`createFileExclusive`, but streamed). A folder on the way is made one part at a time and a link or a
+file in the way is refused. A filesystem without hard links fails closed.
+
+**Order.** (1) the session and transcript locks (`sessionlock.TryAcquire`, no waiting) for every
+copied session file and `messages.jsonl`: a running jad that holds one stops the migration before
+anything is written; (2) the v1 loads of every migrated session and profile, taken while `W` is
+still v1; (3) the journal; (4) additions to G; (5) workspace files; (6) `global.json`; (7) **verify**: every
+created file is hashed again against the hash written, every copied source is hashed again against the
+hash the plan read (a source that changed while it was copied stops the run); (8) **`workspace.json`,
+the switch**; (9) the comparison; (10) `complete`.
+
+**The journal** `W/.jad/migrations/<run>.jsonl` is append-only and records, with a timestamp: `start`
+(with W and G), each folder made (`mkdir`), each `temp` file, each `create` (path, temporary file, sha256,
+size; synced before the link), `done` after the link, `switch`, `complete` or `failed`, and what a
+cleanup `removed` or `kept`. It holds paths and hashes, never contents. It is the manifest of the run
+and is never removed.
+
+**Cleanup** (on any failure after the first write, and `--rollback <journal>`) removes only what the
+journal shows this run created, and only if it still has the recorded hash: a file counts as created
+by this run when it has a `done` entry, or when its temporary file still is the same file (a crash
+between the link and `done`); a file with neither is kept ("this run did not create it"), however
+its content looks. A file whose content changed since is kept, a path outside the run's W and G is kept,
+and a folder is removed only if this run made it and it is empty. `workspace.json` is removed first
+(reverse order), which is the rollback to v1. Running it twice finds nothing more.
+
+**The comparison** loads W as v2 (with `JAD_ROOT_SETTING_PATH` left out, since it would keep v1) and
+compares, per migrated session and per profile of its scope, with the v1 loads: identity, profile
+list, model offer (each model file by content hash), working folder, where the transcript, backup,
+usage cache and staging are (relative to the session's state folder), every in-process write target
+(`writeTargets`), tool definition paths, MCP servers (by content), which tools are on, and the server and
+cli settings as JSON. Any difference rolls the run back, `workspace.json` first. It guards against a path or a
+name that moved; it is not a proof that the two layouts behave alike (hooks, sandbox rules, prompts
+and the model's behaviour are not compared). A session that does not load in v1 is compared as an
+error on both sides. One consequence: an absolute `tool_storage_dir` (or any write target) into the
+v1 state keeps its place in v2 while the copied transcripts move, so v1 and v2 would write the same
+files; the comparison reports it and rolls back.
+
+**Limits that are not hidden.**
+- `workspace.json` exists, and the folder is v2 for any process that starts there, from the switch
+  until the comparison ends (milliseconds on a small workspace). The decision was to write it last and
+  compare after it; the only way to load v2 is through that file.
+- The v1 state copy is in practice reachable only when no write target of the session follows the cwd:
+  the exec and tool_smith `functions_dir` and the tool storage default under the cwd, outside the
+  copied state, and the plan blocks (`storage_outside`) or the comparison rolls back. A v1 state outside
+  `W/.jad` therefore mostly stays a blocker. This repository's state is already in `W/.jad` (in place).
+- A copy is not a live replica: a v1 run after the migration changes the v1 files only.
+- Locks are advisory (flock): a process that does not lock is not stopped. Sources are re-hashed at the
+  end, so a change is detected, not prevented.
+- The journal is local; a different machine's run is not seen. The cleanup trusts hard links and
+  inode identity of a local filesystem.
+- Creating the lock files touches the v1 state folders (as any jad run does).
+- Not done: moving models or tools into G (they stay workspace-private when already in `W/.jad`;
+  a `promote` step is the person's decision), settings outside `W/.jad`, the `.jad/.jad` bug (T-029).
