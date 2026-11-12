@@ -4211,3 +4211,10 @@ The neutral theme makes `--color-icon-accent` monochrome, so grouped icons use `
 - The expand/count control no longer carries `jad-activity-trigger`, so it has no hover/press background. Tool and reasoning rows keep it. Focus outline, ARIA and keyboard handling of the control are unchanged.
 - Evidence: jsdom renders the real ToolGroupRow/ActivityRow bodies with the real `index.css` (selector match and computed colour of the status svg, not of the wrench/chevron), lightningcss compiles the new rule, and the neutral-theme contrast test uses the purple token on the grouped background in both modes.
 - Not verified: a real browser pixel check, jsdom cannot evaluate `:hover` or `light-dark()`; other themes' purple contrast; the colour of the icon is a design choice, easy to change in one CSS line.
+
+## T-024 follow-up: which icon is "first" in a tool group header (Go-independent, frontend, 2026-11-12)
+
+- Rendered with the real Astryx `ChatToolCalls` (jsdom): the only glyph left of the tool name in the header call is the Astryx `success` icon, a solid circled check (`M12 3a9 9 0 100 18 ...`), drawn inside the status span. The wrench, count and chevron are to the right of it, in the separate expand control.
+- The installed Astryx icon registry has no `checklist` glyph (grep of `Icon/` finds none), so the circled check is the closest match to the reported "checklist"; no other icon precedes the name. If the user means something else, the target is not in this component.
+- Colour rule unchanged: `.jad-group-header-call[data-status='complete'] svg`, so running (spinner) and error keep their own colours. New test `the real Astryx header call ...` asserts this on the real component and the real `index.css`; the earlier T-024 test used a synthetic probe svg, which is now documented as weaker than this one.
+- Still unverified: real-browser pixel rendering, `light-dark()` resolution, custom themes.

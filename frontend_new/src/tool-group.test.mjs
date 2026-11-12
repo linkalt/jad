@@ -174,7 +174,7 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     style.textContent = readFileSync(new URL('./index.css', import.meta.url), 'utf8').replace(/var\(--color-icon-purple\)/, 'rgb(1, 2, 3)');
     document.head.appendChild(style);
     headerCall.insertAdjacentHTML('beforeend', '<svg id="probe"></svg>');
-    assert.equal(window.getComputedStyle(document.getElementById('probe')).color, 'rgb(1, 2, 3)', 'the first call status icon is recolored');
+    assert.equal(window.getComputedStyle(document.getElementById('probe')).color, 'rgb(1, 2, 3)', 'a svg inside the complete header call is recolored (real Astryx icon: next test)');
     assert.equal(window.getComputedStyle(toggle().querySelector('svg')).color === 'rgb(1, 2, 3)', false, 'the wrench/chevron are not recolored');
     assert.ok(button('tool-a').matches('.jad-activity-trigger'));
     document.getElementById('probe').remove();
@@ -272,4 +272,42 @@ test('compiled activity CSS paints hover and press on the interactive row', asyn
   assert.match(compiled, /\.jad-activity-trigger:active\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /box-shadow:inset/);
   assert.match(compiled, /\.jad-group-header-call\[data-status=complete\] svg\{color:var\(--color-icon-purple\)\}/);
+});
+
+test('the real Astryx header call: the leftmost glyph before the tool name is the status circled check, recolored only when complete', async () => {
+  const {JSDOM} = await import('jsdom');
+  const React = (await import('react')).default;
+  const {createRoot} = await import('react-dom/client');
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {url: 'http://localhost/'});
+  const saved = {};
+  const set = (k, v) => { saved[k] = Object.getOwnPropertyDescriptor(globalThis, k); Object.defineProperty(globalThis, k, {value: v, configurable: true, writable: true}); };
+  for (const k of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'SVGElement', 'MutationObserver', 'CSS']) if (dom.window[k]) set(k, dom.window[k]);
+  set('IS_REACT_ACT_ENVIRONMENT', true);
+  set('requestAnimationFrame', f => setTimeout(f, 0));
+  set('cancelAnimationFrame', clearTimeout);
+  let root;
+  try {
+    const {ChatToolCalls} = await import('@astryxdesign/core');
+    const style = document.createElement('style');
+    style.textContent = readFileSync(new URL('./index.css', import.meta.url), 'utf8').replace(/var\(--color-icon-purple\)/, 'rgb(1, 2, 3)');
+    document.head.appendChild(style);
+    root = createRoot(document.getElementById('root'));
+    const render = status => React.act(() => root.render(React.createElement('div', {className: 'jad-group-header-call', 'data-status': status},
+      React.createElement(ChatToolCalls, {calls: [{id: '1', name: 'tool-a', status}], isFlush: true}))));
+    await render('complete');
+    const header = document.querySelector('.jad-group-header-call');
+    const svgs = [...header.querySelectorAll('svg')];
+    assert.equal(svgs.length, 1, 'the row has exactly one glyph, before the name');
+    const name = [...header.querySelectorAll('span')].find(el => el.textContent === 'tool-a');
+    assert.ok(svgs[0].compareDocumentPosition(name) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'the glyph precedes the tool name');
+    assert.match(svgs[0].querySelector('path').getAttribute('d'), /^M12 3a9 9 0 100 18/, 'Astryx success glyph (circled check); the Astryx icon set has no checklist glyph');
+    assert.equal(dom.window.getComputedStyle(svgs[0]).color, 'rgb(1, 2, 3)', 'the real glyph is recolored when complete');
+    await render('error');
+    assert.notEqual(dom.window.getComputedStyle(document.querySelector('svg')).color, 'rgb(1, 2, 3)', 'error keeps its own colour');
+    await render('running');
+    assert.equal(document.querySelectorAll('.jad-group-header-call svg').length === 0 || dom.window.getComputedStyle(document.querySelector('svg')).color !== 'rgb(1, 2, 3)', true, 'running keeps its own look');
+  } finally {
+    if (root) await React.act(() => root.unmount());
+    for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  }
 });
