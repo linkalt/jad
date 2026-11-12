@@ -768,7 +768,9 @@ function ToolGroupRow({
       <div id={listId} hidden={!isExpanded}>
         {isExpanded && (
           <VStack gap={0} width="100%">
-            {listed.map(({call, result}) => renderCall(call, result))}
+            {listed.map(({call, result}) => (
+              <div key={call.callId} className="jad-group-listed-call" data-status={toolCallStatus(result)}>{renderCall(call, result)}</div>
+            ))}
           </VStack>
         )}
       </div>

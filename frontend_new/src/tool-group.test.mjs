@@ -58,7 +58,7 @@ const row = source.slice(source.indexOf('function ToolGroupRow'), source.indexOf
 
 test('the group header renders the first call and the list renders the rest', () => {
   assert.match(row, /renderCall\(header\.call, header\.result, isExpanded \? undefined :/);
-  assert.match(row, /listed\.map\(\(\{call, result\}\) => renderCall\(call, result\)\)/);
+  assert.match(row, /listed\.map\(\(\{call, result\}\) => \(\s*<div key=\{call\.callId\} className=\"jad-group-listed-call\" data-status=\{toolCallStatus\(result\)\}>\{renderCall\(call, result\)\}<\/div>/);
   assert.doesNotMatch(row, /calls\.map\(\(\{call, result\}\) => renderCall/);
   assert.doesNotMatch(row, /calls\[calls\.length - 1\]/);
 });
@@ -90,7 +90,7 @@ test('collapsed header expands before it can open a result', () => {
 test('group and activity styles use semantic tokens and tight row spacing', () => {
   assert.match(source, /backgroundColor: colorVars\['--color-accent-muted'\]/);
   assert.doesNotMatch(source, /groupIcon/);
-  assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-group-header-call\[data-status='complete'\] svg \{ color: var\(--color-icon-purple\)/);
+  assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-group-header-call\[data-status='complete'\] svg,\s*\.jad-group-listed-call\[data-status='complete'\] svg \{ color: var\(--color-icon-purple\)/);
   assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:hover \{ background-color: var\(--color-overlay-hover\)/);
   assert.match(readFileSync(new URL('./index.css', import.meta.url), 'utf8'), /\.jad-activity-trigger:active \{ background-color: var\(--color-overlay-hover\)/);
   assert.match(row, /<VStack gap=\{0\} width="100%" xstyle=\{styles\.groupedActivity\}>/);
@@ -203,6 +203,11 @@ test('rendered group routes pointer and keyboard actions without opening a colla
     assert.equal(toggle().getAttribute('aria-expanded'), 'true');
     assert.equal(document.getElementById(toggle().getAttribute('aria-controls')).hidden, false);
     assert.ok(button('tool-b') && button('tool-c'));
+    for (const id of ['b', 'c']) {
+      const wrapper = button('tool-' + id).closest('.jad-group-listed-call');
+      assert.ok(wrapper && wrapper.getAttribute('data-status') === 'complete', 'every listed child carries its status wrapper');
+      assert.equal(wrapper.closest('.jad-group-header'), null, 'children stay outside the header hover block');
+    }
     assert.equal([...document.querySelectorAll('[role="button"]')].filter(el => el.textContent.includes('tool-a')).length, 1);
     await click(button('tool-a'));
     assert.equal(panel(), 'tool-a');
@@ -278,7 +283,7 @@ test('compiled activity CSS paints hover and press on the interactive row', asyn
   assert.match(compiled, /\.jad-group-header:has\(\.jad-activity-trigger:hover\)\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /\.jad-group-header:has\(\.jad-activity-trigger:active\)\{[^}]*background-color:var\(--color-overlay-hover\)/);
   assert.match(compiled, /\.jad-group-header \.jad-activity-trigger:hover[^{]*\{[^}]*background-color:(transparent|#0000)/);
-  assert.match(compiled, /\.jad-group-header-call\[data-status=complete\] svg\{color:var\(--color-icon-purple\)\}/);
+  assert.match(compiled, /\.jad-group-header-call\[data-status=complete\] svg,\s*\.jad-group-listed-call\[data-status=complete\] svg\{color:var\(--color-icon-purple\)\}/);
 });
 
 test('the real Astryx header call: the leftmost glyph before the tool name is the status circled check, recolored only when complete', async () => {
@@ -313,6 +318,49 @@ test('the real Astryx header call: the leftmost glyph before the tool name is th
     assert.notEqual(dom.window.getComputedStyle(document.querySelector('svg')).color, 'rgb(1, 2, 3)', 'error keeps its own colour');
     await render('running');
     assert.equal(document.querySelectorAll('.jad-group-header-call svg').length === 0 || dom.window.getComputedStyle(document.querySelector('svg')).color !== 'rgb(1, 2, 3)', true, 'running keeps its own look');
+  } finally {
+    if (root) await React.act(() => root.unmount());
+    for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  }
+});
+
+test('real Astryx glyphs of every call in a group are recolored when complete only; a single ungrouped call is not', async () => {
+  const {JSDOM} = await import('jsdom');
+  const React = (await import('react')).default;
+  const {createRoot} = await import('react-dom/client');
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {url: 'http://localhost/'});
+  const saved = {};
+  const set = (k, v) => { saved[k] = Object.getOwnPropertyDescriptor(globalThis, k); Object.defineProperty(globalThis, k, {value: v, configurable: true, writable: true}); };
+  for (const k of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'SVGElement', 'MutationObserver', 'CSS']) if (dom.window[k]) set(k, dom.window[k]);
+  set('IS_REACT_ACT_ENVIRONMENT', true);
+  set('requestAnimationFrame', f => setTimeout(f, 0));
+  set('cancelAnimationFrame', clearTimeout);
+  let root;
+  try {
+    const {ChatToolCalls} = await import('@astryxdesign/core');
+    const style = document.createElement('style');
+    style.textContent = readFileSync(new URL('./index.css', import.meta.url), 'utf8').replace(/var\(--color-icon-purple\)/g, 'rgb(1, 2, 3)');
+    document.head.appendChild(style);
+    root = createRoot(document.getElementById('root'));
+    const row = (cls, id, status) => React.createElement('div', {key: id, className: cls, 'data-status': status},
+      React.createElement(ChatToolCalls, {calls: [{id, name: 'tool-' + id, status}], isFlush: true}));
+    await React.act(() => root.render(React.createElement('div', null,
+      row('jad-group-header-call', 'a', 'complete'),
+      row('jad-group-listed-call', 'b', 'complete'),
+      row('jad-group-listed-call', 'c', 'complete'),
+      row('jad-group-listed-call', 'd', 'error'),
+      row('jad-group-listed-call', 'e', 'running'),
+      row('', 'single', 'complete'))));
+    const color = id => {
+      const el = [...document.querySelectorAll('span')].find(e => e.textContent === 'tool-' + id);
+      const svg = el.closest('div[data-status]').querySelector('svg');
+      assert.ok(svg, 'tool-' + id + ' has a glyph');
+      return dom.window.getComputedStyle(svg).color;
+    };
+    for (const id of ['a', 'b', 'c']) assert.equal(color(id), 'rgb(1, 2, 3)', id + ' is recolored');
+    assert.notEqual(color('d'), 'rgb(1, 2, 3)', 'a failed child keeps its own colour');
+    assert.notEqual(color('e'), 'rgb(1, 2, 3)', 'a running child keeps its own look');
+    assert.notEqual(color('single'), 'rgb(1, 2, 3)', 'a single call outside a group is not recolored');
   } finally {
     if (root) await React.act(() => root.unmount());
     for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];

@@ -55,5 +55,6 @@
 }
 .jad-group-header:has(.jad-activity-trigger:active) { background-color: var(--color-overlay-hover); box-shadow: inset 0 0 0 var(--border-width) var(--color-overlay-pressed); }
 
-/* The status check at the start of a grouped call's header; the expand/count control has no hover background. */
-.jad-group-header-call[data-status='complete'] svg { color: var(--color-icon-purple); }
+/* The status check of every call in a group (the header call and the listed children); the expand/count control has no hover background. */
+.jad-group-header-call[data-status='complete'] svg,
+.jad-group-listed-call[data-status='complete'] svg { color: var(--color-icon-purple); }

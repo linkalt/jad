@@ -4223,3 +4223,9 @@ The neutral theme makes `--color-icon-accent` monochrome, so grouped icons use `
 
 Hovering or pressing the first call of a group paints one `--color-overlay-hover` block (with the existing inset outline) on a `.jad-group-header` wrapper around the call and the expand/count control, through `:has(.jad-activity-trigger:hover)`. Inside the wrapper the call's own hover paint is switched off, so nothing is drawn twice and the gap shows no seam. Hovering the expand/count control alone still paints nothing (T-024). Click and keyboard actions, ARIA and the icon colour are unchanged; the wrapper is a plain block div, so layout is unchanged.
 Verified: jsdom test that the wrapper contains both parts; compiled-CSS test (lightningcss) of the three rules; typecheck. NOT verified: `:hover`/`:has()` painting in a real browser (jsdom evaluates neither); the full frontend suite was not run (known unrelated `MEMORY_DESIGN.md` failure).
+
+## T-026 group status icon colour on every grouped call (Go, 2026-05-01)
+
+- The purple status check (T-024) now applies to every complete call in a tool group: the header call and each listed child. Each listed child is wrapped in `div.jad-group-listed-call[data-status]` (plain block, no layout change, outside the header hover block). The rule is `.jad-group-header-call[data-status='complete'] svg, .jad-group-listed-call[data-status='complete'] svg` in `index.css`. Running and error keep their own colours; single ungrouped calls and reasoning rows are not recoloured.
+- Verified: jsdom renders real Astryx `ChatToolCalls` glyphs for complete/error/running children and a single call (computed colour with the token replaced by a probe colour); rendered group test checks the child wrappers; compiled-CSS check; mutation of the listed selector fails 4 tests.
+- Not verified: real-browser pixels (jsdom does not evaluate `light-dark()`), full `npm test` not run (known unrelated `MEMORY_DESIGN.md` failure).
