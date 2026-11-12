@@ -376,7 +376,7 @@ func (b remoteBackend) StartSubagent(ctx context.Context, request remoteapi.Suba
 	if !known {
 		return nil, remoteapi.ErrUnknownTarget
 	}
-	config, err := bound.config.WithModel()
+	config, err := remoteSubagentBase(bound.config)
 	if err != nil {
 		return nil, mapSessionError(err)
 	}
@@ -542,4 +542,11 @@ func (i *remoteRunIndex) entry(remoteID string) (remoteRunRef, bool) {
 	defer i.mu.Unlock()
 	ref, ok := i.runs[remoteID]
 	return ref, ok
+}
+
+// remoteSubagentBase is the configuration of a remote sub-agent run, which starts here: the
+// profile's own models are read once, as for a run (decider 3c.2b), and the child's model loads
+// from that copy (childConfig).
+func remoteSubagentBase(config sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
+	return config.PinOwnModels().WithModel()
 }

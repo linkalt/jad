@@ -31,6 +31,8 @@ type ModelBase struct {
 	// (nil: the file is read), so a candidate own model is judged before it is written; an
 	// empty candidate is judged as empty, never as the file on disk.
 	trial *[]byte
+	// pin is the own model as the run read it when it started (PinOwnModels); nil before.
+	pin *ownModelPin
 }
 
 // ownModelKeys are the keys of an own model file.
@@ -233,6 +235,13 @@ func readOwnModelFile(path string) (ownModelFile, error) {
 // ownModelFields are the model fields of the own model at path: the base's file with the
 // own set applied. The own file must still name the base it named when the session loaded.
 func ownModelFields(path string, base ModelBase) (map[string]json.RawMessage, error) {
+	if base.pin != nil {
+		// A started run never reads the own file or its base again (decider 3c.2b).
+		if base.pin.err != nil {
+			return nil, base.pin.err
+		}
+		return maps.Clone(base.pin.fields), nil
+	}
 	var file ownModelFile
 	var err error
 	if base.trial != nil {

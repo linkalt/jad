@@ -82,6 +82,9 @@ func (r boundRunner) Run(ctx context.Context, input json.RawMessage, options ses
 // runLocked is a run once the session's run lock is held.
 func (r boundRunner) runLocked(ctx context.Context, input json.RawMessage, options session.RunOptions) (session.RunResult, error) {
 	var err error
+	// The profile's own models are read once, now: every model load of this run and of what it
+	// starts uses this copy, so an edit made while it runs applies from the next run (3c.2b).
+	r.config = r.config.PinOwnModels()
 	// Listing and reading a session never create its transcript directory; the first
 	// write of a run does, before the input is appended to the transcript.
 	if err := os.MkdirAll(filepath.Dir(r.config.MessagesPath), 0o755); err != nil {

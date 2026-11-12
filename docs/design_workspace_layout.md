@@ -965,3 +965,40 @@ the same pipeline as the profile file and the documents (sections 13 and 14).
   (section 15) and to sandboxed exec (read-only for the own run, hidden from others).
 - **`jad check`:** reports, for each profile of the workspace, each own model file its load
   leaves out (skipped name, rule, base, composition), with the loader's reason.
+
+## 20. Phase 3c.2b as built: a run keeps the own models it started with
+
+Decider 3c.2b: a run never uses an own model edited after it started.
+
+- **What re-read before:** the trace of every `WithModel` and model-read call reachable while a
+  run goes found these readers of the run's own model files: the prompt_submit and
+  session_start hooks' key variable (before the run loads its model), the run's model and its
+  fallback plan (`prepareRun`, `planRunStreamer`), the key variables hidden from tools and
+  hooks (`runModelKeys`, again at every hook event), a sub-agent that keeps the run's model
+  (`childConfig`) and a remote sub-agent start. A fallback switch itself reads nothing: its
+  client is built when the run prepares. So an edit could reach a run between those reads,
+  give a sub-agent the new `set`, hide another key variable than the one a fallback client
+  uses, or fail a later read with "load the session again".
+- **The copy:** `SessionConfig.PinOwnModels` runs when a run starts (`runLocked`, and
+  `remoteSubagentBase` for a remote sub-agent). It composes the run's model and each
+  `model_fallback` model that is an own model with its base, while it holds the profile
+  file's lock, so it reads one revision: an edit publishes under that lock, and one that fails
+  halfway and is undone is never seen. The result is kept on the run's `ModelBases`
+  (`ModelBase.pin`); `ownModelFields` returns it and reads neither the own file nor its base
+  again. Effort is applied per load from the copy, as before.
+- **Fail closed:** an own model of the profile that the run did not reach when it started has a
+  pin that is an error ("this run did not read this own model when it started"), so no path
+  reads it from the disk during the run. A copy that failed (a base gone, `based_on` changed
+  since the load) fails each load that needs it, as the read did before.
+- **What follows its files as before:** shared models and v1 are read from their files on each
+  load, as today; a config with no own model is returned as it is and takes no lock. The next
+  run loads the session again and takes a new copy.
+- **Lock order:** a starting run holds its session's run lock and waits for the profile file's
+  lock; no writer of the profile file waits for a run, so the wait ends when the writer does.
+- **Limits:** the copy is of the own files at run start, while the profile file was read when
+  the session was resolved, before the run waited for its session's run lock; an edit between the two is judged by the existing
+  `based_on` check and the fail-closed missing file. Background work a run left going keeps
+  that run's copy. One process only, as every lock here.
+- **Shared ID added later:** when a shared model is added with an own model's ID, the bare ID is
+  ambiguous for that profile and its load leaves the profile out (T-018); deleting the own model
+  through `profile edit` (or naming it with `profile:`) repairs it.

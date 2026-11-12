@@ -121,8 +121,11 @@ type ProfileHistory struct {
 }
 
 // profileFileLocks hold one lock per profile file for the writers of this process: edit,
-// revert and the admin writes (model default, catalog write and delete). The lock is never
-// taken with a session run lock held for it, so a run's own edit cannot deadlock (S3).
+// revert and the admin writes (model default, catalog write and delete). A writer never waits
+// for a session run lock while it holds one, so a run's own edit cannot deadlock (S3). A run
+// that starts waits for it (waitProfileFile) while it holds its session's run lock, to read the
+// profile's own models of one revision (PinOwnModels, decider 3c.2b); no writer waits for a run,
+// so that wait ends when the writer does.
 var profileFileLocks sync.Map
 
 // lockProfileFile takes the lock of the profile file at path, or fails at once with a
@@ -134,6 +137,14 @@ func lockProfileFile(path string) (func(), error) {
 		return nil, &ConflictError{Message: fmt.Sprintf("%s is being changed by another writer; read it again and retry", path)}
 	}
 	return mu.Unlock, nil
+}
+
+// waitProfileFile takes the lock of the profile file at path, waiting while a writer holds it.
+func waitProfileFile(path string) func() {
+	value, _ := profileFileLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // EditProfile edits or reverts the profile file of profile in the session at location: the
