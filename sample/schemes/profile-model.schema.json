@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "profile-model.schema.json",
+  "title": "Jad profile's own model (workspace layout)",
+  "description": "W/.jad/profile-own/<category>/<name>/models/<model category>/<model name>.json: a model only that profile sees, picked with profile:<model category>/<model name> (docs/design_workspace_layout.md section 17). It is not a whole model file (model.schema.json): it names a shared model with its scope and the few tuning keys it changes. The endpoint, the credential and the billed model always come from the base, so an edit of the base reaches it. A file that fails these rules, or whose base is missing or fails, is left out of what the profile offers with a warning. Sub-agents, other profiles, profile_message callers and the catalog routes never see it. An unknown key is refused.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "based_on": {
+      "type": "string",
+      "pattern": "^(global|workspace):[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "The shared model this one is based on, with its scope: global:<category>/<name> or workspace:<category>/<name>. Never another profile's own model (profile:)."
+    },
+    "set": {
+      "type": "object",
+      "description": "The model keys this model changes; each replaces the base's value as a whole (model.schema.json describes them). Only tuning keys may be set. base_url, api_key_env, provider, api, model, anthropic, chat_completions, auth_mode and oauth_auth_file are refused, also under profile_self_edit full; so is every key not listed here, pricing and hosted_tools included.",
+      "properties": {
+        "name": {"type": "string"},
+        "request": {"type": "object"},
+        "efforts": {"type": "array", "items": {"type": "string"}},
+        "prompt_cache_key": {"enum": ["off", "session"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["based_on"],
+  "additionalProperties": false
+}

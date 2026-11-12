@@ -104,18 +104,20 @@ func SetLayoutModelDefaultIfMatch(location Location, profile, model, durability,
 	if err := readLayoutFile(entry.Path, &file); err != nil {
 		return ModelDefaultUpdate{}, err
 	}
-	models, err := layout.ScanModels(nil)
+	// The profile's catalog: the shared models and its own (phase 3c).
+	own, err := layout.profileModels(nil, profile)
 	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: %v", entry.Path, err)
 	}
-	if models, err = models.Narrow(file.Models); err != nil {
+	models, err := own.catalog.Narrow(file.Models)
+	if err != nil {
 		return ModelDefaultUpdate{}, configError("%s: models: %v", entry.Path, err)
 	}
 	modelEntry, offered := models.Get(id)
 	if !offered {
 		return ModelDefaultUpdate{}, &ClientError{Message: fmt.Sprintf("model '%s' is not offered by profile '%s'", id, profile)}
 	}
-	if err := checkModelEffort(modelEntry.Path, effort); err != nil {
+	if err := own.effort(modelEntry.Path, effort); err != nil {
 		return ModelDefaultUpdate{}, err
 	}
 	update := ModelDefaultUpdate{ActiveProfile: profile, Profiles: profiles.IDs(), ModelDefault: model, Changed: file.ModelDefault != model, ETag: CatalogETag(contents)}

@@ -148,6 +148,9 @@ type SessionModelOption struct {
 	Provider      string   `json:"provider"`
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// Scope is "profile" for one of the profile's own models (workspace layout); empty for a
+	// shared one.
+	Scope string `json:"scope,omitempty"`
 }
 
 type SessionModelDefaultUpdate struct {

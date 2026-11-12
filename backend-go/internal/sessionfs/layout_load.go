@@ -147,6 +147,13 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	}
 	config.ModelPath = modelPaths[name]
 	config.ModelPaths = modelPaths
+	own := judged.verdicts[entry.ID()].own
+	if len(own.bases) > 0 {
+		config.ModelBases = own.bases
+	}
+	for _, note := range own.notes {
+		built.warn("%s: %s", sessionPath, note)
+	}
 	if fault != nil {
 		config.ModelFault, config.ModelPath, config.ReasoningEffort = fault, "", ""
 		if requestedModel == "" {
@@ -156,20 +163,28 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 		}
 	}
 	if config.NativeSubagent != nil && config.NativeSubagent.ModelChoice {
-		config.NativeSubagent.ProfileModels = modelPaths
+		// A sub-agent picks among the profile's shared models only: the own ones are not
+		// visible to it (decider 3c C2).
+		shared := make(map[string]string, len(modelPaths))
+		for id, path := range modelPaths {
+			if !own.own(path) {
+				shared[id] = path
+			}
+		}
+		config.NativeSubagent.ProfileModels = shared
 	}
 	if config.ReasoningEffort != "" {
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		// Only the effort is checked: a model file that fails the model rules is reported by
 		// the run that uses it, not by every load of the session.
-		if err := checkModelEffortOnly(config.ModelPath, config.ReasoningEffort); err != nil {
+		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, config.ReasoningEffort); err != nil {
 			return SessionConfig{}, err
 		}
 	}
 	if err := resolveSubagentModels(config.NativeSubagent, layout, sessionPath, scans); err != nil {
 		return SessionConfig{}, err
 	}
-	if err := resolveFallbackModels(config.ModelFallback, layout, sessionPath, scans, built.warn); err != nil {
+	if err := resolveFallbackModels(config.ModelFallback, own, sessionPath, scans, built.warn); err != nil {
 		return SessionConfig{}, err
 	}
 	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
@@ -178,15 +193,13 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 
 // resolveFallbackModels turns each model_fallback model ID into its model file and
 // effort. Like an agent's model, a fallback may be any model of the catalog, not only one
-// the profile lists. An unknown ID or an effort the model does not offer is a config error.
-func resolveFallbackModels(settings *ModelFallbackSettings, layout Layout, sessionPath string, scans *CatalogScans, warn func(format string, args ...any)) error {
+// the profile lists; the catalog is the selected profile's, so its own models are found too.
+// An unknown ID or an effort the model does not offer is a config error.
+func resolveFallbackModels(settings *ModelFallbackSettings, own ownModels, sessionPath string, scans *CatalogScans, warn func(format string, args ...any)) error {
 	if settings == nil {
 		return nil
 	}
-	models, err := layout.ScanModels(scans)
-	if err != nil {
-		return configError("%s: %v", sessionPath, err)
-	}
+	models := own.catalog
 	kept := settings.Models[:0]
 	for index := range settings.Models {
 		entry := settings.Models[index]
@@ -200,11 +213,11 @@ func resolveFallbackModels(settings *ModelFallbackSettings, layout Layout, sessi
 		}
 		// A fallback is optional: a model whose file fails is left out, as a run leaves out one
 		// it cannot load (planRunStreamer), and the others still serve.
-		if err := scans.check("model", found.Path, modelFileProblem); err != nil {
+		if err := own.check(scans, found.Path); err != nil {
 			warn("%s: model_fallback.models[%d]: model %s left out: %v", sessionPath, index, entry.ID, err)
 			continue
 		}
-		if err := checkModelEffort(found.Path, effort); err != nil {
+		if err := own.effort(found.Path, effort); err != nil {
 			return configError("%s: model_fallback.models[%d]: %v", sessionPath, index, err)
 		}
 		entry.ModelPath, entry.ReasoningEffort = found.Path, effort
@@ -239,6 +252,9 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 			}
 		}
 		for _, id := range agent.Toolset {
+			if ownReference(id) {
+				return configError("%s: tools.native.subagent agent %s: toolset %s: a profile's own toolset is used by that profile's own runs only, never by a sub-agent", c.sessionPath, agent.Name, id)
+			}
 			if _, err := available.Lookup(id); err != nil {
 				return configError("%s: tools.native.subagent agent %s: toolset: %v", c.sessionPath, agent.Name, err)
 			}
@@ -445,6 +461,9 @@ func resolveSubagentModels(settings *NativeSubagentSettings, layout Layout, sess
 		modelID, effort, err := SplitModelEffort(agent.Model)
 		if err != nil {
 			return configError("%s: tools.native.subagent agent %s: model: %v", sessionPath, agent.Name, err)
+		}
+		if ownReference(modelID) {
+			return configError("%s: tools.native.subagent agent %s: model %s: a profile's own model is used by that profile's own runs only, never by a sub-agent", sessionPath, agent.Name, modelID)
 		}
 		entry, err := models.Lookup(modelID)
 		if err != nil {

@@ -169,7 +169,11 @@ func TestProfileSchemaTakesScopePrefixes(t *testing.T) {
 	if !schemaAccepts(t, schema, `{"schema_version":1,"models":["workspace:openai/default","global:openai","global:*"],"model_default":"global:openai/mini@high","toolset":["global:dev/t","dev/u"]}`) {
 		t.Error("a profile with scope prefixes is refused")
 	}
-	for _, refused := range []string{`{"schema_version":1,"models":["profile:openai/default"]}`, `{"schema_version":1,"model_default":"other:openai/x"}`, `{"schema_version":1,"toolset":"global:workspace:dev/t"}`} {
+	// A profile's own models take profile: (phase 3c.1); own toolsets do not exist yet.
+	if !schemaAccepts(t, schema, `{"schema_version":1,"models":["profile:openai/fast","profile:local"],"model_default":"profile:openai/fast@high"}`) {
+		t.Error("a profile naming its own models is refused")
+	}
+	for _, refused := range []string{`{"schema_version":1,"toolset":"profile:dev/t"}`, `{"schema_version":1,"model_default":"other:openai/x"}`, `{"schema_version":1,"toolset":"global:workspace:dev/t"}`, `{"schema_version":1,"models":["profile:global:openai/x"]}`} {
 		if schemaAccepts(t, schema, refused) {
 			t.Errorf("%s is accepted", refused)
 		}

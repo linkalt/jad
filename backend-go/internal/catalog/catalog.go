@@ -19,7 +19,7 @@ type Entry struct {
 	Category string
 	Name     string
 	Path     string
-	// Scope is the name of the scope MergeScopes found the entry in ("global", "workspace");
+	// Scope is the name of the scope MergeScopes found the entry in ("global", "workspace", "profile");
 	// empty for a catalog of one folder.
 	Scope string
 }

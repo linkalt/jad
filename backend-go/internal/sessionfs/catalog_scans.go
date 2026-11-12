@@ -1,7 +1,9 @@
 package sessionfs
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"jad/backend-go/internal/catalog"
@@ -68,19 +70,22 @@ func newTrialScans(path string, contents []byte) *CatalogScans {
 	return scans
 }
 
-// readProfileOf is readProfileOf with the overlay of a trial load: the profile at path is
-// read from the overlay when it holds that file. A nil scans reads the disk.
-func (s *CatalogScans) readProfileOf(path string, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
+// readProfileOf reads a profile for judging it in a session's scope (judgeScope), with the
+// overlay of a trial load: the profile at path is read from the overlay when it holds that
+// file. A nil scans reads the disk. effortCheck is the profile's checkModelEffortOnly: a
+// model_default whose model file fails the model rules does not fail the profile (the model
+// is reported on its own), an effort the model does not offer still does.
+func (s *CatalogScans) readProfileOf(path string, allModels *catalog.Catalog, effortCheck func(modelPath, effort string) error) (layoutProfileFile, *catalog.Catalog, error) {
 	if s != nil && s.memo.overlay != nil {
 		if contents, found := s.memo.overlay[filepath.Clean(path)]; found {
 			var profile layoutProfileFile
 			if err := parseLayoutFile(path, contents, &profile); err != nil {
 				return layoutProfileFile{}, nil, err
 			}
-			return checkProfileWith(path, profile, allModels, checkModelEffortOnly)
+			return checkProfileWith(path, profile, allModels, effortCheck)
 		}
 	}
-	return readProfileOf(path, allModels)
+	return readProfileWith(path, allModels, effortCheck)
 }
 
 // recorder is a view that shares the memo and records what its own load reads: a
@@ -89,9 +94,28 @@ func (s *CatalogScans) recorder() *CatalogScans {
 	return &CatalogScans{memo: s.memo, recording: true}
 }
 
+// sharedScopeNames are the scopes of the shared catalogs, in folder order: G's folder, then the
+// workspace's own. A profile's own models are a scope of their own, added for its load only
+// (Layout.profileModels), never a folder here.
+var sharedScopeNames = []string{catalog.ScopeGlobal, catalog.ScopeWorkspace}
+
 // scanScopes scans the folder of each scope ("" is no scope) and merges them; one folder is
 // Scan as it is.
 func (s *CatalogScans) scanScopes(kind string, dirs ...string) (*catalog.Catalog, error) {
+	scopes, err := s.scanScopeList(kind, dirs...)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.MergeScopes(kind, scopes...), nil
+}
+
+// scanScopeList scans the folder of each shared scope: the first folder is G's, the second the
+// workspace's ("global:" and "workspace:" pick them). More folders than shared scopes is an
+// error: a folder is never named a scope it is not.
+func (s *CatalogScans) scanScopeList(kind string, dirs ...string) ([]catalog.Scope, error) {
+	if len(dirs) > len(sharedScopeNames) {
+		return nil, fmt.Errorf("%s catalog: %d folders given, but only %d shared scopes (%s) exist", kind, len(dirs), len(sharedScopeNames), strings.Join(sharedScopeNames, ", "))
+	}
 	scopes := make([]catalog.Scope, 0, len(dirs))
 	for index, dir := range dirs {
 		if dir == "" && index > 0 {
@@ -101,11 +125,9 @@ func (s *CatalogScans) scanScopes(kind string, dirs ...string) (*catalog.Catalog
 		if err != nil {
 			return nil, err
 		}
-		// The first folder is G's, the second the workspace's: "global:" and "workspace:"
-		// pick them (catalog.ScopePrefixes).
-		scopes = append(scopes, catalog.Scope{Name: catalog.ScopePrefixes[min(index, len(catalog.ScopePrefixes)-1)], Catalog: scanned})
+		scopes = append(scopes, catalog.Scope{Name: sharedScopeNames[index], Catalog: scanned})
 	}
-	return catalog.MergeScopes(kind, scopes...), nil
+	return scopes, nil
 }
 
 // Scan is catalog.Scan, remembered. Scan errors are remembered too, so every session of

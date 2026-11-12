@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,15 @@ func (s fileStat) appendGeneration(buffer []byte) []byte {
 	buffer = strconv.AppendUint(buffer, s.Ino, 10)
 	buffer = append(buffer, ':')
 	return strconv.AppendInt(buffer, s.BirthMS, 10)
+}
+
+// fileStamps is fileStamp of each path, joined; for one path it is fileStamp.
+func fileStamps(paths []string) string {
+	stamps := make([]string, len(paths))
+	for index, path := range paths {
+		stamps[index] = fileStamp(path)
+	}
+	return strings.Join(stamps, "+")
 }
 
 // fileStamp changes whenever the file is edited, replaced or removed.

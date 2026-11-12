@@ -161,7 +161,8 @@ command can come later).
   qualified id, never by session or profile name alone.
 - The catalog HTTP routes take a `scope` parameter (built in phase 1b step 3: `global` for
   G's models, toolsets, MCP servers and sandbox templates, `workspace:<id>` for that
-  workspace's profiles, models and toolsets; `profile:…` comes with phase 3). Without it the v1
+  workspace's profiles, models and toolsets; a profile's own models are not served by the
+  catalog routes, decider 3c C2). Without it the v1
   target is kept: in v2 the start workspace's profiles and the global rest. A kind the scope
   has no folder for, an unknown workspace, and any scope in v1 are 404. A global delete is
   refused while a profile or session of any served workspace still needs the file; a
@@ -198,8 +199,9 @@ command can come later).
   definitions) stay settable in profile files the user writes, as in v1. Under self-edit
   (phase 3) they are refused under `on` and allowed under `full`; a hook or command a profile
   adds under `full` is the same as running anything unsandboxed. Self-edit can never set or
-  change model endpoints or credential references (also not under `full`); a profile-scope
-  model may only reuse an endpoint and credential pair of a global or workspace model.
+  change model endpoints or credential references (also not under `full`); a profile's own
+  model is **based on** a global or workspace model and changes only allow-listed tuning keys,
+  so its endpoint and credential always come from the base (decider 3c C1, section 17).
 - Relative paths (Q5): `catalogs`, `libraries` and `defaults.env_file` of the global setting
   resolve from `G`, of `workspace.json` from `W/.jad`. `defaults.cwd` of `workspace.json`
   resolves from `W` (a cwd inside `.jad` would run tools there), of the global setting from
@@ -326,7 +328,8 @@ The native `profile` tool gets actions on its own profile only:
 
 May change: instructions and documents (D3), offered models and default model and tools
 from visible scopes, tuning settings (compaction, parallel calls), and its own models and
-tools as copies of visible ones with only non-endpoint fields changed. Ceiling keys are
+tools as files based on visible ones that change only allow-listed tuning keys (section 17;
+endpoints and credentials always come from the base). Ceiling keys are
 refused unless `profile_self_edit: "full"`. The setting is `on` by default, may be `off`, is set
 at global or workspace level, and a profile cannot change it. Refused for sub-agents, for
 other profiles and in plan mode.
@@ -400,7 +403,8 @@ tests, `verify-go.sh` (with targeted `--race`), frontend tests and typecheck whe
    sandbox), section 12.
 3. **Self-edit:** `edit`, `history`, `revert`, profile-scope models and tools,
    `profile_self_edit`, the D3 path limits. 3a (the profile file, history, revert, the level) is
-   built (section 13); 3b (own documents) and 3c (own models and tools) are not.
+   built (section 13); 3b (own documents) is built (section 14); 3c.1 (hand-written own models)
+   is built (section 17); 3c.2 (self-edit of own models) and 3c.3 (own toolsets) are not.
 4. **Migration command.**
 5. **UI:** workspace picker, scope badges, "set by" display, a visible "not sandboxed" notice.
 
@@ -812,3 +816,54 @@ history.
   not failed. A normal worktree run is unchanged.
 - **Limits:** an overlay run's paths are judged on the host path, not through its holder; the
   links race after the check stays (not inside bwrap).
+
+## 17. Phase 3c.1 as built: a profile's own models
+
+Decider 3c C1, C2 and C4, stage 1: own models written by hand. Self-edit of them (3c.2) and own
+toolsets (3c.3) are not built.
+
+- **File and format:** `W/.jad/profile-own/<cat>/<name>/models/<model cat>/<model name>.json`
+  (schema `sample/schemes/profile-model.schema.json`) holds `schema_version`, `based_on` (a
+  shared model with its scope, `global:x/y` or `workspace:x/y`; never `profile:`) and `set`,
+  the keys it changes. A key of `set` replaces the base's value as a whole. Allowed:
+  `name`, `request`, `efforts`, `prompt_cache_key`. Refused by name, also under `full`:
+  `base_url`, `api_key_env`, `provider`, `api`, `model`, `anthropic`, `chat_completions`,
+  `auth_mode`, `oauth_auth_file`. Every other key (`pricing`, `hosted_tools`, keys added
+  later) is refused by the allow-list. Nothing of the endpoint is stored in `profile-own`: a
+  run reads the base each time, so an edit of the base reaches the own model, and a
+  `based_on` changed after the load fails the run until the session is loaded again.
+- **Loading:** the loader reads the own folder walked from the real `W/.jad` with every
+  folder checked (a link is refused, as for history and documents); a linked category folder
+  or file is not used. An own file that fails (its rules, a refused key, a missing or
+  failing base, a link) stays in the profile's catalog and fails like a model file that
+  fails the model rules: it is left out of what the profile offers, with a warning in that
+  profile's load only. A model file that sets `based_on` and is read as a whole model (a
+  shared model, a sub-agent's model path, an own file reached any other way) is a load
+  error, so an own file never runs without its base.
+- **Scopes:** `profile` is a third scope prefix (`catalog.ScopePrefixes`). The shared catalogs
+  take only the global and workspace folders; a third folder is an error (the old clamp
+  named it `workspace`). Each profile is judged with its own catalog, the shared models with
+  its own as the `profile` scope (`Layout.profileModels`), for its `models`, `model_default`,
+  `model_fallback`, the model-default route and the catalog route's profile check. An own ID
+  that is also a shared ID is ambiguous in that profile only and needs a prefix; other
+  profiles still see the shared one. The offered list keeps bare IDs, as for a
+  prefix-picked shared model; the listing marks an own model with `scope: "profile"`.
+- **Visibility:** sub-agents (a `profile:` model or toolset is refused by name, the model
+  choice offers shared models only), another profile, a `profile_message` caller naming a
+  model (refused when the target would run its own model) and the catalog routes do not see
+  own models. A sub-agent without a model of its own inherits the run's model, own or not,
+  and the session's `model_fallback` list, as before.
+- **Deletion guard:** deleting a model is refused while an own model of a profile of a served
+  workspace is based on that file (`dev/coder (its own model profile:x/y is based on it)`),
+  and each profile's use is judged with its own catalog. A workspace the server does not
+  serve is not checked; its own model is then left out with a warning at its next load.
+- **Other:** the session version and checkpoint harness paths include the base of an own
+  model; the run reads own models through `SessionConfig.ModelBases`.
+- **Tested:** composition and following a base edit, every refused and unknown key (same
+  `base_url` with another `api_key_env` included), missing and broken bases, links,
+  ID clashes, fallback and sub-agent refusals, deletion guard, schema agreement, listing,
+  and a bwrap run whose own exec cannot write `profile-own/.../models` while another profile
+  cannot read it.
+- **Not decided here:** the `anthropic` and `chat_completions` blocks hold tuning a profile
+  could want (`default_max_tokens`, `cache`, thinking budgets; `request_timeout_ms`,
+  `system_role`, `extra_body`); they stay refused as a whole (decider stop condition, reported).

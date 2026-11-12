@@ -37,6 +37,8 @@ type profileVerdict struct {
 	// among them whose files fail the model rules, in catalog order.
 	listed    *catalog.Catalog
 	badModels []badModel
+	// own is the model catalog the profile loads with: the shared models and its own.
+	own ownModels
 	// err is why the profile is left out; nil when it is usable.
 	err error
 	// composition is set when err is what applying its toolsets to this session's settings
@@ -99,7 +101,13 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 		scans.noteFile(entry.Path)
 		verdict := &profileVerdict{entry: entry}
 		judgement.verdicts[entry.ID()] = verdict
-		file, narrowed, err := scans.readProfileOf(entry.Path, models)
+		// Each profile is judged with its own models beside the shared ones (phase 3c).
+		own, err := layout.profileModels(scans, entry.ID())
+		if err != nil {
+			return scopeJudgement{}, configError("%s: %v", sessionPath, err)
+		}
+		verdict.own = own
+		file, narrowed, err := scans.readProfileOf(entry.Path, own.catalog, own.effortOnly)
 		if err == nil {
 			err = checkUnselectedProfile(entry.Path, file)
 		}
@@ -124,7 +132,7 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 			verdict.composition = verdict.err != nil
 		}
 		if verdict.err == nil {
-			verdict.badModels = badModelsOf(scans, narrowed)
+			verdict.badModels = badModelsOf(scans, narrowed, own)
 		}
 		if verdict.err != nil {
 			judgement.usable = judgement.usable.Without(entry.ID())
@@ -243,10 +251,10 @@ func parseToolsetFile(path string) error {
 }
 
 // badModelsOf returns the models among listed whose files fail the model rules.
-func badModelsOf(scans *CatalogScans, listed *catalog.Catalog) []badModel {
+func badModelsOf(scans *CatalogScans, listed *catalog.Catalog, own ownModels) []badModel {
 	var bad []badModel
 	for _, item := range listed.Entries() {
-		if err := scans.check("model", item.Path, modelFileProblem); err != nil {
+		if err := own.check(scans, item.Path); err != nil {
 			bad = append(bad, badModel{id: item.ID(), err: err})
 		}
 	}

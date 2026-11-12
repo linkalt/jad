@@ -21,7 +21,7 @@ type Selector struct {
 	kind     selectorKind
 	category string
 	name     string // only for selectFile
-	// scope, when set, is the scope prefix ("global", "workspace"): only entries of that
+	// scope, when set, is the scope prefix ("global", "workspace", "profile"): only entries of that
 	// scope match (workspace layout).
 	scope string
 }

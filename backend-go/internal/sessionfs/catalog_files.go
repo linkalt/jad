@@ -325,7 +325,7 @@ func DeleteCatalogFile(layout Layout, roots []Root, kind CatalogKind, id, ifMatc
 	}
 	var users []string
 	for _, target := range layout.usersOf(roots) {
-		found, err := catalogUsers(target.layout, target.roots, kind, id)
+		found, err := catalogUsers(target.layout, target.roots, kind, id, path)
 		if err != nil {
 			return err
 		}
@@ -377,29 +377,35 @@ func validateModelFile(path string, data []byte) error {
 	return err
 }
 
-// modelUsers lists the profiles that stop resolving when the model is removed: their models
-// selection or model_default names it, or the selection loses its last member of a category.
-// A profile that does not resolve today is not counted.
-func modelUsers(layout Layout, id string) ([]string, error) {
-	all, err := layout.ScanModels(nil)
-	if err != nil {
-		return nil, configError("%v", err)
-	}
-	remaining := all.Without(id)
+// modelUsers lists the profiles that stop resolving when the model file at path is removed:
+// their models selection or model_default names it, or the selection loses its last member of
+// a category, or one of their own models is based on it (phase 3c). Each profile is judged with
+// its own catalog (Layout.profileModels). A profile that does not resolve today is not counted.
+func modelUsers(layout Layout, id, path string) ([]string, error) {
 	profiles, err := catalog.Scan("profile", layout.Profiles)
 	if err != nil {
 		return nil, configError("%v", err)
 	}
 	var users []string
+	// One memo for every profile: the shared folders are scanned once.
+	scans := NewCatalogScans()
 	for _, entry := range profiles.Entries() {
+		own, err := layout.profileModels(scans, entry.ID())
+		if err != nil {
+			return nil, configError("%v", err)
+		}
+		if base := own.basedOn(path); base != "" {
+			users = append(users, entry.ID()+" (its own model "+base+" is based on it)")
+			continue
+		}
 		var profile layoutProfileFile
 		if err := readLayoutFile(entry.Path, &profile); err != nil {
 			continue
 		}
-		if _, _, err := checkProfile(entry.Path, profile, all); err != nil {
+		if _, _, err := checkProfileWith(entry.Path, profile, own.catalog, own.effort); err != nil {
 			continue
 		}
-		if _, _, err := checkProfile(entry.Path, profile, remaining); err != nil {
+		if _, _, err := checkProfileWith(entry.Path, profile, own.catalog.Without(id), own.effort); err != nil {
 			users = append(users, entry.ID())
 		}
 	}
@@ -413,11 +419,12 @@ func validateProfileFile(layout Layout, path string, data []byte) error {
 	if err := parseLayoutFile(path, data, &profile); err != nil {
 		return err
 	}
-	models, err := layout.ScanModels(nil)
+	// The profile is judged with its own models beside the shared ones (phase 3c).
+	own, err := layout.profileModels(nil, layout.profileIDOf(path))
 	if err != nil {
 		return configError("%s: %v", path, err)
 	}
-	if _, _, err := checkProfile(path, profile, models); err != nil {
+	if _, _, err := checkProfileWith(path, profile, own.catalog, own.effort); err != nil {
 		return err
 	}
 	if err := checkUnselectedProfile(path, profile); err != nil {
@@ -555,12 +562,12 @@ func createFileExclusive(path string, data []byte, syncWrite bool) error {
 // catalogUsers lists what still needs the file id of kind in one layout: the sessions for a
 // profile, the profiles for a model or toolset, the toolsets for an MCP server, the
 // defaults, sessions and profiles for a sandbox template.
-func catalogUsers(layout Layout, roots []Root, kind CatalogKind, id string) ([]string, error) {
+func catalogUsers(layout Layout, roots []Root, kind CatalogKind, id, path string) ([]string, error) {
 	switch kind {
 	case CatalogProfiles:
 		return profileUsers(layout, roots, id)
 	case CatalogModels:
-		return modelUsers(layout, id)
+		return modelUsers(layout, id, path)
 	case CatalogToolsets:
 		return toolsetUsers(layout, id)
 	case CatalogSandboxes:

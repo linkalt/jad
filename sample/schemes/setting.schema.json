@@ -631,7 +631,7 @@
               "pattern": "\\.json$"
             }
           },
-          "description": "Model IDs (<category>/<name>, optionally @<effort>) in the order they are tried. Any model of the catalog, not only those the profile lists."
+          "description": "Model IDs (<category>/<name>, optionally @<effort>) in the order they are tried. Any model of the catalog, not only those the profile lists; in the workspace layout the catalog is the selected profile's, so its own models (profile:) are found too."
         },
         "on_status": {
           "type": "array",

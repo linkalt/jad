@@ -32,21 +32,19 @@ type modelSummary struct {
 // as the model name, so one broken model file never hides a session.
 func listingModelSummary(location sessionfs.Location, config sessionfs.SessionConfig) modelSummary {
 	summary := modelSummary{Provider: "unknown", Model: location.SessionID}
-	contents, err := os.ReadFile(config.ModelPath)
+	if config.ModelPath == "" {
+		return summary
+	}
+	// A profile's own model is read composed with its base (sessionfs.ModelBase).
+	fields, err := config.ModelFields(config.ModelPath)
 	if err != nil {
 		return summary
 	}
-	var fields struct {
-		Provider any `json:"provider"`
-		Model    any `json:"model"`
-	}
-	if json.Unmarshal(contents, &fields) != nil {
-		return summary
-	}
-	if provider, ok := fields.Provider.(string); ok && strings.TrimSpace(provider) != "" {
+	var provider, model string
+	if json.Unmarshal(fields["provider"], &provider) == nil && strings.TrimSpace(provider) != "" {
 		summary.Provider = strings.TrimSpace(provider)
 	}
-	if model, ok := fields.Model.(string); ok && strings.TrimSpace(model) != "" {
+	if json.Unmarshal(fields["model"], &model) == nil && strings.TrimSpace(model) != "" {
 		summary.Model = strings.TrimSpace(model)
 	}
 	return summary
@@ -66,9 +64,11 @@ func listingModelOptions(config sessionfs.SessionConfig) []modelOption {
 	options := make([]modelOption, 0, len(config.Models))
 	for _, id := range config.Models {
 		option := modelOption{ID: id, Provider: "unknown"}
-		contents, err := os.ReadFile(config.ModelPaths[id])
-		var fields map[string]json.RawMessage
-		if err == nil && json.Unmarshal(contents, &fields) == nil {
+		if config.OwnModel(config.ModelPaths[id]) {
+			option.Scope = sessionfs.OwnModelScope
+		}
+		fields, err := config.ModelFields(config.ModelPaths[id])
+		if err == nil {
 			var provider string
 			if json.Unmarshal(fields["provider"], &provider) == nil && strings.TrimSpace(provider) != "" {
 				option.Provider = strings.TrimSpace(provider)
@@ -826,12 +826,12 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 		fileStamp(config.StoragePaths.RunErrorCache),
 		fmt.Sprint(config.BackupTurns),
 		fileStamp(config.SettingPath),
-		fileStamp(config.ModelPath),
+		fileStamps(config.ModelSourceFiles(config.ModelPath)),
 		// The profile's entity tag is in the body, so an edit of the profile changes the version.
 		fileStamp(config.ProfilePath),
 	}
 	for _, id := range config.Models {
-		parts = append(parts, fileStamp(config.ModelPaths[id]))
+		parts = append(parts, fileStamps(config.ModelSourceFiles(config.ModelPaths[id])))
 	}
 	return makeETag(strings.Join(parts, "|"))
 }

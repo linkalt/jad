@@ -68,10 +68,16 @@ func effortsField(fields map[string]json.RawMessage, path string) ([]string, err
 func CheckModelEffort(modelPath, effort string) error { return checkModelEffort(modelPath, effort) }
 
 func checkModelEffort(modelPath, effort string) error {
+	return checkModelEffortOf(modelPath, nil, effort)
+}
+
+// checkModelEffortOf is checkModelEffort for a model that may be one of a profile's own
+// (bases, loadModelOf).
+func checkModelEffortOf(modelPath string, bases map[string]ModelBase, effort string) error {
 	if effort == "" {
 		return nil
 	}
-	model, err := loadModel(modelPath, "", "")
+	model, err := loadModelOf(modelPath, bases, "", "")
 	if err != nil {
 		return err
 	}
@@ -120,10 +126,16 @@ func (m Model) withEffort(effort string) (Model, error) {
 // it reports only an effort the model does not offer, and none when the file cannot be
 // loaded, which is reported where the model itself is judged.
 func checkModelEffortOnly(modelPath, effort string) error {
+	return checkModelEffortOnlyOf(modelPath, nil, effort)
+}
+
+// checkModelEffortOnlyOf is checkModelEffortOnly for a model that may be one of a profile's
+// own (bases, loadModelOf).
+func checkModelEffortOnlyOf(modelPath string, bases map[string]ModelBase, effort string) error {
 	if effort == "" {
 		return nil
 	}
-	model, err := loadModel(modelPath, "", "")
+	model, err := loadModelOf(modelPath, bases, "", "")
 	if err != nil {
 		return nil
 	}

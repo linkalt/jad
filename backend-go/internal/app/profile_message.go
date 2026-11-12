@@ -96,6 +96,11 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		}
 		return nil, err
 	}
+	if bound, ok := resolved.Runner.(boundRunner); ok {
+		if err := refuseOwnModel(bound.config, request.Model); err != nil {
+			return nil, err
+		}
+	}
 	canonical := resolved.Profile
 	if resolved.Reference == callerRef && canonical == caller {
 		return nil, native.ErrProfileCycle
@@ -247,4 +252,14 @@ func canonicalPath(path string) string {
 // clients and follower goroutines the resolver owns and closes.
 func (m profileMessenger) RemoteDirectory(dir string) *remote.Directory {
 	return m.resolver.remotes.Directory(dir)
+}
+
+// refuseOwnModel refuses a model a profile_message caller named when it is one of the target
+// profile's own models (phase 3c): those are for the target's own choice. Without a named
+// model the target runs its own default, own or not.
+func refuseOwnModel(target sessionfs.SessionConfig, model string) error {
+	if model != "" && target.OwnModel(target.ModelPath) {
+		return &native.ProfileModelError{Model: model, Message: "it is one of that profile's own models, which another profile cannot choose"}
+	}
+	return nil
 }

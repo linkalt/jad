@@ -154,6 +154,11 @@ type SessionConfig struct {
 	// ModelPaths maps each model ID the profile may use to its file. A model whose file fails
 	// the model rules is not in it, nor in Models.
 	ModelPaths map[string]string
+	// ModelBases are the selected profile's own model files (workspace layout, phase 3c) with
+	// the model each is based on, by file: a run composes such a file with its base
+	// (loadModelOf). Every other model path, a sub-agent's too, is read as a whole model, and
+	// an own file read that way fails. nil without own models.
+	ModelBases map[string]ModelBase
 	// ModelFault is why the model this load would run cannot be used, and then ModelPath is
 	// empty (a copy that is given another ModelPath, a sub-agent's or a fallback's, is not
 	// affected): the profile's explicit model_default, or the model the caller requested, fails
@@ -754,7 +759,7 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 	if c.ModelPath == "" && c.ModelFault != nil {
 		return SessionConfig{}, c.ModelFault
 	}
-	model, err := loadModel(c.ModelPath, c.Model.PromptRole, c.Model.PromptText)
+	model, err := loadModelOf(c.ModelPath, c.ModelBases, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -1008,6 +1013,11 @@ func modelFromFields(fields map[string]json.RawMessage, path, promptRole, prompt
 	var err error
 	if err := validateSchemaVersion(fields, path); err != nil {
 		return Model{}, err
+	}
+	if _, own := fields["based_on"]; own {
+		// Only the session of the profile an own model belongs to composes it with its base
+		// (loadModelOf); read as a whole model anywhere else, it fails here.
+		return Model{}, configError("%s: based_on is a key of a profile's own model (profile-own/<profile>/models), which only that profile's session loads; a model file used on its own cannot set it", path)
 	}
 	if raw, ok := fields["name"]; ok {
 		var displayName string

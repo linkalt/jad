@@ -502,6 +502,55 @@ func TestProfileSandboxKeepsTheDocumentsReadOnlyAndPrivate(t *testing.T) {
 	}
 }
 
+// The run's own models folder is read-only to its own exec and hidden from another profile's;
+// the loader still composes the own model from it (3c.1).
+func TestProfileSandboxKeepsTheOwnModelsReadOnlyAndPrivate(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{workspace}","{tmp}"`)
+	useOwnTempDir(t)
+	host := filepath.Join(f.a, ".jad", "profile-own", "dev", "coder", "models", "openai", "fast.json")
+	const ownModel = `{"based_on":"global:openai/default","set":{"name":"own-fast"}}`
+	writeWorkspaceFile(t, host, ownModel)
+	writeWorkspaceFile(t, filepath.Join(f.a, ".jad", "profiles", "dev", "coder.json"), `{"models":["openai/default","profile:openai/fast"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.a, Environment: map[string]string{"HOME": f.home}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := sessionfs.Resolve(loaded.Roots, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := sessionfs.LoadSessionSettings(location, "dev/coder", "openai/fast")
+	if err != nil || config.ModelPath != host || !config.OwnModel(host) {
+		t.Fatalf("own model = %s, %v", config.ModelPath, err)
+	}
+	models := ".jad/profile-own/dev/coder/models"
+	command := profileAttempt("read", `grep -q own-fast `+models+`/openai/fast.json`) +
+		profileAttempt("create", `echo x > `+models+`/openai/new.json`) +
+		profileAttempt("change", `echo x > `+models+`/openai/fast.json`) +
+		profileAttempt("remove", `rm -f `+models+`/openai/fast.json && test ! -e `+models+`/openai/fast.json`) +
+		profileAttempt("folder", `mkdir `+models+`/local`) +
+		profileAttempt("replace", `mv `+models+` .jad/profile-own/dev/coder/old`)
+	wantProfileOutput(t, "own run", f.run(t, command, tools.ExecutionContext{}, config.Sandbox), "read=yes", "create=no", "change=no", "remove=no", "folder=no", "replace=no")
+	if got, err := os.ReadFile(host); err != nil || string(got) != ownModel {
+		t.Fatalf("the own model changed on the host: %q, %v", got, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(host)); len(entries) != 1 {
+		t.Fatalf("the own models folder holds %d files", len(entries))
+	}
+
+	other := filepath.Join(f.a, ".jad", "profiles", "dev", "other.json")
+	writeWorkspaceFile(t, other, `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"]}}}`)
+	otherConfig, err := sessionfs.LoadSessionSettings(location, "dev/other", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProfileOutput(t, "other profile", f.run(t, profileAttempt("read", `cat `+models+`/openai/fast.json`)+profileAttempt("write", `echo x > `+models+`/openai/planted.json`), tools.ExecutionContext{}, otherConfig.Sandbox), "read=no", "write=no")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(host), "planted.json")); err == nil {
+		t.Fatal("another profile planted an own model")
+	}
+}
+
 // A writable path a profile lists into a profile-own folder (its own documents, another
 // profile's, the profile-own root, through .. or a link, or the whole W/.jad) opens nothing: the
 // fixed read-only and hidden rules are bound after it and win (3b.1).

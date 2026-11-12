@@ -325,6 +325,8 @@ func HarnessPaths(config sessionfs.SessionConfig) []string {
 		storage.CursorCache, storage.RunErrorCache, storage.StateContext, storage.Staging, storage.HTTPDebug, storage.ToolStorage,
 		config.UsageCachePath, sessionfs.UsageBaselinePath(config.UsageCachePath),
 	}
+	// A profile's own model is read with its base: the base is the model file like ModelPath.
+	candidates = append(candidates, config.ModelSourceFiles(config.ModelPath)[1:]...)
 	if config.NativeTask != nil {
 		candidates = append(candidates, config.NativeTask.StorageDir)
 	}

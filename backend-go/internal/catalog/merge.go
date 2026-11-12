@@ -7,15 +7,25 @@ import (
 )
 
 // Scope names a catalog of one scope of the workspace layout for MergeScopes: "global" for
-// G's folder, "workspace" for the workspace's own. A reference may start with "<name>:" to
-// pick the entry of that scope (ParseSelector, Lookup).
+// G's folder, "workspace" for the workspace's own, "profile" for the own models of the profile
+// a catalog is made for (phase 3c). A reference may start with "<name>:" to pick the entry of
+// that scope (ParseSelector, Lookup).
 type Scope struct {
 	Name    string
 	Catalog *Catalog
 }
 
-// ScopePrefixes are the scope names a selector or reference may start with.
-var ScopePrefixes = []string{"global", "workspace"}
+// The scope names of the workspace layout.
+const (
+	ScopeGlobal    = "global"
+	ScopeWorkspace = "workspace"
+	ScopeProfile   = "profile"
+)
+
+// ScopePrefixes are the scope names a selector or reference may start with. Only the catalog
+// of one profile's own load has entries of ScopeProfile; elsewhere a profile: reference is
+// not found.
+var ScopePrefixes = []string{ScopeGlobal, ScopeWorkspace, ScopeProfile}
 
 // Merge joins catalogs of one kind without scope names; see MergeScopes.
 func Merge(kind string, scopes ...*Catalog) *Catalog {

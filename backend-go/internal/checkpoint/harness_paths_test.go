@@ -145,3 +145,16 @@ func TestHarnessPathsExcludeTheUsageBaseline(t *testing.T) {
 		t.Fatalf("HarnessPaths = %v, want the usage baseline", paths)
 	}
 }
+
+// The base of a profile's own model is read like the model file, so it is the session's too.
+func TestHarnessPathsIncludeTheBaseOfAnOwnModel(t *testing.T) {
+	own, base := "/w/.jad/profile-own/dev/coder/models/openai/fast.json", "/w/.jad/models/openai/default.json"
+	config := sessionfs.SessionConfig{ModelPath: own, ModelBases: map[string]sessionfs.ModelBase{own: {BasedOn: "workspace:openai/default", Path: base}}}
+	if paths := HarnessPaths(config); !containsPath(paths, own) || !containsPath(paths, base) {
+		t.Fatalf("paths = %v", paths)
+	}
+	config.ModelBases = nil
+	if paths := HarnessPaths(config); containsPath(paths, base) {
+		t.Fatalf("a shared model's paths = %v", paths)
+	}
+}

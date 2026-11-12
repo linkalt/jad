@@ -13,14 +13,6 @@ func readProfile(path string, allModels *catalog.Catalog) (layoutProfileFile, *c
 	return readProfileWith(path, allModels, checkModelEffort)
 }
 
-// readProfileOf is readProfile for judging a profile of a session's scope: a model_default
-// whose model file fails the model rules does not fail the profile (the model is reported
-// on its own, and a run with it stops with the file's error). An effort the model does not
-// offer still does.
-func readProfileOf(path string, allModels *catalog.Catalog) (layoutProfileFile, *catalog.Catalog, error) {
-	return readProfileWith(path, allModels, checkModelEffortOnly)
-}
-
 func readProfileWith(path string, allModels *catalog.Catalog, effortCheck func(modelPath, effort string) error) (layoutProfileFile, *catalog.Catalog, error) {
 	var profile layoutProfileFile
 	if err := readLayoutFile(path, &profile); err != nil {
