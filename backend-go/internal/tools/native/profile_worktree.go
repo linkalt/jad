@@ -144,9 +144,11 @@ func (d *DelegatedWorktree) Sandbox(sandbox *sessionfs.SandboxSettings, origin s
 	copied.ReadOnlyPaths = alsoMoved(sandbox.ReadOnlyPaths)
 	copied.SealedPaths = alsoMoved(sandbox.SealedPaths)
 	copied.SealedInner = alsoMoved(sandbox.SealedInner)
-	// The data folder stays the workspace's own, where the run's writable paths no longer reach.
+	// The data folder stays the workspace's own and read-only: an isolated run writes only in
+	// its worktree (decider S2), so no {profile_data} is filled and nothing is bound writable.
 	copied.ProfileHidden = alsoMoved(sandbox.ProfileHidden)
 	copied.ProfileShown = alsoMoved(sandbox.ProfileShown)
+	copied.ProfileData = ""
 	return &copied
 }
 

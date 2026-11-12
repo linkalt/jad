@@ -594,18 +594,25 @@ writes into b), `plugins_test.go` (`TestInstallRefusesProfilesWhereThereAreNoGlo
   hidden too (no listing at run start). The in-process readers get the same folders as
   `NativePathPolicy.Hidden` with the own ones in `HiddenExcept`, with or without a sandbox; an
   except folder never shows a hidden path inside it.
-- S1, own data writable: the shown data folder is bound read-write when it is `ProfileData` and a
-  writable path covers it (as the helper folders); the hide rule is what decides, so neither a
-  writable path inside `W/.jad` nor a `{profile_data}` entry can open another profile's folder.
-  `ensureProfileData` makes it (0700, with its parents) before a bwrap or seatbelt start and
-  refuses the call when any part below the real `W/.jad` is a link or not a folder.
+- S1, own data writable (2c, decider F2): the shown data folder is bound read-write whenever it
+  is `ProfileData`, with or without a writable path that covers it, and never counts against the
+  writable-paths ceiling; `ProfileData` is set only for the profile's own top-level runs (S2).
+  The hide rule is what decides, so neither a writable path inside `W/.jad` nor a
+  `{profile_data}` entry can open another profile's folder. `ensureProfileData` makes it (0700,
+  with its parents) before a bwrap or seatbelt start and refuses the call when any part below
+  the real `W/.jad` is a link or not a folder.
+- Missing roots (2c, decider F1): `ensureProfileRoots` makes `W/.jad/profile-own` and
+  `W/.jad/data/profiles` (0700, same link check) before every bwrap or seatbelt start of a v2
+  sandbox, whatever the run, so their hide rule always applies and no call can make another
+  profile's folder in a missing root. Failing to make them refuses the call. A root whose
+  `W/.jad` does not exist (a worktree's moved copy of the paths) is left out.
 - S2, only the profile's own top-level runs: `ForPlanMode`, `callSandbox` for `AgentDepth > 0`,
   `NarrowSandbox` and `InheritSandbox` clear `ProfileData`. `NarrowSandbox` keeps the hidden
   folders of both and shows only folders both show (a `profile_message` target under a
   sandboxed caller sees neither's); `InheritSandbox` shows none and drops the caller's
   `{profile_data}` paths. A target's own runs (by the user, a trigger, an unsandboxed caller)
-  write normally. A sandbox choice and a worktree run (whose writable paths moved to the
-  worktree) do not write the data folder.
+  write normally. A sandbox choice (never given `ProfileData`) and a worktree run
+  (`DelegatedWorktree.Sandbox` clears it) do not write the data folder.
 - `{profile_data}` is a sandbox path placeholder filled from `SandboxSettings.ProfileData` at
   each start (`sandboxedLaunch`, the reader mirror `environmentPolicy`) and from
   `SessionConfig.ProfileDataDir` in the narrowing places (`SandboxPlace.ProfileData`), so it

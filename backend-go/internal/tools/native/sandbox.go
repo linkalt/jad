@@ -84,9 +84,14 @@ func sandboxedLaunch(sandbox *sessionfs.SandboxSettings, place sandboxPlace, con
 		return sandboxLaunch{configured: configured, resolved: resolved, args: args}, nil
 	}
 	place.profileData = sandbox.ProfileData
-	if sandbox.ProfileData != "" && sandbox.Backend != sessionfs.SandboxBackendCommand {
-		if err := ensureProfileData(sandbox.ProfileData); err != nil {
+	if sandbox.Backend != sessionfs.SandboxBackendCommand {
+		if err := ensureProfileRoots(sandbox.ProfileHidden); err != nil {
 			return sandboxLaunch{}, err
+		}
+		if sandbox.ProfileData != "" {
+			if err := ensureProfileData(sandbox.ProfileData); err != nil {
+				return sandboxLaunch{}, err
+			}
 		}
 	}
 	expand := sandboxExpander(place)

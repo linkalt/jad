@@ -291,6 +291,11 @@ func TestNarrowedAndInheritedSandboxesWriteNoDataFolder(t *testing.T) {
 func TestProfileDataAccessFollowsTheRun(t *testing.T) {
 	config := SessionConfig{WorkingDir: "/w", ProfileDataDir: "/w/.jad/data/profiles/dev/a",
 		Sandbox: &SandboxSettings{Backend: SandboxBackendBwrap, Tools: []string{"exec"}, WritablePaths: []string{"{workspace}"}, ProfileData: "/w/.jad/data/profiles/dev/a"}}
+	// No writable path covers the data folder: the own top-level run writes it anyway (F2).
+	unlisted := config
+	unlistedSandbox := *config.Sandbox
+	unlistedSandbox.WritablePaths = []string{"{tmp}"}
+	unlisted.Sandbox = &unlistedSandbox
 	for name, test := range map[string]struct {
 		config SessionConfig
 		run    ProfileRun
@@ -298,6 +303,8 @@ func TestProfileDataAccessFollowsTheRun(t *testing.T) {
 		reason string
 	}{
 		"own":      {config, ProfileRun{}, true, "writable"},
+		"unlisted": {unlisted, ProfileRun{}, true, "own top-level run"},
+		"worktree": {config, ProfileRun{HasEnvironment: true, Sandbox: config.Sandbox.WithoutProfileData()}, false, "worktree"},
 		"plan":     {config, ProfileRun{PlanMode: true}, false, "plan mode"},
 		"confined": {config, ProfileRun{HasEnvironment: true, Sandbox: config.Sandbox.WithoutProfileData()}, false, "confined"},
 		"none":     {SessionConfig{ProfileDataDir: config.ProfileDataDir}, ProfileRun{}, true, "every other profile's"},

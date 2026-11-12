@@ -168,15 +168,9 @@ func ProfileDataAccess(config SessionConfig, run ProfileRun) (bool, string) {
 		return false, "plan mode: read-only"
 	}
 	if sandbox.ProfileData == "" {
-		return false, "this run is confined by another sandbox (a caller's, or a sandbox choice): read-only"
+		return false, "this run is confined by another sandbox (a caller's, a sandbox choice or a worktree): read-only"
 	}
-	expand := SandboxPlace{Workspace: config.WorkingDir, CWD: config.WorkingDir, SessionDir: config.StateDir, ProfileData: sandbox.ProfileData}.Expander()
-	for _, path := range sandbox.WritablePaths {
-		if expanded := expand(path); expanded != "" && PathWithin(expanded, config.ProfileDataDir) {
-			return true, "writable in this run's sandbox"
-		}
-	}
-	return false, "no writable path of the sandbox covers it; add {profile_data} to the defaults' writable paths"
+	return true, "writable in this run's sandbox: the profile's own top-level run"
 }
 
 // ReadProfileConfig reads the profile file of a loaded catalog-layout configuration and

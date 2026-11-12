@@ -9,6 +9,7 @@ import (
 
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
+	"jad/backend-go/internal/worktree"
 )
 
 // profileSandboxFixture is a workspace a with profiles dev/coder (sandboxed, the one loaded)
@@ -253,5 +254,125 @@ func TestSeatbeltProfileHidesOtherProfilesFolders(t *testing.T) {
 	}
 	if strings.Contains(text, `(allow file-write* (subpath "`+own+`"))`) {
 		t.Errorf("the own private folder is writable:\n%s", text)
+	}
+}
+
+// The own data folder is writable in the profile's own top-level run with no writable path
+// that covers it (decider S1, F2); plan mode, a sub-agent and a worktree run read it only, and
+// the profile's private folder and the project stay read-only.
+func TestProfileSandboxOwnDataIsWritableWithoutAWritablePath(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{tmp}"`)
+	useOwnTempDir(t)
+	if writable, reason := sessionfs.ProfileDataAccess(f.config, sessionfs.ProfileRun{}); !writable {
+		t.Fatalf("profile config says %q", reason)
+	}
+	command := profileAttempt("data", `echo hi > .jad/data/profiles/dev/coder/new.md`) +
+		profileAttempt("readdata", `grep -q coder-notes .jad/data/profiles/dev/coder/notes.md`) +
+		profileAttempt("writeown", `echo x > .jad/profile-own/dev/coder/documents/doc.md`) +
+		profileAttempt("project", `echo hi > project.txt`)
+	wantProfileOutput(t, "own run", f.run(t, command, tools.ExecutionContext{}, f.config.Sandbox), "data=yes", "readdata=yes", "writeown=no", "project=no")
+	wantProfileOutput(t, "plan mode", f.run(t, command, tools.ExecutionContext{PlanMode: true}, f.config.Sandbox), "data=no", "readdata=yes")
+	wantProfileOutput(t, "sub-agent", f.run(t, command, tools.ExecutionContext{AgentDepth: 1}, f.config.Sandbox), "data=no", "readdata=yes")
+
+	d := &DelegatedWorktree{tree: &worktree.Tree{Workspace: t.TempDir()}}
+	moved := d.Sandbox(f.config.Sandbox, f.a)
+	if moved.ProfileData != "" {
+		t.Fatalf("worktree sandbox keeps the data folder %s", moved.ProfileData)
+	}
+	if writable, _ := sessionfs.ProfileDataAccess(f.config, sessionfs.ProfileRun{HasEnvironment: true, Sandbox: moved}); writable {
+		t.Fatal("profile config says a worktree run writes the data folder")
+	}
+	wantProfileOutput(t, "worktree", f.run(t, command, tools.ExecutionContext{Environment: &tools.Environment{Sandbox: moved}}, nil), "data=no", "readdata=yes")
+	if data, err := os.ReadFile(filepath.Join(f.config.ProfileDataDir, "new.md")); err != nil || string(data) != "hi\n" {
+		t.Errorf("own data file = %q, %v", data, err)
+	}
+}
+
+// With both profile folder roots missing and a writable path that covers W/.jad/data (so
+// W/.jad is not sealed), the engine makes the roots before the sandbox starts and hides them:
+// no call can make another profile's private or data folder (decider F1).
+func TestProfileSandboxMakesMissingRootsSoOthersCannotBePlanted(t *testing.T) {
+	requireBwrap(t)
+	f := newProfileSandboxFixture(t, `"{workspace}/.jad/data","{tmp}"`)
+	useOwnTempDir(t)
+	ownRoot, dataRoot := filepath.Join(f.a, ".jad", "profile-own"), filepath.Join(f.a, ".jad", "data", "profiles")
+	for _, root := range []string{ownRoot, dataRoot} {
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := profileAttempt("plantdata", `mkdir -p .jad/data/profiles/dev/other && echo x > .jad/data/profiles/dev/other/notes.md`) +
+		profileAttempt("plantown", `mkdir -p .jad/profile-own/dev/other/documents && echo x > .jad/profile-own/dev/other/documents/doc.md`) +
+		profileAttempt("data", `echo hi > .jad/data/profiles/dev/coder/new.md`)
+	// The sub-agent first: it has no data folder of its own, so only the roots are made for it.
+	for _, run := range []struct {
+		name      string
+		execution tools.ExecutionContext
+	}{{"sub-agent", tools.ExecutionContext{AgentDepth: 1}}, {"own run", tools.ExecutionContext{}}} {
+		name, execution := run.name, run.execution
+		wantProfileOutput(t, name, f.run(t, command, execution, f.config.Sandbox), "plantdata=no", "plantown=no")
+		for _, planted := range []string{filepath.Join(dataRoot, "dev", "other"), filepath.Join(ownRoot, "dev", "other")} {
+			if _, err := os.Lstat(planted); err == nil {
+				t.Fatalf("%s: %s was made from the sandbox", name, planted)
+			}
+		}
+	}
+	for _, root := range []string{ownRoot, dataRoot} {
+		if info, err := os.Lstat(root); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("root %s = %v, %v", root, info, err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(f.config.ProfileDataDir, "new.md")); err != nil || string(data) != "hi\n" {
+		t.Errorf("own data file = %q, %v", data, err)
+	}
+}
+
+// ensureProfileRoots refuses a path that is no profile folder root and a link in a root's
+// place, leaves out a root whose W/.jad does not exist, and takes a W/.jad behind a link.
+func TestEnsureProfileRootsRefusesLinksAndOtherPaths(t *testing.T) {
+	w := t.TempDir()
+	if err := ensureProfileRoots([]string{filepath.Join(w, "x", "profiles")}); err == nil {
+		t.Fatal("a path that is no profile folder root was accepted")
+	}
+	if err := ensureProfileRoots([]string{filepath.Join(w, "missing", ".jad", "profile-own")}); err != nil {
+		t.Fatalf("a missing W/.jad: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(w, "missing")); err == nil {
+		t.Fatal("a missing workspace was made")
+	}
+	jad := filepath.Join(w, ".jad")
+	if err := os.MkdirAll(jad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(jad, "profile-own")); err != nil {
+		t.Fatal(err)
+	}
+	err := ensureProfileRoots([]string{filepath.Join(jad, "data", "profiles"), filepath.Join(jad, "profile-own")})
+	if err == nil || !strings.Contains(err.Error(), "is a link or not a folder") {
+		t.Fatalf("a linked root: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(jad, "data", "profiles")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("data root = %v, %v", info, err)
+	}
+
+	// W/.jad behind a link: the roots are given as written and below its target, whose name
+	// is not .jad; both forms are made once.
+	w2 := t.TempDir()
+	target := filepath.Join(w2, "config")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(w2, ".jad")); err != nil {
+		t.Fatal(err)
+	}
+	linked := []string{filepath.Join(w2, ".jad", "profile-own"), filepath.Join(w2, ".jad", "data", "profiles"), filepath.Join(target, "profile-own"), filepath.Join(target, "data", "profiles")}
+	if err := ensureProfileRoots(linked); err != nil {
+		t.Fatalf("a linked W/.jad: %v", err)
+	}
+	for _, root := range linked[2:] {
+		if info, err := os.Lstat(root); err != nil || !info.IsDir() {
+			t.Fatalf("root %s = %v, %v", root, info, err)
+		}
 	}
 }

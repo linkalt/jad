@@ -254,7 +254,7 @@ type sandboxKeep struct {
 func sandboxFixedRules(place sandboxPlace, writable []string, sandbox *sessionfs.SandboxSettings, candidates []string, visible func(string) bool) []sandboxRule {
 	rules := sandboxConfigurationRules(place, writable, sandbox.ReadOnlyPaths, candidates)
 	rules = append(rules, sandboxSealedRules(writable, sandbox.SealedPaths, sandbox.SealedInner)...)
-	rules = append(rules, sandboxProfileRules(sandbox, writable, visible)...)
+	rules = append(rules, sandboxProfileRules(sandbox, visible)...)
 	if root, err := filepath.EvalSymlinks(sandboxTempRoot()); err == nil {
 		var keep []sandboxKeep
 		if place.tmp != "" {
