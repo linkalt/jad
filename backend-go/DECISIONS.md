@@ -5308,13 +5308,21 @@ and `tmp/T-042-decisions.md` (which overrides it). Builds on T-042a (guard, read
     user record that was just under the limit over it. Not measured; a later task could exclude the field from the
     length.
   - No production reader of `stored_at` yet (web UI display and the history API are later tasks, R3 out of scope).
-  - The `messages-golden-diff` binary procedure (baseline worktree build) was not run; the in-tree run-baseline
-    goldens (frozen pre-change outputs) with and without the normaliser are the comparison. Running the skill
-    against a b9dc0c2a worktree would close it.
+  - Closed by decider review: the `messages-golden-diff` binary procedure (baseline worktree build) was not run;
+    the in-tree off-mode comparison against the frozen pre-change run-baseline goldens, without normalising, is the
+    stronger proof.
   - Final gate (after 6149e322): `verify-go.sh --race "./internal/transcript ./internal/session ./internal/app"`
     with `TMPDIR=/tmp/t042` (mode 711, so the bwrap tests run) gave gofmt, vet, full test (38 packages ok) and
     diffcheck exit 0; the race step passed transcript and session (-count=3) but `internal/app` hit the default
     10-minute `go test` timeout at -count=3 (no DATA RACE in the log; `TestRunMCPLoaderServersAreConfinedByTheSessionsSandbox`
     was running). `go test -race -count=1 -timeout 40m ./internal/app` passed (249 s, no race). The script's fixed
-    -count=3 with the default timeout cannot cover `internal/app` under -race; a `-timeout` in the script would
-    close it. The 15 bwrap tests ran and passed, none skipped.
+    -count=3 with the default timeout cannot cover `internal/app` under -race. The 15 bwrap tests ran and passed,
+    none skipped.
+  - Result (closed): race passed for transcript and session at -count=3, and for app at -count=1 -timeout 40m. The
+    local (git-ignored) `verify-go.sh` race step now runs `go test -race -count=3 -timeout 60m`; after b88cf768,
+    `GOCACHE=/tmp/t042-gocache verify-go.sh --race "./internal/app"` gave gofmt, vet, full test (38 packages ok),
+    race (`ok internal/app 738.619s`, -count=3, no DATA RACE) and diffcheck exit 0, 16m01s wall. That run used the
+    default TMPDIR, so the bwrap tests are covered by the earlier run above, not this one.
+  - The `~/.cache` "no space left on device" error was the 16 GiB `~/.cache` tmpfs being full (`go-build` at
+    15 GiB), not a disk quota. Not cleaned (the user did not require it); gate runs use a temporary `GOCACHE`
+    under `/tmp`.
