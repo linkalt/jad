@@ -6,21 +6,23 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"jad/backend-go/internal/sessionfs"
 )
 
 func TestLibraryListsMarkdownAssetsAndReadsFullContent(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["library/prompts"],"template_dirs":["library/templates"],"skill_dirs":["library/skills"]}}`)
+	dirs := map[string][]string{"prompt_dirs": {"library/prompts"}, "template_dirs": {"library/templates"}, "skill_dirs": {"library/skills"}}
 	writeLibraryTestFile(t, filepath.Join(root, "library/prompts/nested/prompt.md"), "---\ntitle: \"Prompt title\"\ndescription: >-\n  Folded\n  description\n---\n# Prompt heading\n\nPrompt body.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "library/prompts/another.md"), "# Another\n\nSecond paragraph.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "library/templates/starter.md"), "---\nname: Starter\n---\nTemplate body.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "library/skills/guide/SKILL.md"), "---\nname: guide\ndescription: Use this skill.\n---\n# Guide\n\nInstructions.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "library/skills/invalid/SKILL.md"), "# Not a valid skill\n")
 
-	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
+	library := newTestLibrary(root, dirs)
 	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -66,103 +68,14 @@ func TestLibraryUsesNodeCompatibleAssetID(t *testing.T) {
 	}
 }
 
-func TestLibraryReloadsRootSettingsOnEachRequest(t *testing.T) {
-	root := t.TempDir()
-	setting := filepath.Join(root, "setting.json")
-	writeLibraryTestFile(t, setting, `{"libraries":{"prompt_dirs":["first"]}}`)
-	writeLibraryTestFile(t, filepath.Join(root, "first/one.md"), "First prompt.")
-	writeLibraryTestFile(t, filepath.Join(root, "second/two.md"), "Second prompt.")
-	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-
-	first, err := library.List(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := []string{first.Prompts[0].Name}; !reflect.DeepEqual(got, []string{"one"}) {
-		t.Fatalf("first catalog = %v", got)
-	}
-	writeLibraryTestFile(t, setting, `{"libraries":{"prompt_dirs":["second"]}}`)
-	second, err := library.List(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := []string{second.Prompts[0].Name}; !reflect.DeepEqual(got, []string{"two"}) {
-		t.Fatalf("catalog did not refresh from setting.json: %v", got)
-	}
-}
-
-func TestLibrarySettingResolutionMatchesRootOptions(t *testing.T) {
-	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["custom"]}}`)
-	writeLibraryTestFile(t, filepath.Join(root, ".agent/prompts/default.md"), "Default prompt.")
-	writeLibraryTestFile(t, filepath.Join(root, "custom/custom.md"), "Custom prompt.")
-
-	withoutSetting := New(Options{
-		WorkingDir:  root,
-		SessionsDir: "sessions",
-		Environment: map[string]string{},
-	})
-	defaultCatalog, err := withoutSetting.List(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := defaultCatalog.Prompts[0].Name; got != "default" {
-		t.Fatalf("sessions-dir default root library = %q, want default", got)
-	}
-
-	withExplicitSetting := New(Options{
-		WorkingDir:      root,
-		SessionsDir:     "sessions",
-		RootSettingPath: "setting.json",
-		Environment:     map[string]string{},
-	})
-	customCatalog, err := withExplicitSetting.List(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := customCatalog.Prompts[0].Name; got != "custom" {
-		t.Fatalf("explicit setting root library = %q, want custom", got)
-	}
-}
-
-func TestLibraryRejectsInvalidSettingsAndMissingExplicitSetting(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		setting string
-	}{
-		{name: "libraries must be object", setting: `{"libraries":null}`},
-		{name: "directory list must be array", setting: `{"libraries":{"prompt_dirs":"bad"}}`},
-		{name: "directory entry must be nonempty", setting: `{"libraries":{"prompt_dirs":[" "]}}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeLibraryTestFile(t, filepath.Join(root, "setting.json"), test.setting)
-			library := New(Options{WorkingDir: root, Environment: map[string]string{}})
-			_, err := library.List(context.Background(), "")
-			var configErr *ConfigError
-			if !errors.As(err, &configErr) {
-				t.Fatalf("List() error = %v, want ConfigError", err)
-			}
-		})
-	}
-
-	root := t.TempDir()
-	library := New(Options{WorkingDir: root, RootSettingPath: "missing.json", Environment: map[string]string{}})
-	_, err := library.List(context.Background(), "")
-	var configErr *ConfigError
-	if !errors.As(err, &configErr) {
-		t.Fatalf("missing explicit setting error = %v, want ConfigError", err)
-	}
-}
-
 func TestLibrarySkipsAssetsOverTheSizeLimit(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["prompts"]}}`)
+	dirs := map[string][]string{"prompt_dirs": {"prompts"}}
 	writeLibraryTestFile(t, filepath.Join(root, "prompts/small.md"), "# Small\n\nFits.\n")
 	oversized := "# Big\n\n" + strings.Repeat("x", 1<<20)
 	writeLibraryTestFile(t, filepath.Join(root, "prompts/big.md"), oversized)
 
-	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
+	library := newTestLibrary(root, dirs)
 	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -176,41 +89,9 @@ func TestLibrarySkipsAssetsOverTheSizeLimit(t *testing.T) {
 	}
 }
 
-func TestLibraryMaxAssetBytesDefaultsAndBounds(t *testing.T) {
-	root := t.TempDir()
-	limit, err := AssetByteLimit(root)
-	if err != nil || limit != 1<<20 {
-		t.Fatalf("default limit = %d, error %v; want %d", limit, err, 1<<20)
-	}
-	for _, test := range []struct {
-		name    string
-		setting string
-		ok      bool
-	}{
-		{name: "minimum accepted", setting: `{"libraries":{"max_asset_bytes":1024}}`, ok: true},
-		{name: "maximum accepted", setting: `{"libraries":{"max_asset_bytes":8388608}}`, ok: true},
-		{name: "below minimum rejected", setting: `{"libraries":{"max_asset_bytes":1023}}`},
-		{name: "above maximum rejected", setting: `{"libraries":{"max_asset_bytes":8388609}}`},
-		{name: "non-integer rejected", setting: `{"libraries":{"max_asset_bytes":"big"}}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeLibraryTestFile(t, filepath.Join(root, "setting.json"), test.setting)
-			_, err := AssetByteLimit(root)
-			var configErr *ConfigError
-			if test.ok && err != nil {
-				t.Fatalf("AssetByteLimit() error = %v, want accepted", err)
-			}
-			if !test.ok && !errors.As(err, &configErr) {
-				t.Fatalf("AssetByteLimit() error = %v, want ConfigError", err)
-			}
-		})
-	}
-}
-
 func TestLibraryEmptyCatalogUsesArrays(t *testing.T) {
 	root := t.TempDir()
-	library := New(Options{WorkingDir: root, SessionsDir: "sessions", Environment: map[string]string{}})
+	library := newTestLibrary(root, nil)
 	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +108,54 @@ func TestLibraryEmptyCatalogUsesArrays(t *testing.T) {
 	}
 }
 
+// newTestLibrary is the library of one workspace "w" whose global folders are dirs (by
+// libraries key, relative to root); a nil dirs leaves them to the built-in defaults under root.
+func newTestLibrary(root string, dirs map[string][]string) *Library {
+	libraries := &sessionfs.Libraries{GlobalDir: root}
+	targets := map[string]*[]string{
+		"prompt_dirs": &libraries.Global.Prompts, "template_dirs": &libraries.Global.Templates,
+		"skill_dirs": &libraries.Global.Skills, "command_dirs": &libraries.Global.Commands,
+	}
+	for key, folders := range dirs {
+		resolved := make([]string, 0, len(folders))
+		for _, folder := range folders {
+			path := resolveLibraryPath(root, folder)
+			if !slices.Contains(resolved, path) {
+				resolved = append(resolved, path)
+			}
+		}
+		*targets[key] = resolved
+	}
+	return New(Options{Workspaces: map[string]*sessionfs.Libraries{"w": libraries}, StartWorkspace: "w"})
+}
+
+// max_asset_bytes of global.json is bounded: a value outside the range is a ConfigError, so a
+// library never reads an unbounded file.
+func TestLibraryMaxAssetBytesBounds(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		bytes int64
+		ok    bool
+	}{
+		{name: "unset uses the default", bytes: 0, ok: true},
+		{name: "minimum accepted", bytes: 1024, ok: true},
+		{name: "maximum accepted", bytes: 8388608, ok: true},
+		{name: "below minimum rejected", bytes: 1023},
+		{name: "above maximum rejected", bytes: 8388609},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := scopedDirectoriesOf(&sessionfs.Libraries{GlobalDir: t.TempDir(), MaxAssetBytes: test.bytes})
+			var configErr *ConfigError
+			if test.ok && err != nil {
+				t.Fatalf("error = %v, want accepted", err)
+			}
+			if !test.ok && !errors.As(err, &configErr) {
+				t.Fatalf("error = %v, want ConfigError", err)
+			}
+		})
+	}
+}
+
 func writeLibraryTestFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -239,7 +168,7 @@ func writeLibraryTestFile(t *testing.T, path, contents string) {
 
 func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["prompts","./prompts"]}}`)
+	dirs := map[string][]string{"prompt_dirs": {"prompts", "./prompts"}}
 	writeLibraryTestFile(t, filepath.Join(root, "prompts/real.md"), "Real prompt.")
 	outside := filepath.Join(root, "outside.md")
 	writeLibraryTestFile(t, outside, "Outside prompt.")
@@ -250,7 +179,7 @@ func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 		t.Skipf("directory symlinks are unavailable: %v", err)
 	}
 
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
+	catalog, err := newTestLibrary(root, dirs).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,48 +190,14 @@ func TestLibrarySkipsSymlinkEntriesAndDeduplicatesDirectories(t *testing.T) {
 
 func TestLibraryErrorDoesNotNameTheAbsoluteDirectory(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"prompt_dirs":["notes.txt"]}}`)
+	dirs := map[string][]string{"prompt_dirs": {"notes.txt"}}
 	writeLibraryTestFile(t, filepath.Join(root, "notes.txt"), "not a directory")
 
-	_, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
+	_, err := newTestLibrary(root, dirs).List(context.Background(), "")
 	if err == nil {
 		t.Fatal("a file named as a prompt directory was accepted")
 	}
 	if strings.Contains(err.Error(), root) {
 		t.Fatalf("error names the absolute directory: %q", err.Error())
-	}
-}
-
-// The library reads the same root setting the session loader finds: .jad/setting.json of
-// the working directory, then the one in $HOME/.jad.
-func TestLibraryFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
-	cwd, home := t.TempDir(), t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(cwd, "setting.json"), `{"libraries":{"prompt_dirs":["old"]}}`)
-	writeLibraryTestFile(t, filepath.Join(cwd, "old/old.md"), "Old.")
-	writeLibraryTestFile(t, filepath.Join(home, ".jad", "setting.json"), `{"libraries":{"prompt_dirs":["home"]}}`)
-	writeLibraryTestFile(t, filepath.Join(home, ".jad", "home/home.md"), "Home.")
-	writeLibraryTestFile(t, filepath.Join(cwd, ".jad", "setting.json"), `{"libraries":{"prompt_dirs":["project"]}}`)
-	writeLibraryTestFile(t, filepath.Join(cwd, ".jad", "project/project.md"), "Project.")
-
-	names := func(workingDir string) []string {
-		t.Helper()
-		catalog, err := New(Options{WorkingDir: workingDir, Environment: map[string]string{"HOME": home}}).List(context.Background(), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []string
-		for _, prompt := range catalog.Prompts {
-			out = append(out, prompt.Name)
-		}
-		return out
-	}
-	if got := names(cwd); !reflect.DeepEqual(got, []string{"project"}) {
-		t.Fatalf("project file must win: %v", got)
-	}
-	if err := os.Remove(filepath.Join(cwd, ".jad", "setting.json")); err != nil {
-		t.Fatal(err)
-	}
-	if got := names(cwd); !reflect.DeepEqual(got, []string{"home"}) {
-		t.Fatalf("home must win over the old place: %v", got)
 	}
 }

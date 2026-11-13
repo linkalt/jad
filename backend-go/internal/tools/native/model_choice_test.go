@@ -111,7 +111,7 @@ func TestDefinitionFilesFromBeforeModelChoiceStillLoad(t *testing.T) {
 			},
 			NativeReadImage:      &sessionfs.NativeReadImageSettings{MaxImageBytes: 5 << 20},
 			NativeSubagent:       &subagent,
-			NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, ModelChoice: choice},
+			NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, ModelChoice: choice},
 			Profile:              "main",
 			Profiles:             []string{"main", "reviewer"},
 		}

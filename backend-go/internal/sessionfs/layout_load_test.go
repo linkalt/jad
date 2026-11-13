@@ -454,23 +454,29 @@ func TestMergeSettingsMergesObjectsAndReplacesTheRest(t *testing.T) {
 	}
 }
 
-// rootFromSample copies sample/jad, makes its session point at a temp cwd and loads the
-// root setting.json the way the server does.
+// rootFromSample builds a workspace from the sample catalogs (sample/jad): its models, tools, MCP
+// servers and sandbox templates are G's, its profiles and its session are the workspace's. The
+// session works in the workspace itself. It returns the loaded config and W/.jad.
 func rootFromSample(t *testing.T) (Config, string) {
 	t.Helper()
-	_, _, root := sampleLayout(t)
-	var cwd string
-	editJSON(t, filepath.Join(root, "sessions", "default.json"), func(m map[string]any) { cwd = m["cwd"].(string) })
-	// State must sit under the session cwd, or the read policy refuses the bash spill folder.
-	editJSON(t, filepath.Join(root, "setting.json"), func(m map[string]any) {
-		delete(m["libraries"].(map[string]any), "tool_definition_paths")
-		m["catalogs"].(map[string]any)["state"] = filepath.Join(cwd, ".jad", "state")
-	})
-	config, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: filepath.Join(root, "setting.json"), Environment: map[string]string{}})
-	if err != nil {
+	f := newWSFixture(t)
+	sample := filepath.Join("..", "..", "..", "sample", "jad")
+	for _, name := range []string{"models", "tools", "mcp", "sandbox"} {
+		copyTree(t, filepath.Join(sample, name), filepath.Join(f.global, name))
+	}
+	w := filepath.Join(f.base, "proj")
+	jad := filepath.Join(w, ".jad")
+	wsPut(t, filepath.Join(jad, "workspace.json"), `{"schema_version":2}`)
+	for _, name := range []string{"profiles", "sessions"} {
+		copyTree(t, filepath.Join(sample, name), filepath.Join(jad, name))
+	}
+	if err := os.MkdirAll(filepath.Join(w, ".jad", "subagents", "x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return config, root
+	wsPut(t, filepath.Join(w, ".jad", "subagents", "x", "prompt.md"), "p")
+	wsPut(t, filepath.Join(w, "CLAUDE.md"), "rules")
+	editJSON(t, filepath.Join(jad, "sessions", "default.json"), func(m map[string]any) { m["cwd"] = w })
+	return wsMustLoad(t, f, w), jad
 }
 
 func TestRootSettingGivesTheSessionRootALayout(t *testing.T) {
@@ -479,45 +485,8 @@ func TestRootSettingGivesTheSessionRootALayout(t *testing.T) {
 	if layout == nil {
 		t.Fatal("root has no layout")
 	}
-	if layout.Profiles != filepath.Join(root, "profiles") || !strings.HasSuffix(layout.State, filepath.Join(".jad", "state")) {
+	if layout.Profiles != filepath.Join(root, "profiles") || layout.State != filepath.Join(root, "state") {
 		t.Fatalf("folders = %s, %s", layout.Profiles, layout.State)
-	}
-	if layout.Defaults["max_tool_rounds"] == nil {
-		t.Fatalf("defaults not read: %v", layout.Defaults)
-	}
-}
-
-func TestRootSettingCatalogsAreReadAndChecked(t *testing.T) {
-	_, _, root := sampleLayout(t)
-	settingPath := filepath.Join(root, "setting.json")
-	editJSON(t, settingPath, func(m map[string]any) {
-		m["catalogs"] = map[string]any{"profiles": "p", "models": "/abs/m"}
-	})
-	config, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	layout := config.Roots[0].Layout
-	if layout.Profiles != filepath.Join(root, "p") || layout.Models != "/abs/m" {
-		t.Fatalf("catalogs = %+v", layout)
-	}
-	editJSON(t, settingPath, func(m map[string]any) {
-		delete(m, "catalogs")
-	})
-	config, err = Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}})
-	if err != nil || config.Roots[0].Layout.MCP != filepath.Join(root, ".jad", "mcp") {
-		t.Fatalf("without catalogs the folders are .jad/<catalog>: %+v, err = %v", config.Roots[0].Layout, err)
-	}
-	editJSON(t, settingPath, func(m map[string]any) { m["catalogs"] = map[string]any{"toolsets": "x"} })
-	if _, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "catalogs.toolsets") {
-		t.Fatalf("unknown catalog error = %v", err)
-	}
-	editJSON(t, settingPath, func(m map[string]any) {
-		delete(m, "catalogs")
-		m["defaults"] = map[string]any{"prompt_documents": []string{"X.md"}}
-	})
-	if _, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: settingPath, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "defaults") {
-		t.Fatalf("defaults with prompt_documents error = %v", err)
 	}
 }
 

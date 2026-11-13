@@ -68,7 +68,7 @@ func dispatchCommand(args []string, streams commandStreams) error {
 	case "transcript":
 		return runTranscriptCommand(args[1:], streams)
 	case "migrate":
-		return runMigrateCommand(args[1:], streams)
+		return fmt.Errorf("jad migrate was removed with workspace layout v1; to migrate a v1 setting, use a jad built from commit %s or earlier (`jad migrate workspace` copies it into a workspace without moving or deleting anything)", sessionfs.LastMigrateCommit)
 	case "check":
 		if len(args) == 1 {
 			return runCheckCommand(streams.stdout)

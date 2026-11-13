@@ -327,14 +327,11 @@ func TestProfileRevertRestoresUnderTheSameRules(t *testing.T) {
 	}
 }
 
-// off refuses edit and revert; v1 has no self-edit.
-func TestProfileEditOffAndV1(t *testing.T) {
+// off refuses edit and revert.
+func TestProfileEditOff(t *testing.T) {
 	e := newEditFixture(t, "", `{"profile_self_edit":"off"}`, "")
 	if _, err := e.edit(t, editBase+`,"description":"x"}`); err == nil || !strings.Contains(err.Error(), "off") {
 		t.Fatalf("edit under off: %v", err)
-	}
-	if _, err := EditProfile(Location{Root: Root{Layout: &Layout{}}}, "dev/coder", ProfileEditRequest{Action: ProfileEditActionEdit}); err == nil || !strings.Contains(err.Error(), "workspace layout") {
-		t.Fatalf("edit in v1: %v", err)
 	}
 }
 

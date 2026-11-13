@@ -310,10 +310,9 @@ func DeleteSessionFile(roots []Root, reference, ifMatch string, deleteState bool
 	return stateDir, os.RemoveAll(stateDir)
 }
 
-// sharesState reports whether two roots keep their sessions' state in one folder: always for
-// roots of a root setting (v1), never for two workspaces of the workspace layout.
+// sharesState reports whether two roots keep their sessions' state in one folder.
 func sharesState(a, b Root) bool {
-	if a.Layout == nil || b.Layout == nil || a.Layout.Workspace == "" || b.Layout.Workspace == "" {
+	if a.Layout == nil || b.Layout == nil {
 		return true
 	}
 	return a.Layout.State == b.Layout.State

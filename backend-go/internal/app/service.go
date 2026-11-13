@@ -11,7 +11,6 @@ import (
 	"jad/backend-go/internal/headless"
 	"jad/backend-go/internal/httpapi"
 	"jad/backend-go/internal/remoteapi"
-	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools"
 	"jad/backend-go/internal/triggers"
 )
@@ -63,16 +62,13 @@ func newServiceWithBudget(config Config, budget *tools.LeafBudget) (*Service, er
 	resolver.SetRunActive(api.RunActive)
 	service := &Service{Handler: api, api: api, resolver: resolver}
 	if config.RemoteAPI.Enabled {
-		newTable, workspaces := remoteapi.NewTokenTable, []string(nil)
-		if sessionfs.WorkspaceLayout(config.Roots) {
-			// The table of the workspace layout names a workspace in every row, and the server
-			// limits each request to its row's workspace (docs/design_workspace_layout.md §30.5).
-			newTable = remoteapi.NewWorkspaceTokenTable
-			for _, root := range config.Roots {
-				workspaces = append(workspaces, root.ID)
-			}
+		// The token table names a workspace in every row, and the server limits each request to
+		// its row's workspace (docs/design_workspace_layout.md §30.5).
+		workspaces := make([]string, 0, len(config.Roots))
+		for _, root := range config.Roots {
+			workspaces = append(workspaces, root.ID)
 		}
-		table, err := newTable(config.RemoteAPI.TokensFile, config.HTTP.Logger, nil)
+		table, err := remoteapi.NewTokenTable(config.RemoteAPI.TokensFile, config.HTTP.Logger, nil)
 		if err != nil {
 			service.Close()
 			return nil, fmt.Errorf("server.remote_api: %w", err)

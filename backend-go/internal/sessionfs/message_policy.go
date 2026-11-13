@@ -261,9 +261,6 @@ func (s NativeProfileMessageSettings) DeniedBy(to string, actions []string) *Mes
 // tool description lists: those no rule refuses as a whole. A refused profile is still
 // addressable (the call is answered profile_denied), it is only not advertised.
 func (s NativeProfileMessageSettings) ShownTargets(targets []string) []string {
-	if s.Caller.Workspace == "" {
-		return targets
-	}
 	from := MessageRef{Workspace: s.Caller.Workspace, Session: s.Caller.Session, Profile: s.Caller.Profile}.Canonical()
 	shown := make([]string, 0, len(targets))
 	for _, id := range targets {

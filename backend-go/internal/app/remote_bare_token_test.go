@@ -1,8 +1,6 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"jad/backend-go/internal/remoteapi"
@@ -57,60 +55,5 @@ func TestRemoteBareGlobTokenSeesSubagentsOfWhatItCanStart(t *testing.T) {
 	}
 	if names, _ := profiles.Candidates(t.Context(), remoteTranscriptCaller, "s1"); len(names) != 0 {
 		t.Fatalf("candidates of an ambiguous id: %q", names)
-	}
-}
-
-// v1 with several session roots: the same rule, with the root id as the qualifier.
-func TestRemoteBareGlobTokenInV1WithSeveralRoots(t *testing.T) {
-	var second string
-	f := newLayoutFixtureWithBudget(t, nil, nil, func(config *Config) {
-		second = filepath.Join(t.TempDir(), "sessions2")
-		layout := config.Roots[0]
-		layout.ID, layout.Directory = "second", second
-		config.Roots = append(config.Roots, layout)
-	})
-	demo, err := os.ReadFile(filepath.Join(f.root, "sessions", "demo.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"demo.json", "solo.json"} {
-		if err := os.MkdirAll(second, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(second, name), demo, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(f.root, "sessions", "mine.json"), demo, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	read := func(token remoteapi.Token, session string) (string, error) {
-		profiles := tokenProfiles{inner: profileMessenger{resolver: f.service.resolver}, may: token.MayProfile, mayAgent: token.MayAgent}
-		target, err := profiles.Profile(t.Context(), remoteTranscriptCaller, session, "dev/coder")
-		return target.Session, err
-	}
-	bare := func(session string) remoteapi.Token {
-		return remoteapi.Token{Profiles: []string{session + "/dev/*"}}
-	}
-	for _, c := range []struct {
-		token   remoteapi.Token
-		session string
-		want    string // the canonical session, "" for refused
-	}{
-		{bare("solo"), "solo", "second:solo"},
-		{bare("solo"), "second:solo", "second:solo"},
-		{bare("solo"), "local:solo", ""},
-		{bare("mine"), "mine", "local:mine"},
-		{bare("demo"), "demo", ""},
-		{bare("demo"), "local:demo", ""},
-		{bare("demo"), "second:demo", ""},
-		{remoteapi.Token{Profiles: []string{"*/dev/*"}}, "second:demo", "second:demo"},
-		{remoteapi.Token{Profiles: []string{"second:*/dev/*"}}, "second:solo", "second:solo"},
-		{remoteapi.Token{Profiles: []string{"second:*/dev/*"}}, "solo", ""},
-	} {
-		got, err := read(c.token, c.session)
-		if (c.want == "") != (err != nil) || got != c.want {
-			t.Errorf("globs %v reading %s: %q, %v; want %q", c.token.Profiles, c.session, got, err, c.want)
-		}
 	}
 }

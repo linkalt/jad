@@ -1,15 +1,12 @@
 package sessionfs
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
-
-	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 const keySecret = "KEYSECRET_0123456789abcdef0123456789abcdef"
@@ -116,7 +113,7 @@ func TestBrokenRemoteKeysFailTheRunAndNameTheKey(t *testing.T) {
 		"open key file": {`{"remote_keys":["ka"]}`, `key ka: the key file must not be readable by group or others`, func(k keysFixture) {
 			_ = os.Chmod(filepath.Join(k.f.global, "auth", "keys", "ka.json"), 0o644)
 		}},
-		"binding with v1 keys": {`{"remote_keys":["ka"]}`, `remote.token_env was removed in the workspace layout`, func(k keysFixture) {
+		"binding with v1 keys": {`{"remote_keys":["ka"]}`, `remote.token_env was removed with workspace layout v1`, func(k keysFixture) {
 			wsPut(t, filepath.Join(k.f.global, "remotes", "boxa.json"), `{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token_env":"JAD_REMOTE_X"}}`)
 		}},
 	} {
@@ -163,26 +160,8 @@ func TestRemoteKeysNamesAreValidated(t *testing.T) {
 	}
 }
 
-// remote_keys is a key of the workspace layout: the v1 layout refuses it in a session or
-// profile file (its remote files carry their own token source), and a toolset never has it.
-func TestRemoteKeysAreRefusedInV1AndInToolsets(t *testing.T) {
-	location, fixture := layoutLocationV1(t, layouttest.Spec{})
-	data, err := os.ReadFile(fixture.SessionFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var session map[string]any
-	if err := json.Unmarshal(data, &session); err != nil {
-		t.Fatal(err)
-	}
-	session["remote_keys"] = []string{"ka"}
-	data, _ = json.Marshal(session)
-	if err := os.WriteFile(fixture.SessionFile, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadSessionSettings(location, "", ""); err == nil || !strings.Contains(err.Error(), "remote_keys is a key of the workspace layout") {
-		t.Fatalf("v1 session file: %v", err)
-	}
+// A toolset never has remote_keys: it would let a toolset choose a credential.
+func TestRemoteKeysAreRefusedInToolsets(t *testing.T) {
 	k := newKeysFixture(t, `{}`, ``, `{`+profileBase+`,"toolset":"coding/x"}`)
 	wsPut(t, filepath.Join(k.f.global, "tools", "coding", "x.json"), `{"native":{},"mcp":{},"remote_keys":["ka"]}`)
 	if config, err := k.load(t); err == nil || !strings.Contains(err.Error(), "remote_keys") {

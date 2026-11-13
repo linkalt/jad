@@ -62,36 +62,36 @@ func TestCheckCommandRefusesOtherArguments(t *testing.T) {
 	}
 }
 
-func TestCheckCommandFailsWithoutTheCatalogLayout(t *testing.T) {
+func TestCheckCommandFailsWithoutAWorkspace(t *testing.T) {
 	t.Chdir(t.TempDir())
-	t.Setenv("JAD_ROOT_SETTING_PATH", "")
-	t.Setenv("JAD_SESSIONS_DIR", "")
+	t.Setenv("JAD_GLOBAL_DIR", t.TempDir())
 	var out bytes.Buffer
 	err := runCommand([]string{"check"}, &out)
-	if err == nil || errors.Is(err, errCheckFailed) || !strings.Contains(err.Error(), "catalog layout") {
-		t.Fatalf("error = %v, want the no-layout error", err)
+	if err == nil || errors.Is(err, errCheckFailed) || !strings.Contains(err.Error(), ".jad/workspace.json") {
+		t.Fatalf("error = %v, want the no-workspace error naming .jad/workspace.json", err)
 	}
 }
 
-// T-035: a setting in a .jad folder that still reads the doubled <.jad>/.jad defaults says so.
-func TestCheckCommandPrintsTheDoubledDefaultWarningAndStillPasses(t *testing.T) {
+// T-041: a directory that still has a v1 setting.json fails with the way to migrate it, and the
+// file is left as it was.
+func TestCheckCommandRefusesAV1SettingWithTheMigrationDirection(t *testing.T) {
 	project := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(project, ".jad", ".jad"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(project, ".jad"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	setting := filepath.Join(project, ".jad", "setting.json")
-	if err := os.WriteFile(setting, []byte(`{"session_roots":[{"id":"local","path":"sessions"}]}`), 0o600); err != nil {
+	const content = `{"session_roots":[{"id":"local","path":"sessions"}]}`
+	if err := os.WriteFile(setting, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(project)
-	t.Setenv("JAD_ROOT_SETTING_PATH", setting)
-	t.Setenv("JAD_SESSIONS_DIR", "")
+	t.Setenv("JAD_GLOBAL_DIR", t.TempDir())
 	var out bytes.Buffer
-	if err := runCommand([]string{"check"}, &out); err != nil {
-		t.Fatalf("a warning must not fail the check: %v\n%s", err, out.String())
+	err := runCommand([]string{"check"}, &out)
+	if err == nil || errors.Is(err, errCheckFailed) || !strings.Contains(err.Error(), "6ac57497") || !strings.Contains(err.Error(), "jad migrate workspace") {
+		t.Fatalf("error = %v, want the migration direction", err)
 	}
-	text := out.String()
-	if !strings.HasPrefix(text, "warning: ") || !strings.Contains(text, filepath.Join(project, ".jad", ".jad")) || !strings.HasSuffix(text, " files, 0 problems\n") {
-		t.Fatalf("output = %q", text)
+	if got, readErr := os.ReadFile(setting); readErr != nil || string(got) != content {
+		t.Fatalf("the v1 setting changed: %q, %v", got, readErr)
 	}
 }

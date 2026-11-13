@@ -37,7 +37,7 @@ func TestProfileInfoRouteAnswersForAGrantedToken(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(fmt.Sprint(body["output"]), "context tokens") {
 		t.Fatalf("info: status %d body %v", status, body)
 	}
-	if len(backend.asked) != 1 || backend.asked[0].Session != "main" || backend.asked[0].Profile != "review/a" {
+	if len(backend.asked) != 1 || bare(backend.asked[0].Session) != "main" || backend.asked[0].Profile != "review/a" {
 		t.Fatalf("backend asked = %+v", backend.asked)
 	}
 }

@@ -76,7 +76,11 @@ func newPMFixture(t *testing.T, mutate func(*sessionfs.NativeProfileMessageSetti
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 60000, ResultMaxBytes: 4096, MaxChain: 2, MaxQueued: 4}
+	reference, err := f.service.resolver.CanonicalSessionReference("local:demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "local", Session: reference, Profile: "dev/coder"}, TimeoutMs: 60000, ResultMaxBytes: 4096, MaxChain: 2, MaxQueued: 4}
 	if mutate != nil {
 		mutate(&settings)
 	}
@@ -85,10 +89,6 @@ func newPMFixture(t *testing.T, mutate func(*sessionfs.NativeProfileMessageSetti
 		t.Fatal(err)
 	}
 	async, err := native.NewAsyncTool(host)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference, err := f.service.resolver.CanonicalSessionReference("local:demo")
 	if err != nil {
 		t.Fatal(err)
 	}

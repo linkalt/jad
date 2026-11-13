@@ -164,8 +164,8 @@ func versionText(version string) string {
 	return version
 }
 
-// pluginTarget is the catalog layout of the roots and the first skill and command folders
-// of its root setting, with the setting's cli section. The catalogs are global to the root setting, so every root shares them.
+// pluginTarget is the catalog layout of the roots and the first global skill and command
+// folders, with the cli section of global.json.
 func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{})
 	if err != nil {
@@ -197,43 +197,19 @@ func pluginTarget() (plugins.Target, sessionfs.CLISettings, error) {
 		},
 	}
 	target.ReadCommands = contentlibrary.CheckCommands
-	if sessionfs.WorkspaceLayout(loaded.Roots) {
-		// Plugins are global in the workspace layout: their models, toolsets and MCP servers go
-		// to G, their records and files to G/state/.plugins, so every workspace sees the same
-		// install; a global delete checks every workspace's profiles. There are no global
-		// profiles, so a plugin that ships some is refused.
-		layout, roots, err := sessionfs.ScopedCatalogLayout(loaded.Roots, sessionfs.CatalogScopeGlobal, sessionfs.CatalogModels)
-		if err != nil {
-			return plugins.Target{}, sessionfs.CLISettings{}, err
-		}
-		layout.State = filepath.Join(loaded.GlobalDir, "state")
-		target.Layout, target.Roots = layout, roots
-		target.NoProfiles = "the workspace layout has no global profiles; copy them into a workspace's .jad/profiles by hand"
-	}
-	if root.Layout.Libraries != nil {
-		// Workspace layout: plugins are global, so skills and commands go to the first global
-		// folders of global.json (no setting.json is read).
-		var err error
-		if target.SkillDir, target.CommandDir, target.SkillMaxBytes, err = contentlibrary.GlobalInstallFolders(root.Layout.Libraries); err != nil {
-			return plugins.Target{}, sessionfs.CLISettings{}, err
-		}
-		return target, loaded.CLI, nil
-	}
-	directories, err := contentlibrary.SkillDirectories(root.GlobalJadRoot)
+	// Plugins are global: their models, toolsets and MCP servers go to G, their records and
+	// files to G/state/.plugins, so every workspace sees the same install; a global delete
+	// checks every workspace's profiles. There are no global profiles, so a plugin that ships
+	// some is refused.
+	layout, roots, err := sessionfs.ScopedCatalogLayout(loaded.Roots, sessionfs.CatalogScopeGlobal, sessionfs.CatalogModels)
 	if err != nil {
 		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}
-	if len(directories) > 0 {
-		target.SkillDir = directories[0]
-	}
-	commandDirectories, err := contentlibrary.CommandDirectories(root.GlobalJadRoot)
-	if err != nil {
-		return plugins.Target{}, sessionfs.CLISettings{}, err
-	}
-	if len(commandDirectories) > 0 {
-		target.CommandDir = commandDirectories[0]
-	}
-	if target.SkillMaxBytes, err = contentlibrary.AssetByteLimit(root.GlobalJadRoot); err != nil {
+	layout.State = filepath.Join(loaded.GlobalDir, "state")
+	target.Layout, target.Roots = layout, roots
+	target.NoProfiles = "the workspace layout has no global profiles; copy them into a workspace's .jad/profiles by hand"
+	// Skills and commands go to the first global folders of global.json.
+	if target.SkillDir, target.CommandDir, target.SkillMaxBytes, err = contentlibrary.GlobalInstallFolders(root.Layout.Libraries); err != nil {
 		return plugins.Target{}, sessionfs.CLISettings{}, err
 	}
 	return target, loaded.CLI, nil

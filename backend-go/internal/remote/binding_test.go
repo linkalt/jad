@@ -22,15 +22,15 @@ func TestParseBindingNeedsAWorkspaceAndNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.Workspace != "proj" || !entry.V2 || entry.Keyed() || entry.WireSession("main") != "proj:main" || entry.TokenEnv != "" || entry.TokenFile != "" {
+	if entry.Workspace != "proj" || entry.Keyed() || entry.WireSession("main") != "proj:main" {
 		t.Fatalf("%+v", entry)
 	}
 	for name, c := range map[string]struct{ data, want string }{
 		"no workspace":    {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787"}}`, "remote.workspace is required"},
 		"colon workspace": {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"a:b"}}`, "remote.workspace is required"},
-		"token_env":       {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token_env":"JAD_REMOTE_X"}}`, "remote.token_env was removed in the workspace layout; the secret moves to a key file"},
-		"token_file":      {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token_file":"t"}}`, "remote.token_file was removed in the workspace layout; move the secret to a key file G/auth/keys"},
-		"default_session": {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","default_session":"main"}}`, "remote.default_session was removed in the workspace layout; write the session in the address"},
+		"token_env":       {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token_env":"JAD_REMOTE_X"}}`, "remote.token_env was removed with workspace layout v1; the secret moves to a key file"},
+		"token_file":      {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token_file":"t"}}`, "remote.token_file was removed with workspace layout v1; move the secret to a key file G/auth/keys"},
+		"default_session": {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","default_session":"main"}}`, "remote.default_session was removed with workspace layout v1; write the session in the address"},
 		"inline token":    {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","token":"` + bindingSecret + `"}}`, "token"},
 		"unknown key":     {`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","workspace":"proj","bogus":1}}`, "bogus"},
 		"wrong kind":      {`{"kind":"other","remote":{"url":"http://10.0.0.2:8787","workspace":"proj"}}`, "kind"},
@@ -44,21 +44,9 @@ func TestParseBindingNeedsAWorkspaceAndNoCredential(t *testing.T) {
 	}
 }
 
-// The v1 reader is as it was: the credential and the default session are its keys, and a
-// workspace is not.
-func TestParseEntryOfTheV1LayoutIsUnchanged(t *testing.T) {
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","token_env":"JAD_REMOTE_X","default_session":"main"}}`))
-	if err != nil || entry.V2 || !entry.Keyed() || entry.WireSession("main") != "main" || entry.DefaultSession != "main" || entry.TokenEnv != "JAD_REMOTE_X" {
-		t.Fatalf("%+v %v", entry, err)
-	}
-	if _, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"http://10.0.0.2:8787","token_env":"JAD_REMOTE_X","workspace":"proj"}}`)); err == nil || !strings.Contains(err.Error(), "remote.workspace is a key of the workspace layout") {
-		t.Fatalf("a v1 file with workspace: %v", err)
-	}
-}
-
 func TestParseBindingProfileFormsAndSessionQualification(t *testing.T) {
 	entry := func(name string) (Entry, error) {
-		return Entry{Name: name, Workspace: "proj", V2: true}, nil
+		return Entry{Name: name, Workspace: "proj"}, nil
 	}
 	target, err := ParseBindingProfile("remote:box/main/review/security", entry)
 	if err != nil || target.Remote != "box" || target.Session != "main" || target.Profile != "review/security" || target.WireSession() != "proj:main" {
@@ -161,7 +149,7 @@ func TestScopedDirectoryUsesTheKeyOfTheBindingAndReadsItEachTime(t *testing.T) {
 		return ""
 	})
 	defer hub.Close()
-	directory := hub.Directory(remotes).Scoped(Scope{Workspace: true, Keys: map[string]Key{"box": {Name: "k", File: keyPath}, "other": {Name: "k", File: keyPath}}})
+	directory := hub.Directory(remotes).Scoped(Scope{Keys: map[string]Key{"box": {Name: "k", File: keyPath}, "other": {Name: "k", File: keyPath}}})
 	call := func(name string) error {
 		client, err := directory.Client(name)
 		if err != nil {
@@ -203,7 +191,7 @@ func TestScopedDirectoryUsesTheKeyOfTheBindingAndReadsItEachTime(t *testing.T) {
 func TestKeyTokenFromTheEnvironment(t *testing.T) {
 	keys := t.TempDir()
 	path := writeKey(t, keys, "k", `{"kind":"remote_key","binding":"box","token_env":"JAD_REMOTE_BOX"}`, 0o600)
-	entry := Entry{Name: "box", V2: true, Workspace: "proj", KeyName: "k", KeyFile: path}
+	entry := Entry{Name: "box", Workspace: "proj", KeyName: "k", KeyFile: path}
 	if _, err := entry.Token(func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "JAD_REMOTE_BOX is not set") {
 		t.Fatalf("unset: %v", err)
 	}
@@ -219,7 +207,7 @@ func TestKeyTokenFromTheEnvironment(t *testing.T) {
 		t.Fatalf("%q %v", token, err)
 	}
 	// An entry without a key has no credential, and no environment variable stands in for one.
-	if _, err := (Entry{Name: "box", V2: true, Workspace: "proj"}).Token(func(string) string { return bindingSecret }); err == nil || !strings.Contains(err.Error(), "no key") {
+	if _, err := (Entry{Name: "box", Workspace: "proj"}).Token(func(string) string { return bindingSecret }); err == nil || !strings.Contains(err.Error(), "no key") {
 		t.Fatalf("unkeyed: %v", err)
 	}
 }
@@ -235,13 +223,13 @@ func TestScopedDirectoriesKeepClientsPerKeyFile(t *testing.T) {
 	hub := NewHub(nil)
 	defer hub.Close()
 	base := hub.Directory(remotes)
-	a, _ := base.Scoped(Scope{Workspace: true, Keys: map[string]Key{"box": {Name: "one", File: one}}}).Client("box")
-	b, _ := base.Scoped(Scope{Workspace: true, Keys: map[string]Key{"box": {Name: "two", File: two}}}).Client("box")
-	again, _ := base.Scoped(Scope{Workspace: true, Keys: map[string]Key{"box": {Name: "one", File: one}}}).Client("box")
+	a, _ := base.Scoped(Scope{Keys: map[string]Key{"box": {Name: "one", File: one}}}).Client("box")
+	b, _ := base.Scoped(Scope{Keys: map[string]Key{"box": {Name: "two", File: two}}}).Client("box")
+	again, _ := base.Scoped(Scope{Keys: map[string]Key{"box": {Name: "one", File: one}}}).Client("box")
 	if a == b || a != again {
 		t.Fatalf("clients: one=%p two=%p one-again=%p", a, b, again)
 	}
-	unkeyed, err := base.Scoped(Scope{Workspace: true}).Entry("box")
+	unkeyed, err := base.Scoped(Scope{}).Entry("box")
 	if err != nil || unkeyed.Keyed() {
 		t.Fatalf("an unkeyed binding: %+v %v", unkeyed, err)
 	}

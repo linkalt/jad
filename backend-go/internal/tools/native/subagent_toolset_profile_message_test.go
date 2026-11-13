@@ -12,7 +12,7 @@ import (
 
 func toolsetAgentChildTools(t *testing.T, listed ...string) ([]string, error) {
 	t.Helper()
-	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, &childMessenger{}, nil)
+	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, &childMessenger{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

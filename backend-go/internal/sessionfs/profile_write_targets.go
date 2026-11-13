@@ -114,7 +114,7 @@ func ProfileOwnTarget(roots []string, path string) (resolved, root string) {
 
 // selfEditPaths are the folders profile self-edit writes (SessionConfig.SelfEditPaths): the
 // profile-own folder of every known workspace (documents and history) and this workspace's
-// profile catalog. Workspace layout only.
+// profile catalog. Nil for the global scope.
 func (l Layout) selfEditPaths() []string {
 	if l.Workspace == "" {
 		return nil

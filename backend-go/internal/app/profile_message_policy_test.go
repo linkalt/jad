@@ -231,7 +231,7 @@ func TestProfileMessageDeniedTargetsAreNotAdvertised(t *testing.T) {
 	if settings == nil || len(settings.WorkspaceDeny) != 1 {
 		t.Fatalf("settings = %+v", settings)
 	}
-	targets := sessionfs.ProfileMessageTargets(bound.config.Profiles, bound.config.Profile, nil)
+	targets := sessionfs.ProfileMessageTargets(bound.config.Profiles, bound.config.Profile)
 	if got := settings.ShownTargets(targets); len(got) != 0 {
 		t.Fatalf("shown = %q, want none (review/reviewer is refused as a whole)", got)
 	}

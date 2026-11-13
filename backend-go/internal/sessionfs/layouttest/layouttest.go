@@ -90,9 +90,7 @@ type Fixture struct {
 	// WorkspaceSetting is W/.jad/workspace.json, GlobalSetting is G/global.json.
 	WorkspaceSetting string
 	GlobalSetting    string
-	// RootSetting is the root setting.json of the retired layout v1; only WriteV1 sets it.
-	RootSetting string
-	SessionsDir string
+	SessionsDir      string
 	// SessionFile is <sessions dir>/<id>.json; SessionStateDir is <state>/<id>.
 	SessionFile     string
 	SessionStateDir string

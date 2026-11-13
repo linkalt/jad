@@ -59,14 +59,13 @@ func TestNormalizeNativeSkillSettingsRejectsInvalidSettings(t *testing.T) {
 	}
 }
 
-func TestLoadSessionConfigAcceptsTheSkillToolAndKeepsTheGlobalRoot(t *testing.T) {
+func TestLoadSessionConfigAcceptsTheSkillToolAndKeepsTheLibraries(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{Native: map[string]any{"skill": map[string]any{"max_bytes": 4096}}})
-	rootDir := fixture.GlobalDir
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig: %v", err)
 	}
-	if config.NativeSkill == nil || config.NativeSkill.MaxBytes != 4096 || config.GlobalJadRoot != rootDir {
-		t.Fatalf("skill = %+v, global root = %q; want max_bytes 4096 and %q", config.NativeSkill, config.GlobalJadRoot, rootDir)
+	if config.NativeSkill == nil || config.NativeSkill.MaxBytes != 4096 || config.Libraries == nil || config.Libraries.GlobalDir != fixture.GlobalDir {
+		t.Fatalf("skill = %+v, libraries = %+v; want max_bytes 4096 and the global folder %q", config.NativeSkill, config.Libraries, fixture.GlobalDir)
 	}
 }

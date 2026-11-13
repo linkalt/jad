@@ -404,7 +404,7 @@ func TestProfileMessageHandleReportsTheTargetsActivity(t *testing.T) {
 	transcript := filepath.Join(t.TempDir(), "messages.jsonl")
 	writeActivity(t, transcript, userLine("hi"), answerLine(1, 1, textItem("working on the review")))
 	messenger := &pathMessenger{controlMessenger: f.messenger, path: transcript}
-	message, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, profileMessageTargets, messenger, f.host)
+	message, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, profileMessageTargets, messenger, f.host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +718,7 @@ func TestProfileMessageHandleOfAnotherWorkspaceNamesNoPath(t *testing.T) {
 	writeActivity(t, transcript, userLine("hi"), answerLine(1, 1, textItem("working on the review")))
 	const label = "b:s1/review/reviewer"
 	messenger := &labelledMessenger{pathMessenger: &pathMessenger{controlMessenger: f.messenger, path: transcript}, label: label}
-	message, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, profileMessageTargets, messenger, f.host)
+	message, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, profileMessageTargets, messenger, f.host)
 	if err != nil {
 		t.Fatal(err)
 	}

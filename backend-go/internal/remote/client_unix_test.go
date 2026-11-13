@@ -34,10 +34,7 @@ func TestClientUnixSocketOwnerAndDirectoryAreChecked(t *testing.T) {
 		return &calls
 	}
 	call := func(socket string) error {
-		entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+socket+`","token_env":"JAD_REMOTE_T","retries":0}}`))
-		if err != nil {
-			t.Fatal(err)
-		}
+		entry := testEntry(t, []byte(`{"kind":"remote","remote":{"workspace":"proj","url":"unix://`+socket+`","retries":0}}`))
 		return newClient(t, entry).Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
 	}
 
@@ -111,10 +108,7 @@ func TestClientRefusesARealForeignPeerAfterTheDial(t *testing.T) {
 	if _, err := exec.LookPath("socat"); err != nil {
 		t.Skip("socat is unavailable, so no foreign listener can run:", err)
 	}
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+shortSocket(t)+`","token_env":"JAD_REMOTE_T","timeout_ms":2000,"retries":0}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entry := testEntry(t, []byte(`{"kind":"remote","remote":{"workspace":"proj","url":"unix://`+shortSocket(t)+`","timeout_ms":2000,"retries":0}}`))
 	socket := entry.Unix
 	if err := os.Chmod(filepath.Dir(socket), 0o777|os.ModeSticky); err != nil {
 		t.Fatal(err)
@@ -138,7 +132,7 @@ func TestClientRefusesARealForeignPeerAfterTheDial(t *testing.T) {
 	if out, err := exec.Command("sudo", "-n", "chown", strconv.Itoa(os.Getuid()), socket).CombinedOutput(); err != nil {
 		t.Fatalf("chown: %v: %s", err, out)
 	}
-	err = newClient(t, entry).Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
+	err := newClient(t, entry).Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "answered by another user") {
 		t.Fatalf("a socket answered by another user must be refused after the dial: %v", err)
 	}

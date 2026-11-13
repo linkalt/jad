@@ -124,9 +124,9 @@ func TestEscapedPathCannotReachAnotherRoute(t *testing.T) {
 	}
 }
 
-// A session written <workspace>:<session> is reached by a glob that says so: "*" or a session part
-// with a colon. A glob that only meant bare ids ("s*", "*1") keeps meaning them (T-036).
-func TestGlobsReachAQualifiedSessionOnlyWhenTheySayWorkspace(t *testing.T) {
+// A token's globs are over bare sessions: a session written <workspace>:<session> is never matched
+// by one (the server strips the workspace of the token's own row first), and a glob has no colon.
+func TestGlobsMatchBareSessionsOnly(t *testing.T) {
 	for _, c := range []struct {
 		glob, target string
 		want         bool
@@ -135,15 +135,8 @@ func TestGlobsReachAQualifiedSessionOnlyWhenTheySayWorkspace(t *testing.T) {
 		{"s*/dev/*", "staging:x/dev/coder", false},
 		{"*1/dev/*", "a:s1/dev/coder", false},
 		{"*1/dev/*", "s1/dev/coder", true},
-		{"s1/dev/*", "a:s1/dev/coder", false},
-		{"*/dev/*", "a:s1/dev/coder", true},
+		{"*/dev/*", "a:s1/dev/coder", false},
 		{"*/dev/*", "s1/dev/coder", true},
-		{"a:*/dev/*", "a:s1/dev/coder", true},
-		{"a:*/dev/*", "b:s1/dev/coder", false},
-		{"a:*/dev/*", "s1/dev/coder", false},
-		{"a:s1/dev/coder", "a:s1/dev/coder", true},
-		{"*:s1/dev/*", "b:s1/dev/coder", true},
-		{"*:s1/dev/*", "b:s2/dev/coder", false},
 	} {
 		if got := (&Token{Profiles: []string{c.glob}}).MayProfile(c.target); got != c.want {
 			t.Errorf("glob %q on %q: %v, want %v", c.glob, c.target, got, c.want)

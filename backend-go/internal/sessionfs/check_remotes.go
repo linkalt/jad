@@ -14,7 +14,7 @@ import (
 // of G/auth/keys the way a session load would, and reports what is wrong with them. A key file's
 // secret is never read into the report: the messages name the key and the binding only.
 func (r *CheckReport) checkRemoteFiles(layout Layout) {
-	if layout.Workspace == "" || layout.Remotes == "" {
+	if layout.Remotes == "" {
 		return
 	}
 	entries, problems := remote.ListBindings(layout.Remotes)
@@ -52,9 +52,6 @@ func (r *CheckReport) checkRemoteFiles(layout Layout) {
 // binding a tool lists that no key of the session reaches: the tool leaves it out and answers
 // unknown_remote for it. A note never fails the check.
 func (r *CheckReport) checkRemoteKeysOf(id string, config SessionConfig) {
-	if !config.WorkspaceLayout {
-		return
-	}
 	if config.RemoteKeyFault != nil {
 		r.add("session", id, config.RemoteKeyFault)
 		return

@@ -32,7 +32,7 @@ func TestWrappersDoNotOptIntoTheLeafBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profileMessage, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, []string{"review/reviewer"}, nopProfileMessenger{}, host)
+	profileMessage, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, []string{"review/reviewer"}, nopProfileMessenger{}, host)
 	if err != nil {
 		t.Fatal(err)
 	}

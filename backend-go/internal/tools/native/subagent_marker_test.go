@@ -179,7 +179,7 @@ func TestRemoteListNamesTheRemotesOfThisMachine(t *testing.T) {
 	// The description is built when the tool is, so build it again with the entries in place.
 	settings := subagentSettings(agentNamed("explore"))
 	settings.Remotes, settings.RemoteTimeoutMs = []string{"peer", "near", "far"}, 20_000
-	tool, err := newSubagentToolRemotes(settings, withExecutors(t, readOnlyTool("read")), nil, f.local, nil, NewSubagentManager(), nil, f.hub.Directory(f.peer.dir))
+	tool, err := newSubagentToolRemotes(settings, withExecutors(t, readOnlyTool("read")), nil, f.local, nil, NewSubagentManager(), nil, f.peer.directory(f.hub))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestRemoteListNamesTheRemotesOfThisMachine(t *testing.T) {
 	}
 	// No remote of this machine, no sentence.
 	settings.Remotes = []string{"peer", "far"}
-	tool, err = newSubagentToolRemotes(settings, withExecutors(t, readOnlyTool("read")), nil, f.local, nil, NewSubagentManager(), nil, f.hub.Directory(f.peer.dir))
+	tool, err = newSubagentToolRemotes(settings, withExecutors(t, readOnlyTool("read")), nil, f.local, nil, NewSubagentManager(), nil, f.peer.directory(f.hub))
 	if err != nil {
 		t.Fatal(err)
 	}

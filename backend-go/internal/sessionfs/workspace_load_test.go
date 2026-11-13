@@ -1,7 +1,6 @@
 package sessionfs
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,40 +95,43 @@ func TestWorkspaceLayoutKeepsSessionsProfilesAndStateInTheWorkspace(t *testing.T
 	}
 }
 
-// A v1 start never reads G/global.json, however broken it is, and a v2 start never reads a
-// setting.json in G or W.
-func TestGlobalJSONIsIgnoredByAV1StartAndSettingJSONByAV2Start(t *testing.T) {
+// A start without .jad/workspace.json does not read G/global.json and does not start empty: an
+// old v1 setting is named in the error with the way to migrate, JAD_ROOT_SETTING_PATH is a removed
+// variable, and a directory with neither is "no workspace". A workspace never reads a setting.json
+// in G or W.
+func TestWithoutAWorkspaceTheStartFailsAndSettingJSONIsNeverRead(t *testing.T) {
 	f := newWSFixture(t)
-	f.globalJSON(t, `{"not":"a v1 key"`)
+	f.globalJSON(t, `{"not":"a v2 key"`)
 	v1 := filepath.Join(f.base, "old")
 	wsPut(t, filepath.Join(v1, ".jad", "setting.json"), `{"session_roots":[{"id":"old","path":"s"}]}`)
-	config := wsMustLoad(t, f, v1)
-	if config.Roots[0].ID != "old" || config.Workspaces != nil {
-		t.Fatalf("v1 start: %+v", config.Roots)
-	}
+	wsMustRefuse(t, f, v1, "workspace layout v1 is no longer supported", filepath.Join(v1, ".jad", "setting.json"), "jad migrate workspace", LastMigrateCommit)
 	bare := filepath.Join(f.base, "bare")
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if config := wsMustLoad(t, f, bare); config.Roots[0].ID != defaultRootID {
-		t.Fatalf("no setting: %+v", config.Roots)
+	wsMustRefuse(t, f, bare, "no workspace", filepath.Join(bare, ".jad", "workspace.json"))
+	for _, name := range []string{"JAD_ROOT_SETTING_PATH", "JAD_SESSIONS_DIR"} {
+		if _, err := Load(LoadOptions{WorkingDir: bare, Environment: map[string]string{"HOME": f.home, name: "x"}}); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// An old setting in the home folder is found too.
+	home := filepath.Join(f.base, "home2")
+	wsPut(t, filepath.Join(home, ".jad", "setting.json"), `{}`)
+	if _, err := Load(LoadOptions{WorkingDir: bare, Environment: map[string]string{"HOME": home}}); err == nil || !strings.Contains(err.Error(), filepath.Join(home, ".jad", "setting.json")) {
+		t.Errorf("home setting: %v", err)
 	}
 
 	f.globalJSON(t, `{"schema_version":2}`)
 	wsPut(t, filepath.Join(f.global, "setting.json"), `{"broken"`)
 	w := f.workspace(t, "proj", `{}`)
 	wsPut(t, filepath.Join(w, ".jad", "setting.json"), `{"broken"`)
-	config = wsMustLoad(t, f, w)
+	config := wsMustLoad(t, f, w)
 	notes := strings.Join(config.Warnings, "\n")
 	for _, ignored := range []string{filepath.Join(f.global, "setting.json"), filepath.Join(w, ".jad", "setting.json")} {
 		if !strings.Contains(notes, ignored+" is not read") {
 			t.Errorf("no warning about %s: %s", ignored, notes)
 		}
-	}
-	// A named root setting keeps v1 even in a workspace.
-	named, err := Load(LoadOptions{WorkingDir: w, RootSettingPath: filepath.Join(v1, ".jad", "setting.json"), Environment: map[string]string{"HOME": f.home}})
-	if err != nil || named.Roots[0].ID != "old" {
-		t.Fatalf("named setting: %+v, %v", named.Roots, err)
 	}
 }
 
@@ -465,17 +467,5 @@ func TestProfileCannotLoosenOrderedKeysInAWorkspace(t *testing.T) {
 		if _, err := wsSession(t, config, "s1", "dev/"+name); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("selected %s: %v", name, err)
 		}
-	}
-}
-
-// v1 layouts are never checked for ceilings: a v1 profile may still raise a default.
-func TestV1ProfileMayStillRaiseADefault(t *testing.T) {
-	layout := Layout{Defaults: map[string]json.RawMessage{"max_run_tokens": json.RawMessage("10")}}
-	if err := checkProfileCeilings(layout, layoutSessionFile{}, "p.json", map[string]json.RawMessage{"max_run_tokens": json.RawMessage("99")}, nil); err != nil {
-		t.Fatal(err)
-	}
-	layout.Workspace = "/w"
-	if err := checkProfileCeilings(layout, layoutSessionFile{}, "p.json", map[string]json.RawMessage{"max_run_tokens": json.RawMessage("99")}, nil); err == nil {
-		t.Fatal("the workspace layout must refuse it")
 	}
 }

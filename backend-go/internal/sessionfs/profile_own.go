@@ -35,13 +35,13 @@ const (
 )
 
 // ProfileOwnDir is W/.jad/profile-own/<category>/<name> of the profile id in the workspace
-// layout, and "" in v1 or for an id that is not a <category>/<name> name.
+// layout, and "" for an id that is not a <category>/<name> name.
 func (l Layout) ProfileOwnDir(id string) string {
 	return l.profileFolder(profileOwnFolder, id)
 }
 
 // ProfileDataDir is W/.jad/data/profiles/<category>/<name> of the profile id in the
-// workspace layout, and "" in v1 or for an id that is not a <category>/<name> name.
+// workspace layout, and "" for an id that is not a <category>/<name> name.
 func (l Layout) ProfileDataDir(id string) string {
 	return l.profileFolder(profileDataFolder, id)
 }
@@ -182,7 +182,7 @@ func (l Layout) judgePrivateDocuments(id, profilePath string, file layoutProfile
 
 // profilePrivateRoots are the folders that hold every profile's private folders in the
 // workspace, W/.jad/profile-own and W/.jad/data/profiles, as written and below the real
-// W/.jad; nil in v1.
+// W/.jad; nil for the global scope, which has no profiles.
 func (l Layout) profilePrivateRoots() []string {
 	if l.Workspace == "" {
 		return nil
@@ -210,13 +210,4 @@ func (l Layout) profileShown(id string) []string {
 		shown = append(shown, filepath.Join(real, profileOwnFolder, relative), filepath.Join(real, profileDataFolder, relative))
 	}
 	return shown
-}
-
-// refuseV1ProfileData refuses {profile_data} in a sandbox value of a v1 session, where no
-// profile has a data folder, as an unknown placeholder was refused before the workspace layout.
-func (c *layoutCompose) refuseV1ProfileData(raw json.RawMessage, where string) error {
-	if c.layout.Workspace == "" && strings.Contains(string(raw), ProfileDataPlaceholder) {
-		return configError("%s: %s is only known in the workspace layout (W/.jad/workspace.json); known are {workspace}, {cwd}, {git_common_dir}, {tmp}, {home}, {session_dir}, {system}", where, ProfileDataPlaceholder)
-	}
-	return nil
 }

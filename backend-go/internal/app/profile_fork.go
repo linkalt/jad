@@ -48,11 +48,8 @@ func (r *Resolver) forkIntoProfile(ctx context.Context, source sessionfs.Locatio
 	if err != nil {
 		return httpapi.ForkResult{}, err
 	}
-	// The profile lives in the session's workspace in the workspace layout.
-	scope := ""
-	if sessionfs.WorkspaceLayout(r.roots) {
-		scope = sessionfs.CatalogScopeWorkspacePrefix + source.Root.ID
-	}
+	// The profile lives in the session's workspace.
+	scope := sessionfs.CatalogScopeWorkspacePrefix + source.Root.ID
 	sourceFile, err := r.ReadCatalogFile(ctx, "profiles", config.Profile, scope)
 	if err != nil {
 		return httpapi.ForkResult{}, err

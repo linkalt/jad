@@ -566,12 +566,8 @@ func remoteSubagentBase(config sessionfs.SessionConfig) (sessionfs.SessionConfig
 // workspace to a message that comes in from another server (design §30.3, R5): a remote caller has
 // no local address, so only a rule without from can match it, and it can ask for the message
 // action alone (no reset or model choice crosses the wire). The refusal is ErrForbidden, which the
-// server answers like a token whose globs do not reach the target. Outside the workspace layout
-// there are no rules.
+// server answers like a token whose globs do not reach the target.
 func (b remoteBackend) checkPolicy(resolved httpapi.ResolvedSession) error {
-	if !sessionfs.WorkspaceLayout(b.resolver.roots) {
-		return nil
-	}
 	location, err := sessionfs.Resolve(b.resolver.roots, resolved.Reference)
 	if err != nil {
 		return remoteapi.ErrNoSession

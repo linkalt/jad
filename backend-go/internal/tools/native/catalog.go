@@ -190,13 +190,10 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if err != nil {
 			return CatalogSections{}, err
 		}
-		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)
+		targets := sessionfs.ProfileMessageTargets(config.Profiles, config.Profile)
 		remotes, remoteNames, err := remoteDirectory(config, "profile_message", config.NativeProfileMessage.Remotes, messenger)
 		if err != nil {
 			return CatalogSections{}, err
-		}
-		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 && config.NativeProfileMessage.Caller.Workspace == "" {
-			return CatalogSections{}, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
 		messageSettings := *config.NativeProfileMessage
 		messageSettings.Remotes = remoteNames
@@ -440,7 +437,7 @@ func buildNativeTools(config sessionfs.SessionConfig, locks *PathLocks, taskStor
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tool, err := NewSkillTool(*config.NativeSkill, config.GlobalJadRoot, config.Libraries)
+		tool, err := NewSkillTool(*config.NativeSkill, config.Libraries)
 		if err != nil {
 			return nil, nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -695,15 +692,13 @@ func remoteDirectory(config sessionfs.SessionConfig, tool string, names []string
 		return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s.remotes needs a catalog-layout session with a remotes folder", config.SettingPath, tool)}
 	}
 	directory := provider.RemoteDirectory(config.RemotesDir)
-	if config.WorkspaceLayout {
-		// The one place a credential is chosen: the session's effective keys, by binding. Every
-		// remote tool reads its entries and clients through this directory.
-		scope := remote.Scope{Workspace: true, Keys: make(map[string]remote.Key, len(config.RemoteKeys))}
-		for binding, key := range config.RemoteKeys {
-			scope.Keys[binding] = remote.Key{Name: key.Name, File: key.File}
-		}
-		directory = directory.Scoped(scope)
+	// The one place a credential is chosen: the session's effective keys, by binding. Every
+	// remote tool reads its entries and clients through this directory.
+	scope := remote.Scope{Keys: make(map[string]remote.Key, len(config.RemoteKeys))}
+	for binding, key := range config.RemoteKeys {
+		scope.Keys[binding] = remote.Key{Name: key.Name, File: key.File}
 	}
+	directory = directory.Scoped(scope)
 	available, _ := directory.List()
 	have := make([]string, 0, len(available))
 	for _, entry := range available {

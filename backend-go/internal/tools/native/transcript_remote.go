@@ -44,8 +44,8 @@ type remoteRead struct {
 	query      url.Values
 }
 
-// remoteShapes are the forms of a remote path per tool: kind, parts without the session (the
-// entry's default_session fills it) and parts with it. A path: is never read on a remote.
+// remoteShapes are the forms of a remote path per tool: kind, parts without the session and
+// parts with it (the session is always written). A path: is never read on a remote.
 var remoteShapes = map[string]map[string][2]int{
 	"transcript":  {"profile": {2, 3}, "subagent": {3, 4}},
 	"transcripts": {"profile": {2, 3}, "session": {1, 1}},
@@ -55,8 +55,6 @@ var remoteShapes = map[string]map[string][2]int{
 // session is always bare and always written.
 const bindingPathForms = "remote:<binding>/profile:<session>/<category>/<name>, remote:<binding>/subagent:<session>/<category>/<name>/<run id>"
 
-const remotePathForms = "remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<session>/<category>/<name>/<run id> (<session> is <workspace>:<session> when the remote holds that session id in several workspaces)"
-
 // selector turns "remote:<name>/<rest>" into the name and the remote's own path, after the
 // switch, the allow-list of this tool and the entry's profile globs. An empty rest lists the
 // default session (transcripts only).
@@ -64,11 +62,7 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 	invalid := func(text string) (string, *remoteFailure) {
 		return "", &remoteFailure{status: tools.StatusInvalidInput, code: "bad_remote_reference", text: text}
 	}
-	forms := remotePathForms
-	binding := r.directory != nil && r.directory.Workspace()
-	if binding {
-		forms = bindingPathForms
-	}
+	forms := bindingPathForms
 	name, rest, _ := remote.Split(reference)
 	if !remote.NamePattern.MatchString(name) {
 		return invalid("a remote path is " + forms)
@@ -81,13 +75,7 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 		return "", &remoteFailure{status: tools.StatusError, code: "remote_unavailable", text: remoteProblem(name, err)}
 	}
 	if rest == "" {
-		if binding {
-			return invalid(fmt.Sprintf("name what to read on remote %s: %s", name, forms))
-		}
-		if tool != "transcripts" || entry.DefaultSession == "" {
-			return invalid(fmt.Sprintf("name what to read on remote %s: %s (remote:%s alone lists its default_session, when it has one)", name, remotePathForms, name))
-		}
-		return "session:" + entry.DefaultSession, nil
+		return invalid(fmt.Sprintf("name what to read on remote %s: %s", name, forms))
 	}
 	kind, body, found := strings.Cut(rest, ":")
 	shape, known := remoteShapes[tool][kind]
@@ -96,21 +84,13 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 		return invalid("a remote path is " + forms + "; path: is never read on a remote")
 	}
 	if len(parts) == shape[0] && shape[0] != shape[1] {
-		if binding {
-			return invalid("a remote path is " + forms + ": the session is always written")
-		}
-		if entry.DefaultSession == "" {
-			return invalid(fmt.Sprintf("remote %s has no default_session, so the path must name the session", name))
-		}
-		parts = append([]string{entry.DefaultSession}, parts...)
+		return invalid("a remote path is " + forms + ": the session is always written")
 	}
 	for index, part := range parts {
 		valid := remote.NamePattern.MatchString(part)
 		switch {
-		case index == 0 && binding:
-			valid = remote.SessionPattern.MatchString(part)
 		case index == 0:
-			valid = remote.SessionRefPattern.MatchString(part)
+			valid = remote.SessionPattern.MatchString(part)
 		case kind == "subagent" && index == 3:
 			valid = transcriptRunID.MatchString(part)
 		}
@@ -121,10 +101,8 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 	if kind != "session" && !entry.Allows(parts[1]+"/"+parts[2]) {
 		return "", &remoteFailure{status: tools.StatusForbidden, code: "remote_not_allowed", text: fmt.Sprintf("Profile %s/%s is not among the profiles this session may reach on remote %s", parts[1], parts[2], name)}
 	}
-	if binding {
-		// The binding is the workspace: the server is asked for <workspace>:<session>.
-		parts[0] = entry.WireSession(parts[0])
-	}
+	// The binding is the workspace: the server is asked for <workspace>:<session>.
+	parts[0] = entry.WireSession(parts[0])
 	return kind + ":" + strings.Join(parts, "/"), nil
 }
 
@@ -175,10 +153,8 @@ func (r remoteReader) read(ctx context.Context, callID string, call remoteRead, 
 		return remoteReadError(callID, call.name, err)
 	}
 	workspace := ""
-	if r.directory.Workspace() {
-		if entry, err := r.directory.Entry(call.name); err == nil {
-			workspace = entry.Workspace
-		}
+	if entry, err := r.directory.Entry(call.name); err == nil {
+		workspace = entry.Workspace
 	}
 	return rewriteRemoteOutput(output, call.name, workspace, contentMax)
 }

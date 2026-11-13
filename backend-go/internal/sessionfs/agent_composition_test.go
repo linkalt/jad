@@ -58,7 +58,7 @@ func TestAgentToolsetConfigDiffersFromTheCallersOnlyInToolsSelectionAndIdentity(
 	// The workspace layout sets the profile's private folders, its self-edit policy, the sandbox rules
 	// that hide the other profiles' folders, and the layout marker after the composition too.
 	identity := []string{"Profile", "DefaultProfile", "Profiles", "ProfileNames", "ProfilePath", "RemotesDir", "SettingSources",
-		"ProfileDataDir", "ProfileOwnDir", "ProfileSelfEdit", "SelfEditPaths", "Sandbox", "WorkspaceLayout"}
+		"ProfileDataDir", "ProfileOwnDir", "ProfileSelfEdit", "SelfEditPaths", "Sandbox"}
 	for requested, selection := range map[string][]string{
 		"":                  {"ModelPath", "ModelPaths"},
 		"openai/cheap@high": {"ModelPath", "ModelPaths", "ReasoningEffort"},

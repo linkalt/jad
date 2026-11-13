@@ -229,6 +229,7 @@ func TestTheFolderFormOfASessionIsNeitherListedNorRead(t *testing.T) {
 
 func TestWriteSessionFileRefusesAnIDAnotherRootHolds(t *testing.T) {
 	roots := sessionRoots(t, 2)
+	roots[1].Layout.State = roots[0].Layout.State // two roots that keep their state in one folder
 	original := filepath.Join(roots[0].Directory, "demo.json")
 	if err := os.WriteFile(original, []byte(`{"x":1}`), 0o600); err != nil {
 		t.Fatal(err)

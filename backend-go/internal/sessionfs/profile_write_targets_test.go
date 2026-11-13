@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
 // writeTargetFixture is workspace proj with dev/coder, a toolset per write target in W/.jad/tools
@@ -97,33 +95,6 @@ func TestProfileEditRefusesWriteTargetsInAProfileOwnFolder(t *testing.T) {
 	}
 	if _, err := e.edit(t, editBase+`,"toolset":["t/lawful"]}`); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// v1 has no profile-own folder: a tool storage folder of that name is an ordinary folder.
-func TestWriteTargetsOfV1AreNotJudged(t *testing.T) {
-	spec := profileSpec("a/one")
-	spec.Settings = map[string]any{"tool_storage_dir": "profile-own/dev/coder/documents"}
-	fixture := layouttest.WriteV1(t, spec)
-	writeToolsetFile(t, fixture, "a/one", grepToolsetText)
-	loaded, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	location, err := Resolve(loaded.Roots, fixture.SessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadSessionSettings(location, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(config.StoragePaths.ToolStorage, filepath.Join("profile-own", "dev", "coder", "documents")) {
-		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
-	}
-	// Nothing is left out of checkpoints and no tool gets profile-own roots.
-	if config.SelfEditPaths != nil || (config.NativeExec != nil && config.NativeExec.Child.ProfileOwnRoots != nil) {
-		t.Fatalf("v1 self-edit paths %v, exec %+v", config.SelfEditPaths, config.NativeExec)
 	}
 }
 

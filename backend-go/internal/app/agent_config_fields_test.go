@@ -48,7 +48,7 @@ var agentConfigFields = map[string]agentConfigField{
 	// RemoteKeys and RemoteKeyFault belong to the session's own remote tools: an agent toolset has
 	// no remotes folder (RemotesDir is the caller's), so no remote tool of a toolset agent uses them.
 	"RemoteKeys": fieldCallerOnly, "RemoteKeyFault": fieldCallerOnly,
-	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelBases": fieldCallerOnly, "WorkspaceLayout": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
+	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelBases": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
 
 	// Tool surface.
 	"NativeExec": fieldToolSurface, "NativeReadImage": fieldToolSurface, "NativeLSP": fieldToolSurface,
@@ -79,7 +79,7 @@ var agentConfigFields = map[string]agentConfigField{
 	"SessionName": fieldLayer, "ModelDefault": fieldLayer, "Models": fieldLayer, "SettingPath": fieldLayer,
 	"StateDir": fieldLayer, "MessagesPath": fieldLayer, "MessagesBackupPath": fieldLayer, "UsageCachePath": fieldLayer,
 	"StagingDir": fieldLayer, "StoragePaths": fieldLayer, "WorkingDir": fieldLayer, "SessionFiles": fieldLayer,
-	"FilePolicy": fieldLayer, "GlobalJadRoot": fieldLayer, "Libraries": fieldLayer, "HTTPDebug": fieldLayer, "ToolDefinitionPaths": fieldLayer,
+	"FilePolicy": fieldLayer, "Libraries": fieldLayer, "HTTPDebug": fieldLayer, "ToolDefinitionPaths": fieldLayer,
 	"MaxToolRounds": fieldLayer, "MaxParallelToolCalls": fieldLayer, "ToolCallScheduling": fieldLayer,
 	"ProviderRetry": fieldLayer, "ProviderStream": fieldLayer, "ProviderNetwork": fieldLayer,
 	"MaxRunTokens": fieldLayer, "ModelFallback": fieldLayer, "Sandbox": fieldLayer, "Isolation": fieldLayer,

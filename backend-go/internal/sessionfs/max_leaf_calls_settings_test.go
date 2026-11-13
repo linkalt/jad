@@ -25,7 +25,7 @@ func TestMaxLeafCallsRefusesOutOfRangeAndNonIntegersAndReadsNullAsAbsent(t *test
 	for _, value := range []string{`0`, `1025`, `"4"`, `1.5`} {
 		cwd := t.TempDir()
 		writeServerSetting(t, cwd, `{"max_leaf_calls":`+value+`}`)
-		_, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		_, err := loadServerSection(cwd)
 		if err == nil || !strings.Contains(err.Error(), "server.max_leaf_calls") {
 			t.Fatalf("value %s: error = %v, want server.max_leaf_calls refused", value, err)
 		}

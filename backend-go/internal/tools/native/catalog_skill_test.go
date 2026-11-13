@@ -29,7 +29,7 @@ func TestBuildCatalogLoadsConfiguredSkillAndServesIt(t *testing.T) {
 		SettingPath:         filepath.Join(directory, "setting.json"),
 		ToolDefinitionPaths: []string{writeSkillManifest(t, directory)},
 		NativeSkill:         &sessionfs.NativeSkillSettings{MaxBytes: 131072},
-		GlobalJadRoot:       directory,
+		Libraries:           &sessionfs.Libraries{GlobalDir: directory},
 	})
 	if err != nil {
 		t.Fatalf("BuildCatalog: %v", err)
@@ -47,7 +47,7 @@ func TestBuildCatalogLoadsConfiguredSkillAndServesIt(t *testing.T) {
 func TestBuildCatalogRequiresTheSkillManifestAndItsExactSchema(t *testing.T) {
 	directory := t.TempDir()
 	settings := &sessionfs.NativeSkillSettings{MaxBytes: 131072}
-	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), NativeSkill: settings, GlobalJadRoot: directory})
+	_, err := BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), NativeSkill: settings, Libraries: &sessionfs.Libraries{GlobalDir: directory}})
 	if err == nil || !strings.Contains(err.Error(), "tools.native.skill is configured but native.skill is missing from tool_definition_paths") {
 		t.Fatalf("missing skill manifest error = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuildCatalogRequiresTheSkillManifestAndItsExactSchema(t *testing.T) {
 	if err := os.WriteFile(tampered, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), ToolDefinitionPaths: []string{tampered}, NativeSkill: settings, GlobalJadRoot: directory})
+	_, err = BuildCatalog(sessionfs.SessionConfig{SettingPath: filepath.Join(directory, "setting.json"), ToolDefinitionPaths: []string{tampered}, NativeSkill: settings, Libraries: &sessionfs.Libraries{GlobalDir: directory}})
 	if err == nil || !strings.Contains(err.Error(), "inputSchema must exactly match") {
 		t.Fatalf("tampered skill schema error = %v", err)
 	}

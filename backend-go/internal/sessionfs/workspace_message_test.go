@@ -1,7 +1,6 @@
 package sessionfs
 
 import (
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,21 +81,6 @@ func TestResolveMessageTargetIsSymmetricBetweenListedWorkspaces(t *testing.T) {
 	}
 	if _, _, err := ResolveMessageTarget(config.Roots, "zzz:s1", "b:s1"); err == nil {
 		t.Fatal("an unknown caller reached b")
-	}
-}
-
-// Outside the workspace layout a reference naming a root is not a way to another root.
-func TestResolveMessageTargetRefusesTheColonFormInV1(t *testing.T) {
-	roots := []Root{{ID: "one", Directory: t.TempDir()}, {ID: "two", Directory: t.TempDir()}}
-	for _, root := range roots {
-		wsPut(t, filepath.Join(root.Directory, "s1.json"), `{"schema_version":1}`)
-	}
-	if _, foreign, err := ResolveMessageTarget(roots, "one:s1", "two:s1"); err == nil || foreign {
-		t.Fatalf("v1 reached another root: %v", err)
-	}
-	var ambiguous *ResolveError
-	if _, _, err := ResolveMessageTarget(roots, "one:s1", "s1"); !errors.As(err, &ambiguous) || ambiguous.Kind != ResolveAmbiguous {
-		t.Fatalf("v1 bare id held by both roots: %v", err)
 	}
 }
 

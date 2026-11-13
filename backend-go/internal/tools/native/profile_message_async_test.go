@@ -150,7 +150,7 @@ func newProfileMessageHandleFixture(t *testing.T, mutate func(*sessionfs.NativeP
 		t.Fatal(err)
 	}
 	t.Cleanup(host.Close)
-	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}
+	settings := sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}
 	if mutate != nil {
 		mutate(&settings)
 	}
@@ -351,7 +351,7 @@ func TestProfileMessageAtTheHandleCapStartsNothing(t *testing.T) {
 
 func TestProfileMessageWithoutTheAsyncHostWaitsInlineAndCancelStopsIt(t *testing.T) {
 	messenger := &controlMessenger{}
-	tool, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024}, profileMessageTargets, messenger, nil)
+	tool, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024}, profileMessageTargets, messenger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

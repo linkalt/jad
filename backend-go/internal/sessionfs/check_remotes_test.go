@@ -42,7 +42,7 @@ func TestCheckReportsBrokenBindingsAndKeys(t *testing.T) {
 	report := checkKeys(t, k)
 	text := problemText(report)
 	for _, want := range []string{
-		"remote.token_env was removed in the workspace layout",
+		"remote.token_env was removed with workspace layout v1",
 		"key ka: the key file must not be readable by group or others",
 		"key orphan is for binding gone, which has no valid file",
 		"remote_keys",

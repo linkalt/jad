@@ -68,7 +68,7 @@ func TestWorkspaceLibraryRefusesANameInBothScopes(t *testing.T) {
 	if _, err := library.List(ctx, "other"); !errors.Is(err, ErrUnknownWorkspace) {
 		t.Errorf("List(other) = %v", err)
 	}
-	if _, err := New(Options{WorkingDir: base}).List(ctx, "w"); !errors.Is(err, ErrUnknownWorkspace) {
-		t.Errorf("a v1 library must refuse a workspace: %v", err)
+	if _, err := New(Options{}).List(ctx, ""); !errors.Is(err, ErrUnknownWorkspace) {
+		t.Errorf("a library of no workspace must refuse: %v", err)
 	}
 }

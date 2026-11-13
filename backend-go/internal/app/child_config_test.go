@@ -97,7 +97,7 @@ func TestChildConfigNeverComposesAnOwnModelForAnAgent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	parent := sessionfs.SessionConfig{ModelPath: own, WorkspaceLayout: true, ModelBases: map[string]sessionfs.ModelBase{own: {BasedOn: "global:openai/default", Path: base}}}
+	parent := sessionfs.SessionConfig{ModelPath: own, ModelBases: map[string]sessionfs.ModelBase{own: {BasedOn: "global:openai/default", Path: base}}}
 	if _, err := parent.WithModel(); err != nil {
 		t.Fatalf("the caller's own model: %v", err)
 	}

@@ -2,9 +2,7 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"errors"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -27,18 +25,13 @@ const DefaultNativeAgentBlockMs int64 = 120_000
 // through when max_chain is not set: the caller and one profile it reaches.
 const DefaultProfileMessageMaxChain = 2
 
-var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "deny", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
-	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
-	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
-)
+// nativeProfileMessageKeys are the keys the section knows; deny_profiles and sessions are the
+// removed v1 keys, listed so that they get their replacement hint, not a generic unknown key.
+var nativeProfileMessageKeys = []string{"deny_profiles", "deny", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
 
 // NativeProfileMessageSettings holds the settings of native.profile_message. A nil
 // pointer in SessionConfig means the tool is not configured.
 type NativeProfileMessageSettings struct {
-	// DenyProfiles are profile ids the model may not message, in configured order. The
-	// targets are the caller's session profiles minus these and the caller itself.
-	DenyProfiles []string
 	// TimeoutMs bounds the whole call, the time queued behind a busy target included.
 	TimeoutMs int
 	// DefaultBlockMs is how long a call that sends no block_ms waits for the answer before
@@ -60,11 +53,6 @@ type NativeProfileMessageSettings struct {
 	// own beside tools.native.subagent.max_depth (NativeSubagentSettings.RunMaxDepth): a message
 	// must pass both, so a longer max_chain never lets a chain run deeper than max_depth.
 	MaxChain int
-	// Sessions are globs of session ids ('*' and '?' only) whose profiles the model may message
-	// as <session>/<category>/<profile>, besides its own session's. None by default, so a
-	// session reaches only its own profiles unless it says so. A v1 key: in the workspace
-	// layout every session of the workspace is reachable and the key is refused.
-	Sessions []string
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
 	Remotes []string
@@ -81,9 +69,8 @@ type NativeProfileMessageSettings struct {
 	// catalog-layout loader in the caller's session.
 	SandboxChoice  []string
 	SandboxChoices []SandboxChoice `json:"-"`
-	// Caller is the calling session in the workspace layout (v2), whose Workspace is empty in
-	// v1. The workspace layout reads addresses by the grammar of message_address.go; v1 keeps
-	// its own. Set by the session loader, never by a setting.
+	// Caller is the calling session. Addresses are read by the grammar of message_address.go.
+	// Set by the session loader, never by a setting.
 	Caller MessageCaller `json:"-"`
 	// Workspaces are the ids of the other workspaces a message may reach by local:<workspace>/...:
 	// the listed workspaces of this process, when the caller's own workspace is listed too. It
@@ -99,7 +86,7 @@ type NativeProfileMessageSettings struct {
 	WorkspaceDeny []MessageRule `json:"-"`
 }
 
-// removedProfileMessageSessionsHint: in the workspace layout the sessions globs no longer gate
+// removedProfileMessageSessionsHint: the sessions globs of the retired v1 layout no longer gate
 // anything; a profile reaches any profile of a session of its workspace and of a listed
 // workspace, and what it may not reach is a deny rule (design §30).
 const removedProfileMessageSessionsHint = "other sessions and listed workspaces are reachable without it, written <session>/<category>/<profile> or local:<workspace>/<session>/<category>/<profile>; delete the key, and use deny to restrict what a profile may reach"
@@ -109,9 +96,9 @@ const removedProfileMessageSessionsHint = "other sessions and listed workspaces 
 // {"to": "local:*/*/<category>/<profile>"}, which refuses at least what the entry refused.
 const removedProfileMessageDenyProfilesHint = `replace each entry <category>/<profile> with a deny rule {"to": "local:*/*/<category>/<profile>"} in tools.native.profile_message.deny, and delete the key`
 
-// normalizeNativeProfileMessageSettings reads tools.native.profile_message. caller is the
-// calling session in the workspace layout (v2) and the zero value in v1, whose keys and
-// addresses are unchanged.
+// normalizeNativeProfileMessageSettings reads tools.native.profile_message of the calling session
+// caller. The keys of the retired v1 layout (sessions, deny_profiles) are errors that say what
+// replaces them.
 func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string, caller MessageCaller) (*NativeProfileMessageSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
@@ -150,24 +137,17 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeProfileMessageKeys, "")
 		}
 	}
-	if _, removed := fields["sessions"]; removed && caller.Workspace != "" {
-		return nil, configError("%s: %s.sessions was removed in the workspace layout; %s", settingPath, section, removedProfileMessageSessionsHint)
+	if _, removed := fields["sessions"]; removed {
+		return nil, configError("%s: %s.sessions was removed with workspace layout v1; %s", settingPath, section, removedProfileMessageSessionsHint)
 	}
-	if _, removed := fields["deny_profiles"]; removed && caller.Workspace != "" {
-		return nil, configError("%s: %s.deny_profiles was removed in the workspace layout; %s", settingPath, section, removedProfileMessageDenyProfilesHint)
+	if _, removed := fields["deny_profiles"]; removed {
+		return nil, configError("%s: %s.deny_profiles was removed with workspace layout v1; %s", settingPath, section, removedProfileMessageDenyProfilesHint)
 	}
 	var deny []MessageRule
 	if raw, present := fields["deny"]; present {
-		if caller.Workspace == "" {
-			return nil, configError("%s: %s.deny is a key of the workspace layout; the v1 layout uses deny_profiles", settingPath, section)
-		}
 		if deny, err = parseMessageRules(raw, settingPath+": "+section+".deny", false, true, ""); err != nil {
 			return nil, err
 		}
-	}
-	denyProfiles, err := normalizeProfileMessageDenyProfiles(fields["deny_profiles"], settingPath, section)
-	if err != nil {
-		return nil, err
 	}
 	timeoutMS, err := configuredInteger(fields, "timeout_ms", defaultNativeProfileMessageTimeoutMS, 1, maxNativeProfileMessageTimeoutMS, settingPath, section)
 	if err != nil {
@@ -204,10 +184,6 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := normalizeSessionGlobs(fields["sessions"], settingPath, section)
-	if err != nil {
-		return nil, err
-	}
 	modelChoice, err := bashBool(fields, "model_choice", false, settingPath+": "+section)
 	if err != nil {
 		return nil, err
@@ -216,78 +192,19 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Caller: caller, Deny: deny, ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
+	return &NativeProfileMessageSettings{Caller: caller, Deny: deny, ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Remotes: remotes, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
 }
 
-// ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
-var ErrProfileMessageNoTargets = errors.New("profile_message has no profile to message: the session has no other profile, or every one is denied")
-
-// ProfileMessageTargets returns the session's profiles the caller may message: every
-// profile except the caller's own and the denied ones, in session order.
-func ProfileMessageTargets(sessionProfiles []string, caller string, denied []string) []string {
+// ProfileMessageTargets returns the session's profiles other than the caller's own, in session
+// order: the profiles the tool description lists (before the deny rules are applied to them).
+func ProfileMessageTargets(sessionProfiles []string, caller string) []string {
 	var targets []string
 	for _, id := range sessionProfiles {
-		if id != caller && !slices.Contains(denied, id) {
+		if id != caller {
 			targets = append(targets, id)
 		}
 	}
 	return targets
-}
-
-// ProfileMessageNoTargetsError is the config error for a profile whose profile_message
-// has no target; the tool catalog and `jad check` both report it.
-func ProfileMessageNoTargetsError(settingPath, profile string) error {
-	return configError("%s (profile %s): %v", settingPath, profile, ErrProfileMessageNoTargets)
-}
-
-func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, section string) ([]string, error) {
-	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
-		return nil, nil
-	}
-	var profiles []string
-	if json.Unmarshal(raw, &profiles) != nil {
-		return nil, configError("%s: %s.deny_profiles must be an array of profile ids", settingPath, section)
-	}
-	seen := map[string]struct{}{}
-	for _, id := range profiles {
-		if !profileMessageIDPattern.MatchString(id) {
-			return nil, configError("%s: %s.deny_profiles entry %q is not a valid profile id", settingPath, section, id)
-		}
-		if _, dup := seen[id]; dup {
-			return nil, configError("%s: %s.deny_profiles lists %q more than once", settingPath, section, id)
-		}
-		seen[id] = struct{}{}
-	}
-	return profiles, nil
-}
-
-// sessionGlobPattern allows no '[', '/' or ':' so a glob can neither cross a segment nor name a root.
-// workspaceSessionGlobPattern is the glob that names a workspace: exactly one colon, a glob of
-// workspace ids (root-id characters) before it and a session glob after it.
-var (
-	sessionGlobPattern          = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
-	workspaceSessionGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,63}:[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
-)
-
-func normalizeSessionGlobs(raw json.RawMessage, settingPath, section string) ([]string, error) {
-	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
-		return nil, nil
-	}
-	var globs []string
-	if json.Unmarshal(raw, &globs) != nil || globs == nil {
-		return nil, configError("%s: %s.sessions must be an array of session id globs", settingPath, section)
-	}
-	seen := map[string]struct{}{}
-	for _, glob := range globs {
-		if !sessionGlobPattern.MatchString(glob) && !workspaceSessionGlobPattern.MatchString(glob) {
-			return nil, configError("%s: %s.sessions entry %q is not a session id glob, or a <workspace glob>:<session glob> (letters, digits, '.', '_', '-', '*' and '?')", settingPath, section, glob)
-		}
-		if _, dup := seen[glob]; dup {
-			return nil, configError("%s: %s.sessions lists %q more than once", settingPath, section, glob)
-		}
-		seen[glob] = struct{}{}
-	}
-	return globs, nil
 }
 
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)

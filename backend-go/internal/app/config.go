@@ -144,24 +144,16 @@ func LoadConfig(options sessionfs.LoadOptions) (Config, error) {
 			RunContentMaxIndexSegments: loaded.Server.RunContentMaxIndexSegments,
 		},
 		Environment: resolverEnvironment,
-		RootLibraryOptions: contentlibrary.Options{
-			WorkingDir:      options.WorkingDir,
-			RootSettingPath: options.RootSettingPath,
-			SessionsDir:     options.SessionsDir,
-			Environment:     cloneEnvironment(resolverEnvironment),
-		},
 	}
-	// In the workspace layout the library of each served workspace comes from global.json and
-	// workspace.json, read once at start, never from a setting.json.
-	if sessionfs.WorkspaceLayout(loaded.Roots) {
-		config.RootLibraryOptions.Workspaces = make(map[string]*sessionfs.Libraries, len(loaded.Roots))
-		for _, root := range loaded.Roots {
-			if root.Layout != nil && root.Layout.Libraries != nil {
-				config.RootLibraryOptions.Workspaces[root.ID] = root.Layout.Libraries
-			}
+	// The library of each served workspace comes from global.json and workspace.json, read
+	// once at start.
+	config.RootLibraryOptions.Workspaces = make(map[string]*sessionfs.Libraries, len(loaded.Roots))
+	for _, root := range loaded.Roots {
+		if root.Layout != nil && root.Layout.Libraries != nil {
+			config.RootLibraryOptions.Workspaces[root.ID] = root.Layout.Libraries
 		}
-		config.RootLibraryOptions.StartWorkspace = loaded.Roots[0].ID
 	}
+	config.RootLibraryOptions.StartWorkspace = loaded.Roots[0].ID
 	if err := config.checkRemoteListenHost(); err != nil {
 		return Config{}, err
 	}

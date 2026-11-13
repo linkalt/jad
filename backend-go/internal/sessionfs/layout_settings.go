@@ -34,11 +34,6 @@ func readLayoutSession(location Location) (layoutSessionFile, error) {
 	if err := session.refuseModelDefaults(location.SettingFile()); err != nil {
 		return layoutSessionFile{}, err
 	}
-	if location.Root.Layout != nil {
-		if err := refuseRemoteKeysInV1(*location.Root.Layout, session.RemoteKeys, location.SettingFile()); err != nil {
-			return layoutSessionFile{}, err
-		}
-	}
 	return session, nil
 }
 

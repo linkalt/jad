@@ -12,13 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"jad/backend-go/internal/rootsetting"
 	"jad/backend-go/internal/serverconfig"
 )
 
@@ -150,10 +147,8 @@ type Config struct {
 // and working-directory inputs. Empty values use the process environment and
 // current working directory.
 type LoadOptions struct {
-	WorkingDir      string
-	SessionsDir     string
-	RootSettingPath string
-	Environment     map[string]string
+	WorkingDir  string
+	Environment map[string]string
 	// GlobalDir is the global folder of the workspace layout; empty means JAD_GLOBAL_DIR, then
 	// $HOME/.jad.
 	GlobalDir string
@@ -233,8 +228,9 @@ func Defaults() ServerSettings {
 	}
 }
 
-// Load reads the selected roots and server settings. JAD_SESSIONS_DIR is refused, not read:
-// the root setting is the only source of roots.
+// Load reads the roots and the server settings of the workspace layout: the start directory must
+// have .jad/workspace.json (docs/design_workspace_layout.md). Every older way to name them fails
+// with a message that says what to do, so an old install never starts empty and silently.
 func Load(options LoadOptions) (Config, error) {
 	cwd := options.WorkingDir
 	if cwd == "" {
@@ -252,68 +248,23 @@ func Load(options LoadOptions) (Config, error) {
 	if env == nil {
 		env = processEnvironment()
 	}
-
-	sessionsDir := strings.TrimSpace(options.SessionsDir)
-	if sessionsDir == "" && strings.TrimSpace(env["JAD_SESSIONS_DIR"]) != "" {
-		return Config{}, errors.New("JAD_SESSIONS_DIR is no longer read; name the session folder in session_roots of the root setting")
+	if strings.TrimSpace(env["JAD_SESSIONS_DIR"]) != "" {
+		return Config{}, errors.New("JAD_SESSIONS_DIR is no longer read; sessions live in <workspace>/.jad/sessions")
 	}
-	if sessionsDir != "" {
-		directory := resolveFrom(cwd, sessionsDir)
-		return Config{
-			Roots: []Root{{
-				ID:            defaultRootID,
-				Label:         defaultRootLabel,
-				Directory:     directory,
-				GlobalJadRoot: directory,
-			}},
-			Server: Defaults(),
-			CLI:    DefaultCLISettings(),
-		}, nil
+	if strings.TrimSpace(env["JAD_ROOT_SETTING_PATH"]) != "" {
+		return Config{}, errors.New("JAD_ROOT_SETTING_PATH was removed with workspace layout v1; start jad in a workspace (a directory with .jad/workspace.json), and see " + legacyLayoutHint)
 	}
-
-	// The workspace layout runs when the start directory has .jad/workspace.json and no root
-	// setting is named; a named setting keeps v1 (docs/design_workspace_layout.md §4.2).
-	if strings.TrimSpace(options.RootSettingPath) == "" && strings.TrimSpace(env["JAD_ROOT_SETTING_PATH"]) == "" {
-		workspace, err := workspaceAt(cwd)
-		if err != nil {
-			return Config{}, err
-		}
-		if workspace {
-			return loadWorkspaces(cwd, options.GlobalDir, env)
-		}
-	}
-	settingPath, err := findRootSettingPath(cwd, options.RootSettingPath, env["JAD_ROOT_SETTING_PATH"], env["HOME"])
+	workspace, err := workspaceAt(cwd)
 	if err != nil {
 		return Config{}, err
 	}
-	if settingPath == "" {
-		roots, err := defaultSessionRoots(cwd)
-		if err != nil {
-			return Config{}, err
-		}
-		return Config{Roots: roots, Server: Defaults(), CLI: DefaultCLISettings()}, nil
+	if workspace {
+		return loadWorkspaces(cwd, options.GlobalDir, env)
 	}
-
-	setting, err := readObject(settingPath)
-	if err != nil {
-		return Config{}, err
+	if legacy := findLegacySetting(cwd, env["HOME"]); legacy != "" {
+		return Config{}, fmt.Errorf("workspace layout v1 is no longer supported (found %s); create %s, or %s", legacy, filepath.Join(cwd, ".jad", workspaceSettingName), legacyLayoutHint)
 	}
-	roots, warnings, err := rootsFromSetting(setting, settingPath)
-	if err != nil {
-		return Config{}, err
-	}
-	serverSettings, err := normalizeServerSettings(setting["server"], settingPath+": server", filepath.Dir(settingPath))
-	if err != nil {
-		return Config{}, err
-	}
-	if serverSettings.LogFile != "" {
-		serverSettings.LogFile = resolveFrom(filepath.Dir(settingPath), serverSettings.LogFile)
-	}
-	cliSettings, err := normalizeCLISettings(setting["cli"], settingPath)
-	if err != nil {
-		return Config{}, err
-	}
-	return Config{Roots: roots, Server: serverSettings, CLI: cliSettings, SettingPath: settingPath, Warnings: warnings}, nil
+	return Config{}, fmt.Errorf("no workspace: %s not found; start jad in a directory that has .jad/workspace.json (docs/design_workspace_layout.md)", filepath.Join(cwd, ".jad", workspaceSettingName))
 }
 
 // Resolve selects a root from an unqualified session ID or a root:session
@@ -392,41 +343,6 @@ func parseReference(value string) (rootID, sessionID string, qualified bool, err
 	return rootID, sessionID, qualified, nil
 }
 
-func findRootSettingPath(cwd, explicit, fromEnvironment, home string) (string, error) {
-	configured := strings.TrimSpace(explicit)
-	if configured == "" {
-		configured = strings.TrimSpace(fromEnvironment)
-	}
-	if configured != "" {
-		return resolveFrom(cwd, configured), nil
-	}
-	return rootsetting.Find(cwd, home)
-}
-
-func defaultSessionRoots(cwd string) ([]Root, error) {
-	candidates := []Root{
-		{Directory: filepath.Join(cwd, ".jad", "sessions"), GlobalJadRoot: cwd},
-		{Directory: filepath.Join(cwd, "..", ".jad", "sessions"), GlobalJadRoot: filepath.Clean(filepath.Join(cwd, ".."))},
-	}
-	selected := candidates[0]
-	for _, candidate := range candidates {
-		info, err := os.Stat(candidate.Directory)
-		if err == nil {
-			if info.IsDir() {
-				selected = candidate
-				break
-			}
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("inspect default session root %q: %w", candidate.Directory, err)
-		}
-	}
-	selected.ID = defaultRootID
-	selected.Label = defaultRootLabel
-	return []Root{selected}, nil
-}
-
 func readObject(path string) (map[string]json.RawMessage, error) {
 	contents, err := readRegularFile(path, maxInternalJSONFileBytes)
 	if err != nil {
@@ -446,92 +362,6 @@ func readObject(path string) (map[string]json.RawMessage, error) {
 		return nil, fmt.Errorf("%s: expected a JSON object", path)
 	}
 	return value, nil
-}
-
-func rootsFromSetting(setting map[string]json.RawMessage, settingPath string) ([]Root, []string, error) {
-	var warnings []string
-	if raw, exists := setting["schema_version"]; exists {
-		version, ok := configSafeInteger(raw)
-		if !ok || version != 1 {
-			return nil, nil, fmt.Errorf("%s: unsupported schema_version %s", settingPath, strings.TrimSpace(string(raw)))
-		}
-	}
-	warnings = append(warnings, unknownSettingKeyWarnings(setting, settingPath, rootSettingKeys)...)
-	rootsRaw, hasRoots := setting["session_roots"]
-	pathsRaw, hasPaths := setting["session_paths"]
-	if hasRoots && hasPaths {
-		return nil, nil, fmt.Errorf("%s: use only one of session_roots or session_paths", settingPath)
-	}
-	if !hasRoots {
-		rootsRaw = pathsRaw
-	}
-	var entries []json.RawMessage
-	if !hasRoots && !hasPaths || json.Unmarshal(rootsRaw, &entries) != nil || entries == nil {
-		return nil, nil, fmt.Errorf("%s: session_roots must be an array", settingPath)
-	}
-	settingDir := filepath.Dir(settingPath)
-	layout, layoutWarnings, err := layoutFromSetting(setting, settingPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	warnings = append(warnings, layoutWarnings...)
-	roots := make([]Root, 0, len(entries))
-	ids := make(map[string]struct{}, len(entries))
-	directories := make(map[string]struct{}, len(entries))
-	for index, raw := range entries {
-		entryPath := fmt.Sprintf("%s: session_roots[%d]", settingPath, index)
-		entry, err := parseRootEntry(raw, index, entryPath)
-		if err != nil {
-			return nil, nil, err
-		}
-		if fields, ok := rawObjectFields(raw); ok {
-			warnings = append(warnings, unknownSettingKeyWarnings(fields, entryPath, rootEntryKeys)...)
-		}
-		if _, exists := ids[entry.id]; exists {
-			return nil, nil, fmt.Errorf("%s: duplicate session root id %s", settingPath, entry.id)
-		}
-		directory := resolveFrom(settingDir, entry.path)
-		if _, exists := directories[directory]; exists {
-			continue
-		}
-		ids[entry.id] = struct{}{}
-		directories[directory] = struct{}{}
-		roots = append(roots, Root{
-			ID:            entry.id,
-			Label:         entry.label,
-			Directory:     directory,
-			GlobalJadRoot: settingDir,
-			Layout:        layout,
-		})
-	}
-	if err := checkUniqueSessionIDs(roots, settingPath); err != nil {
-		return nil, nil, err
-	}
-	return roots, warnings, nil
-}
-
-// rootSettingKeys are the keys the root setting object reads; rootEntryKeys are the keys of
-// an object session_roots entry. A key outside these lists is ignored and warned about.
-var (
-	rootSettingKeys = []string{"schema_version", "server", "cli", "session_roots", "session_paths", "libraries", "catalogs", "defaults"}
-	rootEntryKeys   = []string{"id", "label", "path"}
-)
-
-// unknownSettingKeyWarnings returns one warning per key of fields that the loader does not
-// read, in sorted order. The root setting is lenient, so these are warnings, not errors.
-func unknownSettingKeyWarnings(fields map[string]json.RawMessage, where string, allowed []string) []string {
-	var keys []string
-	for key := range fields {
-		if !slices.Contains(allowed, key) {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	warnings := make([]string, 0, len(keys))
-	for _, key := range keys {
-		warnings = append(warnings, fmt.Sprintf("%s: %s is not read by the loader and is ignored", where, key))
-	}
-	return warnings
 }
 
 // rawObjectFields decodes raw as a JSON object, reporting false for anything else.

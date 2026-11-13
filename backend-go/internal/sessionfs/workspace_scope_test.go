@@ -110,18 +110,6 @@ func TestScopedCatalogLayoutFollowsTheScope(t *testing.T) {
 	}
 }
 
-// Outside the workspace layout a scope is refused and the first layout root is used.
-func TestScopedCatalogLayoutInV1(t *testing.T) {
-	roots := []Root{{ID: "r", Layout: &Layout{Models: "/m"}}}
-	if _, _, err := ScopedCatalogLayout(roots, "global", CatalogModels); err == nil || wsCatalogKind(t, err) != CatalogNotFound {
-		t.Fatalf("v1 scope = %v", err)
-	}
-	layout, got, err := ScopedCatalogLayout(roots, "", CatalogModels)
-	if err != nil || layout.Models != "/m" || len(got) != 1 {
-		t.Fatalf("v1 = %+v %v %v", layout, got, err)
-	}
-}
-
 // A scope prefix picks a model or toolset found in both scopes; {workspace} in a prompt
 // document means W even when the session works in another cwd (design D1, D2).
 func TestScopePrefixesAndTheWorkspacePlaceholder(t *testing.T) {

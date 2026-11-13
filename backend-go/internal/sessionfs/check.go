@@ -224,20 +224,6 @@ func (r *CheckReport) checkMisnamedSessions(roots []Root) {
 	}
 }
 
-func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
-	if config.NativeProfileMessage == nil {
-		return
-	}
-	if config.NativeProfileMessage.Caller.Workspace != "" {
-		// The workspace layout reaches other sessions and workspaces by address, so a profile
-		// with no other profile in its session still has somebody to message.
-		return
-	}
-	if len(config.NativeProfileMessage.Sessions) == 0 && len(ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)) == 0 {
-		r.add("session", id, ProfileMessageNoTargetsError(config.SettingPath, config.Profile))
-	}
-}
-
 // addLeftOutByComposition reports each profile of the session's scope that a load leaves out
 // because its toolsets do not apply to this session's settings. The load only warns, and the
 // profile never shows in the session's profile list, so nothing else would name it.
@@ -263,7 +249,7 @@ func (r *CheckReport) addLeftOutByComposition(id string, location Location) {
 // that fails the model rules. A load only warns about these in the server log, and a session
 // whose selected model is one of them fails only when it runs.
 func (r *CheckReport) checkOwnModels(layout Layout) {
-	if layout.Workspace == "" || layout.Profiles == "" {
+	if layout.Profiles == "" {
 		return
 	}
 	profiles, err := catalog.Scan(string(CatalogProfiles), layout.Profiles)
@@ -293,7 +279,7 @@ func (r *CheckReport) checkOwnModels(layout Layout) {
 // scan skips, a file that fails the own toolset rules, a base that is missing, and a composed
 // toolset that does not compose or fails the toolset rules, whether a profile names it yet or not.
 func (r *CheckReport) checkOwnToolsets(layout Layout, roots []Root) {
-	if layout.Workspace == "" || layout.Profiles == "" {
+	if layout.Profiles == "" {
 		return
 	}
 	profiles, err := catalog.Scan(string(CatalogProfiles), layout.Profiles)
@@ -347,7 +333,6 @@ func (r *CheckReport) checkSessions(roots []Root) {
 		}
 		r.checkSandboxFolder(location.Root.Layout.SandboxTemplateDir(config.WorkingDir))
 		r.checkLegacyCategory(location)
-		r.checkProfileMessage(file.ID, config)
 		r.checkRemoteKeysOf(file.ID, config)
 		r.addSandbox(file.ID, config)
 		r.addShares(file.ID, config)
@@ -361,7 +346,6 @@ func (r *CheckReport) checkSessions(roots []Root) {
 				r.add("session", fmt.Sprintf("%s (profile %s)", file.ID, profile), err)
 				continue
 			}
-			r.checkProfileMessage(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.checkRemoteKeysOf(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addSandbox(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addShares(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)

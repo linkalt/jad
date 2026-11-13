@@ -2,10 +2,7 @@ package contentlibrary
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 )
@@ -20,53 +17,6 @@ const maxSkillNameLength = 64
 type LoadedSkill struct {
 	Asset     Asset
 	Directory string
-}
-
-// SkillDirectories returns the skill directories named by the global root's own
-// setting.json. A root without a setting.json uses the defaults. Unlike the
-// root-library service it addresses the root directly instead of discovering
-// the setting file from the working directory, and the file is read on every
-// call so an edit applies without a restart.
-func SkillDirectories(globalJadRoot string) ([]string, error) {
-	return rootDirectories(globalJadRoot, "skill_dirs", func(defaults libraryDefaults) []string { return defaults.Skills })
-}
-
-// CommandDirectories returns libraries.command_dirs of the root setting in globalJadRoot,
-// resolved like SkillDirectories.
-func CommandDirectories(globalJadRoot string) ([]string, error) {
-	return rootDirectories(globalJadRoot, "command_dirs", func(defaults libraryDefaults) []string { return defaults.Commands })
-}
-
-func rootDirectories(globalJadRoot, key string, pick func(libraryDefaults) []string) ([]string, error) {
-	root, err := filepath.Abs(globalJadRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve global root: %w", err)
-	}
-	settingPath := filepath.Join(root, "setting.json")
-	label := root
-	var setting map[string]json.RawMessage
-	info, err := os.Stat(settingPath)
-	switch {
-	case err == nil && info.Mode().IsRegular():
-		if setting, err = readLibrarySetting(settingPath); err != nil {
-			return nil, err
-		}
-		label = settingPath
-	case err != nil && !errors.Is(err, os.ErrNotExist):
-		return nil, err
-	}
-
-	var configured map[string]json.RawMessage
-	if raw, exists := setting["libraries"]; exists {
-		if err := json.Unmarshal(raw, &configured); err != nil || configured == nil {
-			return nil, configError("%s: libraries must be an object", label)
-		}
-	}
-	var defaults libraryDefaults
-	if err := json.Unmarshal(embeddedDefaults, &defaults); err != nil {
-		return nil, fmt.Errorf("decode embedded root-library defaults: %w", err)
-	}
-	return resolveLibraryDirectoryList(configured, key, pick(defaults), label, root)
 }
 
 // ListSkills returns the skills visible across directories, in directory order.

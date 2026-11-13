@@ -115,12 +115,8 @@ func ParseMessageRef(reference string, caller MessageCaller) (MessageRef, error)
 	return ref, nil
 }
 
-// messageCallerOf is the caller of a session at location in the workspace layout, without its
-// profile (the profile is known only once the session's profile is selected); the zero value
-// for a session of any other layout.
+// messageCallerOf is the caller of a session at location, without its profile (the profile is
+// known only once the session's profile is selected).
 func messageCallerOf(location Location) MessageCaller {
-	if layout := location.Root.Layout; layout == nil || layout.Workspace == "" {
-		return MessageCaller{}
-	}
 	return MessageCaller{Workspace: location.Root.ID, Session: location.SessionID}
 }

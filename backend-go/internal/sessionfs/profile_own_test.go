@@ -247,22 +247,6 @@ func TestWorkspaceSandboxKnowsTheProfilesFolders(t *testing.T) {
 	}
 }
 
-// v1 refuses {profile_data} as before; v2 takes it.
-func TestProfileDataPlaceholderIsRefusedInV1(t *testing.T) {
-	layout, location, root := sampleLayout(t)
-	editJSON(t, filepath.Join(root, "profiles", "dev", "coder.json"), func(m map[string]any) {
-		settings, _ := m["settings"].(map[string]any)
-		if settings == nil {
-			settings = map[string]any{}
-		}
-		settings["sandbox"] = map[string]any{"enabled": true, "backend": "command", "command": []string{"true"}, "writable_paths": []string{"{profile_data}"}}
-		m["settings"] = settings
-	})
-	if _, err := LoadLayoutSessionConfig(location, layout, "", ""); err == nil || !strings.Contains(err.Error(), "{profile_data} is only known in the workspace layout") {
-		t.Fatalf("v1 {profile_data} = %v", err)
-	}
-}
-
 // NarrowSandbox and InheritSandbox never pass a data folder on; the shown folders are those
 // both sides show, and an inherited sandbox shows none and drops {profile_data} paths.
 func TestNarrowedAndInheritedSandboxesWriteNoDataFolder(t *testing.T) {

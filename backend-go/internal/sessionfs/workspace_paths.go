@@ -11,14 +11,14 @@ import (
 // sessions, profiles, toolsets and models) and G for the global ones. The settings of a
 // session are composed into one object and read with one base, so the base is W/.jad
 // (Root.pathBase) and the relative paths of a global toolset are made absolute from G before
-// they are merged in (absoluteGlobalToolsetPaths). A v1 root keeps its setting folder.
+// they are merged in (absoluteGlobalToolsetPaths).
 
 // workspacePlaceholder starts a prompt document path that always means the workspace W, also
 // for a session or profile working in a worktree or another cwd (design D1, D2).
 const workspacePlaceholder = "{workspace}"
 
-// pathBase is the folder relative paths of a session's settings resolve from: the root
-// setting's folder in v1, W/.jad in the workspace layout.
+// pathBase is the folder relative paths of a session's settings resolve from: W/.jad; G for
+// the scratch location of a global toolset check, which has no workspace.
 func (r Root) pathBase() string {
 	if r.Layout != nil && r.Layout.Workspace != "" {
 		return filepath.Join(r.Layout.Workspace, ".jad")

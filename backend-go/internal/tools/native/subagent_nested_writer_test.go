@@ -143,7 +143,7 @@ func (f *remoteSubagentFixture) remoteEntries(t *testing.T, urls map[string]stri
 func writeRemoteEntries(t *testing.T, dir string, urls map[string]string) {
 	t.Helper()
 	for name, url := range urls {
-		entry := fmt.Sprintf(`{"kind":"remote","description":%q,"remote":{"url":%q,"token_env":"JAD_REMOTE_PEER","default_session":"main"}}`, name, url)
+		entry := fmt.Sprintf(`{"kind":"remote","description":%q,"remote":{"url":%q,"workspace":"w"}}`, name, url)
 		if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(entry), 0o600); err != nil {
 			t.Fatal(err)
 		}

@@ -26,11 +26,11 @@ func (a localAddress) label() string { return a.ref.Canonical() }
 
 var errUnknownLocalProfile = errors.New("profile is not available")
 
-// parseLocalV2 reads a local address of the workspace layout written by the calling session.
+// parseLocal reads a local address of the workspace layout written by the calling session.
 // A syntax error is sessionfs.ErrInvalidMessageRef; a profile of the calling session that the
 // session does not hold is errUnknownLocalProfile. Whether any other session, workspace or
 // profile exists is the messenger's to say.
-func (p *profileMessageTool) parseLocalV2(profile string) (localAddress, error) {
+func (p *profileMessageTool) parseLocal(profile string) (localAddress, error) {
 	caller := p.settings.Caller
 	ref, err := sessionfs.ParseMessageRef(profile, caller)
 	if err != nil {

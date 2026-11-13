@@ -184,7 +184,7 @@ func TestStopRunIsRetriedAndPostsToTheRunsStopRoute(t *testing.T) {
 func TestHubReusesClientsAndClosesEverything(t *testing.T) {
 	dir := t.TempDir()
 	writeEntry := func(url string) {
-		body := `{"kind":"remote","remote":{"url":"` + url + `","token_env":"JAD_REMOTE_X"}}`
+		body := `{"kind":"remote","remote":{"url":"` + url + `","workspace":"proj"}}`
 		if err := writeFile(dir+"/a.json", body); err != nil {
 			t.Fatal(err)
 		}
@@ -395,7 +395,7 @@ func TestViewRequestsAskForTextThatFitsTheResponseLimit(t *testing.T) {
 func TestDirectoryClientForUsesTheGivenEntry(t *testing.T) {
 	dir := t.TempDir()
 	write := func(url string) {
-		if err := writeFile(dir+"/a.json", `{"kind":"remote","remote":{"url":"`+url+`","token_env":"JAD_REMOTE_X"}}`); err != nil {
+		if err := writeFile(dir+"/a.json", `{"kind":"remote","remote":{"url":"`+url+`","workspace":"proj"}}`); err != nil {
 			t.Fatal(err)
 		}
 	}

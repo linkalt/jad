@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,73 +12,34 @@ import (
 	"jad/backend-go/internal/sessionfs/layouttest"
 )
 
-func TestLoadRootsAndResolveAmbiguousReferences(t *testing.T) {
-	cwd := t.TempDir()
-	first := filepath.Join(cwd, "roots", "first")
-	second := filepath.Join(cwd, "roots", "second")
-	for _, directory := range []string{first, second} {
-		if err := os.MkdirAll(directory, 0o755); err != nil {
-			t.Fatal(err)
-		}
+// writeServerSetting makes cwd a workspace whose global folder is cwd+"-global" and gives it a
+// global.json with the "server" section of the old-style setting text (its other keys are
+// dropped), so a test can keep writing the section it exercises. A missing section leaves {}.
+func writeServerSection(cwd, setting string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(setting), &fields); err != nil {
+		return err
 	}
-	setting := `{"schema_version":1,"session_roots":[{"id":"alpha","label":"Alpha","path":"roots/first"},"roots/second"],"server":{"host":"0.0.0.0","port":8899,"max_body_bytes":4096,"run_state_retention_ms":0,"tool_stream_interval_ms":23,"sse_max_buffered_bytes":2048,"conditional_requests":false,"run_content_memory_bytes":4096,"run_content_write_batch_bytes":2048,"run_content_flush_interval_ms":12,"run_content_max_index_segments":64,"allowed_origins":["https://ui.example.test"]}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
+	global := map[string]json.RawMessage{}
+	if raw, ok := fields["server"]; ok {
+		global["server"] = raw
 	}
+	data, _ := json.Marshal(global)
+	if err := os.MkdirAll(filepath.Join(cwd, ".jad"), 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cwd+"-global", 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".jad", "workspace.json"), []byte(`{"schema_version":2}`), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(cwd+"-global", "global.json"), data, 0o600)
+}
 
-	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(config.Roots) != 2 {
-		t.Fatalf("Load() returned %d roots, want 2", len(config.Roots))
-	}
-	if config.Roots[0].ID != "alpha" || config.Roots[0].Label != "Alpha" || config.Roots[0].Directory != first {
-		t.Errorf("first root = %+v", config.Roots[0])
-	}
-	if config.Roots[1].ID != "root-2" || config.Roots[1].Directory != second {
-		t.Errorf("second root = %+v", config.Roots[1])
-	}
-	if config.Server.Host != "0.0.0.0" || config.Server.Port != 8899 || config.Server.MaxBodyBytes != 4096 {
-		t.Errorf("server settings = %+v", config.Server)
-	}
-	if config.Server.RunStateRetention != 0 || !config.Server.AllowZeroRunStateRetention || config.Server.SSEMaxBufferedBytes != 2048 {
-		t.Errorf("retention/SSE settings = %+v", config.Server)
-	}
-	if config.Server.ToolStreamInterval != 23*time.Millisecond {
-		t.Errorf("tool stream interval = %s, want 23ms", config.Server.ToolStreamInterval)
-	}
-	if config.Server.RunContentMemoryBytes != 4096 || config.Server.RunContentWriteBatchBytes != 2048 || config.Server.RunContentFlushInterval != 12*time.Millisecond || config.Server.RunContentMaxIndexSegments != 64 {
-		t.Errorf("run content settings = %+v", config.Server)
-	}
-	if got := config.Server.AllowedOrigins; len(got) != 1 || got[0] != "https://ui.example.test" {
-		t.Errorf("allowed origins = %#v", got)
-	}
-
-	// Load refuses two roots that already hold the same id, so the second copy appears later.
-	for _, directory := range []string{first, second} {
-		if err := os.WriteFile(filepath.Join(directory, "shared-session.json"), []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := Resolve(config.Roots, "shared-session"); err == nil {
-		t.Fatal("Resolve(unqualified duplicate) succeeded, want ambiguity error")
-	} else {
-		var resolveErr *ResolveError
-		if !asResolveError(err, &resolveErr) || resolveErr.Kind != ResolveAmbiguous {
-			t.Fatalf("Resolve(unqualified duplicate) error = %v, want ambiguity ResolveError", err)
-		}
-		if !strings.Contains(resolveErr.Message, "include a root id") {
-			t.Errorf("ambiguity message = %q", resolveErr.Message)
-		}
-	}
-	location, err := Resolve(config.Roots, "alpha:shared-session")
-	if err != nil {
-		t.Fatalf("Resolve(qualified) error = %v", err)
-	}
-	if location.Reference != "alpha:shared-session" || location.File != filepath.Join(first, "shared-session.json") {
-		t.Errorf("qualified location = %+v", location)
-	}
+// loadServerSetting loads the workspace writeServerSetting made.
+func loadServerSection(cwd string) (Config, error) {
+	return Load(LoadOptions{WorkingDir: cwd, GlobalDir: cwd + "-global", Environment: map[string]string{}})
 }
 
 func TestRunContentSettingDefaultsAndValidation(t *testing.T) {
@@ -102,10 +64,10 @@ func TestRunContentSettingDefaultsAndValidation(t *testing.T) {
 		{`{"session_roots":[{"path":"sessions"}],"server":{"tool_stream_interval_ms":-1}}`, "tool_stream_interval_ms"},
 	}
 	for _, test := range invalidSettings {
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(test.json), 0o600); err != nil {
+		if err := writeServerSection(cwd, test.json); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), test.want) {
+		if _, err := loadServerSection(cwd); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("Load(%s) error = %v, want message containing %q", test.json, err, test.want)
 		}
 	}
@@ -163,87 +125,13 @@ func TestServerNumberRangeErrorsUseTheTypeScriptWording(t *testing.T) {
 		{"idle_timeout_ms", `"5"`, "server.idle_timeout_ms must be a safe integer between 0 and 3600000"},
 	} {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":{"` + tc.key + `":` + tc.value + `}}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		_, err := loadServerSection(cwd)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("server.%s = %s: error = %v, want it to contain %q", tc.key, tc.value, err, tc.want)
 		}
-	}
-}
-
-func TestLoadRootSettingAliasesDeduplicatesPathsAndHonorsSessionsDir(t *testing.T) {
-	cwd := t.TempDir()
-	settingPath := filepath.Join(cwd, "custom.json")
-	setting := `{"session_paths":[{"id":"one","path":"sessions"},{"id":"two","path":"./sessions"}]}`
-	if err := os.WriteFile(settingPath, []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := Load(LoadOptions{
-		WorkingDir:      cwd,
-		RootSettingPath: "custom.json",
-		Environment:     map[string]string{},
-	})
-	if err != nil {
-		t.Fatalf("Load(session_paths) error = %v", err)
-	}
-	if len(config.Roots) != 1 || config.Roots[0].ID != "one" {
-		t.Fatalf("deduplicated roots = %+v, want only the first path owner", config.Roots)
-	}
-	otherCWD := t.TempDir()
-	config, err = Load(LoadOptions{
-		WorkingDir: otherCWD,
-		Environment: map[string]string{
-			"JAD_ROOT_SETTING_PATH": settingPath,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Load(JAD_ROOT_SETTING_PATH) error = %v", err)
-	}
-	if len(config.Roots) != 1 || config.Roots[0].Directory != filepath.Join(cwd, "sessions") {
-		t.Fatalf("root-setting environment override = %+v", config.Roots)
-	}
-
-	explicit := filepath.Join(cwd, "explicit-sessions")
-	_, err = Load(LoadOptions{
-		WorkingDir: cwd,
-		Environment: map[string]string{
-			"JAD_SESSIONS_DIR":      explicit,
-			"JAD_ROOT_SETTING_PATH": filepath.Join(cwd, "missing.json"),
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "JAD_SESSIONS_DIR is no longer read") {
-		t.Fatalf("Load(JAD_SESSIONS_DIR) error = %v, want it refused", err)
-	}
-	config, err = Load(LoadOptions{WorkingDir: cwd, SessionsDir: explicit, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatalf("Load(SessionsDir option) error = %v", err)
-	}
-	if len(config.Roots) != 1 || config.Roots[0].ID != "default" || config.Roots[0].Directory != explicit {
-		t.Fatalf("explicit sessions root = %+v", config.Roots)
-	}
-}
-
-func TestLoadDefaultRootsAndQualifiedSingleRootReference(t *testing.T) {
-	cwd := t.TempDir()
-	defaultPath := filepath.Join(cwd, ".jad", "sessions")
-	if err := os.MkdirAll(defaultPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatalf("Load(default roots) error = %v", err)
-	}
-	if len(config.Roots) != 1 || config.Roots[0].Directory != defaultPath || config.Roots[0].GlobalJadRoot != cwd {
-		t.Errorf("default root = %+v", config.Roots)
-	}
-	location, err := Resolve(config.Roots, "default:session-1")
-	if err != nil {
-		t.Fatalf("Resolve(root-qualified single root) error = %v", err)
-	}
-	if location.Reference != "session-1" {
-		t.Errorf("canonical reference = %q, want unqualified session ID", location.Reference)
 	}
 }
 
@@ -308,42 +196,18 @@ func TestIsExactOriginMatchesCanonicalHTTPOrigins(t *testing.T) {
 	}
 }
 
-func TestLoadWarnsOnUnknownRootSettingKeysWithoutRefusing(t *testing.T) {
-	cwd := t.TempDir()
-	setting := `{"session_roots":[{"path":"a","lable":"typo"}],"typo_key":true}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
-	if err != nil {
-		t.Fatalf("Load(%s) error = %v, want the unknown keys warned, not refused", setting, err)
-	}
-	for _, key := range []string{"typo_key", "lable"} {
-		found := false
-		for _, warning := range config.Warnings {
-			found = found || strings.Contains(warning, key)
-		}
-		if !found {
-			t.Errorf("Warnings = %q, want one naming %q", config.Warnings, key)
-		}
-	}
-}
-
 func TestLoadRejectsInvalidRootsAndServerSettings(t *testing.T) {
 	for _, setting := range []string{
-		`{"session_roots":[],"session_paths":[]}`,
-		`{"session_roots":[{"id":"same","path":"a"},{"id":"same","path":"b"}]}`,
 		`{"session_roots":["a"],"server":{"port":70000}}`,
 		`{"session_roots":["a"],"server":null}`,
 		`{"session_roots":["a"],"server":{"allowed_origins":["https://example.test/"]}}`,
-		`{"schema_version":2,"session_roots":[]}`,
 	} {
 		t.Run(setting, func(t *testing.T) {
 			cwd := t.TempDir()
-			if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+			if err := writeServerSection(cwd, setting); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}}); err == nil {
+			if _, err := loadServerSection(cwd); err == nil {
 				t.Fatalf("Load(%s) succeeded, want config error", setting)
 			}
 		})
@@ -363,10 +227,10 @@ func TestRootSettingRunRetentionDefaultsAndNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cwd := t.TempDir()
-			if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(test.json), 0o600); err != nil {
+			if err := writeServerSection(cwd, test.json); err != nil {
 				t.Fatal(err)
 			}
-			config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+			config, err := loadServerSection(cwd)
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
@@ -391,10 +255,10 @@ func TestSSEHeartbeatIntervalSettingDefaultsAndValidation(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server string
@@ -429,10 +293,10 @@ func TestLoadServerReadHeaderAndIdleTimeouts(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server           string
@@ -482,10 +346,10 @@ func TestLoadServerLoggingSettings(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server, level, format, file string
@@ -496,7 +360,7 @@ func TestLoadServerLoggingSettings(t *testing.T) {
 		{`{"log_level":"off"}`, "off", "text", ""},
 		{`{"log_file":""}`, "info", "text", ""},
 		{`{"log_file":"  "}`, "info", "text", ""},
-		{`{"log_file":"logs/agent.log"}`, "info", "text", filepath.Join(cwd, "logs", "agent.log")},
+		{`{"log_file":"logs/agent.log"}`, "info", "text", filepath.Join(cwd+"-global", "logs", "agent.log")},
 		{`{"log_file":"/var/log/agent.log"}`, "info", "text", "/var/log/agent.log"},
 	} {
 		config, err := load(accepted.server)
@@ -535,10 +399,10 @@ func TestLoadServerRecoverProcessesAtStartIsRefused(t *testing.T) {
 	}
 	for _, value := range []string{`true`, `false`, `null`, `"yes"`} {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":{"recover_processes_at_start":` + value + `}}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		_, err := loadServerSection(cwd)
 		if err == nil || !strings.Contains(err.Error(), "server.recover_processes_at_start was removed") {
 			t.Errorf("recover_processes_at_start=%s: error = %v, want a removal error", value, err)
 		}
@@ -552,10 +416,10 @@ func TestLoadServerRecoverSubagentRunsAtStart(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server string
@@ -596,76 +460,6 @@ func TestDefaultsKeepLoggingAtInfoText(t *testing.T) {
 	}
 }
 
-// The root setting is looked for in .jad/setting.json of the working directory first, then
-// in $HOME/.jad/setting.json, then in the older places.
-func TestLoadFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
-	cwd, home := t.TempDir(), t.TempDir()
-	write := func(path, id string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(`{"session_roots":[{"id":"`+id+`","path":"s"}]}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	rootID := func() string {
-		t.Helper()
-		config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{"HOME": home}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return config.Roots[0].ID
-	}
-	write(filepath.Join(cwd, "setting.json"), "old")
-	if got := rootID(); got != "old" {
-		t.Fatalf("old place: root = %q", got)
-	}
-	write(filepath.Join(home, ".jad", "setting.json"), "home")
-	if got := rootID(); got != "home" {
-		t.Fatalf("home must win over the old place: root = %q", got)
-	}
-	write(filepath.Join(cwd, ".jad", "setting.json"), "project")
-	if got := rootID(); got != "project" {
-		t.Fatalf("the project file must win: root = %q", got)
-	}
-	// the folder of the root setting is the global root: its sessions are resolved there
-	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{"HOME": home}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(cwd, ".jad", "s"); config.Roots[0].Directory != want {
-		t.Fatalf("directory = %q, want %q", config.Roots[0].Directory, want)
-	}
-	// an explicit path still wins
-	explicit := filepath.Join(cwd, "elsewhere.json")
-	write(explicit, "explicit")
-	config, err = Load(LoadOptions{WorkingDir: cwd, RootSettingPath: explicit, Environment: map[string]string{"HOME": home}})
-	if err != nil || config.Roots[0].ID != "explicit" {
-		t.Fatalf("explicit path: %v, %+v", err, config.Roots)
-	}
-}
-
-// Roots of one root setting share the state catalog, so the same session id in two of
-// them would write one transcript; the root setting is refused.
-func TestLoadRefusesTheSameLayoutSessionInTwoRoots(t *testing.T) {
-	fixture := layouttest.WriteV1(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
-	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
-		t.Fatalf("one session: %v", err)
-	}
-	fixture.AddSessionInRoot(t, "beta", "other", fixture.CWD, "dev/coder", nil)
-	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
-		t.Fatalf("different ids in two roots: %v", err)
-	}
-	fixture.AddSessionInRoot(t, "beta", "shared", fixture.CWD, "dev/coder", nil)
-	_, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
-	for _, want := range []string{`session "shared"`, `"alpha"`, `"beta"`, "rename one of the sessions"} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %v, want it to contain %q", err, want)
-		}
-	}
-}
-
 // A folder is not a session, so a folder named like a session file's id does not collide.
 func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
@@ -696,10 +490,10 @@ func TestSessionStoreIdleSettingDefaultsAndBounds(t *testing.T) {
 		{`{"session_store_idle_ms":86400000}`, 24 * time.Hour},
 	} {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + accepted.server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		config, err := loadServerSection(cwd)
 		if err != nil {
 			t.Fatalf("Load(%s) error = %v", accepted.server, err)
 		}
@@ -719,10 +513,10 @@ func TestSessionDeleteStopWaitSettingDefaultsAndValidation(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server string
@@ -761,10 +555,10 @@ func TestSSEWriteTimeoutAndFallbackCapDefaultsAndBounds(t *testing.T) {
 	}
 	load := func(server string) (Config, error) {
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+		if err := writeServerSection(cwd, setting); err != nil {
 			t.Fatal(err)
 		}
-		return Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		return loadServerSection(cwd)
 	}
 	for _, accepted := range []struct {
 		server  string

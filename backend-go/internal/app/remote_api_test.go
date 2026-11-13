@@ -383,7 +383,11 @@ func TestUnixSocketOnlyRemoteAPIKeepsTheTCPListenerOut(t *testing.T) {
 	t.Cleanup(func() { socketServer.Close() })
 
 	// The socket serves them, through the real client.
-	entry := remote.Entry{Name: "peer", URL: "unix://" + socket, Unix: socket, TokenEnv: "JAD_REMOTE_GATE",
+	keyFile := filepath.Join(t.TempDir(), "gate-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"kind":"remote_key","binding":"peer","token_env":"JAD_REMOTE_GATE"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := remote.Entry{Name: "peer", Workspace: "demo", KeyName: "gate-key", KeyFile: keyFile, URL: "unix://" + socket, Unix: socket,
 		Timeout: 5000, MaxResponseBytes: 1 << 20, MaxInFlight: 1, PollMs: 200, LostAfterMs: 1000}
 	client := remote.NewClient(entry, remote.Options{Environment: func(string) string { return remoteTestSecret }})
 	defer client.Close()

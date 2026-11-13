@@ -42,7 +42,7 @@ func (m *childMessenger) reply(ctx context.Context) (string, error) {
 
 func profileMessageChild(t *testing.T, settings sessionfs.NativeSubagentSettings, messenger ProfileMessenger, run nestedBehaviour) *tools.Catalog {
 	t.Helper()
-	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, messenger, nil)
+	pm, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, MaxChain: 3}, profileMessageTargets, messenger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

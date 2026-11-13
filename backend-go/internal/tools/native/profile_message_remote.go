@@ -56,10 +56,7 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 	}
 	target, err := p.remotes.directory.ParseProfile(reference)
 	if err != nil {
-		if p.remotes.directory.Workspace() {
-			return p.invalidProfileRef(callID, reference), nil
-		}
-		return tools.ExecutionError(callID, tools.StatusInvalidInput, "bad_remote_reference", err.Error()), nil
+		return p.invalidProfileRef(callID, reference), nil
 	}
 	entry, err := p.remotes.directory.Entry(name)
 	if err != nil {

@@ -275,26 +275,6 @@ func TestSharedModelFileCannotSetBasedOn(t *testing.T) {
 	}
 }
 
-// A v1 catalog-layout session loads and runs a model file that sets based_on (decider 3c.1b).
-func TestV1ModelFileIgnoresBasedOn(t *testing.T) {
-	config, root := rootFromSample(t)
-	editJSON(t, filepath.Join(root, "models", "openai", "gpt-deep.json"), func(m map[string]any) { m["based_on"] = "global:openai/gpt-fast" })
-	location, err := Resolve(config.Roots, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadSessionConfig(location, "dev/coder", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.WorkspaceLayout || !slices.Contains(loaded.Models, "openai/gpt-deep") || !strings.HasSuffix(loaded.ModelPath, "gpt-deep.json") || loaded.Model.Name == "" {
-		t.Fatalf("v1 model with based_on: models %v, path %s, model %+v", loaded.Models, loaded.ModelPath, loaded.Model)
-	}
-	if err := checkModelEffortOnlyOf(loaded.ModelPath, nil, false, "nope"); err == nil {
-		t.Fatal("v1: the effort of a model with based_on is not checked")
-	}
-}
-
 // A base is in use while an own model is based on it; the catalog routes check a profile with
 // its own models.
 func TestOwnModelKeepsItsBaseFromBeingDeleted(t *testing.T) {

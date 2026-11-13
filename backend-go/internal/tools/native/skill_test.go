@@ -29,20 +29,13 @@ func newSkillFixture(t *testing.T, settings sessionfs.NativeSkillSettings) skill
 			t.Fatal(err)
 		}
 	}
-	writeSkillRootSetting(t, root, `{"libraries":{"skill_dirs":["skills-a","skills-b"]}}`)
-	tool, err := NewSkillTool(settings, root, nil)
+	libraries := &sessionfs.Libraries{GlobalDir: root, Global: sessionfs.LibraryFolders{Skills: []string{fixture.first, fixture.second}}}
+	tool, err := NewSkillTool(settings, libraries)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.tool = tool
 	return fixture
-}
-
-func writeSkillRootSetting(t *testing.T, root, contents string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, "setting.json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func addSkill(t *testing.T, directory, name, description, body string, folder ...string) {
@@ -277,30 +270,21 @@ func TestSkillToolRereadsDirectoriesOnEveryCall(t *testing.T) {
 	if got := skillFields(f.run(t, `{}`))["skills"]; got != "2" {
 		t.Fatalf("skills before the edit = %s", got)
 	}
-	writeSkillRootSetting(t, f.root, `{"libraries":{"skill_dirs":["skills-b"]}}`)
-	if got := skillFields(f.run(t, `{}`))["skills"]; got != "1" {
+	if err := os.RemoveAll(filepath.Join(f.first, "one")); err != nil {
+		t.Fatal(err)
+	}
+	addSkill(t, f.second, "three", "Third.", "Body.")
+	if got := skillFields(f.run(t, `{}`))["skills"]; got != "2" {
 		t.Fatalf("skills after the edit = %s", got)
 	}
 	if status := skillStatus(t, f.run(t, `{"name":"one"}`)); status != "not_found" {
-		t.Fatalf("a removed directory still served its skill: %s", status)
+		t.Fatalf("a removed skill is still served: %s", status)
 	}
 }
 
-func TestSkillToolUnreadableRootSettingIsARecoverableError(t *testing.T) {
-	f := newSkillFixture(t, sessionfs.NativeSkillSettings{MaxBytes: 131072})
-	writeSkillRootSetting(t, f.root, "{ not json")
-	output := f.run(t, `{}`)
-	if skillStatus(t, output) != "error" || skillFields(output)["error_code"] != "skill_directories_unavailable" {
-		t.Fatalf("output = %s", output)
-	}
-	if !strings.Contains(skillFields(output)["reason"], "invalid JSON") {
-		t.Fatalf("the reason does not say why: %s", output)
-	}
-}
-
-func TestSkillToolDefaultsToTheEmbeddedDirectoryWithoutARootSetting(t *testing.T) {
+func TestSkillToolDefaultsToTheEmbeddedDirectoryOfTheGlobalFolder(t *testing.T) {
 	root := t.TempDir()
-	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, root, nil)
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, &sessionfs.Libraries{GlobalDir: root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +354,7 @@ func TestSkillToolDefinitionMatchesTypeScriptFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &expected); err != nil {
 		t.Fatal(err)
 	}
-	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, t.TempDir(), nil)
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, &sessionfs.Libraries{GlobalDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,10 +382,8 @@ func TestWorkspaceSkillToolRefusesANameInBothLibraries(t *testing.T) {
 	addSkill(t, global, "both", "Global copy.", "G.")
 	addSkill(t, own, "both", "Workspace copy.", "W.")
 	addSkill(t, own, "mine", "Mine.", "Only here.")
-	// A setting.json in the root is never read in the workspace layout.
-	writeSkillRootSetting(t, root, `{"libraries":{"skill_dirs":["nothing"]}}`)
 	libraries := &sessionfs.Libraries{GlobalDir: filepath.Join(root, "g"), Global: sessionfs.LibraryFolders{Skills: []string{global}}, Workspace: sessionfs.LibraryFolders{Skills: []string{own}}}
-	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, root, libraries)
+	tool, err := NewSkillTool(sessionfs.NativeSkillSettings{MaxBytes: 131072}, libraries)
 	if err != nil {
 		t.Fatal(err)
 	}

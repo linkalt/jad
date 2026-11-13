@@ -2,8 +2,6 @@ package sessionfs
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,25 +42,22 @@ func TestCLISettingsDefaultsValuesAndRefusals(t *testing.T) {
 	}
 }
 
-// Load reads the cli section, and gives the defaults without a root setting.
+// Load reads the cli section of global.json.
 func TestLoadReadsTheCLISection(t *testing.T) {
-	dir := t.TempDir()
-	setting := filepath.Join(dir, "setting.json")
-	if err := os.WriteFile(setting, []byte(`{"session_roots":["sessions"],"cli":{"mcp_login_timeout_ms":2000}}`), 0o600); err != nil {
-		t.Fatal(err)
+	f := newWSFixture(t)
+	w := f.workspace(t, "proj", `{}`)
+	f.globalJSON(t, `{"cli":{"mcp_login_timeout_ms":2000}}`)
+	loaded, err := f.load(w)
+	if err != nil || loaded.CLI.MCPLoginTimeout != 2*time.Second || loaded.CLI.PluginInstallTimeout != 5*time.Minute {
+		t.Fatalf("loaded cli = %+v, %v", loaded.CLI, err)
 	}
-	loaded, err := Load(LoadOptions{WorkingDir: dir, RootSettingPath: setting, Environment: map[string]string{}})
-	if err != nil || loaded.CLI.MCPLoginTimeout != 2*time.Second || loaded.CLI.PluginInstallTimeout != 5*time.Minute || len(loaded.Warnings) != 0 {
-		t.Fatalf("loaded cli = %+v, warnings %v, %v", loaded.CLI, loaded.Warnings, err)
-	}
-	if err := os.WriteFile(setting, []byte(`{"session_roots":["sessions"],"cli":{"mcp_login_timeout_ms":0}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(LoadOptions{WorkingDir: dir, RootSettingPath: setting, Environment: map[string]string{}}); err == nil || !strings.Contains(err.Error(), "cli.mcp_login_timeout_ms") {
+	f.globalJSON(t, `{"cli":{"mcp_login_timeout_ms":0}}`)
+	if _, err := f.load(w); err == nil || !strings.Contains(err.Error(), "cli.mcp_login_timeout_ms") {
 		t.Fatalf("bad cli section: %v", err)
 	}
-	loaded, err = Load(LoadOptions{WorkingDir: dir, SessionsDir: "sessions", Environment: map[string]string{}})
+	f.globalJSON(t, `{}`)
+	loaded, err = f.load(w)
 	if err != nil || loaded.CLI != DefaultCLISettings() {
-		t.Fatalf("without a root setting: %+v, %v", loaded.CLI, err)
+		t.Fatalf("without a cli section: %+v, %v", loaded.CLI, err)
 	}
 }

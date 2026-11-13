@@ -309,16 +309,11 @@ func otherProfileError(ownerKey, profile string, err error) error {
 	return fmt.Errorf("profile %s: its selected model could not be loaded", profile)
 }
 
-// checkPolicy judges the call by the profile_message policy of the workspace layout (design
-// §30.3) before the target is looked at further, queued, reset, compacted or run: the global
-// rules, the deny rules of the caller's and the target's workspace, and a reset across
+// checkPolicy judges the call by the profile_message policy (design §30.3) before the target is
+// looked at further, queued, reset, compacted or run: the global rules, the deny rules of the caller's and the target's workspace, and a reset across
 // workspaces against the target workspace's allow_reset. A refusal names who refused and the
-// action, never a path or a rule. Outside the workspace layout there is no policy here (v1's
-// deny_profiles is the tool's).
+// action, never a path or a rule.
 func (m profileMessenger) checkPolicy(request native.ProfileMessageRequest, callerReference, caller, targetReference, target string) error {
-	if !sessionfs.WorkspaceLayout(m.resolver.roots) {
-		return nil
-	}
 	from, err := sessionfs.Resolve(m.resolver.roots, callerReference)
 	if err != nil {
 		return native.ErrProfileUnknown

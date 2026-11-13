@@ -21,20 +21,13 @@ func TestWorkspaceTokenTableNeedsAWorkspaceAndBareGlobs(t *testing.T) {
 		"colon glob":      {row(`,"workspace":"a","profiles":["a:*/c/*"]`), "has a colon"},
 		"colon in agent":  {row(`,"workspace":"a","agents":["a:s/c/n/x"]`), "has a colon"},
 	} {
-		if _, err := ParseWorkspaceTokens([]byte(c.body)); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := ParseTokens([]byte(c.body)); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: want %q got %v", name, c.want, err)
 		}
 	}
-	tokens, err := ParseWorkspaceTokens([]byte(row(`,"workspace":"proj","profiles":["main/review/*"]`)))
+	tokens, err := ParseTokens([]byte(row(`,"workspace":"proj","profiles":["main/review/*"]`)))
 	if err != nil || tokens[0].Workspace != "proj" {
 		t.Fatalf("%+v %v", tokens, err)
-	}
-	// The v1 table is as it was: no workspace key, and a colon glob is the T-036 form.
-	if _, err := ParseTokens([]byte(row(`,"workspace":"proj"`))); err == nil || !strings.Contains(err.Error(), "workspace is a key of the workspace layout") {
-		t.Fatalf("v1 table with a workspace: %v", err)
-	}
-	if _, err := ParseTokens([]byte(row(`,"profiles":["a:*/c/*"]`))); err != nil {
-		t.Fatalf("v1 colon glob: %v", err)
 	}
 }
 
@@ -73,7 +66,7 @@ func scopeFixture(t *testing.T, workspaces ...string) (*fixture, *scopeBackend) 
  {"id":"rc","sha256":%q,"workspace":"c","profiles":["*/*/*"],"actions":["message","status","transcripts","profile"]},
  {"id":"rd","sha256":%q,"workspace":"a","profiles":["s1/dev/*"],"agents":["s1/dev/*/explore"],"actions":["subagent","status"]}]}`,
 		hashOf(secretA), hashOf(secretB), hashOf("tokenC_0123456789abcdef0123456789abcdef"), hashOf(subSecret))
-	parsed, err := ParseWorkspaceTokens([]byte(rows))
+	parsed, err := ParseTokens([]byte(rows))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,33 +49,15 @@ func TestWorkspaceSessionKnowsTheCallerOfItsProfileMessage(t *testing.T) {
 func TestWorkspaceLayoutRefusesTheSessionsKeyOfProfileMessage(t *testing.T) {
 	_, config := profileMessageWorkspaces(t, `{"sessions":["*"]}`, true)
 	_, err := wsSession(t, config, "a:s1", "")
-	if err == nil || !strings.Contains(err.Error(), "profile_message.sessions was removed in the workspace layout") || !strings.Contains(err.Error(), "delete the key") {
+	if err == nil || !strings.Contains(err.Error(), "profile_message.sessions was removed with workspace layout v1") || !strings.Contains(err.Error(), "delete the key") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// The same section in a v1 layout is read as it always was.
-func TestV1KeepsTheSessionsKeyOfProfileMessage(t *testing.T) {
-	settings, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"sessions":["a-*"]}}`), "setting.json", MessageCaller{})
-	if err != nil || len(settings.Sessions) != 1 || settings.Caller.Workspace != "" {
-		t.Fatalf("v1 settings = %+v, %v", settings, err)
-	}
-	if _, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"sessions":["a-*"]}}`), "setting.json", MessageCaller{Workspace: "a"}); err == nil {
-		t.Fatal("v2 accepted sessions")
-	}
-}
-
-// jad check does not call a profile that has nobody else in its session a mistake in the
-// workspace layout: it reaches other sessions and workspaces by address.
-func TestCheckAcceptsAProfileMessageWithoutOtherProfilesInTheWorkspaceLayout(t *testing.T) {
-	var report CheckReport
-	report.checkProfileMessage("a:s1", SessionConfig{Profile: "dev/coder", Profiles: []string{"dev/coder"}, NativeProfileMessage: &NativeProfileMessageSettings{Caller: MessageCaller{Workspace: "a"}}})
-	if len(report.Problems) != 0 {
-		t.Fatalf("problems = %+v", report.Problems)
-	}
-	report = CheckReport{}
-	report.checkProfileMessage("s1", SessionConfig{Profile: "dev/coder", Profiles: []string{"dev/coder"}, NativeProfileMessage: &NativeProfileMessageSettings{}})
-	if len(report.Problems) != 1 {
-		t.Fatalf("v1 problems = %+v", report.Problems)
+// The sessions key of the retired v1 layout is an error that says what replaces it.
+func TestTheV1SessionsKeyOfProfileMessageIsRemoved(t *testing.T) {
+	_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"sessions":["a-*"]}}`), "setting.json", MessageCaller{Workspace: "a"})
+	if err == nil || !strings.Contains(err.Error(), "sessions was removed") || !strings.Contains(err.Error(), "use deny") {
+		t.Fatalf("sessions: %v", err)
 	}
 }

@@ -78,7 +78,7 @@ func newRemoteSubagentFixtureOn(t *testing.T, p *peer, mutate func(*sessionfs.Na
 	}}
 	parent := withExecutors(t, readOnlyTool("read"))
 	manager := NewSubagentManager()
-	tool, err := newSubagentToolRemotes(settings, parent, nil, local, nil, manager, host, hub.Directory(p.dir))
+	tool, err := newSubagentToolRemotes(settings, parent, nil, local, nil, manager, host, p.directory(hub))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func newSyncRemoteTool(t *testing.T, f *remoteSubagentFixture) tools.Tool {
 	settings.Remotes, settings.RemoteTimeoutMs, settings.ResultMaxBytes = []string{"peer"}, 20_000, 4096
 	settings.MaxDepth, settings.MaxRunsPerSession = 2, 1
 	parent := withExecutors(t, readOnlyTool("read"))
-	tool, err := newSubagentToolRemotes(settings, parent, nil, f.local, nil, f.manager, nil, f.hub.Directory(f.peer.dir))
+	tool, err := newSubagentToolRemotes(settings, parent, nil, f.local, nil, f.manager, nil, f.peer.directory(f.hub))
 	if err != nil {
 		t.Fatal(err)
 	}

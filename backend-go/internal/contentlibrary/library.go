@@ -100,13 +100,11 @@ type Library struct {
 
 // New constructs a library service without touching the filesystem.
 func New(options Options) *Library {
-	options.Environment = cloneEnvironment(options.Environment)
 	return &Library{options: options}
 }
 
-// List reads summaries from the configured prompt, template, and skill trees.
-// In the workspace layout, workspace names whose library is listed ("" for the start
-// workspace); a v1 library has none and refuses any other.
+// List reads summaries from the prompt, template, skill and command trees of workspace ("" is
+// the start workspace); a workspace this server does not serve is ErrUnknownWorkspace.
 func (l *Library) List(ctx context.Context, workspace string) (Catalog, error) {
 	if l == nil {
 		return Catalog{}, errors.New("root library is unavailable")
@@ -114,60 +112,19 @@ func (l *Library) List(ctx context.Context, workspace string) (Catalog, error) {
 	if ctx == nil {
 		return Catalog{}, errors.New("root library request context is required")
 	}
-	if l.options.Workspaces != nil {
-		libraries, err := l.options.workspaceLibraries(workspace)
-		if err != nil {
-			return Catalog{}, err
-		}
-		dirs, err := scopedDirectoriesOf(libraries)
-		if err != nil {
-			return Catalog{}, err
-		}
-		return listScoped(ctx, dirs)
-	}
-	if workspace != "" {
-		return Catalog{}, ErrUnknownWorkspace
-	}
-	directories, err := loadDirectories(l.options)
+	libraries, err := l.options.workspaceLibraries(workspace)
 	if err != nil {
 		return Catalog{}, err
 	}
-	catalog := Catalog{
-		Prompts:   []Summary{},
-		Templates: []Summary{},
-		Skills:    []Summary{},
+	dirs, err := scopedDirectoriesOf(libraries)
+	if err != nil {
+		return Catalog{}, err
 	}
-	// The command folders were added later, with a default other tools may also use, so a
-	// broken one costs only the commands, not the prompts, templates and skills beside them.
-	commands, err := listCommands(ctx, directories.commands, directories.maxAssetBytes)
-	switch {
-	case err != nil && ctx.Err() != nil:
-		return Catalog{}, ctx.Err()
-	case err != nil:
-		catalog.Commands, catalog.CommandsError = []Summary{}, err.Error()
-	default:
-		catalog.Commands = commands
-	}
-	for _, entry := range []struct {
-		kind Kind
-		dirs []string
-		dst  *[]Summary
-	}{
-		{kind: Prompt, dirs: directories.prompts, dst: &catalog.Prompts},
-		{kind: Template, dirs: directories.templates, dst: &catalog.Templates},
-		{kind: Skill, dirs: directories.skills, dst: &catalog.Skills},
-	} {
-		items, err := listKind(ctx, entry.kind, entry.dirs, directories.maxAssetBytes)
-		if err != nil {
-			return Catalog{}, err
-		}
-		*entry.dst = items
-	}
-	return catalog, nil
+	return listScoped(ctx, dirs)
 }
 
 // Read returns one current asset by its opaque, path-derived identifier, of workspace's
-// library in the workspace layout (see List).
+// library (see List).
 func (l *Library) Read(ctx context.Context, kind Kind, id, workspace string) (Asset, bool, error) {
 	if l == nil || !validKind(kind) || !assetIDPattern.MatchString(id) {
 		return Asset{}, false, nil
@@ -175,25 +132,15 @@ func (l *Library) Read(ctx context.Context, kind Kind, id, workspace string) (As
 	if ctx == nil {
 		return Asset{}, false, errors.New("root library request context is required")
 	}
-	if l.options.Workspaces != nil {
-		libraries, err := l.options.workspaceLibraries(workspace)
-		if err != nil {
-			return Asset{}, false, err
-		}
-		dirs, err := scopedDirectoriesOf(libraries)
-		if err != nil {
-			return Asset{}, false, err
-		}
-		return readScoped(ctx, dirs, kind, id)
-	}
-	if workspace != "" {
-		return Asset{}, false, ErrUnknownWorkspace
-	}
-	directories, err := loadDirectories(l.options)
+	libraries, err := l.options.workspaceLibraries(workspace)
 	if err != nil {
 		return Asset{}, false, err
 	}
-	return readByID(ctx, kind, directoryList(directories, kind), id, directories.maxAssetBytes)
+	dirs, err := scopedDirectoriesOf(libraries)
+	if err != nil {
+		return Asset{}, false, err
+	}
+	return readScoped(ctx, dirs, kind, id)
 }
 
 // readByID finds the asset of kind whose path-derived ID is id in directories.

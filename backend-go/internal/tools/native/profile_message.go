@@ -6,9 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path"
-	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -396,9 +393,6 @@ func newProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, suba
 	if remotes == nil {
 		remoteNames = nil
 	}
-	if len(targets) == 0 && len(remoteNames) == 0 && len(settings.Sessions) == 0 && settings.Caller.Workspace == "" {
-		return tools.Tool{}, sessionfs.ErrProfileMessageNoTargets
-	}
 	if settings.TimeoutMs < 1 {
 		return tools.Tool{}, errors.New("tools.native.profile_message.timeout_ms must be at least 1")
 	}
@@ -437,18 +431,12 @@ func profileMessageListText(settings sessionfs.NativeProfileMessageSettings, tar
 	if len(targets) > 0 {
 		text = " Profiles: " + strings.Join(targets, ", ") + "."
 	}
-	if settings.Caller.Workspace != "" {
-		text += " Profiles are written " + sessionfs.MessageRefForms + ": a name alone is a profile of your own category, and each shorter form is a profile of your own session or workspace."
-		if len(settings.Workspaces) > 0 {
-			text += " Workspaces you can reach: " + strings.Join(settings.Workspaces, ", ") + "."
-		}
-	} else if len(settings.Sessions) > 0 {
-		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(settings.Sessions, ", ") + ")."
+	text += " Profiles are written " + sessionfs.MessageRefForms + ": a name alone is a profile of your own category, and each shorter form is a profile of your own session or workspace."
+	if len(settings.Workspaces) > 0 {
+		text += " Workspaces you can reach: " + strings.Join(settings.Workspaces, ", ") + "."
 	}
-	if len(remotes) > 0 && settings.Caller.Workspace != "" {
+	if len(remotes) > 0 {
 		text += " Remote profiles on other JAD servers are written remote:<binding>/<session>/<category>/<name>, one binding per server workspace (bindings: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach."
-	} else if len(remotes) > 0 {
-		text += " Remote profiles on other JAD servers are written remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach, and <workspace>: is needed only when the remote holds that session id in several workspaces."
 	}
 	return text
 }
@@ -501,25 +489,16 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		}
 		choice = &chosen
 	}
-	var session, target string
-	label := profile
-	if p.settings.Caller.Workspace != "" {
-		address, err := p.parseLocalV2(profile)
-		if errors.Is(err, sessionfs.ErrInvalidMessageRef) {
-			return p.invalidProfileRef(callID, profile), nil
-		}
-		if err != nil {
-			return p.unknownProfile(callID, profile), nil
-		}
-		session, target, label = address.session, address.target, address.label()
-		if refusal := p.settings.DeniedBy(label, p.requestedActions(model)); refusal != nil {
-			return p.deniedAnswer(callID, label, refusal), nil
-		}
-	} else {
-		var allowed bool
-		if session, target, allowed = p.localTarget(profile); !allowed {
-			return p.unknownProfile(callID, profile), nil
-		}
+	address, err := p.parseLocal(profile)
+	if errors.Is(err, sessionfs.ErrInvalidMessageRef) {
+		return p.invalidProfileRef(callID, profile), nil
+	}
+	if err != nil {
+		return p.unknownProfile(callID, profile), nil
+	}
+	session, target, label := address.session, address.target, address.label()
+	if refusal := p.settings.DeniedBy(label, p.requestedActions(model)); refusal != nil {
+		return p.deniedAnswer(callID, label, refusal), nil
 	}
 	owner, canHandle := handleOwner(execution)
 	handled := p.host != nil && canHandle
@@ -584,30 +563,6 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 		return p.runInline(ctx, callID, label, plan)
 	}
 	return p.runHandle(ctx, callID, label, message, owner, plan, block)
-}
-
-var localProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
-// localTarget splits a local profile argument of the v1 layout: <category>/<profile> of the
-// calling session, or <session>/<category>/<profile> when a tools.native.profile_message.sessions
-// glob allows the session. A profile denied by deny_profiles is denied in every session. The
-// workspace layout reads its addresses with parseLocalV2.
-func (p *profileMessageTool) localTarget(profile string) (session, target string, allowed bool) {
-	switch len(strings.Split(profile, "/")) {
-	default:
-		return "", profile, slices.Contains(p.targets, profile)
-	case 3:
-		session, target, _ = strings.Cut(profile, "/")
-		if !remote.SessionPattern.MatchString(session) || !localProfilePattern.MatchString(target) || slices.Contains(p.settings.DenyProfiles, target) {
-			return "", "", false
-		}
-		for _, glob := range p.settings.Sessions {
-			if ok, err := path.Match(glob, session); err == nil && ok {
-				return session, target, true
-			}
-		}
-	}
-	return "", "", false
 }
 
 // unknownProfile is the answer for a target that is not allowed and for one that does not

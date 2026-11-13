@@ -39,8 +39,7 @@ func loadLayoutSessionSettings(location Location, layout Layout, requestedProfil
 	if scans == nil {
 		scans = NewCatalogScans()
 	}
-	if layout.Workspace == "" || scans.trial() {
-		// v1 has no self-edit, so nothing publishes.
+	if scans.trial() {
 		return loadLayoutSessionOnce(location, layout, requestedProfile, requestedModel, scans, nil)
 	}
 	view := scans
@@ -77,9 +76,6 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		return SessionConfig{}, configError("%s: unsupported schema_version %d", sessionPath, session.SchemaVersion)
 	}
 	if err := session.refuseModelDefaults(sessionPath); err != nil {
-		return SessionConfig{}, err
-	}
-	if err := refuseRemoteKeysInV1(layout, session.RemoteKeys, sessionPath); err != nil {
 		return SessionConfig{}, err
 	}
 	if _, err := checkRemoteKeyNames(session.RemoteKeys, sessionPath+": "+remoteKeysKey); err != nil {
@@ -156,16 +152,13 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 	}
 	config.SettingSources = sources
 	config.ProfileOwnDir, config.ProfileDataDir = layout.ProfileOwnDir(entry.ID()), layout.ProfileDataDir(entry.ID())
-	if layout.Workspace != "" {
-		config.WorkspaceLayout = true
-		config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
-		config.SelfEditPaths = layout.selfEditPaths()
-		if settings := config.NativeProfileMessage; settings != nil {
-			settings.Caller.Profile = entry.ID()
-			settings.GlobalDeny, settings.WorkspaceDeny = layout.GlobalMessageDeny, layout.MessageDeny
-			if layout.Listed {
-				settings.Workspaces = otherThan(layout.MessageWorkspaces, settings.Caller.Workspace)
-			}
+	config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
+	config.SelfEditPaths = layout.selfEditPaths()
+	if settings := config.NativeProfileMessage; settings != nil {
+		settings.Caller.Profile = entry.ID()
+		settings.GlobalDeny, settings.WorkspaceDeny = layout.GlobalMessageDeny, layout.MessageDeny
+		if layout.Listed {
+			settings.Workspaces = otherThan(layout.MessageWorkspaces, settings.Caller.Workspace)
 		}
 	}
 	if err := built.finishSandbox(&config); err != nil {
@@ -189,11 +182,9 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		}
 	}
 	config.RemotesDir = layout.Remotes
-	if layout.Workspace != "" {
-		// A broken key does not stop the session from loading and listing: a run fails with the
-		// named error (WithModel), and the remote tools see no key.
-		config.RemoteKeys, config.RemoteKeyFault = layout.resolveRemoteKeys(session, sessionPath, judged.verdicts[entry.ID()].file, entry.Path)
-	}
+	// A broken key does not stop the session from loading and listing: a run fails with the
+	// named error (WithModel), and the remote tools see no key.
+	config.RemoteKeys, config.RemoteKeyFault = layout.resolveRemoteKeys(session, sessionPath, judged.verdicts[entry.ID()].file, entry.Path)
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
 	config.ProfilePath = entry.Path
@@ -239,7 +230,7 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		// Only the effort is checked: a model file that fails the model rules is reported by
 		// the run that uses it, not by every load of the session.
-		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, config.WorkspaceLayout, config.ReasoningEffort); err != nil {
+		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, true, config.ReasoningEffort); err != nil {
 			return SessionConfig{}, err
 		}
 	}
@@ -386,13 +377,13 @@ func (c *layoutCompose) setPlanSandboxReadOnlyPaths(config SessionConfig, readOn
 	}
 }
 
-// addFixedHidePaths adds the layout's fixed paths (workspace layout only) to a sandbox after
+// addFixedHidePaths adds the layout's fixed paths to a sandbox after
 // its hide_paths were read, so neither a profile's hide_paths nor a template can remove them:
 // the hidden G/auth and other workspaces' .jad folders, and the sealed G and W/.jad with the
 // helper folders of the tools the sandbox covers. The lists are copied, never appended to in
 // place, because sandboxes may share them.
 func (c *layoutCompose) addFixedHidePaths(sandbox *SandboxSettings) {
-	if sandbox == nil || c.layout.Workspace == "" {
+	if sandbox == nil {
 		return
 	}
 	sandbox.HidePaths = appendNewStrings(append([]string(nil), sandbox.HidePaths...), c.layout.FixedHidePaths...)
@@ -451,9 +442,6 @@ func (c *layoutCompose) resolveAgentSandboxes(config *SessionConfig, readOnly []
 		where := fmt.Sprintf("%s: tools.native.subagent agent %s", c.sessionPath, agent.Name)
 		fields, reset, err := expandSandboxValue(agent.sandboxRaw, c.templates, where)
 		if err != nil || reset || fields == nil {
-			return err
-		}
-		if err := c.refuseV1ProfileData(mustJSON(fields), where); err != nil {
 			return err
 		}
 		own, enabled, err := parseSandbox(mustJSON(fields), where, "sandbox")
@@ -735,9 +723,6 @@ func (c *layoutCompose) composeSandbox(setting, sessionLayer, profileSettings ma
 	}
 	composed, absent, err := composeSandboxLayers(layers, wheres, c.templates)
 	if err != nil {
-		return err
-	}
-	if err := c.refuseV1ProfileData(composed, c.sessionPath+": sandbox"); err != nil {
 		return err
 	}
 	if absent {

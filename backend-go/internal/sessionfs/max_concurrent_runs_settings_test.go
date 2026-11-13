@@ -1,8 +1,6 @@
 package sessionfs
 
 import (
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,7 +25,7 @@ func TestMaxConcurrentRunsRefusesNonIntegersAndReadsNullAsAbsent(t *testing.T) {
 	for _, value := range []string{`"4"`, `1.5`} {
 		cwd := t.TempDir()
 		writeServerSetting(t, cwd, `{"max_concurrent_runs":`+value+`}`)
-		_, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+		_, err := loadServerSection(cwd)
 		if err == nil || !strings.Contains(err.Error(), "server.max_concurrent_runs") {
 			t.Fatalf("value %s: error = %v, want server.max_concurrent_runs refused", value, err)
 		}
@@ -40,11 +38,7 @@ func TestMaxConcurrentRunsRefusesNonIntegersAndReadsNullAsAbsent(t *testing.T) {
 
 func writeServerSetting(t *testing.T, cwd, server string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
+	if err := writeServerSection(cwd, `{"server":`+server+`}`); err != nil {
 		t.Fatal(err)
 	}
 }

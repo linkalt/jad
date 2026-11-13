@@ -162,8 +162,8 @@ func waitProfileFile(path string) func() {
 // history before the new one is published (S3 to S6). The running run keeps the settings it
 // loaded; the change applies from the next run.
 func EditProfile(location Location, profile string, request ProfileEditRequest) (ProfileEditResult, error) {
-	if location.Root.Layout == nil || location.Root.Layout.Workspace == "" || !location.UsesLayout() {
-		return ProfileEditResult{}, &ClientError{Message: "a profile edits itself only in the workspace layout (W/.jad/workspace.json)"}
+	if location.Root.Layout == nil || !location.UsesLayout() {
+		return ProfileEditResult{}, &ClientError{Message: "a profile edits itself only in a session of a workspace"}
 	}
 	layout := *location.Root.Layout
 	level := layout.ProfileSelfEdit
@@ -339,8 +339,8 @@ func EditProfile(location Location, profile string, request ProfileEditRequest) 
 // ReadProfileHistory lists the history of the profile's own file, newest first, without the
 // stored files; at most limit entries (0: all).
 func ReadProfileHistory(location Location, profile string, limit int) (ProfileHistory, error) {
-	if location.Root.Layout == nil || location.Root.Layout.Workspace == "" {
-		return ProfileHistory{}, &ClientError{Message: "a profile has a history only in the workspace layout (W/.jad/workspace.json)"}
+	if location.Root.Layout == nil {
+		return ProfileHistory{}, &ClientError{Message: "a profile has a history only in a session of a workspace"}
 	}
 	own := location.Root.Layout.ProfileOwnDir(profile)
 	if own == "" {

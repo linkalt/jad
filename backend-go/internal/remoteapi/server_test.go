@@ -60,7 +60,15 @@ type fakeBackend struct {
 	delay    chan struct{}
 }
 
+// testWorkspace is the one workspace the default fixture serves: every row names it and the
+// server qualifies each session with it. The fake backend takes the workspace off again, so the
+// tests keep writing the bare session.
+const testWorkspace = "w"
+
+func bare(session string) string { return strings.TrimPrefix(session, testWorkspace+":") }
+
 func (b *fakeBackend) Profiles(_ context.Context, session string) ([]string, error) {
+	session = bare(session)
 	if names, ok := b.profiles[session]; ok {
 		return names, nil
 	}
@@ -80,12 +88,14 @@ func (b *fakeBackend) start() (Run, error) {
 	return run, nil
 }
 func (b *fakeBackend) SendMessage(_ context.Context, r MessageRequest) (Run, error) {
+	r.Session = bare(r.Session)
 	b.mu.Lock()
 	b.messages = append(b.messages, r)
 	b.mu.Unlock()
 	return b.start()
 }
 func (b *fakeBackend) StartSubagent(_ context.Context, r SubagentRequest) (Run, error) {
+	r.Session = bare(r.Session)
 	b.mu.Lock()
 	b.subs = append(b.subs, r)
 	b.mu.Unlock()
@@ -94,7 +104,7 @@ func (b *fakeBackend) StartSubagent(_ context.Context, r SubagentRequest) (Run, 
 
 func tokens(t *testing.T, rows string) *TokenTable {
 	t.Helper()
-	parsed, err := ParseTokens([]byte(rows))
+	parsed, err := ParseTokens([]byte(strings.ReplaceAll(rows, `{"id":`, `{"workspace":"`+testWorkspace+`","id":`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +127,7 @@ type fixture struct {
 func newFixture(t *testing.T, table *TokenTable, mutate func(*Options)) *fixture {
 	t.Helper()
 	backend := &fakeBackend{profiles: map[string][]string{"main": {"review/a", "review/b", "dev/coder"}}}
-	opts := Options{Tokens: table, Backend: backend}
+	opts := Options{Tokens: table, Backend: backend, Workspaces: []string{testWorkspace}}
 	if mutate != nil {
 		mutate(&opts)
 	}
@@ -605,15 +615,15 @@ func TestCloseStopsLiveRuns(t *testing.T) {
 func TestTokenTableValidation(t *testing.T) {
 	good := hashOf(secretA)
 	for name, c := range map[string]struct{ body, want string }{
-		"unknown key":   {`{"tokens":[{"id":"a","sha256":"` + good + `","actions":[],"secret":"x"}]}`, "unknown field"},
-		"plaintext":     {`{"tokens":[{"id":"a","sha256":"` + secretA + `"}]}`, "64 hex"},
-		"bad action":    {`{"tokens":[{"id":"a","sha256":"` + good + `","actions":["delete"]}]}`, "unknown action"},
-		"dup id":        {`{"tokens":[{"id":"a","sha256":"` + good + `"},{"id":"a","sha256":"` + hashOf(secretB) + `"}]}`, "unique"},
-		"dup hash":      {`{"tokens":[{"id":"a","sha256":"` + good + `"},{"id":"b","sha256":"` + good + `"}]}`, "unique"},
-		"bad glob":      {`{"tokens":[{"id":"a","sha256":"` + good + `","profiles":["[x"]}]}`, "valid glob"},
-		"bad expires":   {`{"tokens":[{"id":"a","sha256":"` + good + `","expires":"tomorrow"}]}`, "RFC 3339"},
-		"negative hops": {`{"tokens":[{"id":"a","sha256":"` + good + `","max_hops":-1}]}`, "negative"},
-		"bad id":        {`{"tokens":[{"id":"a b","sha256":"` + good + `"}]}`, "id must be"},
+		"unknown key":   {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `","actions":[],"secret":"x"}]}`, "unknown field"},
+		"plaintext":     {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + secretA + `"}]}`, "64 hex"},
+		"bad action":    {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `","actions":["delete"]}]}`, "unknown action"},
+		"dup id":        {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `"},{"workspace":"w","id":"a","sha256":"` + hashOf(secretB) + `"}]}`, "unique"},
+		"dup hash":      {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `"},{"workspace":"w","id":"b","sha256":"` + good + `"}]}`, "unique"},
+		"bad glob":      {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `","profiles":["[x"]}]}`, "valid glob"},
+		"bad expires":   {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `","expires":"tomorrow"}]}`, "RFC 3339"},
+		"negative hops": {`{"tokens":[{"workspace":"w","id":"a","sha256":"` + good + `","max_hops":-1}]}`, "negative"},
+		"bad id":        {`{"tokens":[{"workspace":"w","id":"a b","sha256":"` + good + `"}]}`, "id must be"},
 	} {
 		if _, err := ParseTokens([]byte(c.body)); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Fatalf("%s: want %q got %v", name, c.want, err)
@@ -632,7 +642,7 @@ func TestTokenFileReloadRevokesAtOnce(t *testing.T) {
 		_ = os.Chtimes(file, future, future)
 	}
 	row := func(revoked bool) string {
-		return fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"revoked":%v,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked)
+		return fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,"revoked":%v,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked)
 	}
 	write(row(false))
 	table, err := NewTokenTable(file, nil, nil)
@@ -699,7 +709,7 @@ func TestTokenFileMustBePrivateAndChangesAreSeenByContent(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "tokens.json")
 	row := func(revoked string) string {
-		return fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"revoked":%s,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked)
+		return fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,"revoked":%s,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked)
 	}
 	if err := os.WriteFile(file, []byte(row("false")), 0o644); err != nil {
 		t.Fatal(err)
@@ -753,7 +763,7 @@ func TestTokenFileMustBePrivateAndChangesAreSeenByContent(t *testing.T) {
 // followed run is not ended. An unknown token keeps 401 and the challenge.
 func TestBrokenTokenTableAnswers503AndAnUnknownTokenStays401(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "tokens.json")
-	body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
+	body := fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
 	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -784,7 +794,7 @@ func TestBrokenTokenTableAnswers503AndAnUnknownTokenStays401(t *testing.T) {
 
 func TestTokenFileIsLookedAtOncePerInterval(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "tokens.json")
-	body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
+	body := fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA))
 	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +818,7 @@ func TestTokenFileIsLookedAtOncePerInterval(t *testing.T) {
 func TestTokenFileReloadAndAuthenticateRace(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "tokens.json")
 	row := func(revoked bool) []byte {
-		return []byte(fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,"revoked":%v,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked))
+		return []byte(fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,"revoked":%v,"profiles":["*/*/*"],"actions":["message"]}]}`, hashOf(secretA), revoked))
 	}
 	if err := os.WriteFile(file, row(false), 0o600); err != nil {
 		t.Fatal(err)
@@ -839,7 +849,7 @@ func TestTokenFileReloadAndAuthenticateRace(t *testing.T) {
 func TestGlobsWithCharacterClassesAreRejected(t *testing.T) {
 	for _, glob := range []string{"main[^x]*", "main/[a-z]*/x", "ma[i]n/*/*"} {
 		for _, key := range []string{"profiles", "agents"} {
-			body := fmt.Sprintf(`{"tokens":[{"id":"a","sha256":%q,%q:[%q],"actions":["message"]}]}`, hashOf(secretA), key, glob)
+			body := fmt.Sprintf(`{"tokens":[{"workspace":"w","id":"a","sha256":%q,%q:[%q],"actions":["message"]}]}`, hashOf(secretA), key, glob)
 			if _, err := ParseTokens([]byte(body)); err == nil {
 				t.Errorf("%s %q must be refused: a class can match '/'", key, glob)
 			}

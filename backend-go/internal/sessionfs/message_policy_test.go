@@ -214,8 +214,8 @@ func TestWorkspaceAndGlobalMessageRuleErrors(t *testing.T) {
 	}
 }
 
-// The toolset's own deny and the removed deny_profiles: the layouts read different keys.
-func TestProfileMessageDenyKeysByLayout(t *testing.T) {
+// The toolset's own deny, and the removed deny_profiles key of the retired v1 layout.
+func TestProfileMessageDenyKeys(t *testing.T) {
 	v2 := MessageCaller{Workspace: "app", Session: "release", Profile: "dev/coder"}
 	settings, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"deny":[{"to":"local:*/*/ops/*"},{"actions":["reset"]}]}}`), "t.json", v2)
 	if err != nil || len(settings.Deny) != 2 {
@@ -226,21 +226,15 @@ func TestProfileMessageDenyKeysByLayout(t *testing.T) {
 		caller MessageCaller
 		want   string
 	}{
-		"v2 deny_profiles":     {`{"profile_message":{"deny_profiles":["ops/root"]}}`, v2, `deny_profiles was removed in the workspace layout; replace each entry <category>/<profile> with a deny rule {"to": "local:*/*/<category>/<profile>"}`},
+		"v2 deny_profiles":     {`{"profile_message":{"deny_profiles":["ops/root"]}}`, v2, `deny_profiles was removed with workspace layout v1; replace each entry <category>/<profile> with a deny rule {"to": "local:*/*/<category>/<profile>"}`},
 		"v2 from in a toolset": {`{"profile_message":{"deny":[{"from":"local:a/*/*/*"}]}}`, v2, "from is not a key of this rule; a toolset's rules are about the profiles that use it"},
 		"v2 bad rule":          {`{"profile_message":{"deny":[{"to":"ops/root"}]}}`, v2, "t.json: tools.native.profile_message.deny[0]: to must be"},
-		"v1 deny":              {`{"profile_message":{"deny":[{}]}}`, MessageCaller{}, "deny is a key of the workspace layout"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(test.native), "t.json", test.caller); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("err = %v, want %q", err, test.want)
 			}
 		})
-	}
-	// v1 reads deny_profiles as it always did.
-	v1, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"deny_profiles":["ops/root"]}}`), "t.json", MessageCaller{})
-	if err != nil || len(v1.DenyProfiles) != 1 {
-		t.Fatalf("v1 deny_profiles: %+v, %v", v1, err)
 	}
 }
 
@@ -254,8 +248,5 @@ func TestShownTargetsLeavesOutWhatIsRefusedAsAWhole(t *testing.T) {
 	got := settings.ShownTargets([]string{"ops/root", "admin/x", "review/security", "review/secret", "review/ok"})
 	if strings.Join(got, ",") != "review/security,review/ok" {
 		t.Fatalf("shown = %q (a reset-only rule must not hide a profile)", got)
-	}
-	if v1 := (NativeProfileMessageSettings{}).ShownTargets([]string{"a/b", "c/d"}); len(v1) != 2 {
-		t.Fatalf("v1 shown = %q", v1)
 	}
 }

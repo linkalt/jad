@@ -77,10 +77,10 @@ func (r *fakeRun) Outcome() ProfileMessageOutcome { return r.outcome }
 func (r *fakeRun) Status() string                 { return "fake is working" }
 func (r *fakeRun) Stop(reason string)             { r.reason.Store(reason); r.cancel() }
 
-var profileMessageTargets = []string{"reviewer", "team/coder"}
+var profileMessageTargets = []string{"dev/reviewer", "team/coder"}
 
 func profileMessageSettings() sessionfs.NativeProfileMessageSettings {
-	return sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024}
+	return sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}}
 }
 
 func callProfileMessage(t *testing.T, settings sessionfs.NativeProfileMessageSettings, messenger ProfileMessenger, arguments string) string {
@@ -110,7 +110,7 @@ func callProfileMessage(t *testing.T, settings sessionfs.NativeProfileMessageSet
 func TestProfileMessageSuccessPassesOwnerTargetAndMessage(t *testing.T) {
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "  looks fine\n", nil }}
 	output := callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"reviewer","message":"check it"}`)
-	if messenger.owner != "s1:main" || messenger.target != "reviewer" || messenger.message != "check it" {
+	if messenger.owner != "s1:main" || messenger.target != "dev/reviewer" || messenger.message != "check it" {
 		t.Fatalf("messenger got %q %q %q", messenger.owner, messenger.target, messenger.message)
 	}
 	if !strings.Contains(output, `"status":"ok"`) || !strings.Contains(output, "looks fine") || strings.Contains(output, "truncated") {
@@ -121,7 +121,7 @@ func TestProfileMessageSuccessPassesOwnerTargetAndMessage(t *testing.T) {
 func TestProfileMessageUnknownProfile(t *testing.T) {
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { t.Fatal("messenger called"); return "", nil }}
 	output := callProfileMessage(t, profileMessageSettings(), messenger, `{"profile":"nobody","message":"hi"}`)
-	if !strings.Contains(output, "error_code: unknown_profile") || !strings.Contains(output, "available: reviewer, team/coder") {
+	if !strings.Contains(output, "error_code: unknown_profile") || !strings.Contains(output, "available: dev/reviewer, team/coder") {
 		t.Fatalf("output = %s", output)
 	}
 }
@@ -148,16 +148,16 @@ func TestProfileMessageSentinelErrorsAndFailure(t *testing.T) {
 		if c.code == "profile_failed" && strings.Contains(output, "disk exploded") {
 			t.Errorf("internal error text leaked: %s", output)
 		}
-		if failed, ok := c.err.(*ProfileFailedError); ok && !strings.Contains(output, "Profile reviewer failed: "+failed.Message) {
+		if failed, ok := c.err.(*ProfileFailedError); ok && !strings.Contains(output, "Profile local:app/release/dev/reviewer failed: "+failed.Message) {
 			t.Errorf("failure message missing: %s", output)
 		}
-		if c.code == "profile_stopped" && !strings.Contains(output, "Profile reviewer was stopped") {
+		if c.code == "profile_stopped" && !strings.Contains(output, "Profile local:app/release/dev/reviewer was stopped") {
 			t.Errorf("stopped text missing: %s", output)
 		}
 		if c.code == "profile_same_transcript" && !strings.Contains(output, "shares this conversation and cannot be called") {
 			t.Errorf("same-transcript text missing: %s", output)
 		}
-		if c.code == "profile_no_answer" && (strings.Contains(output, `"status":"ok"`) || !strings.Contains(output, "Profile reviewer finished without an answer")) {
+		if c.code == "profile_no_answer" && (strings.Contains(output, `"status":"ok"`) || !strings.Contains(output, "Profile local:app/release/dev/reviewer finished without an answer")) {
 			t.Errorf("no-answer result wrong: %s", output)
 		}
 	}
@@ -225,7 +225,7 @@ func TestProfileMessageToolIsNotReadOnlyAndListsProfiles(t *testing.T) {
 	if tool.ReadOnly || tool.MayChangeFiles == nil || !tool.MayChangeFiles(map[string]any{}) {
 		t.Fatalf("ReadOnly = %v, MayChangeFiles set = %v", tool.ReadOnly, tool.MayChangeFiles != nil)
 	}
-	if !strings.Contains(tool.Definition.Description, "reviewer, team/coder") {
+	if !strings.Contains(tool.Definition.Description, "dev/reviewer, team/coder") {
 		t.Fatalf("description = %q", tool.Definition.Description)
 	}
 	if _, err := NewProfileMessageTool(profileMessageSettings(), profileMessageTargets, nil, nil); err == nil {
@@ -265,7 +265,7 @@ func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testi
 		t.Fatalf("manifest inputSchema differs from the in-code schema (err %v)", err)
 	}
 	settings := profileMessageSettings()
-	config := sessionfs.SessionConfig{SettingPath: filepath.Join(t.TempDir(), "setting.json"), ToolDefinitionPaths: []string{manifest}, NativeProfileMessage: &settings, Profile: "main", Profiles: []string{"main", "reviewer", "team/coder"}}
+	config := sessionfs.SessionConfig{SettingPath: filepath.Join(t.TempDir(), "setting.json"), ToolDefinitionPaths: []string{manifest}, NativeProfileMessage: &settings, Profile: "main", Profiles: []string{"main", "dev/reviewer", "team/coder"}}
 	catalog, err := BuildCatalog(config)
 	if err != nil {
 		t.Fatal(err)
@@ -278,27 +278,30 @@ func TestProfileMessageManifestMatchesTheInCodeSchemaAndNeedsAMessenger(t *testi
 		t.Fatal(err)
 	}
 	definitions := catalog.Definitions()
-	if len(definitions) != 1 || definitions[0].ID != profileMessageToolID || !strings.Contains(definitions[0].Description, "reviewer, team/coder") {
+	if len(definitions) != 1 || definitions[0].ID != profileMessageToolID || !strings.Contains(definitions[0].Description, "dev/reviewer, team/coder") {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 }
 
-func TestProfileMessageToolWithoutTargetsIsAConfigError(t *testing.T) {
-	_, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "no profile to message") {
+// A profile with no other profile in its session still has a tool: it reaches other sessions,
+// workspaces and remotes by address.
+func TestProfileMessageToolWithoutSessionTargetsIsBuilt(t *testing.T) {
+	if _, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{}, nil); err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *testing.T) {
+// The tool lists the other profiles of the session that no rule refuses as a whole; a denied one
+// is still addressable and answered profile_denied, the caller itself is unknown.
+func TestProfileMessageCatalogListsSessionProfilesExceptDeniedAndCaller(t *testing.T) {
 	settings := profileMessageSettings()
-	settings.DenyProfiles = []string{"team/coder"}
+	settings.Deny = []sessionfs.MessageRule{{To: "local:*/*/team/coder"}}
 	config := sessionfs.SessionConfig{
 		SettingPath:          filepath.Join(t.TempDir(), "setting.json"),
 		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
 		NativeProfileMessage: &settings,
-		Profile:              "main",
-		Profiles:             []string{"main", "reviewer", "team/coder"},
+		Profile:              "dev/main",
+		Profiles:             []string{"dev/main", "dev/reviewer", "team/coder"},
 	}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
 	catalog, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, messenger)
@@ -306,7 +309,7 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 		t.Fatal(err)
 	}
 	definitions := catalog.Definitions()
-	if len(definitions) != 1 || !strings.HasSuffix(definitions[0].Description, " Profiles: reviewer.") {
+	if len(definitions) != 1 || !strings.Contains(definitions[0].Description, " Profiles: dev/reviewer.") {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	call := func(profile string) string {
@@ -319,15 +322,11 @@ func TestProfileMessageCatalogAllowsSessionProfilesExceptDeniedAndCaller(t *test
 	if out := call("reviewer"); !strings.Contains(out, "answered") {
 		t.Fatalf("reviewer output = %s", out)
 	}
-	for _, denied := range []string{"team/coder", "main"} {
-		if out := call(denied); !strings.Contains(out, "unknown_profile") {
-			t.Fatalf("%s output = %s", denied, out)
-		}
+	if out := call("team/coder"); !strings.Contains(out, "profile_denied") {
+		t.Fatalf("team/coder output = %s", out)
 	}
-
-	config.Profiles = []string{"main", "team/coder"}
-	if _, err := BuildCatalogWithMessenger(config, nil, nil, nil, nil, nil, nil, nil, messenger); err == nil || !strings.Contains(err.Error(), "no profile to message") {
-		t.Fatalf("empty effective list error = %v", err)
+	if out := call("main"); !strings.Contains(out, "unknown_profile") {
+		t.Fatalf("main output = %s", out)
 	}
 }
 
@@ -395,7 +394,7 @@ func TestProfileMessageModelReachesTheMessengerAndARefusalIsInvalidInput(t *test
 	}
 	messenger = &fakeMessenger{prepareErr: &ProfileModelError{Model: "openai/huge", Message: "not listed"}}
 	output := callProfileMessage(t, settings, messenger, `{"profile":"reviewer","message":"check it","model":"openai/huge"}`)
-	if !strings.Contains(output, "model_unavailable") || !strings.Contains(output, "Profile reviewer cannot answer with model openai/huge: not listed") {
+	if !strings.Contains(output, "model_unavailable") || !strings.Contains(output, "Profile local:app/release/dev/reviewer cannot answer with model openai/huge: not listed") {
 		t.Fatalf("output = %s", output)
 	}
 	messenger = &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}

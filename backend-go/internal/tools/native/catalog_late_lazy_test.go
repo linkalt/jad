@@ -41,7 +41,7 @@ func lateLazyCatalog(t *testing.T, name string, set *tools.LazySet, hooks sessio
 	case "profile":
 		config.NativeProfile = &sessionfs.NativeProfileSettings{}
 	case "profile_message":
-		config.NativeProfileMessage = &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024}
+		config.NativeProfileMessage = &sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024}
 	case "subagent":
 		reader := agentNamed("explore")
 		reader.Tools, reader.HasTools = []string{"read_image"}, true
@@ -118,9 +118,9 @@ func TestChildOfAParentNamingProfileMessageLazyStillGetsItEager(t *testing.T) {
 		SettingPath:          filepath.Join(t.TempDir(), "setting.json"),
 		ToolDefinitionPaths:  []string{filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "subagent.json"), filepath.Join("..", "..", "..", "..", "sample", "tools", "native", "profile_message.json")},
 		NativeSubagent:       &subagent,
-		NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024},
-		Profile:              "main",
-		Profiles:             []string{"main", "reviewer"},
+		NativeProfileMessage: &sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024},
+		Profile:              "dev/main",
+		Profiles:             []string{"dev/main", "dev/reviewer"},
 	}
 	launcher := &fakeLauncher{}
 	messenger := &fakeMessenger{reply: func(context.Context) (string, error) { return "ok", nil }}
@@ -136,7 +136,7 @@ func TestChildOfAParentNamingProfileMessageLazyStillGetsItEager(t *testing.T) {
 	if strings.Contains(childCall, "lazy_tool_not_loaded") {
 		t.Fatalf("the child's call to profile_message was refused as lazy: %s", childCall)
 	}
-	if messenger.target != "reviewer" {
+	if messenger.target != "dev/reviewer" {
 		t.Fatalf("the child's call did not reach the messenger (target %q)", messenger.target)
 	}
 }

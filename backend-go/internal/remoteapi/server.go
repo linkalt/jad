@@ -170,8 +170,7 @@ type Options struct {
 	WaitMax         time.Duration
 	BodyMaxBytes    int64
 	ResultMaxBytes  int
-	// Workspaces are the ids of the workspaces this server serves (the workspace layout); empty
-	// for a v1 server. A token row of the workspace layout reaches one of them.
+	// Workspaces are the ids of the workspaces this server serves. A token row reaches one of them.
 	Workspaces []string
 }
 

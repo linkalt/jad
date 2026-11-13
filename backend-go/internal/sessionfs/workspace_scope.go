@@ -31,22 +31,10 @@ type scopeUser struct {
 }
 
 // ScopedCatalogLayout is the layout the catalog routes use for kind in scope, and the roots
-// whose sessions count for its in-use checks. Outside the workspace layout the scope must be
-// empty and the first layout root is used, as before. A scope that names an unknown or
+// whose sessions count for its in-use checks. A scope that names an unknown or
 // unserved workspace, or a kind the scope has no folder for, is CatalogNotFound.
 func ScopedCatalogLayout(roots []Root, scope string, kind CatalogKind) (Layout, []Root, error) {
 	scope = strings.TrimSpace(scope)
-	if !WorkspaceLayout(roots) {
-		if scope != "" {
-			return Layout{}, nil, &CatalogError{Kind: CatalogNotFound, Message: "scope is known only in the workspace layout"}
-		}
-		for _, root := range roots {
-			if root.Layout != nil {
-				return *root.Layout, roots, nil
-			}
-		}
-		return Layout{}, nil, &CatalogError{Kind: CatalogNotFound, Message: "no catalog layout is configured"}
-	}
 	if scope == "" {
 		scope = CatalogScopeGlobal
 		if kind == CatalogProfiles {

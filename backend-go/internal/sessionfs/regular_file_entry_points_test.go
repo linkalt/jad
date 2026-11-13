@@ -82,9 +82,21 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 				return err
 			}},
 		{"prompt document", maxPromptDocumentBytes, func(_ Layout, _ Location, _ string) string { return "" }, settings},
-		{"root setting", maxInternalJSONFileBytes, func(_ Layout, _ Location, root string) string { return filepath.Join(root, "setting.json") },
+		{"global setting", maxInternalJSONFileBytes, func(_ Layout, _ Location, root string) string {
+			// A workspace beside the sample root, with the sample root as its global folder.
+			workspace := filepath.Join(root+"-w", ".jad")
+			if err := os.MkdirAll(workspace, 0o755); err != nil {
+				panic(err)
+			}
+			for path, text := range map[string]string{filepath.Join(workspace, "workspace.json"): `{}`, filepath.Join(root, "global.json"): `{}`} {
+				if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+					panic(err)
+				}
+			}
+			return filepath.Join(root, "global.json")
+		},
 			func(_ Layout, _ Location, root string) error {
-				_, err := Load(LoadOptions{WorkingDir: root, RootSettingPath: filepath.Join(root, "setting.json"), Environment: map[string]string{}})
+				_, err := Load(LoadOptions{WorkingDir: root + "-w", GlobalDir: root, Environment: map[string]string{}})
 				return err
 			}},
 		{"ReadCatalogFile", maxInternalJSONFileBytes, func(l Layout, _ Location, _ string) string { return filepath.Join(l.Models, "openai", "gpt-fast.json") },
@@ -152,7 +164,7 @@ func TestEveryConfigReaderRefusesNonRegularAndOversizeFiles(t *testing.T) {
 				if kind == "oversize" && !strings.Contains(err.Error(), "larger than") {
 					t.Errorf("%s oversize: error does not name the limit: %v", e.name, err)
 				}
-				if kind != "oversize" && !strings.Contains(err.Error(), "not a regular file") && !strings.Contains(err.Error(), "directory") {
+				if kind != "oversize" && !strings.Contains(err.Error(), "not a regular file") && !strings.Contains(err.Error(), "directory") && !strings.Contains(err.Error(), "readable file") {
 					t.Errorf("%s as %s: unexpected error %v", e.name, kind, err)
 				}
 			})

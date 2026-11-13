@@ -24,7 +24,7 @@ var ceilingCaps = [][]string{
 // checkProfileCeilings refuses a profile of a workspace-layout session whose settings loosen an
 // ordered key the lower layers set.
 func checkProfileCeilings(layout Layout, session layoutSessionFile, profilePath string, profile map[string]json.RawMessage, scans *CatalogScans) error {
-	if layout.Workspace == "" || len(profile) == 0 {
+	if len(profile) == 0 {
 		return nil
 	}
 	sessionLayer := mergeSettings(nil, session.Settings)

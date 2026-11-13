@@ -37,14 +37,10 @@ type Directory struct {
 	scope Scope
 }
 
-// Scope is what makes a Directory a session's: whether the folder holds the bindings of the
-// workspace layout (v2), and the keys the session may use, by binding. It is the one place a
-// credential is chosen: every remote tool reads its entries and clients through the Directory,
-// and nothing else can name a key file. The zero Scope is the v1 layout, whose entries carry
-// their own token source.
+// Scope is what makes a Directory a session's: the keys the session may use, by binding. It is
+// the one place a credential is chosen: every remote tool reads its entries and clients through
+// the Directory, and nothing else can name a key file.
 type Scope struct {
-	// Workspace says the folder holds bindings (workspace layout).
-	Workspace bool
 	// Keys are the session's effective keys by binding name (Key.File is a key file).
 	Keys map[string]Key
 }
@@ -52,7 +48,7 @@ type Scope struct {
 // Key is one key a session may use: its name and the key file.
 type Key struct{ Name, File string }
 
-// Directory returns the hub's view of a remotes folder, for a v1 session.
+// Directory returns the hub's view of a remotes folder.
 func (h *Hub) Directory(dir string) *Directory { return &Directory{hub: h, dir: dir} }
 
 // Scoped is the view with the scope of a session. The hub and its clients are shared.
@@ -63,40 +59,22 @@ func (d *Directory) Scoped(scope Scope) *Directory {
 // Dir is the folder.
 func (d *Directory) Dir() string { return d.dir }
 
-// Workspace says the folder holds the bindings of the workspace layout, so the references are
-// remote:<binding>/<session>/... and a session is sent qualified with the binding's workspace.
-func (d *Directory) Workspace() bool { return d.scope.Workspace }
-
-// ParseProfile reads a profile reference by the grammar of the directory's layout.
+// ParseProfile reads remote:<binding>/<session>/<category>/<profile>.
 func (d *Directory) ParseProfile(s string) (Target, error) {
-	if d.scope.Workspace {
-		return ParseBindingProfile(s, d.Entry)
-	}
-	return ParseProfile(s, d.Entry)
+	return ParseBindingProfile(s, d.Entry)
 }
 
-// ParseSubagent reads a sub-agent reference by the grammar of the directory's layout.
+// ParseSubagent reads remote:<binding>/<session>/<category>/<profile>/<agent>.
 func (d *Directory) ParseSubagent(s string) (Target, error) {
-	if d.scope.Workspace {
-		return ParseBindingSubagent(s, d.Entry)
-	}
-	return ParseSubagent(s, d.Entry)
+	return ParseBindingSubagent(s, d.Entry)
 }
 
-// List reads every entry of the folder by the directory's layout.
-func (d *Directory) List() ([]Entry, []error) {
-	if d.scope.Workspace {
-		return ListBindings(d.dir)
-	}
-	return List(d.dir)
-}
+// List reads every binding of the folder.
+func (d *Directory) List() ([]Entry, []error) { return ListBindings(d.dir) }
 
-// Entry reads the remote's file. In the workspace layout it is a binding, with the key this
-// session has for it, if any (an unkeyed binding is returned as it is: Keyed is false).
+// Entry reads the binding's file, with the key this session has for it, if any (an unkeyed
+// binding is returned as it is: Keyed is false).
 func (d *Directory) Entry(name string) (Entry, error) {
-	if !d.scope.Workspace {
-		return Load(d.dir, name)
-	}
 	entry, err := LoadBinding(d.dir, name)
 	if err != nil {
 		return Entry{}, err

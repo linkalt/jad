@@ -38,7 +38,7 @@ func TestProfileRemoteInfoReachesThePeerAndShowsNoPath(t *testing.T) {
 	})
 	t.Cleanup(hub.Close)
 	settings := sessionfs.NativeProfileSettings{MaxEntries: 5, ScanMaxEntries: 5, AllowOtherSessions: true, AllowOtherProfiles: true, AllowChildren: true, AllowRemote: true, Remotes: []string{"peer"}}
-	tool, err := NewProfileToolWithRemotes(settings, TranscriptFiles{}, nil, nil, []string{"peer"}, hub.Directory(p.dir))
+	tool, err := NewProfileToolWithRemotes(settings, TranscriptFiles{}, nil, nil, []string{"peer"}, p.directory(hub))
 	if err != nil {
 		t.Fatal(err)
 	}

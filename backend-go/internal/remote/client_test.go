@@ -22,13 +22,29 @@ const secretToken = "tok_SECRET0123456789abcdef0123456789"
 
 func environment(string) string { return secretToken }
 
-// httpEntry is the entry of a test server: plain http on its loopback address.
-func httpEntry(t *testing.T, server *httptest.Server) Entry {
+// testEntry parses a binding and gives it a key whose token comes from the environment variable
+// JAD_REMOTE_T, which these tests answer with secretToken (the Options.Environment of newClient).
+func testEntry(t *testing.T, data []byte) Entry {
 	t.Helper()
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"`+server.URL+`","token_env":"JAD_REMOTE_T","timeout_ms":2000,"max_response_bytes":1024,"retries":2}}`))
+	entry, err := ParseBinding("box", "/x/box.json", data)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return keyed(t, entry)
+}
+
+// keyed gives the entry a key file that reads its token from JAD_REMOTE_T.
+func keyed(t *testing.T, entry Entry) Entry {
+	t.Helper()
+	entry.KeyName = "k"
+	entry.KeyFile = writeKey(t, t.TempDir(), "k", `{"kind":"remote_key","binding":"box","token_env":"JAD_REMOTE_T"}`, 0o600)
+	return entry
+}
+
+// httpEntry is the entry of a test server: plain http on its loopback address.
+func httpEntry(t *testing.T, server *httptest.Server) Entry {
+	t.Helper()
+	entry := testEntry(t, []byte(`{"kind":"remote","remote":{"workspace":"proj","url":"`+server.URL+`","timeout_ms":2000,"max_response_bytes":1024,"retries":2}}`))
 	return entry
 }
 
@@ -199,10 +215,7 @@ func TestClientUnixSocket(t *testing.T) {
 	})}
 	go server.Serve(listener)
 	defer server.Close()
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+socket+`","token_env":"JAD_REMOTE_T"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entry := testEntry(t, []byte(`{"kind":"remote","remote":{"workspace":"proj","url":"unix://`+socket+`"}}`))
 	client := newClient(t, entry)
 	var out struct{ OK bool }
 	if err := client.Do(context.Background(), Request{Method: "GET", Path: "/x"}, &out); err != nil || !out.OK {
@@ -218,12 +231,9 @@ func TestClientUnixPathMustBeASocket(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := ParseEntry("box", "/x/box.json", []byte(`{"kind":"remote","remote":{"url":"unix://`+file+`","token_env":"JAD_REMOTE_T","retries":0}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	entry := testEntry(t, []byte(`{"kind":"remote","remote":{"workspace":"proj","url":"unix://`+file+`","retries":0}}`))
 	client := newClient(t, entry)
-	err = client.Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
+	err := client.Do(context.Background(), Request{Method: "GET", Path: "/x"}, nil)
 	if err == nil || strings.Contains(err.Error(), secretToken) {
 		t.Fatalf("a regular file must be refused: %v", err)
 	}
@@ -311,7 +321,7 @@ func TestClientNoGoroutineLeak(t *testing.T) {
 }
 
 func TestClientErrorsNeverContainTheToken(t *testing.T) {
-	entry := Entry{Name: "box", URL: "http://127.0.0.1:1", Host: "127.0.0.1:1", TokenEnv: "JAD_REMOTE_T", Timeout: 500, MaxResponseBytes: 1024, MaxInFlight: 1, Retries: 1}
+	entry := keyed(t, Entry{Name: "box", Workspace: "proj", URL: "http://127.0.0.1:1", Host: "127.0.0.1:1", Timeout: 500, MaxResponseBytes: 1024, MaxInFlight: 1, Retries: 1})
 	client := newClient(t, entry)
 	err := client.Do(context.Background(), Request{Method: "GET", Path: "/x", Retry: true}, nil)
 	if err == nil || strings.Contains(err.Error(), secretToken) || strings.Contains(err.Error(), "Bearer") {

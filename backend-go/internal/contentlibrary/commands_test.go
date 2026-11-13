@@ -63,7 +63,7 @@ func TestExpandCommand(t *testing.T) {
 
 func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["first","second"]}}`)
+	dirs := map[string][]string{"command_dirs": {"first", "second"}}
 	writeLibraryTestFile(t, filepath.Join(root, "first/review.md"), "---\ndescription: Review a file\nargument-hint: <file>\n---\nReview $ARGUMENTS carefully.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "first/git/commit.md"), "# Commit\n\nCommit the staged changes.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "second/review.md"), "Hidden by the first folder.\n")
@@ -72,7 +72,7 @@ func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 	writeLibraryTestFile(t, filepath.Join(root, "second/prompt/x.md"), "Another kind's word.\n")
 	writeLibraryTestFile(t, filepath.Join(root, "second/empty.md"), "---\ndescription: nothing\n---\n")
 
-	library := New(Options{WorkingDir: root, Environment: map[string]string{}})
+	library := newTestLibrary(root, dirs)
 	catalog, err := library.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -112,12 +112,12 @@ func TestLibraryListsCommandsFromEachFolderInOrder(t *testing.T) {
 // commands: the prompts beside it are still listed.
 func TestCommandFolderThatIsAFileIsReportedWithoutFailingTheList(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["file"],"prompt_dirs":["prompts"]}}`)
+	dirs := map[string][]string{"command_dirs": {"file"}, "prompt_dirs": {"prompts"}}
 	writeLibraryTestFile(t, filepath.Join(root, "prompts", "hello.md"), "Say hello.")
 	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
+	catalog, err := newTestLibrary(root, dirs).List(context.Background(), "")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestDefaultCommandFolderThatIsAFileKeepsTheOtherKinds(t *testing.T) {
 	root := t.TempDir()
 	writeLibraryTestFile(t, filepath.Join(root, ".agent", "prompts", "hello.md"), "Say hello.")
 	writeLibraryTestFile(t, filepath.Join(root, ".agent", "commands"), "not a folder")
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
+	catalog, err := newTestLibrary(root, nil).List(context.Background(), "")
 	if err != nil || len(catalog.Prompts) != 1 || catalog.CommandsError == "" {
 		t.Fatalf("catalog = %+v, err %v", catalog, err)
 	}
@@ -146,7 +146,7 @@ func TestDefaultCommandFolderThatIsAFileKeepsTheOtherKinds(t *testing.T) {
 
 // Without a problem there is no commands_error in the JSON.
 func TestCatalogWithoutCommandProblemHasNoCommandsError(t *testing.T) {
-	catalog, err := New(Options{WorkingDir: t.TempDir(), Environment: map[string]string{}}).List(context.Background(), "")
+	catalog, err := newTestLibrary(t.TempDir(), nil).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,10 +156,11 @@ func TestCatalogWithoutCommandProblemHasNoCommandsError(t *testing.T) {
 }
 
 func TestDefaultDirectoriesIncludeCommands(t *testing.T) {
-	defaults, err := DefaultDirectories()
-	if err != nil {
+	var builtIn libraryDefaults
+	if err := json.Unmarshal(embeddedDefaults, &builtIn); err != nil {
 		t.Fatal(err)
 	}
+	defaults := map[string][]string{"prompt_dirs": builtIn.Prompts, "template_dirs": builtIn.Templates, "skill_dirs": builtIn.Skills, "command_dirs": builtIn.Commands}
 	if strings.Join(defaults["command_dirs"], ",") != ".agent/commands" {
 		t.Fatalf("command_dirs default = %v", defaults["command_dirs"])
 	}
@@ -194,7 +195,7 @@ func TestDefaultDirectoriesIncludeCommands(t *testing.T) {
 // list; a bad value is reported on the command, which is still listed.
 func TestCommandRunOptions(t *testing.T) {
 	root := t.TempDir()
-	writeLibraryTestFile(t, filepath.Join(root, "setting.json"), `{"libraries":{"command_dirs":["commands"]}}`)
+	dirs := map[string][]string{"command_dirs": {"commands"}}
 	for name, text := range map[string]string{
 		"flow.md":     "---\nmodel: openai/fast@high\nprofile: dev/coder\nplan: true\nallowed-tools: [lsp, \"read_image\", lsp]\n---\nPlan it.\n",
 		"comma.md":    "---\nallowed-tools: lsp, mcp:docs:*\n---\nRead it.\n",
@@ -208,7 +209,7 @@ func TestCommandRunOptions(t *testing.T) {
 	} {
 		writeLibraryTestFile(t, filepath.Join(root, "commands", name), text)
 	}
-	catalog, err := New(Options{WorkingDir: root, Environment: map[string]string{}}).List(context.Background(), "")
+	catalog, err := newTestLibrary(root, dirs).List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

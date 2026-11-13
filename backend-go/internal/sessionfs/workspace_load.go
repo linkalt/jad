@@ -643,3 +643,26 @@ func readProfileMessage(setting map[string]json.RawMessage, where, ownWorkspace 
 	}
 	return deny, allowReset, nil
 }
+
+// legacyLayoutHint is what a v1 install is told. The last binary that has `jad migrate workspace`
+// is the build of the commit below; the migration copies and never moves or deletes a file.
+const legacyLayoutHint = "migrate the v1 setting with a jad built from commit " + LastMigrateCommit + " or earlier (`jad migrate workspace`), which copies it into a workspace without moving or deleting anything"
+
+// LastMigrateCommit is the last commit whose binary still has `jad migrate workspace`.
+const LastMigrateCommit = "6ac57497"
+
+// findLegacySetting returns the first place a v1 root setting.json was looked for that holds a
+// regular file, or "". It does not parse the file: its presence is enough to refuse the start.
+func findLegacySetting(cwd, home string) string {
+	candidates := []string{filepath.Join(cwd, ".jad", v1RootSettingName)}
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, ".jad", v1RootSettingName))
+	}
+	candidates = append(candidates, filepath.Join(cwd, v1RootSettingName), filepath.Join(cwd, "..", v1RootSettingName))
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return filepath.Clean(candidate)
+		}
+	}
+	return ""
+}

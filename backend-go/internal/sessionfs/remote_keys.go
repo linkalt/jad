@@ -48,15 +48,6 @@ func checkRemoteKeyNames(names *[]string, where string) (*[]string, error) {
 	return names, nil
 }
 
-// refuseRemoteKeysInV1 refuses remote_keys in a file read by the v1 layout, which has no keys:
-// a binding and its key are the workspace layout's.
-func refuseRemoteKeysInV1(layout Layout, keys *[]string, path string) error {
-	if keys != nil && layout.Workspace == "" {
-		return configError("%s: remote_keys is a key of the workspace layout; the v1 layout's remote files carry their own token source", path)
-	}
-	return nil
-}
-
 // remoteKeysDir is G/auth/keys.
 func (l Layout) remoteKeysDir() string { return filepath.Join(l.GlobalDir, "auth", "keys") }
 

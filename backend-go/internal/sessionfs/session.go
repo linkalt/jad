@@ -159,9 +159,6 @@ type SessionConfig struct {
 	// (loadModelOf). Every other model path, a sub-agent's too, is read as a whole model, and
 	// an own file read that way fails. nil without own models.
 	ModelBases map[string]ModelBase
-	// WorkspaceLayout is set for a session of the workspace layout (v2). There a model file read
-	// as a whole model may not set based_on; v1 ignores the key (loadWholeModel).
-	WorkspaceLayout bool
 	// ModelFault is why the model this load would run cannot be used, and then ModelPath is
 	// empty (a copy that is given another ModelPath, a sub-agent's or a fallback's, is not
 	// affected): the profile's explicit model_default, or the model the caller requested, fails
@@ -241,11 +238,8 @@ type SessionConfig struct {
 	// Warnings are load-time notices, not errors (a tool, server or hooks that two of
 	// the toolsets name, where the first listed won). The resolver logs them.
 	Warnings []string
-	// GlobalJadRoot is the global root whose setting.json names the skill
-	// directories the skill tool reads (v1).
-	GlobalJadRoot string
-	// Libraries are the content libraries of the session's workspace (workspace layout only;
-	// nil in v1, where GlobalJadRoot's setting.json names them).
+	// Libraries are the content libraries of the session's workspace (global.json and
+	// workspace.json), the folders the skill tool reads.
 	Libraries           *Libraries
 	MCPServers          []MCPServerReference
 	StateContext        StateContextSettings
@@ -704,7 +698,6 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 		NativeTranscripts:        nativeTranscripts,
 		NativeProfile:            nativeProfile,
 		NativeLoadTool:           nativeLoadTool,
-		GlobalJadRoot:            location.Root.GlobalJadRoot,
 		MCPServers:               mcpServers,
 		StateContext:             stateContext,
 		HTTPDebug:                httpDebug,
@@ -774,7 +767,7 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 	if c.ModelPath == "" && c.ModelFault != nil {
 		return SessionConfig{}, c.ModelFault
 	}
-	model, err := loadModelOf(c.ModelPath, c.ModelBases, c.WorkspaceLayout, c.Model.PromptRole, c.Model.PromptText)
+	model, err := loadModelOf(c.ModelPath, c.ModelBases, true, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
 		return SessionConfig{}, err
 	}

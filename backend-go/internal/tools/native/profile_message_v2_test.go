@@ -120,8 +120,7 @@ func TestProfileMessageV2OwnSessionTargetsAreTheSessionsProfiles(t *testing.T) {
 }
 
 // The description lists the five forms, the profiles of the session and the reachable
-// workspaces; a profile with no other profile still has a tool (it reaches by address), and v1
-// keeps its error and its text.
+// workspaces; a profile with no other profile still has a tool (it reaches by address).
 func TestProfileMessageV2Description(t *testing.T) {
 	tool, err := NewProfileMessageTool(v2Settings(), v2Targets, &fakeMessenger{}, nil)
 	if err != nil {
@@ -138,15 +137,5 @@ func TestProfileMessageV2Description(t *testing.T) {
 	}
 	if _, err := NewProfileMessageTool(v2Settings(), nil, &fakeMessenger{}, nil); err != nil {
 		t.Errorf("v2 tool without session targets: %v", err)
-	}
-	if _, err := NewProfileMessageTool(profileMessageSettings(), nil, &fakeMessenger{}, nil); err == nil {
-		t.Error("v1 tool without targets was built")
-	}
-	v1, err := NewProfileMessageTool(profileMessageSettings(), v2Targets, &fakeMessenger{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(v1.Definition.Description, "local:") {
-		t.Errorf("v1 description shows v2 forms: %s", v1.Definition.Description)
 	}
 }

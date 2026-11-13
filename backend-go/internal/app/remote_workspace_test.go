@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -16,8 +15,6 @@ import (
 
 	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/sessionfs"
-	"jad/backend-go/internal/tools"
-	"jad/backend-go/internal/tools/native"
 )
 
 // remoteWorkspaces is a remote-API server of the workspace layout with two workspaces, a and b,
@@ -323,34 +320,5 @@ func TestRemoteAPIHopLimitAppliesToQualifiedSessions(t *testing.T) {
 		"session": "a:s1", "profile": "dev/base", "message": "x", "request_id": "req-hop-ws-01"}, remoteapi.HeaderHops, "4")
 	if status != http.StatusLoopDetected || body["code"] != "remote_hop_limit" || w.providerRuns() != 0 {
 		t.Fatalf("%d %v", status, body)
-	}
-}
-
-// The local profile_message never leaves the caller's workspace, however the other workspace's
-// session is written: b:s1 and only-b (a session only b holds) answer as a session that does not
-// exist, so the answer does not tell that another workspace has it (design Q6).
-func TestProfileMessageToAnotherWorkspaceReadsLikeAMissingSession(t *testing.T) {
-	m := twoWorkspaces(t)
-	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 60_000, ResultMaxBytes: 4096, MaxChain: 2, MaxQueued: 4, Sessions: []string{"*"}}
-	tool, err := native.NewProfileMessageTool(settings, []string{"dev/other"}, m, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := func(profile string) string {
-		t.Helper()
-		out, err := tool.Execute(context.Background(), map[string]any{"profile": profile, "message": "hi"}, tools.ExecutionContext{CallID: "call", SessionKey: "a:s1\x00dev/coder"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return strings.ReplaceAll(out, profile, "PROFILE")
-	}
-	missing := run("ghost/dev/coder")
-	if !strings.Contains(missing, "error_code: unknown_profile") {
-		t.Fatalf("a missing session: %s", missing)
-	}
-	for _, profile := range []string{"b:s1/dev/coder", "only-b/dev/coder", "b:only-b/dev/coder"} {
-		if got := run(profile); got != missing {
-			t.Errorf("%s:\n got %s\nwant %s", profile, got, missing)
-		}
 	}
 }

@@ -26,58 +26,31 @@ var skillInputSchema = json.RawMessage(`{
 
 const skillDescription = "Load a skill's instructions by name. Call without a name to list available skills."
 
-// skillLibrary is what the skill tool needs from the skill libraries. It is
-// resolved on every call, so a change to setting.json applies without a restart.
+// skillLibrary is what the skill tool needs from the skill libraries: the global and the
+// session's workspace skill folders, read once at start (sessionfs.Libraries), a name in both
+// an error. The folders are listed on every call, so a new skill applies without a restart.
 type skillLibrary interface {
-	Directories() ([]string, error)
-	List(ctx context.Context, directories []string) ([]contentlibrary.Asset, error)
-	Read(ctx context.Context, directories []string, name string) (contentlibrary.LoadedSkill, bool, error)
+	List(ctx context.Context) ([]contentlibrary.Asset, error)
+	Read(ctx context.Context, name string) (contentlibrary.LoadedSkill, bool, error)
 }
 
-type rootSkillLibrary struct{ globalJadRoot string }
-
-func (l rootSkillLibrary) Directories() ([]string, error) {
-	return contentlibrary.SkillDirectories(l.globalJadRoot)
-}
-
-func (l rootSkillLibrary) List(ctx context.Context, directories []string) ([]contentlibrary.Asset, error) {
-	maxBytes, err := contentlibrary.AssetByteLimit(l.globalJadRoot)
-	if err != nil {
-		return nil, err
-	}
-	return contentlibrary.ListSkills(ctx, directories, maxBytes)
-}
-
-func (l rootSkillLibrary) Read(ctx context.Context, directories []string, name string) (contentlibrary.LoadedSkill, bool, error) {
-	maxBytes, err := contentlibrary.AssetByteLimit(l.globalJadRoot)
-	if err != nil {
-		return contentlibrary.LoadedSkill{}, false, err
-	}
-	return contentlibrary.ReadSkill(ctx, directories, name, maxBytes)
-}
-
-// workspaceSkillLibrary is the skill library of a workspace-layout session: the global and
-// the workspace's skill folders read once at start (sessionfs.Libraries), a name in both an
-// error. The directories the tool passes are not used.
 type workspaceSkillLibrary struct{ libraries *sessionfs.Libraries }
 
-func (l workspaceSkillLibrary) Directories() ([]string, error) { return nil, nil }
-
-func (l workspaceSkillLibrary) List(ctx context.Context, _ []string) ([]contentlibrary.Asset, error) {
+func (l workspaceSkillLibrary) List(ctx context.Context) ([]contentlibrary.Asset, error) {
 	return contentlibrary.ListWorkspaceSkills(ctx, l.libraries)
 }
 
-func (l workspaceSkillLibrary) Read(ctx context.Context, _ []string, name string) (contentlibrary.LoadedSkill, bool, error) {
+func (l workspaceSkillLibrary) Read(ctx context.Context, name string) (contentlibrary.LoadedSkill, bool, error) {
 	return contentlibrary.ReadWorkspaceSkill(ctx, l.libraries, name)
 }
 
-// NewSkillTool creates the read-only bridge from the skill libraries to the model: the global
-// root's (v1), or with libraries those of the session's workspace (workspace layout).
-func NewSkillTool(settings sessionfs.NativeSkillSettings, globalJadRoot string, libraries *sessionfs.Libraries) (tools.Tool, error) {
-	if libraries != nil {
-		return newSkillTool(settings, workspaceSkillLibrary{libraries: libraries})
+// NewSkillTool creates the read-only bridge from the skill libraries of the session's
+// workspace to the model.
+func NewSkillTool(settings sessionfs.NativeSkillSettings, libraries *sessionfs.Libraries) (tools.Tool, error) {
+	if libraries == nil {
+		return tools.Tool{}, errors.New("the skill tool needs the libraries of a workspace")
 	}
-	return newSkillTool(settings, rootSkillLibrary{globalJadRoot: globalJadRoot})
+	return newSkillTool(settings, workspaceSkillLibrary{libraries: libraries})
 }
 
 func newSkillTool(settings sessionfs.NativeSkillSettings, library skillLibrary) (tools.Tool, error) {
@@ -181,21 +154,16 @@ func cutUTF8(text string, maxBytes int64) (string, bool) {
 }
 
 func executeNativeSkill(ctx context.Context, arguments map[string]any, settings sessionfs.NativeSkillSettings, library skillLibrary, callID string) (string, error) {
-	directories, err := library.Directories()
-	if err != nil {
-		return tools.ExecutionError(callID, tools.StatusError, "skill_directories_unavailable", "Skill directories could not be loaded",
-			tools.Information{Key: "reason", Value: err.Error()}), nil
-	}
 	name, hasName := arguments["name"].(string)
 	if !hasName {
-		skills, err := library.List(ctx, directories)
+		skills, err := library.List(ctx)
 		if err != nil {
 			return "", fmt.Errorf("list skills: %w", err)
 		}
 		return renderSkillList(callID, skills, settings.MaxBytes)
 	}
 
-	found, exists, err := library.Read(ctx, directories, name)
+	found, exists, err := library.Read(ctx, name)
 	var ambiguous *contentlibrary.AmbiguousError
 	if errors.As(err, &ambiguous) {
 		// A name in both the global and the workspace library (workspace layout): the model
@@ -208,7 +176,7 @@ func executeNativeSkill(ctx context.Context, arguments map[string]any, settings 
 	if !exists {
 		// Recoverable: hand back the valid names so the model can correct itself
 		// in one step instead of probing.
-		skills, err := library.List(ctx, directories)
+		skills, err := library.List(ctx)
 		if err != nil {
 			return "", fmt.Errorf("list skills: %w", err)
 		}

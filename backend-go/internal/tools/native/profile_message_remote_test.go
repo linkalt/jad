@@ -26,6 +26,12 @@ import (
 
 const remoteSecret = "JADREMOTE_secret_0123456789abcdef0123456789"
 
+// peerWorkspace is the one workspace the fake peer serves; every binding names it and the peer's
+// backend takes it off a session again, so the tests keep writing the bare session.
+const peerWorkspace = "w"
+
+func peerBare(session string) string { return strings.TrimPrefix(session, peerWorkspace+":") }
+
 // peerRun is a run on the fake peer that the test ends by hand.
 type peerRun struct {
 	done    chan struct{}
@@ -84,6 +90,7 @@ type peerBackend struct {
 
 // ProfileInfo records the request and answers the info text of a profile with 42 tokens.
 func (b *peerBackend) ProfileInfo(_ context.Context, r remoteapi.ProfileRequest) (string, error) {
+	r.Session = peerBare(r.Session)
 	b.mu.Lock()
 	b.infos = append(b.infos, r)
 	b.mu.Unlock()
@@ -100,6 +107,7 @@ func (b *peerBackend) SendMessage(_ context.Context, r remoteapi.MessageRequest)
 	if b.err != nil {
 		return nil, b.err
 	}
+	r.Session = peerBare(r.Session)
 	b.messages = append(b.messages, r)
 	run := newPeerRun()
 	b.runs = append(b.runs, run)
@@ -114,6 +122,7 @@ func (b *peerBackend) StartSubagent(_ context.Context, r remoteapi.SubagentReque
 	if r.Agent == "ghost" {
 		return nil, remoteapi.ErrUnknownTarget
 	}
+	r.Session = peerBare(r.Session)
 	b.subs = append(b.subs, r)
 	run := newPeerRun()
 	b.runs = append(b.runs, run)
@@ -141,6 +150,23 @@ type peer struct {
 	api     *remoteapi.Server
 	handler *switchHandler
 	dir     string
+	// keyDir holds one key file per binding of dir: its token is JAD_REMOTE_PEER.
+	keyDir string
+}
+
+// directory is the peer's folder of bindings as a session sees it: each binding with the key.
+func (p *peer) directory(hub *remote.Hub) *remote.Directory {
+	scope := remote.Scope{Keys: map[string]remote.Key{}}
+	if entries, err := os.ReadDir(p.dir); err == nil {
+		for _, entry := range entries {
+			if name, ok := strings.CutSuffix(entry.Name(), ".json"); ok {
+				file := filepath.Join(p.keyDir, name+".json")
+				_ = os.WriteFile(file, []byte(`{"kind":"remote_key","binding":"`+name+`","token_env":"JAD_REMOTE_PEER"}`), 0o600)
+				scope.Keys[name] = remote.Key{Name: name + "-key", File: file}
+			}
+		}
+	}
+	return hub.Directory(p.dir).Scoped(scope)
 }
 
 // switchHandler lets a test cut the connection or answer with something else.
@@ -178,12 +204,12 @@ func startPeer(t *testing.T, grant string) *peer { return startPeerWith(t, grant
 func startPeerWith(t *testing.T, grant string, mutate func(*remoteapi.Options), responseMax int64) *peer {
 	t.Helper()
 	sum := sha256.Sum256([]byte(remoteSecret))
-	parsed, err := remoteapi.ParseTokens([]byte(fmt.Sprintf(`{"tokens":[{"id":"peer","sha256":%q,%s}]}`, hex.EncodeToString(sum[:]), grant)))
+	parsed, err := remoteapi.ParseTokens([]byte(fmt.Sprintf(`{"tokens":[{"id":"peer","workspace":"w","sha256":%q,%s}]}`, hex.EncodeToString(sum[:]), grant)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	backend := &peerBackend{}
-	options := remoteapi.Options{Tokens: remoteapi.StaticTokenTable(parsed, nil), Backend: backend, WaitMax: 300 * time.Millisecond}
+	options := remoteapi.Options{Tokens: remoteapi.StaticTokenTable(parsed, nil), Backend: backend, WaitMax: 300 * time.Millisecond, Workspaces: []string{peerWorkspace}}
 	if mutate != nil {
 		mutate(&options)
 	}
@@ -199,11 +225,11 @@ func startPeerWith(t *testing.T, grant string, mutate func(*remoteapi.Options), 
 	if responseMax > 0 {
 		extra = fmt.Sprintf(`"max_response_bytes":%d,`, responseMax)
 	}
-	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,%s"token_env":"JAD_REMOTE_PEER","timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1,"default_session":"main"}}`, server.URL, extra)
+	entry := fmt.Sprintf(`{"kind":"remote","description":"peer","remote":{"url":%q,%s"workspace":"w","timeout_ms":3000,"poll_ms":200,"lost_after_ms":1500,"retries":1}}`, server.URL, extra)
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return &peer{backend: backend, server: server, api: api, handler: handler, dir: dir}
+	return &peer{backend: backend, server: server, api: api, handler: handler, dir: dir, keyDir: t.TempDir()}
 }
 
 const peerGrant = `"profiles":["*/*/*"],"agents":["*/*/*/*"],"actions":["message","subagent","status","stop","transcripts","profile"]`
@@ -235,11 +261,11 @@ func newRemoteMessageFixtureOn(t *testing.T, p *peer, mutate func(*sessionfs.Nat
 		t.Fatal(err)
 	}
 	t.Cleanup(host.Close)
-	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 20_000, ResultMaxBytes: 1024, MaxQueued: 4, Remotes: []string{"peer"}}
+	settings := sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 20_000, ResultMaxBytes: 1024, MaxQueued: 4, Remotes: []string{"peer"}}
 	if mutate != nil {
 		mutate(&settings)
 	}
-	message, err := NewProfileMessageToolWithRemotes(settings, []string{"reviewer"}, &controlMessenger{}, host, hub.Directory(p.dir))
+	message, err := NewProfileMessageToolWithRemotes(settings, []string{"dev/reviewer"}, &controlMessenger{}, host, p.directory(hub))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,17 +367,6 @@ func TestRemoteProfileMessageCompactNoteOnAnAsyncHandle(t *testing.T) {
 	f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "late"})
 }
 
-func TestRemoteProfileMessageDefaultSessionAndExplicitSession(t *testing.T) {
-	f := newRemoteMessageFixture(t, peerGrant, nil)
-	go func() { f.peer.backend.run(t, 0).finish(remoteapi.RunResult{State: "done", Text: "a"}) }()
-	f.send(t, "remote:peer/review/reviewer", 5000, remoteCaller)
-	go func() { f.peer.backend.run(t, 1).finish(remoteapi.RunResult{State: "done", Text: "b"}) }()
-	f.send(t, "remote:peer/other/review/reviewer", 5000, remoteCaller)
-	if got := []string{f.peer.backend.messages[0].Session, f.peer.backend.messages[1].Session}; got[0] != "main" || got[1] != "other" {
-		t.Fatalf("sessions: %v", got)
-	}
-}
-
 func TestRemoteProfileMessageBecomesAHandleAndWaitStatusStopWork(t *testing.T) {
 	f := newRemoteMessageFixture(t, peerGrant, nil)
 	out := f.send(t, remoteTarget, 0, remoteCaller)
@@ -427,12 +442,12 @@ func TestRemoteProfileMessageRefusals(t *testing.T) {
 		"remote not enabled for the session": {peerGrant, "remote:ghost/main/review/reviewer", "unknown_remote", nil},
 		"token may not reach the profile":    {`"profiles":["main/dev/*"],"actions":["message","status","stop"]`, remoteTarget, "remote_forbidden", nil},
 		"token may not message":              {`"profiles":["*/*/*"],"actions":["status"]`, remoteTarget, "remote_forbidden", nil},
-		"malformed reference":                {peerGrant, "remote:peer/reviewer", "bad_remote_reference", nil},
-		"path in the reference":              {peerGrant, "remote:peer/main/review/../etc", "bad_remote_reference", nil},
-		"session with two colons":            {peerGrant, "remote:peer/local:main:x/review/reviewer", "bad_remote_reference", nil},
-		"workspace without a session":        {peerGrant, "remote:peer/local:/review/reviewer", "bad_remote_reference", nil},
-		"session without a workspace":        {peerGrant, "remote:peer/:main/review/reviewer", "bad_remote_reference", nil},
-		"workspace that is not an id":        {peerGrant, "remote:peer/.l:main/review/reviewer", "bad_remote_reference", nil},
+		"malformed reference":                {peerGrant, "remote:peer/reviewer", "invalid_profile_ref", nil},
+		"path in the reference":              {peerGrant, "remote:peer/main/review/../etc", "invalid_profile_ref", nil},
+		"session with two colons":            {peerGrant, "remote:peer/local:main:x/review/reviewer", "invalid_profile_ref", nil},
+		"workspace without a session":        {peerGrant, "remote:peer/local:/review/reviewer", "invalid_profile_ref", nil},
+		"session without a workspace":        {peerGrant, "remote:peer/:main/review/reviewer", "invalid_profile_ref", nil},
+		"workspace that is not an id":        {peerGrant, "remote:peer/.l:main/review/reviewer", "invalid_profile_ref", nil},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -457,14 +472,14 @@ func TestRemoteProfileMessageNotOfferedWithoutRemotesSetting(t *testing.T) {
 	if len(f.peer.backend.messages) != 0 {
 		t.Fatal("a message was sent")
 	}
-	if strings.Contains(f.message.Definition.Description, "remote:") {
+	if strings.Contains(f.message.Definition.Description, "bindings:") {
 		t.Fatalf("the model is told about remotes it cannot use:\n%s", f.message.Definition.Description)
 	}
 }
 
 func TestRemoteProfileMessageDescriptionListsTheRemotes(t *testing.T) {
 	f := newRemoteMessageFixture(t, peerGrant, nil)
-	if !strings.Contains(f.message.Definition.Description, "remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: peer)") {
+	if !strings.Contains(f.message.Definition.Description, "one binding per server workspace (bindings: peer)") {
 		t.Fatalf("description:\n%s", f.message.Definition.Description)
 	}
 }
@@ -519,7 +534,7 @@ func TestRemoteProfileMessageBusyAndTokenErrorsNeverContainTheToken(t *testing.T
 	wrong.hub.Close()
 	closedHub := remote.NewHub(func(string) string { return "JADREMOTE_other_0123456789abcdef0123456789abcd" })
 	t.Cleanup(closedHub.Close)
-	tool, err := NewProfileMessageToolWithRemotes(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, Remotes: []string{"peer"}}, []string{"reviewer"}, &controlMessenger{}, nil, closedHub.Directory(f.peer.dir))
+	tool, err := NewProfileMessageToolWithRemotes(sessionfs.NativeProfileMessageSettings{Caller: sessionfs.MessageCaller{Workspace: "app", Session: "release", Profile: "dev/main"}, TimeoutMs: 5000, ResultMaxBytes: 1024, Remotes: []string{"peer"}}, []string{"dev/reviewer"}, &controlMessenger{}, nil, f.peer.directory(closedHub))
 	if err != nil {
 		t.Fatal(err)
 	}

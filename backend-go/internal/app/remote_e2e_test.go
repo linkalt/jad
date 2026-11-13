@@ -67,7 +67,7 @@ func newBoundClient(t *testing.T, entryURL, workspace, extra string) *remoteClie
 	}
 	hub := remote.NewHub(nil)
 	t.Cleanup(hub.Close)
-	directory := hub.Directory(dir).Scoped(remote.Scope{Workspace: true, Keys: map[string]remote.Key{"peer": {Name: "peer-key", File: keyFile}}})
+	directory := hub.Directory(dir).Scoped(remote.Scope{Keys: map[string]remote.Key{"peer": {Name: "peer-key", File: keyFile}}})
 	host, err := local.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(local.cwd, "pm")), Config: asyncmgr.DefaultConfig()})
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ func TestRemoteE2ELocalProfileMessageIsUnchangedWithoutRemotes(t *testing.T) {
 	if !strings.Contains(out, "pm_") && !strings.Contains(out, "answered") {
 		t.Fatalf("local message:\n%s", out)
 	}
-	if strings.Contains(p.message.Definition.Description, "remote:") {
+	if strings.Contains(p.message.Definition.Description, "Remote profiles on other JAD servers") {
 		t.Fatalf("a session without remotes must not mention them:\n%s", p.message.Definition.Description)
 	}
 }

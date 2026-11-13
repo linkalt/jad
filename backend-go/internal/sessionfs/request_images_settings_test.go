@@ -1,22 +1,14 @@
 package sessionfs
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
 func loadServerSetting(t *testing.T, server string) ServerSettings {
 	t.Helper()
 	cwd := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(cwd, "sessions"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := Load(LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	writeServerSetting(t, cwd, server)
+	config, err := loadServerSection(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,17 +9,14 @@ import (
 	"jad/backend-go/internal/remote"
 )
 
-func readerWithEntry(t *testing.T, defaultSession string, profiles string) remoteReader {
+func readerWithEntry(t *testing.T, profiles string) remoteReader {
 	t.Helper()
 	dir := t.TempDir()
 	extra := ""
-	if defaultSession != "" {
-		extra += `,"default_session":"` + defaultSession + `"`
-	}
 	if profiles != "" {
 		extra += `,"profiles":[` + profiles + `]`
 	}
-	body := `{"kind":"remote","remote":{"url":"http://example.invalid:8787","token_env":"JAD_REMOTE_X"` + extra + `}}`
+	body := `{"kind":"remote","remote":{"url":"http://example.invalid:8787","workspace":"proj"` + extra + `}}`
 	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -28,45 +25,8 @@ func readerWithEntry(t *testing.T, defaultSession string, profiles string) remot
 	return remoteReader{allow: true, names: []string{"peer"}, directory: hub.Directory(dir)}
 }
 
-func TestRemoteSelectorGrammar(t *testing.T) {
-	r := readerWithEntry(t, "demo", "")
-	good := map[[2]string]string{
-		{"transcript", "remote:peer/profile:main/dev/coder"}:               "profile:main/dev/coder",
-		{"transcript", "remote:peer/profile:dev/coder"}:                    "profile:demo/dev/coder",
-		{"transcript", "remote:peer/subagent:main/dev/coder/sub_0123abcd"}: "subagent:main/dev/coder/sub_0123abcd",
-		{"transcript", "remote:peer/subagent:dev/coder/sub_0123abcd"}:      "subagent:demo/dev/coder/sub_0123abcd",
-		{"transcripts", "remote:peer"}:                                     "session:demo",
-		{"transcripts", "remote:peer/session:main"}:                        "session:main",
-		{"transcripts", "remote:peer/profile:main/dev/coder"}:              "profile:main/dev/coder",
-		{"transcripts", "remote:peer/profile:dev/coder"}:                   "profile:demo/dev/coder",
-	}
-	for in, want := range good {
-		if got, failure := r.selector(in[0], in[1]); failure != nil || got != want {
-			t.Errorf("%v: got %q, %v want %q", in, got, failure, want)
-		}
-	}
-	bad := [][2]string{
-		{"transcript", "remote:peer"}, {"transcript", "remote:peer/path:/etc/passwd"}, {"transcript", "remote:peer/profile:main/../coder"},
-		{"transcript", "remote:peer/profile:a/b/c/d"}, {"transcript", "remote:peer/subagent:main/dev/coder/notarun"},
-		{"transcript", "remote:peer/subagent:sub_0123abcd"}, {"transcript", "remote:peer/profile:main/dev/co:der"}, {"transcript", "remote:peer/session:main"},
-		{"transcripts", "remote:peer/subagent:main/dev/coder/sub_0123abcd"}, {"transcript", "remote:/profile:a/b/c"}, {"transcript", "remote:peer/profile:main//coder"},
-	}
-	for _, in := range bad {
-		if got, failure := r.selector(in[0], in[1]); failure == nil {
-			t.Errorf("%v must be refused, got %q", in, got)
-		}
-	}
-	noDefault := readerWithEntry(t, "", "")
-	if _, failure := noDefault.selector("transcripts", "remote:peer"); failure == nil {
-		t.Error("remote:<name> alone needs a default_session")
-	}
-	if _, failure := noDefault.selector("transcript", "remote:peer/profile:dev/coder"); failure == nil {
-		t.Error("a short path needs a default_session")
-	}
-}
-
 func TestRemoteSelectorSwitchListAndEntryGlobs(t *testing.T) {
-	r := readerWithEntry(t, "demo", `"review/*"`)
+	r := readerWithEntry(t, `"review/*"`)
 	if _, failure := r.selector("transcript", "remote:peer/profile:main/dev/coder"); failure == nil || failure.code != "remote_not_allowed" {
 		t.Fatalf("the entry's profile globs apply: %+v", failure)
 	}
@@ -138,7 +98,7 @@ func TestBindingReaderQualifiesTheSessionAndRewritesTheAnswer(t *testing.T) {
 	}
 	hub := remote.NewHub(nil)
 	defer hub.Close()
-	reader := remoteReader{allow: true, names: []string{"peer"}, directory: hub.Directory(dir).Scoped(remote.Scope{Workspace: true})}
+	reader := remoteReader{allow: true, names: []string{"peer"}, directory: hub.Directory(dir).Scoped(remote.Scope{})}
 	for _, c := range []struct {
 		tool, reference, want string
 	}{

@@ -3,7 +3,6 @@ package sessionfs
 import (
 	"errors"
 	"os"
-	"strings"
 )
 
 // errWorkspaceSessionNotFound is what a tool gets for a session outside its workspace and for
@@ -11,25 +10,12 @@ import (
 // another workspace exists (design Q6).
 var errWorkspaceSessionNotFound = &ResolveError{Kind: ResolveSessionNotFound, Message: "session not found"}
 
-// WorkspaceLayout reports whether the roots are the workspaces of the workspace layout (v2).
-func WorkspaceLayout(roots []Root) bool {
-	for _, root := range roots {
-		if root.Layout != nil && root.Layout.Workspace != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // ResolveFrom resolves reference as a tool of the session caller sees it (transcript,
 // transcripts, profile, profile_message and the sub-agent runs they reach). In the workspace
 // layout only the caller's own workspace is visible: an unqualified ID is looked up there, a
 // session of another workspace (even named <workspace>:<id>) and a session that does not
-// exist are both "session not found". Outside the workspace layout it is Resolve.
+// exist are both "session not found".
 func ResolveFrom(roots []Root, caller, reference string) (Location, error) {
-	if !WorkspaceLayout(roots) {
-		return Resolve(roots, reference)
-	}
 	from, err := Resolve(roots, caller)
 	if err != nil {
 		return Location{}, errWorkspaceSessionNotFound
@@ -53,11 +39,8 @@ func ResolveFrom(roots []Root, caller, reference string) (Location, error) {
 }
 
 // VisibleFrom keeps the session references (as ListSessionFiles gives them) a tool of the
-// session caller may see: in the workspace layout those of its own workspace, else all.
+// session caller may see: those of its own workspace.
 func VisibleFrom(roots []Root, caller string, references []string) []string {
-	if !WorkspaceLayout(roots) {
-		return references
-	}
 	from, err := Resolve(roots, caller)
 	if err != nil {
 		return nil
@@ -76,17 +59,8 @@ func VisibleFrom(roots []Root, caller string, references []string) []string {
 // <workspace>:<session> of another workspace is reached when both workspaces are listed in
 // global.json (design §30): listing is the only opt-in, and there is no consent of the target
 // beyond it. A workspace that is not listed, one that is not served and a session that does not
-// exist all give the same error, so the answer does not tell them apart. Outside the workspace
-// layout a reference naming a root is refused: the colon form is not a v1 way to reach another
-// root. Only profile_message calls this: ResolveFrom still gates every other tool.
+// exist all give the same error, so the answer does not tell them apart. Only profile_message calls this: ResolveFrom still gates every other tool.
 func ResolveMessageTarget(roots []Root, caller, reference string) (Location, bool, error) {
-	if !WorkspaceLayout(roots) {
-		if strings.Contains(reference, ":") {
-			return Location{}, false, errWorkspaceSessionNotFound
-		}
-		location, err := Resolve(roots, reference)
-		return location, false, err
-	}
 	from, err := Resolve(roots, caller)
 	if err != nil {
 		return Location{}, false, errWorkspaceSessionNotFound
