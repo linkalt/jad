@@ -4779,8 +4779,9 @@ or write a, and cannot read b's own `.jad` that a hides.
 - *Not isolation without a sandbox.* Where the sandbox is off the caller's tools read both workspaces
   anyway; `accept_from` limits who can start a message run, nothing more.
 - *The target's transcript path reaches the caller* in the failure information, as it does for
-  another session of the same workspace.
+  another session of the same workspace. (Closed for a target in another workspace by T-037b below.)
 - *A workspace named `remote`* cannot be addressed locally (`remote:` is the remote prefix).
+  (Closed by T-037b below: `local:remote:<session>/...`.)
 - *A sandboxed caller must cover the target's folders.* With sandboxes on in both workspaces a
   message is refused (`sandbox_widens`) unless the caller's sandbox covers what the target's sandbox
   writes; the user lists the target's folder in the caller's sandbox. That is the safe reading of "the
@@ -4789,4 +4790,45 @@ or write a, and cannot read b's own `.jad` that a hides.
 - *Not built:* a UI for it, a `jad check` warning for a colon glob that names a workspace that does
   not accept the caller, and seatbelt runs of the cross-workspace sandbox case.
 - *The caller's `context_trigger` reaches the target's transcript* (compact or reset before a
-  message), also across workspaces; it is part of what `accept_from` accepts.
+  message), also across workspaces; it is part of what `accept_from` accepts. (Reset closed by
+  T-037b below; compact stays.)
+
+## profile_message across workspaces: reset refused, paths hidden, `local:` form (T-037b, Go, 2026-11-13)
+
+**Decision** (decider T-037 step 45.10, checked against the code; user's addendum on a local
+syntax for `remote`). Design: `docs/design_workspace_layout.md` section 29, "Follow-up".
+
+- *Reset across workspaces fails closed.* A caller's `context_trigger` of action `reset` aimed at a
+  target in another workspace is refused in `Prepare` (`native.ErrContextTriggerForeignReset`, tool
+  code `context_trigger_refused`) after the target's workspace accepted the caller, before any
+  queue place, run or lock; with or without `after`. `compact`, and a reset inside one workspace,
+  are unchanged. Checked: a foreign compact runs with the *target's* session and settings (the
+  hook is asked `b:s1/review/reviewer`; the real `compactTarget` resolves in b) and costs b's
+  tokens; accepting a caller accepts that.
+- *Target transcript by name.* One place decides it, the plan (`TranscriptLabels`): the `transcript`
+  information, `ref_transcript` and the poll's "transcript:" line of a handle show
+  `<workspace>:<session>/<category>/<profile>` for a foreign target; the activity cursor keeps the
+  file (`activityProgress.label`) so the news of the target is still reported.
+- *`local:` form.* `local:<workspace>:<session>/<category>/<profile>` names a local workspace
+  whatever its id (for `remote`); read only in front of two colons, which were never valid, so every
+  earlier form means what it meant. Chosen over only warning because it is small, unambiguous and
+  keeps a workspace named `remote` usable; no start or `jad check` warning is added.
+- *Self-edit cannot grant a workspace glob:* the removed check stays removed; the claim is now
+  tested (`TestSelfEditCannotGrantAWorkspaceSessionGlob`), at `on` and `full`, for an own toolset and
+  the profile file.
+
+**Tests.** `app`: foreign reset refused (real reset and hooks never run, transcript bytes unchanged,
+with and without `after`, unaccepted workspace still `unknown_profile`), foreign compact runs and
+sends, same-workspace reset (own session and own workspace qualified) really resets, plan labels,
+and the tool end to end into a workspace named `remote` with the label in the caller's transcript.
+`tools/native`: the `local:` rows (twelve), the listing text, the refusal's own answer, and a handle
+of a foreign target that names no path in running result, polls or final result.
+
+**Open gaps.**
+- *Text of a failed target run and the worktree line* are still shown to the caller as before; only
+  the transcript is covered.
+- *`remote` addressing is only for `profile_message`.* No other local tool takes a workspace.
+- *Revoking `accept_from` needs a restart*, and a toolset switch to a colon glob is still decided by
+  the target's `accept_from` (both from the T-037 limits).
+- *Not built:* a per-caller key that lets a target accept a reset, a `jad check` warning for globs
+  naming a workspace that does not accept the caller, a UI, seatbelt runs.

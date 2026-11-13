@@ -218,6 +218,19 @@ type profileMessagePlan struct {
 	confine func(httpapi.RunSession) (httpapi.RunSession, error)
 	// targetMessages and callerMessages are the transcripts of the target and of the caller.
 	targetMessages, callerMessages string
+	// foreign is a target in another workspace: its transcript is shown to the caller by name,
+	// not by path.
+	foreign bool
+}
+
+// TranscriptLabels implements native.ProfileTranscriptLabels for a target of another
+// workspace: the qualified session and profile in place of the file of the target workspace,
+// which the caller has no business knowing (the caller's own file is shown as it is).
+func (p *profileMessagePlan) TranscriptLabels() (target, caller string) {
+	if !p.foreign {
+		return p.targetMessages, p.callerMessages
+	}
+	return p.reference + "/" + p.target, p.callerMessages
 }
 
 // Transcripts implements native.ProfileMessageTranscripts.

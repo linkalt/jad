@@ -224,7 +224,10 @@ func outputWatchFrom(ctx context.Context) *outputWatch {
 // steps were shown, and the turn that offset falls in, which is where the next poll resumes the
 // turn index instead of parsing the whole transcript again.
 type activityProgress struct {
-	path    string
+	path string
+	// label is what the model is told the transcript is when the file's own path must not be
+	// shown (a profile_message target of another workspace); empty shows the path.
+	label   string
 	off     int64
 	shownAt time.Time
 	// turnOff and turn are the offset and the number of the turn start at or before off. Both
@@ -260,11 +263,11 @@ func turnAt(turns []transcriptTurn, off int64) (turnOff, number int64) {
 
 // seedActivity starts the cursor of a handle at the end of its transcript as it is now, so
 // the first block shows only what the run did.
-func (h *AsyncHost) seedActivity(id, path string) {
+func (h *AsyncHost) seedActivity(id, path, label string) {
 	if path == "" {
 		return
 	}
-	cursor := &activityProgress{path: path, shownAt: time.Now()}
+	cursor := &activityProgress{path: path, label: label, shownAt: time.Now()}
 	if info, err := os.Stat(path); err == nil {
 		cursor.off = info.Size()
 	}
@@ -276,8 +279,15 @@ func (h *AsyncHost) seedActivity(id, path string) {
 // transcript step so the transcript tool can open it there. namePath also says where the
 // transcript is; a caller whose result already names it leaves it out rather than repeat it.
 func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.Config, now time.Time, namePath bool) (string, any) {
-	if shown, ok := prev.(*activityProgress); ok && transcript == "" {
-		transcript = shown.path
+	named := transcript
+	if shown, ok := prev.(*activityProgress); ok {
+		if transcript == "" {
+			transcript = shown.path
+			named = shown.path
+		}
+		if shown.label != "" {
+			named = shown.label
+		}
 	}
 	head := fmt.Sprintf("%s %s", info.state, latestAge(now.Sub(info.started)))
 	if info.state == asyncmgr.StateQueued {
@@ -299,7 +309,7 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 	if size > cfg.LatestScanMaxBytes {
 		text := head + "\ntranscript too large to summarize (latest_scan_max_bytes)"
 		if namePath {
-			text += "; transcript: " + transcript
+			text += "; transcript: " + named
 		}
 		return text, prev
 	}
@@ -315,7 +325,7 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 	if err != nil || len(turns) == 0 {
 		text := head + "; no steps yet"
 		if namePath {
-			text += "\ntranscript: " + transcript
+			text += "\ntranscript: " + named
 		}
 		return text, prev
 	}
@@ -338,12 +348,12 @@ func activityLatest(transcript string, info latestInfo, prev any, cfg asyncmgr.C
 		last := walk.steps[len(walk.steps)-1].id.String()
 		reference = []string{"last transcript step " + last}
 		if namePath {
-			reference = []string{"transcript: " + transcript + " (last step " + last + ")"}
+			reference = []string{"transcript: " + named + " (last step " + last + ")"}
 		}
 	} else if namePath {
-		reference = []string{"transcript: " + transcript}
+		reference = []string{"transcript: " + named}
 	}
-	next := &activityProgress{path: cursor.path, off: complete, shownAt: now}
+	next := &activityProgress{path: cursor.path, label: cursor.label, off: complete, shownAt: now}
 	next.turnOff, next.turn = turnAt(turns, complete)
 	lastEvent := "last event " + latestAge(now.Sub(stat.ModTime())) + " ago"
 	if len(news) == 0 {

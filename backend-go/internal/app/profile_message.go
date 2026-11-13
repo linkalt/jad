@@ -64,6 +64,11 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		if targetReference, foreign, err = m.otherSession(reference, request.Session, target); err != nil {
 			return nil, err
 		}
+		if foreign && request.ContextTrigger.Action == sessionfs.ProfileMessageContextReset {
+			// Refused before the target is looked at further, queued or run, and after the
+			// target's workspace has accepted the caller, so the refusal tells nothing new.
+			return nil, native.ErrContextTriggerForeignReset
+		}
 	}
 	if request.Session == "" && target == caller {
 		return nil, native.ErrProfileCycle
@@ -168,6 +173,7 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		lineage: native.ExtendRunLineage(native.RunLineageOf(ctx), request.OwnerKey),
 
 		callerMessages: callerMessagesPath,
+		foreign:        foreign,
 	}
 	if bound, ok := resolved.Runner.(boundRunner); ok {
 		plan.targetMessages = bound.config.MessagesPath

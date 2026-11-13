@@ -45,6 +45,7 @@ type messageWorkspaceOptions struct {
 	bToolset               string // the toolset of b's dev/base, coding/none by default
 	aProfile               string // a's dev/base file when the toolset alone is not enough
 	exec                   bool   // the tool definition of exec is loaded
+	bID                    string // the workspace id of b, "b" by default
 }
 
 const acceptA = `{"profile_message":{"accept_from":["a"]}}`
@@ -111,14 +112,15 @@ func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *mess
 		}
 		paths = append(paths, `"`+definition+`"`)
 	}
-	workspaces := `{"id":"b","path":"` + w.b + `"}`
+	bID := orDefault(options.bID, "b")
+	workspaces := `{"id":"` + bID + `","path":"` + w.b + `"}`
 	if !options.unlistedA {
 		workspaces = `{"id":"a","path":"` + w.a + `"},` + workspaces
 	}
 	put(filepath.Join(global, "global.json"), `{"workspaces":[`+workspaces+`],"libraries":{"tool_definition_paths":[`+strings.Join(paths, ",")+`]}}`)
 	put(filepath.Join(global, "models", "openai", "default.json"), `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY","base_url":"`+provider.URL+`/v1"}`)
 	put(filepath.Join(global, "tools", "coding", "none.json"), `{"native":{},"mcp":{}}`)
-	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":{"sessions":["b:*"],"timeout_ms":60000}},"mcp":{}}`)
+	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":{"sessions":["`+bID+`:*"],"timeout_ms":60000}},"mcp":{}}`)
 	put(filepath.Join(global, "tools", "coding", "exec.json"), `{"native":{"exec":{"spill":{"enabled":false}}},"mcp":{}}`)
 	put(filepath.Join(w.a, ".jad", "workspace.json"), orDefault(options.aWorkspace, `{}`))
 	put(filepath.Join(w.b, ".jad", "workspace.json"), orDefault(options.bWorkspace, `{}`))

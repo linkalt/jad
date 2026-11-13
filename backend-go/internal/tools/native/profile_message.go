@@ -86,6 +86,21 @@ func (e *ContextTriggerError) Error() string {
 
 func (e *ContextTriggerError) Unwrap() error { return e.Err }
 
+// ErrContextTriggerForeignReset is returned by a ProfileMessenger when the caller's
+// context_trigger is reset and the target is in another workspace. Nothing is sent and nothing
+// of the target is touched: the trigger comes from the caller's settings, which can come with a
+// cloned repository, and the target workspace allowing the caller to message it did not allow
+// the caller to clear its history before every message. A compact is not refused.
+var ErrContextTriggerForeignReset = errors.New("context_trigger reset is not allowed across workspaces")
+
+// ProfileTranscriptLabels is optionally implemented by a plan whose target transcript path must
+// not be shown to the model (the target is in another workspace): the text the tool shows for
+// the target's and the caller's transcripts instead of Transcripts' paths, which stay for
+// the host's own reads.
+type ProfileTranscriptLabels interface {
+	TranscriptLabels() (target, caller string)
+}
+
 // ErrProfileStopped is returned by a ProfileMessenger when the target run was stopped
 // by the user while the caller was still waiting.
 var ErrProfileStopped = errors.New("profile run was stopped")
@@ -305,6 +320,20 @@ type ProfileMessageNotes interface {
 	Notes() []tools.Information
 }
 
+// shownTranscripts are the transcripts the model is shown: the plan's labels when it has them
+// (a target of another workspace), else the files themselves.
+func shownTranscripts(plan ProfileMessagePlan) (target, caller string, known bool) {
+	if labelled, ok := plan.(ProfileTranscriptLabels); ok {
+		target, caller = labelled.TranscriptLabels()
+		return target, caller, true
+	}
+	if files, ok := plan.(ProfileMessageTranscripts); ok {
+		target, caller = files.Transcripts()
+		return target, caller, true
+	}
+	return "", "", false
+}
+
 // transcriptInformation is the transcript key (the target's file) and caller_transcript key
 // of a plan that knows its files, then the plan's notes.
 func transcriptInformation(plan ProfileMessagePlan) []tools.Information {
@@ -312,11 +341,10 @@ func transcriptInformation(plan ProfileMessagePlan) []tools.Information {
 	if noted, ok := plan.(ProfileMessageNotes); ok {
 		information = append(information, noted.Notes()...)
 	}
-	known, ok := plan.(ProfileMessageTranscripts)
-	if !ok {
+	target, caller, known := shownTranscripts(plan)
+	if !known {
 		return information
 	}
-	target, caller := known.Transcripts()
 	if target != "" {
 		information = append(information, tools.Information{Key: "transcript", Value: target})
 	}
@@ -407,7 +435,7 @@ func profileMessageListText(targets, sessions, remotes []string) string {
 		text = " Profiles: " + strings.Join(targets, ", ") + "."
 	}
 	if len(sessions) > 0 {
-		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + "); in the workspace layout a session without a workspace is one of your own workspace, and a glob <workspace>:<session> is a session of another workspace that also has to accept yours, written <workspace>:<session>/<category>/<profile>."
+		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + "); in the workspace layout a session without a workspace is one of your own workspace, and a glob <workspace>:<session> is a session of another workspace that also has to accept yours, written <workspace>:<session>/<category>/<profile>; a workspace named remote is written local:remote:<session>/<category>/<profile>, since remote: always means a remote server."
 	}
 	if len(remotes) > 0 {
 		text += " Remote profiles on other JAD servers are written remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach, and <workspace>: is needed only when the remote holds that session id in several workspaces."
@@ -528,6 +556,12 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	return p.runHandle(ctx, callID, profile, message, owner, plan, block)
 }
 
+// explicitLocalPrefix written before a <workspace>:<session> says that the workspace is a local
+// one: "remote:" always means a remote server, so a workspace named remote is written
+// local:remote:<session>. Only the two-colon form is read this way; local:<session> stays the
+// session of a workspace named local, as before.
+const explicitLocalPrefix = "local:"
+
 var localProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // localTarget splits a local profile argument: <category>/<profile> of the calling session, or
@@ -539,6 +573,9 @@ func (p *profileMessageTool) localTarget(profile string) (session, target string
 		return "", profile, slices.Contains(p.targets, profile)
 	case 3:
 		session, target, _ = strings.Cut(profile, "/")
+		if rest, found := strings.CutPrefix(session, explicitLocalPrefix); found && strings.Contains(rest, ":") {
+			session = rest
+		}
 		// A session written <workspace>:<session> is matched only by the globs that name a
 		// workspace, and a bare one only by the globs that do not: a bare "*" has always meant
 		// the calling workspace and must not start to mean every workspace.
@@ -630,6 +667,8 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 		return "profile_no_answer", fmt.Sprintf("Profile %s finished without an answer", profile)
 	case errors.Is(err, ErrProfileChainTooLong):
 		return "profile_chain_too_long", fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)
+	case errors.Is(err, ErrContextTriggerForeignReset):
+		return "context_trigger_refused", fmt.Sprintf("Profile %s was not sent the message: this run's context_trigger is reset, and a reset of a profile in another workspace is not allowed. Nothing was sent or changed", profile)
 	case errors.Is(err, ErrRunTreeParentGone):
 		return "profile_unavailable", fmt.Sprintf("Profile %s cannot be messaged from here: %s", profile, err)
 	case errors.Is(err, ErrRunTreeLimit):

@@ -689,3 +689,54 @@ func TestLatestActivityWithoutPathNamesOnlyTheLastTranscriptStep(t *testing.T) {
 		}
 	})
 }
+
+type labelledMessenger struct {
+	*pathMessenger
+	label string
+}
+
+func (m *labelledMessenger) Prepare(ctx context.Context, request ProfileMessageRequest) (ProfileMessagePlan, error) {
+	plan, err := m.pathMessenger.Prepare(ctx, request)
+	return labelledPlan{pathPlan: plan.(pathPlan), label: m.label}, err
+}
+
+// labelledPlan is a target of another workspace: Transcripts is the file, TranscriptLabels is
+// what the model is shown instead.
+type labelledPlan struct {
+	pathPlan
+	label string
+}
+
+func (p labelledPlan) TranscriptLabels() (string, string) { return p.label, "" }
+
+// A message to a profile of another workspace is shown by its name, never by the file of the
+// other workspace: not in the running result, not in the polls of its handle, not in the final
+// result's ref_transcript. The host still follows the file, so the activity is reported.
+func TestProfileMessageHandleOfAnotherWorkspaceNamesNoPath(t *testing.T) {
+	f := newProfileMessageHandleFixture(t, nil, nil)
+	transcript := filepath.Join(t.TempDir(), "messages.jsonl")
+	writeActivity(t, transcript, userLine("hi"), answerLine(1, 1, textItem("working on the review")))
+	const label = "b:s1/review/reviewer"
+	messenger := &labelledMessenger{pathMessenger: &pathMessenger{controlMessenger: f.messenger, path: transcript}, label: label}
+	message, err := NewProfileMessageTool(sessionfs.NativeProfileMessageSettings{TimeoutMs: 5000, ResultMaxBytes: 1024, MaxQueued: 4}, profileMessageTargets, messenger, f.host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.message = message
+	out := f.send(t, tools.ExecutionContext{SessionKey: "s1:main"}, 50)
+	id := handleIDPattern.FindString(out)
+	if id == "" || strings.Contains(out, transcript) || strings.Count(out, label) != 1 || !strings.Contains(execField(out, "latest"), "last transcript step 1.") {
+		t.Fatalf("the running result names the label once, no path, and has the activity:\n%s", out)
+	}
+	appendActivity(t, transcript, answerLine(1, 2, textItem("now halfway through")))
+	status := callAsync(t, f.async, "s1:main", map[string]any{"action": "status", "id": id})
+	if text := latestTextOf(t, status, id); !strings.Contains(text, "now halfway through") || strings.Contains(status, transcript) || strings.Count(text, label) != 1 {
+		t.Fatalf("a poll shows the news and names the label, never the file:\n%s", status)
+	}
+	f.messenger.run(t, 0).finish(ProfileMessageOutcome{Text: "ok"})
+	waitForState(t, f.host, "s1:main", id, asyncmgr.StateDone)
+	final := callAsync(t, f.async, "s1:main", map[string]any{"action": "status", "id": id})
+	if strings.Contains(final, transcript) || !strings.Contains(final, label) {
+		t.Fatalf("the finished handle's ref_transcript is the label:\n%s", final)
+	}
+}

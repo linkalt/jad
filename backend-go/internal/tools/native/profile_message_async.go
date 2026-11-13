@@ -181,7 +181,12 @@ func (p *profileMessageTool) runHandle(ctx context.Context, callID, profile, mes
 	if reason := host.setProfileMessageRun(id, run); reason != "" {
 		run.Stop(reason)
 	}
-	host.seedActivity(id, transcriptRef(plan))
+	shown, _, _ := shownTranscripts(plan)
+	file := transcriptFile(plan)
+	if shown == file {
+		shown = ""
+	}
+	host.seedActivity(id, file, shown)
 	ended := make(chan struct{})
 	go func() {
 		defer close(ended)
@@ -335,12 +340,20 @@ func worktreeFirst(worktree *DelegatedWorktreeResult, text string) string {
 	return strings.TrimSpace(worktree.Text + "\n" + text)
 }
 
-// transcriptRef is the target's messages.jsonl, the ref_transcript of the handle: where the
-// full work of a message is. A remote message has none here.
-func transcriptRef(plan ProfileMessagePlan) string {
+// transcriptFile is the target's messages.jsonl itself, for the host's own reads (the activity
+// cursor), never shown to the model. A remote message has none here.
+func transcriptFile(plan ProfileMessagePlan) string {
 	if known, ok := plan.(ProfileMessageTranscripts); ok {
 		target, _ := known.Transcripts()
 		return target
 	}
 	return ""
+}
+
+// transcriptRef is the target's messages.jsonl, the ref_transcript of the handle: where the
+// full work of a message is, or its label when the target is in another workspace. A remote
+// message has none here.
+func transcriptRef(plan ProfileMessagePlan) string {
+	target, _, _ := shownTranscripts(plan)
+	return target
 }

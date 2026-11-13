@@ -271,3 +271,37 @@ func TestCheckReportsOwnToolsetFiles(t *testing.T) {
 		t.Fatalf("own toolset problems = %v (all: %+v)", found, report.Problems)
 	}
 }
+
+// A self-edit cannot give a profile the reach of another workspace (T-037): the sessions glob
+// <workspace>:<session> of profile_message, like deny_profiles and context_trigger, is not a key
+// an own toolset may set, and a profile file has no place for tool settings at all. Neither is
+// written, at either level, and nothing is left behind; the globs come only from a toolset or
+// the defaults the user wrote, and the target workspace's accept_from is not editable at all.
+func TestSelfEditCannotGrantAWorkspaceSessionGlob(t *testing.T) {
+	for _, level := range []string{ProfileSelfEditOn, ProfileSelfEditFull} {
+		e := newToolsetEditFixture(t)
+		e.location.Root.Layout.ProfileSelfEdit = level
+		for _, tc := range []struct{ name, contents, toolset, want string }{
+			{"own toolset sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["b:*"]}}}}`, "set.native.profile_message.sessions cannot be changed"},
+			{"own toolset bare sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["*"]}}}}`, "set.native.profile_message.sessions cannot be changed"},
+			{"own toolset context_trigger", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"context_trigger":{"action":"reset"}}}}}`, "context_trigger"},
+			{"own toolset deny_profiles", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"deny_profiles":[]}}}}`, "deny_profiles"},
+			{"profile file tools", editBase + `,"tools":{"native":{"profile_message":{"sessions":["b:*"]}}}}`, "", "profile.tools.native is not supported"},
+			{"profile file settings", editBase + `,"settings":{"tools":{"native":{"profile_message":{"sessions":["b:*"]}}}}}`, "", "tools"},
+			{"profile file accept_from", editBase + `,"profile_message":{"accept_from":["*"]}}`, "", "profile_message is not a key of a profile file"},
+		} {
+			var changes []ProfileDocumentChange
+			if tc.toolset != "" {
+				changes = append(changes, ProfileDocumentChange{Path: "coding/lean", Content: text(tc.toolset)})
+			}
+			before, _ := os.ReadFile(e.file)
+			_, err := e.editToolsets(t, tc.contents, changes...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s %s: %v, want %q", level, tc.name, err, tc.want)
+			}
+			if after, _ := os.ReadFile(e.file); string(after) != string(before) || e.ownToolsetRevision(t, "coding/lean") != "" || e.historyCount(t) != 0 {
+				t.Fatalf("%s %s: something was written", level, tc.name)
+			}
+		}
+	}
+}

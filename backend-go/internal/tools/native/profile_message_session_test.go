@@ -132,3 +132,68 @@ func TestProfileMessageListTextNamesTheWorkspaceForm(t *testing.T) {
 		}
 	}
 }
+
+// remote: always means a remote server, so a workspace named remote is written
+// local:remote:<session>; the prefix is only read before a <workspace>:<session> (two colons,
+// which were never valid), and local:<session> stays the session of a workspace named local.
+func TestProfileMessageExplicitLocalForm(t *testing.T) {
+	for name, test := range map[string]struct {
+		sessions []string
+		profile  string
+		session  string // "" means refused
+	}{
+		"workspace named remote":               {[]string{"remote:*"}, "local:remote:s1/review/reviewer", "remote:s1"},
+		"explicit form of another workspace":   {[]string{"b:*"}, "local:b:s1/review/reviewer", "b:s1"},
+		"workspace named local, plain":         {[]string{"local:*"}, "local:s1/review/reviewer", "local:s1"},
+		"workspace named local, explicit":      {[]string{"local:*"}, "local:local:s1/review/reviewer", "local:s1"},
+		"plain remote form is not local":       {[]string{"remote:*"}, "remote:s1/review/reviewer", ""},
+		"glob of another workspace":            {[]string{"b:*"}, "local:remote:s1/review/reviewer", ""},
+		"bare glob does not match":             {[]string{"s1"}, "local:remote:s1/review/reviewer", ""},
+		"local:<session> is workspace local":   {[]string{"remote:*"}, "local:s1/review/reviewer", ""},
+		"three colons":                         {[]string{"*:*"}, "local:a:b:s1/review/reviewer", ""},
+		"nothing after the prefix":             {[]string{"*:*"}, "local::s1/review/reviewer", ""},
+		"explicit form with traversal":         {[]string{"*:*"}, "local:remote:../review/reviewer", ""},
+		"prefix in the middle is not a prefix": {[]string{"*:*"}, "b:local:s1/review/reviewer", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			settings := crossSessionSettings()
+			settings.Sessions = test.sessions
+			called := false
+			messenger := &fakeMessenger{reply: func(context.Context) (string, error) { called = true; return "ok", nil }}
+			output := callProfileMessage(t, settings, messenger, `{"profile":"`+test.profile+`","message":"hi"}`)
+			if test.session == "" {
+				if called || messenger.request.Session != "" || messenger.target != "" {
+					t.Fatalf("the messenger was reached (session %q, target %q): %s", messenger.request.Session, messenger.target, output)
+				}
+				return
+			}
+			if !called || messenger.request.Session != test.session || messenger.target != "review/reviewer" {
+				t.Fatalf("session %q target %q, want %q: %s", messenger.request.Session, messenger.target, test.session, output)
+			}
+		})
+	}
+}
+
+// The listing tells the model how to write a workspace named remote.
+func TestProfileMessageListTextNamesTheExplicitLocalForm(t *testing.T) {
+	if text := profileMessageListText(nil, []string{"remote:*"}, nil); !strings.Contains(text, "local:remote:<session>/<category>/<profile>") {
+		t.Errorf("list text: %s", text)
+	}
+}
+
+// A refused cross-workspace reset is its own error code, not a failed reset that "may need
+// attention", and it says nothing was sent or changed.
+func TestProfileMessageForeignResetRefusalIsItsOwnAnswer(t *testing.T) {
+	settings := crossSessionSettings()
+	settings.Sessions = []string{"b:*"}
+	messenger := &fakeMessenger{prepareErr: ErrContextTriggerForeignReset}
+	output := callProfileMessage(t, settings, messenger, `{"profile":"b:s1/review/reviewer","message":"hi"}`)
+	for _, want := range []string{"error_code: context_trigger_refused", "Nothing was sent or changed"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output lacks %q: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "may need attention") {
+		t.Errorf("a refusal is not a failed reset: %s", output)
+	}
+}

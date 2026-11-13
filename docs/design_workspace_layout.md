@@ -1564,8 +1564,13 @@ step 44.9, with the changes below).
 uses (`remote.SessionRefPattern`); `<workspace>` is the root id of the workspace (the id
 global.json lists it under). A bare `<session>/<category>/<profile>` still means the caller's own
 workspace, so a session id held by two workspaces is never ambiguous locally. The caller's own
-workspace written qualified is the same as bare. A workspace called `remote` cannot be written
-this way (`remote:` is the remote prefix); it can still be reached by a remote entry.
+workspace written qualified is the same as bare. `remote:` always means a remote server, so a
+workspace called `remote` is written `local:remote:<session>/<category>/<profile>` (T-037b): the
+`local:` prefix is read only in front of a `<workspace>:<session>` (two colons, never valid before),
+so `local:<session>` is still the session of a workspace called `local` and every existing form
+means what it meant. The glob stays `remote:*` (globs match the form without `local:`). The tool
+description tells the model about the prefix. Nothing else reads a bare `remote:` as a workspace:
+`transcript` and the other tools reach only the caller's own workspace and take no workspace.
 
 **Both sides must say yes, nothing by default.**
 
@@ -1623,13 +1628,42 @@ harmless call unusable). The check runs again when the run starts, with the sett
   a colon glob; toolsets are user-managed files, and the target's `accept_from` still decides. A
   profile file cannot carry tool settings in the workspace layout, and an own toolset can only tune
   `timeout_ms`, `busy_wait_ms`, `result_max_bytes` and `default_block_ms`, so a self-edit cannot
-  write a colon glob (there is no self-edit key table change for it).
-- The transcript path of the target, in the tool's failure information, is the target's own file
-  in its workspace (it names a path in the other workspace's `.jad`).
+  write a colon glob (there is no self-edit key table change for it). This is tested
+  (`TestSelfEditCannotGrantAWorkspaceSessionGlob`): an own toolset's `sessions`, `context_trigger`
+  and `deny_profiles`, a profile file's `tools`, `settings.tools` and `profile_message`, at `on` and
+  `full`, are refused and nothing is written; `accept_from` is in `workspace.json`, which no
+  self-edit can write.
+- The target's worktree, when its message ran in one, is reported to the caller on purpose (the
+  changes are the answer); its path is a path in the target workspace.
+- A failure of the target run that carries a client-safe provider message shows that message as it
+  does for any message; only the transcript is covered by the rule below.
 - A target workspace's own `accept_from` can be written by whoever wrote that repository; a
   workspace that lists a repository it does not trust and also accepts `*` from the others lets that
   repository's profiles be driven by the others' callers' prompts. List workspaces you trust.
-- The caller's own `context_trigger` (compact or reset the target's transcript before a message)
-  applies to a target in another workspace as it does to another session: accepting a caller
-  accepts that. A workspace that does not want its history compacted or reset by another does not
-  list that workspace in `accept_from`.
+- `compact` of the caller's `context_trigger` applies to a target in another workspace as it does
+  to another session: it deletes nothing, keeps its backup and runs with the *target's* own
+  compaction and model settings (the hook is asked about the target's session, and the target's
+  tokens pay for it), so accepting a caller accepts that.
+
+**Follow-up (T-037b, decider step 45.10).**
+
+- *A reset `context_trigger` is refused across workspaces.* The trigger comes from the caller's
+  settings (a cloned repository can carry them), and it clears the target's whole history before
+  every qualifying message. `Prepare` refuses it (`native.ErrContextTriggerForeignReset`, code
+  `context_trigger_refused`, "Nothing was sent or changed") right after the target's workspace has
+  accepted the caller, so the refusal tells nothing a refusal at that point does not: before any
+  queue place, run or transcript lock, with or without `after`. The refusal is for any reset
+  trigger, even one that would not have fired yet: the setting is the caller's request to clear
+  the target. Compact and a reset inside one workspace (own session, another session, the own
+  workspace written qualified) are unchanged. Later, if wanted, the target could allow resets
+  from chosen callers with its own key; not built.
+- *The target's transcript is shown by name.* For a target in another workspace the tool's
+  `transcript` information, the `ref_transcript` of a handle and the "transcript:" line of its polls
+  show `<workspace>:<session>/<category>/<profile>` instead of the file in the target's `.jad`
+  (`native.ProfileTranscriptLabels`, one place: the plan). The host keeps the file for its own
+  reads, so the activity block of a handle still follows the target. The caller's own transcript
+  path and a same-workspace target are shown as before. The path held no secret and a sandbox hides
+  the target's `.jad`; this is the rule already applied to own-model errors. Not covered: the text
+  of a failed run the provider reported, and the worktree line above.
+- *Workspace named `remote`:* the explicit `local:` form above. No warning at start or in
+  `jad check` is added: the form works, and the tool description names it.
