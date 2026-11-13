@@ -527,10 +527,6 @@ func TestMigrationPlanStopsOnGlobalPathsTiedToTheWorkspace(t *testing.T) {
 		{"relative remote api tokens file", func(t *testing.T, f *migrateFixture) {
 			f.setting["server"] = map[string]any{"port": 4100, "remote_api": map[string]any{"tokens_file": "remote-tokens.json"}}
 		}, "server.remote_api.tokens_file", func(f *migrateFixture) string { return filepath.Join(f.global, "global.json") }},
-		{"relative token file of a remote", func(t *testing.T, f *migrateFixture) {
-			f.setting["catalogs"] = map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": "state", "remotes": "remotes"}
-			f.put(t, "remotes/home.json", map[string]any{"schema_version": 1, "remote": map[string]any{"url": "http://127.0.0.1:1", "token_file": "tokens/home"}})
-		}, "remote.token_file", func(f *migrateFixture) string { return filepath.Join(f.global, "remotes/home.json") }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "kind": "remote",
+  "description": "Build machine, its \"main\" workspace; reviewers only. Plain http: the bearer token travels in clear text, so reach it over a VPN or a unix socket. Workspace layout: G/remotes/build-box.json is a binding (one server, one workspace) and holds no credential; the key file G/auth/keys/build-box.json supplies it once workspace.json (or a session or profile) lists it in remote_keys and the tool lists \"build-box\" in remotes. Address: remote:build-box/<session>/<category>/<profile>.",
+  "remote": {
+    "url": "http://build.example.net:8787",
+    "workspace": "main",
+    "profiles": ["review/*"]
+  }
+}

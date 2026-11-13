@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "remote",
-  "description": "Build machine; reviewers only. Plain http: the bearer token travels in clear text, so reach it over a VPN or a unix socket.",
+  "description": "v1 layout (setting.json). Build machine; reviewers only. Plain http: the bearer token travels in clear text, so reach it over a VPN or a unix socket.",
   "remote": {
     "url": "http://build.example.net:8787",
     "token_env": "JAD_REMOTE_BUILD_BOX_TOKEN",

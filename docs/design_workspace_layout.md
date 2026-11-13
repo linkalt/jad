@@ -1783,3 +1783,65 @@ rule order and `allow_reset` cannot override a `deny`.
 - Not covered here (stage C): incoming remote messages are judged by the same rules without a
   caller address, so `global.json` and the target workspace's rules without `from` apply to them;
   rules with `from` never match a remote caller.
+
+### 30.4 Remote messaging: bindings, keys and workspace rows (stage C, built)
+
+Remote servers are the only place a credential exists. A remote is reached by name, always with
+a session in the address: `remote:<binding>/<session>/<category>/<name>`.
+
+| File | Place | What it holds |
+|---|---|---|
+| binding | `G/remotes/<binding>.json` | `remote.url` and `remote.workspace` (required), the connection keys (`timeout_ms`, ...), `profiles`; no credential. `token_env`, `token_file` and `default_session` are removed keys |
+| key | `G/auth/keys/<key>.json`, mode 0600 | `kind: remote_key`, `binding`, and `token` or `token_env` (`JAD_REMOTE_*`) |
+| key list | `remote_keys` in `workspace.json`, a session file or a profile file | key names; nearest level wins, `[]` is none, absent inherits |
+| token row | the server's `remote_api.tokens_file` | `workspace` (required), bare globs over `session/category/name` inside it, the existing `actions`, `max_hops`, `expires`, `revoked` |
+
+- *A key never grants reach.* A tool reaches a binding only if its own list names it
+  (`profile_message` `remotes`; `profile`, `transcript`, `transcripts` `remotes` and
+  `allow_remote`; `subagent` `remotes`) and the session has a key for it. A key works for the
+  binding it names only, is read at each request (replace the file to rotate; delete it or revoke the
+  row to revoke) and is never put in an error, a log, a description or a transcript.
+- *The server decides.* A row names one workspace and the server qualifies every route to it, so a
+  row cannot reach another workspace even for a session id both hold. Rows are matched with bare
+  globs; a glob with a colon is a load error. Routes without a session argument (`/runs`,
+  `result`, `stop`) are limited to the token that started the run. The `global.json` and target
+  workspace `deny` rules without `from` apply to an incoming message; a reset cannot travel.
+- *A binding that points at this same server* is a remote message (credential, row and `max_hops`
+  apply; the caller's `local:` rules and `allow_reset` do not). `jad check` warns of it; the loop
+  it allows stops at `max_hops`.
+- *Not self-editable:* `remote_keys` is refused in a profile edit and in every toolset; the binding
+  and key files, `G/remotes` and `workspace.json` are read-only in every sandbox and `G/auth` is
+  hidden. Without a sandbox none of this binds an agent that can run commands: a key file's
+  permissions and the sandbox are the protection, as for every other credential.
+
+### 30.5 Migration, compatibility and operator steps (stage D, built)
+
+- *Layouts.* v1 reads everything as before: `sessions`, `deny_profiles`, `token_env`, `token_file`,
+  `default_session`, rows without `workspace`. v2 refuses each removed key by name with its
+  replacement. Remote files, token tables and toolsets are read by the layout of the session or
+  server that reads them, so a v1 and a v2 process may share a folder only as far as §25 says.
+- *`jad migrate workspace`* (dry run by default) never copies a remote file and never writes or
+  reads a secret.
+  - Each v1 remote file is a manual step in the plan: create the binding with `remote.workspace`,
+    create the key (`token_env` or the token itself, chosen by the person), list it in
+    `remote_keys`, list the binding in the tools' `remotes`. A remote file already in G's folder
+    stays and v2 reads it as a binding (refused until converted). A migrated workspace has no
+    remote access until then (it fails closed). The old `token_file` path rebasing is deleted.
+  - A copied toolset's `deny_profiles` becomes `deny` rules `{"to": "local:*/*/<category>/<name>"}`
+    (at least as strict), and its `sessions` is dropped with a plan line saying that reach widens to
+    every session of the workspace and the listed workspaces. A toolset that stays in place (in G or
+    workspace-private) with either key is a blocker (`removed_keys`): v1 and v2 read the same file.
+  - An enabled `server.remote_api` gets a warning: every row needs a `workspace`; the table is not
+    changed.
+  - A toolset that lists `remotes` gets a warning: its run fails to start until a binding of each
+    name exists.
+- *Operator steps in an existing v2 installation* (this change never edits them): remove
+  `profile_message.sessions` and `accept_from`; turn `~/.jad/remotes/*` into bindings and put the
+  secrets in `~/.jad/auth/keys` (`chmod 600`); add `remote_keys`; add `workspace` to every server
+  token row and make its globs bare; no tool definition file has to be refreshed (the input
+  schema is unchanged; the generated tool description already lists the address forms of the layout).
+  Examples: `sample/workspace-layout/`.
+- *Schemas.* `remote.schema.json` (both shapes, v1-only keys marked), `remote-key.schema.json`,
+  `workspace.schema.json` (`remote_keys`, `profile_message.deny`, `allow_reset`),
+  `global.schema.json`, `session.schema.json`, `profile.schema.json`, and the token table text in
+  `root-setting.schema.json`.

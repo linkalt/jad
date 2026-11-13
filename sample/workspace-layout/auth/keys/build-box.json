@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "kind": "remote_key",
+  "binding": "build-box",
+  "token_env": "JAD_REMOTE_BUILD_BOX_TOKEN"
+}

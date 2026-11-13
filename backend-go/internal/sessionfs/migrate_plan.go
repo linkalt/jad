@@ -155,6 +155,7 @@ const (
 	migrationBlockSandboxCWD      = "sandbox_catalog_cwd"
 	migrationBlockTied            = "tied_to_workspace"
 	migrationBlockForbidden       = "forbidden_place"
+	migrationBlockRemovedKeys     = "removed_keys"
 )
 
 // v1LibraryGlobalKeys are the v1 libraries keys that belong to G's global.json in v2; the
@@ -605,6 +606,12 @@ func (p *migrationPlanner) serverPaths(raw json.RawMessage) (json.RawMessage, er
 	}
 	file := filepath.Join(p.global, globalSettingName)
 	changed := p.absoluteString(fields, "log_file", p.settingDir, file, "server.log_file")
+	if remote, ok := rawObjectFields(fields["remote_api"]); ok {
+		var enabled bool
+		if json.Unmarshal(remote["enabled"], &enabled) == nil && enabled {
+			p.warn("server.remote_api is enabled: in the workspace layout every row of its token table names the workspace it reaches (\"workspace\") and its globs are over session/category/name inside it; the table is not changed, and the server refuses to start until each row has a workspace")
+		}
+	}
 	if remote, ok := rawObjectFields(fields["remote_api"]); ok && p.absoluteString(remote, "tokens_file", p.settingDir, file, "server.remote_api.tokens_file") {
 		encoded, err := marshalOrderedObject(remote, mustKeys(fields["remote_api"]))
 		if err != nil {
@@ -931,6 +938,10 @@ func (p *migrationPlanner) planGlobalCatalogs() {
 }
 
 func (p *migrationPlanner) planGlobalKind(kind, source, destination, workspace string, files []string) {
+	if kind == "remotes" {
+		p.planRemotes(source, destination, files)
+		return
+	}
 	switch {
 	case realPath(source) == realPath(destination):
 		for _, rel := range files {
@@ -976,6 +987,9 @@ func (p *migrationPlanner) planGlobalKind(kind, source, destination, workspace s
 				continue
 			case same:
 				p.plan.Files = append(p.plan.Files, MigrationFile{Group: kind, Source: from, Destination: own, Action: MigrationSame, Size: int64(len(data))})
+				if kind == "tools" {
+					p.refuseRemovedToolsetKeys(own)
+				}
 				continue
 			}
 		}
@@ -987,14 +1001,18 @@ func (p *migrationPlanner) planGlobalKind(kind, source, destination, workspace s
 			file.Action, file.SHA256, file.Rewritten = MigrationSame, "", false
 			rewrites = nil
 		}
+		if kind == "tools" {
+			p.warnListedRemotes(from, target, data)
+		}
 		for _, item := range rewrites {
 			p.rewrite(target, item.Key, item.From, item.To)
+			if item.Key == "native.profile_message.sessions" {
+				p.warn("behaviour change: %s drops native.profile_message.sessions (%s): in the workspace layout the profile reaches every session of its workspace and of the listed workspaces; use deny rules to restrict it", target, item.From)
+			}
 		}
 		p.plan.Files = append(p.plan.Files, file)
 		p.scanSecretsData(kind, target, data)
-		if file.Action == MigrationCopy && kind == "remotes" {
-			p.blockTied(target, candidate)
-		} else if file.Action == MigrationCopy {
+		if file.Action == MigrationCopy {
 			p.warnTied(target, candidate)
 		}
 	}
@@ -1007,41 +1025,22 @@ func (p *migrationPlanner) planInPlace(kind, path string, global bool) {
 		return
 	}
 	p.plan.Files = append(p.plan.Files, MigrationFile{Group: kind, Source: path, Destination: path, Action: MigrationInPlace, Global: global, Size: info.Size()})
+	if kind == "tools" {
+		p.refuseRemovedToolsetKeys(path)
+	}
 	p.scanSecretsOf(kind, path, path)
 }
 
 // globalCandidate is the content a file moved to G gets: a toolset's relative paths made
 // absolute from the v1 setting's folder with the loader's own list (absoluteGlobalToolsetPaths,
-// which v2 applies from G), a remote's token_file from its v1 folder; other kinds have no
-// path the move changes (model files have none, MCP and sandbox paths are absolute or
-// resolve from the session's cwd).
+// which v2 applies from G), and its profile_message keys the workspace layout removed
+// (deny_profiles becomes deny, sessions is dropped); other kinds have no path the move changes
+// (model files have none, MCP and sandbox paths are absolute or resolve from the session's cwd).
+// Remotes are never copied (planRemotes).
 func (p *migrationPlanner) globalCandidate(kind, path string, data []byte) ([]byte, []MigrationRewrite, error) {
 	switch kind {
 	case "tools":
 		return toolsetCandidate(data, p.settingDir)
-	case "remotes":
-		fields, ok := rawObjectFields(data)
-		if !ok {
-			return nil, nil, errors.New("not a JSON object")
-		}
-		remote, ok := rawObjectFields(fields["remote"])
-		if !ok {
-			return data, nil, nil
-		}
-		var value string
-		if json.Unmarshal(remote["token_file"], &value) != nil || strings.TrimSpace(value) == "" || filepath.IsAbs(strings.TrimSpace(value)) {
-			return data, nil, nil
-		}
-		value = strings.TrimSpace(value)
-		to := resolveFrom(filepath.Dir(path), value)
-		remote["token_file"] = mustJSON(to)
-		encodedRemote, err := marshalOrderedObject(remote, mustKeys(fields["remote"]))
-		if err != nil {
-			return nil, nil, err
-		}
-		fields["remote"] = encodedRemote
-		encoded, err := marshalOrderedObject(fields, mustKeys(data))
-		return encoded, []MigrationRewrite{{Key: "remote.token_file", From: value, To: to}}, err
 	}
 	return data, nil, nil
 }
@@ -1075,6 +1074,17 @@ func toolsetCandidate(data []byte, base string) ([]byte, []MigrationRewrite, err
 			}
 		}
 	}
+	if raw, has := rewritten.Native["profile_message"]; has {
+		replaced, pmRewrites, err := workspaceProfileMessage(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(pmRewrites) > 0 {
+			rewritten.Native["profile_message"] = replaced
+			rewrites = append(rewrites, pmRewrites...)
+			changedNative = true
+		}
+	}
 	if !bytes.Equal(toolset.Hooks, rewritten.Hooks) {
 		before, _ := rawObjectFields(toolset.Hooks)
 		after, _ := rawObjectFields(rewritten.Hooks)
@@ -1100,6 +1110,119 @@ func toolsetCandidate(data []byte, base string) ([]byte, []MigrationRewrite, err
 	}
 	encoded, err := marshalOrderedObject(fields, mustKeys(data))
 	return encoded, rewrites, err
+}
+
+// workspaceProfileMessage rewrites the keys of a toolset's profile_message the workspace layout
+// removed (T-040): deny_profiles <category>/<name> becomes the deny rule {"to":
+// "local:*/*/<category>/<name>"}, which refuses at least what the entry refused (the entry denied
+// the profile of the caller's session; the rule denies it in every session and workspace), and
+// sessions is dropped (other sessions of the workspace and listed workspaces are reachable in v2;
+// deny restricts). It returns the section and one rewrite for each key it changed.
+func workspaceProfileMessage(raw json.RawMessage) (json.RawMessage, []MigrationRewrite, error) {
+	fields, ok := rawObjectFields(raw)
+	if !ok {
+		return raw, nil, nil
+	}
+	var rewrites []MigrationRewrite
+	if denied, has := fields["deny_profiles"]; has {
+		var ids []string
+		if err := json.Unmarshal(denied, &ids); err != nil {
+			return nil, nil, errors.New("native.profile_message.deny_profiles must be an array of profile ids")
+		}
+		rules := make([]map[string]string, 0, len(ids))
+		for _, id := range ids {
+			rules = append(rules, map[string]string{"to": "local:*/*/" + id})
+		}
+		rewritten, err := json.Marshal(rules)
+		if err != nil {
+			return nil, nil, err
+		}
+		rewrites = append(rewrites, MigrationRewrite{Key: "native.profile_message.deny_profiles", From: compactJSON(denied), To: "deny " + string(rewritten)})
+		delete(fields, "deny_profiles")
+		fields["deny"] = rewritten
+	}
+	if sessions, has := fields["sessions"]; has {
+		rewrites = append(rewrites, MigrationRewrite{Key: "native.profile_message.sessions", From: compactJSON(sessions), To: "(removed)"})
+		delete(fields, "sessions")
+	}
+	if len(rewrites) == 0 {
+		return raw, nil, nil
+	}
+	encoded, err := marshalOrderedObject(fields, mustKeys(raw))
+	return encoded, rewrites, err
+}
+
+// planRemotes plans the v1 remote files: none is copied. A remote of the workspace layout is a
+// binding (one server and one workspace) with no credential, and its credential is a key file in
+// G/auth/keys named in remote_keys, so a v1 file cannot be carried over by the tool without
+// writing a secret or guessing a workspace. Each file is a manual step in the plan, with what to
+// do for the keys it has; a file that is already in G's remotes folder stays where it is, and v2
+// reads it as a binding (jad check reports it until it is converted). Nothing is read from a
+// token file.
+func (p *migrationPlanner) planRemotes(source, destination string, files []string) {
+	inPlace := realPath(source) == realPath(destination)
+	for _, rel := range files {
+		from := filepath.Join(source, rel)
+		data, _, err := readSource(from)
+		if err != nil {
+			p.block(migrationBlockUnreadable, from, "%v", err)
+			continue
+		}
+		name := strings.TrimSuffix(filepath.ToSlash(rel), ".json")
+		fields, _ := rawObjectFields(data)
+		inner, _ := rawObjectFields(fields["remote"])
+		steps := []string{fmt.Sprintf("create %s with the connection keys of this file (url, timeout_ms, ...) and remote.workspace, the id of the workspace to reach on that server, and without token_env, token_file and default_session", filepath.Join(destination, rel))}
+		switch {
+		case len(inner["token_env"]) > 0:
+			steps = append(steps, fmt.Sprintf("create %s with kind remote_key, binding %s and token_env %s (or the token itself), mode 0600", filepath.Join(p.global, "auth", "keys", name+".json"), name, compactJSON(inner["token_env"])))
+		case len(inner["token_file"]) > 0:
+			steps = append(steps, fmt.Sprintf("create %s with kind remote_key, binding %s and the content of the token file (token_file is %s) as token, mode 0600; the path itself is not carried over", filepath.Join(p.global, "auth", "keys", name+".json"), name, compactJSON(inner["token_file"])))
+		}
+		steps = append(steps, fmt.Sprintf("name the key in remote_keys of %s (or of a session or profile) and list the binding %s in the tools' remotes", filepath.Join(p.jad, workspaceSettingName), name))
+		if len(inner["default_session"]) > 0 {
+			steps = append(steps, fmt.Sprintf("write the session in every address (default_session is %s): remote:%s/<session>/<category>/<name>", compactJSON(inner["default_session"]), name))
+		}
+		reason := "v1 remote " + name + " is not copied: in the workspace layout a remote is a binding and its credential a key. Manual steps: " + strings.Join(steps, "; ")
+		if inPlace {
+			reason = "v1 remote " + name + " stays in place and v2 reads it as a binding, which refuses its v1 keys. Manual steps: " + strings.Join(steps, "; ")
+		}
+		p.leaveOut(from, "%s", reason)
+	}
+}
+
+// warnListedRemotes notes each tool of a copied toolset that lists remotes: remotes are not
+// migrated (planRemotes), and a run of the workspace layout whose tool lists a remote with no
+// binding of that name fails to start, which is how a misspelt remote is told.
+func (p *migrationPlanner) warnListedRemotes(from, target string, data []byte) {
+	var toolset layoutToolsetFile
+	if json.Unmarshal(data, &toolset) != nil {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(toolset.Native)) {
+		section, _ := rawObjectFields(toolset.Native[name])
+		var remotes []string
+		if json.Unmarshal(section["remotes"], &remotes) == nil && len(remotes) > 0 {
+			p.warn("%s lists remotes %s in tools.native.%s: a run that uses it fails to start in the workspace layout until a binding of each name exists in %s (see the remote steps)", target, strings.Join(remotes, ", "), name, p.globalFolders["remotes"])
+		}
+	}
+}
+
+// refuseRemovedToolsetKeys is the blocker for a toolset that stays where it is (in G, or
+// workspace-private) and holds a profile_message key the workspace layout removed: v1 and v2 read
+// the same file, so the migration cannot rewrite it for v2 without changing what v1 does with it.
+func (p *migrationPlanner) refuseRemovedToolsetKeys(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	fields, _ := rawObjectFields(data)
+	native, _ := rawObjectFields(fields["native"])
+	section, _ := rawObjectFields(native["profile_message"])
+	for _, key := range []string{"deny_profiles", "sessions"} {
+		if _, has := section[key]; has {
+			p.block(migrationBlockRemovedKeys, path, "%s stays where it is and holds native.profile_message.%s, which the workspace layout removed (a profile that uses it would not load in v2); replace deny_profiles with deny rules {\"to\": \"local:*/*/<category>/<name>\"} and delete sessions in that file (v1 stops reading them too), then plan again", path, key)
+		}
+	}
 }
 
 // catalogFiles lists the files Scan reads in a <category>/<name>.json catalog, relative to

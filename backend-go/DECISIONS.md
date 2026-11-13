@@ -4651,6 +4651,8 @@ Decider phase 5b ruling (design section 27).
 
 ## profile_message in the workspace layout: remote workspace addressing (T-036, Go, 2026-11-13)
 
+> Superseded by the T-040 entry (`## profile_message redesign (T-040`) on the access points it names; v1 is as described here.
+
 **Decision (decider T-036, step 41.6).** Local `profile_message` is unchanged: it reaches the sessions
 of the caller's own workspace only (`ResolveFrom`, Q6), another workspace answers as a missing
 session, and a profile's private folder is shared by the sessions of its workspace. The change is on
@@ -4692,6 +4694,8 @@ globs and `Resolve` (no file name before it is parsed); no golden file changed.
 
 ## Remote transcripts for bare-glob tokens, and the self-pointing loop (T-036b, Go, 2026-11-13)
 
+> Superseded by the T-040 entry (`## profile_message redesign (T-040`) on the access points it names; v1 is as described here.
+
 **Decision (decider, after T-036).** The token-glob rule of T-036 (a qualified session matches only
 globs whose session part is `*` or has a colon) is accepted and confirmed. The ambiguous-session
 change of v1 with several roots is accepted. Two items had to land: a token written for bare ids
@@ -4732,6 +4736,8 @@ loop would reach the busy profile: each fails a test.
 - Still not built: a token limited to workspaces, and a workspace allow-list in the client entry.
 
 ## profile_message across workspaces, locally (T-037, Go, 2026-11-13)
+> Superseded by the T-040 entry (`## profile_message redesign (T-040`) on the access points it names; v1 is as described here.
+
 
 **Decision.** The user asked for workspace to workspace in the local `profile_message`. This
 supersedes the T-036 entry's "local profile_message is unchanged" for `profile_message` only
@@ -4794,6 +4800,8 @@ or write a, and cannot read b's own `.jad` that a hides.
   T-037b below; compact stays.)
 
 ## profile_message across workspaces: reset refused, paths hidden, `local:` form (T-037b, Go, 2026-11-13)
+> Superseded by the T-040 entry (`## profile_message redesign (T-040`) on the access points it names; v1 is as described here.
+
 
 **Decision** (decider T-037 step 45.10, checked against the code; user's addendum on a local
 syntax for `remote`). Design: `docs/design_workspace_layout.md` section 29, "Follow-up".
@@ -4943,3 +4951,35 @@ before (the v1 goldens and the T-036 suite are unchanged); every changed reader 
   recommended default.
 - *Not done in this stage:* migration of v1 remote files and rows, remote and key schemas and
   samples, design text (stage D); the deletion sweep (stage E).
+
+### Stage D: migration, schemas, samples, docs (built)
+
+- `jad migrate workspace` copies no remote file and handles no secret. A v1 remote becomes a
+  manual step in the plan (binding with `remote.workspace`, key file, `remote_keys`, tool `remotes`,
+  explicit session in the address); a remote file already in G stays and is read as a binding.
+  The `token_file` rebasing branch of `globalCandidate` and its test are deleted. The migrated
+  workspace has no remote access until the steps are done (fails closed).
+- A copied toolset's `deny_profiles` becomes `deny` rules (`local:*/*/<id>`, at least as strict as
+  the entry); `sessions` is dropped with a plan line ("reach widens"). A toolset that stays in
+  place and holds either key is the blocker `removed_keys` (v1 reads the same file). An enabled
+  `server.remote_api` and a toolset with `remotes` each get a warning. Nothing is read from a token
+  file or an environment variable.
+- Schemas: `remote.schema.json` describes both shapes, `remote-key.schema.json` is new, the token
+  row text in `root-setting.schema.json` names `workspace`. Samples: `sample/jad/remotes/*` stay v1
+  (marked), `sample/workspace-layout/` holds the binding and key examples (`TestWorkspaceLayoutSamplesLoad`).
+- The `profile_message` input schema is **unchanged**: its static `profile` property still says
+  "one of the available profiles, or <session>/<category>/<profile> ...". I changed it first, and the
+  v1 run baselines (`testdata/run_baseline/*_tools.txt`) pin that text, so the change failed three
+  v1 goldens and would also force every operator to refresh the tool definition. The decider
+  handoff's "v1 goldens must not change" wins: the layout-specific forms are in the generated
+  description (`profileMessageListText`), which differs per layout. No operator action.
+- Mutation checks: 7 of 7 guards of the migration code caught.
+
+**Open gaps (stage D).**
+- *No key-issuing command:* creating a key and the matching server row (SHA-256 of the token) is by
+  hand (accepted, D5); the plan prints the steps, not the secrets.
+- *Server table not migrated:* `server.remote_api.tokens_file` is not rewritten (rows need a
+  `workspace` the tool cannot know); the plan only warns, and the server refuses to start until the
+  rows are fixed.
+- *`deny` rewrite is per profile id in every session and workspace,* which can be stricter than the
+  v1 entry (it denied the profile in the caller's session only).

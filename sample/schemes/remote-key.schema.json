@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "remote-key.schema.json",
+  "title": "JAD remote key (workspace layout)",
+  "description": "G/auth/keys/<key>.json, mode 0600 (a file readable by group or others is refused): the one place a remote credential lives in the workspace layout. It names the binding (G/remotes/<binding>.json) it is for and holds the bearer token itself or the JAD_REMOTE_* variable that does. G/auth is hidden in every sandbox. A key is used only when workspace.json, the session or the profile lists it in remote_keys; a key never grants reach to a binding (the tool's remotes list and its allow_remote still decide), it only supplies the token, and it works only for the binding it names. The file is read at each request and never cached, logged, shown or put in an error, so replacing it rotates the credential without a restart. The server's token row (remote_api.tokens_file) stores only the SHA-256 of the token and names the one workspace it reaches. There is no tool that writes this file: create it by hand with chmod 600.",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "remote_key" },
+    "binding": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "The remote binding (file name without .json in G/remotes) this key is for." },
+    "token": { "type": "string", "minLength": 32, "pattern": "^\\S+$", "description": "The bearer token: at least 32 printable characters without spaces. Set exactly one of token and token_env." },
+    "token_env": { "type": "string", "pattern": "^JAD_REMOTE_[A-Za-z0-9_]+$", "description": "Name of the environment variable, which must start with JAD_REMOTE_ (a key cannot read provider keys or other variables), that holds the token. Set exactly one of token and token_env." }
+  },
+  "required": ["kind", "binding"],
+  "oneOf": [{ "required": ["token"] }, { "required": ["token_env"] }],
+  "additionalProperties": false
+}
