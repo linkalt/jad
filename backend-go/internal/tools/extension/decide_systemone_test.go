@@ -226,11 +226,8 @@ func TestDecideSystemoneSchemaRejectsMissingParts(t *testing.T) {
 		"no input":        `{"questions":[{"instructions":"?"}]}`,
 		"no questions":    `{"input":"x"}`,
 		"empty questions": `{"input":"x","questions":[]}`,
-		"no instructions": `{"input":"x","questions":[{"name":"a"}]}`,
 		"unknown field":   `{"input":"x","questions":[{"instructions":"?"}],"model":"other"}`,
 		"unknown type":    `{"input":"x","questions":[{"type":"rank","instructions":"?"}]}`,
-		"one level":       `{"input":"x","questions":[{"instructions":"?","levels":["only"]}]}`,
-		"one choice":      `{"input":"x","questions":[{"instructions":"?","choices":["only"]}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if output := rig.call(t, arguments); !strings.Contains(output, `"status":"invalid_input"`) || !strings.Contains(output, "schema") {
@@ -1154,6 +1151,58 @@ func TestDecideSystemoneOptionCounts(t *testing.T) {
 					})
 				}
 			}
+		}
+	}
+}
+
+// The provider's own request-wide rules (a number that is not finite, nesting past 64 levels)
+// are not checked here: the tool forwards the input as given and the provider's 400 reaches the
+// caller as a rejected request. A local check would repeat a rule the provider already enforces
+// and could only drift from it.
+func TestDecideSystemoneForwardsInputsTheProviderLimitsAndReportsItsRefusal(t *testing.T) {
+	deep := strings.Repeat("[", 70) + strings.Repeat("]", 70)
+	for name, tc := range map[string]struct{ value, state string }{
+		"number past float64": {`1e999`, `"state":[1e999]`},
+		"nesting past 64":     {deep, `"state":[` + deep + `]`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newDecideSystemoneRig(t, 400, `{"detail":"The request was rejected"}`, nil)
+			output := rig.call(t, `{"input":[{"type":"json","value":`+tc.value+`}],`+predicateQuestion+`}`)
+			if len(rig.requests) != 1 || !strings.Contains(string(rig.requests[0].Raw), tc.state) {
+				t.Fatalf("the input was not forwarded as given: %d requests", len(rig.requests))
+			}
+			if !strings.Contains(output, `"status":"invalid_input"`) || !strings.Contains(output, "error_code: request_rejected") || !strings.Contains(output, "The request was rejected") {
+				t.Fatalf("the provider's refusal was not reported:\n%s", output)
+			}
+		})
+	}
+}
+
+// Every status the System One API documents maps to one code, on both paths.
+func TestDecideSystemoneMapsEveryDocumentedStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		code, state string
+	}{
+		{400, "request_rejected", "invalid_input"},
+		{401, "unauthorized", "error"},
+		{403, "unauthorized", "error"},
+		{402, "request_rejected", "invalid_input"},
+		{413, "request_rejected", "invalid_input"},
+		{415, "request_rejected", "invalid_input"},
+		{422, "request_rejected", "invalid_input"},
+		{429, "rate_limited", "error"},
+		{500, "provider_error", "error"},
+		{529, "provider_error", "error"},
+	} {
+		for _, path := range decideSystemonePaths {
+			t.Run(strconv.Itoa(tc.status)+path, func(t *testing.T) {
+				rig := newDecideSystemoneRig(t, tc.status, `{"error":{"message":"refused"}}`, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Path = path })
+				output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
+				if !strings.Contains(output, `"status":"`+tc.state+`"`) || !strings.Contains(output, "error_code: "+tc.code) || !strings.Contains(output, "The provider answered HTTP "+strconv.Itoa(tc.status)) || !strings.Contains(output, "refused") {
+					t.Fatalf("HTTP %d: want %s/%s, got:\n%s", tc.status, tc.state, tc.code, output)
+				}
+			})
 		}
 	}
 }

@@ -27,13 +27,19 @@ type decideSystemoneAnswer struct {
 	Confidence    *float64
 	Probabilities []decideSystemoneProbability
 	Legend        orderedDecideSystemoneLegend
-	Refused       bool
+	// Box is set only on a box answer whose four edges all passed decideSystemoneBoxFromJSON.
+	Box     *decideSystemoneBox
+	Refused bool
 	// HasNumber is set when the provider gave the number its type needs (probability
 	// or score). A missing or null number is not a 0.
 	HasNumber bool
 	// Broken marks an answer that could not be decoded at all.
 	Broken bool
 }
+
+// decideSystemoneBox holds the edges as the provider wrote them, so none is rounded or
+// reordered. Only a box that passed decideSystemoneBoxFromJSON is ever built.
+type decideSystemoneBox struct{ Top, Bottom, Left, Right json.RawMessage }
 
 type decideSystemoneProbability struct {
 	Label       string
@@ -86,10 +92,10 @@ type decideSystemoneResponse struct {
 }
 
 // requestDecisions sends one request and returns answers and optional metadata.
-func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (*decideSystemoneResponse, error) {
+func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion, assets map[string]decideSystemoneAsset) (*decideSystemoneResponse, error) {
 	// The shared marshaler keeps <, > and & as they are, so the bytes max_input_bytes
 	// counted for the JSON input parts are the bytes on the wire.
-	payload, err := tools.MarshalJSON(systemoneRequest(settings.Model, input, questions))
+	payload, err := tools.MarshalJSON(systemoneRequest(settings.Model, input, questions, assets))
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
@@ -102,6 +108,9 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	request.Header.Set("Accept", "application/json")
 	if settings.LongContext {
 		request.Header.Set("TypeSafe-Danger-Zone-Long-Context", "true")
+	}
+	if decideSystemoneNeedsImages(questions, assets) {
+		request.Header.Set("TypeSafe-Danger-Zone-Images", "true")
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -123,6 +132,22 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 		return nil, &decideSystemoneResponseError{err.Error()}
 	}
 	return answers, nil
+}
+
+// decideSystemoneNeedsImages reports whether the request must carry the images header: it
+// sends an image, or asks a box question, which locates something in one. The header
+// follows the request, not a setting.
+func decideSystemoneNeedsImages(questions []decideSystemoneQuestion, assets map[string]decideSystemoneAsset) bool {
+	return len(assets) > 0 || decideSystemoneHasBox(questions)
+}
+
+func decideSystemoneHasBox(questions []decideSystemoneQuestion) bool {
+	for _, question := range questions {
+		if question.Type == "box" {
+			return true
+		}
+	}
+	return false
 }
 
 // decideSystemoneErrorMessage takes the provider's error text from the error shapes it
@@ -258,8 +283,12 @@ func decideSystemoneScalarText(raw json.RawMessage) string {
 
 // ---- Request and answers ----
 
-func systemoneRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) map[string]any {
-	return map[string]any{"model": model, "state": systemoneState(input), "questions": systemoneQuestionItems(questions)}
+func systemoneRequest(model string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion, assets map[string]decideSystemoneAsset) map[string]any {
+	request := map[string]any{"model": model, "state": systemoneState(input), "questions": systemoneQuestionItems(questions)}
+	if len(assets) > 0 {
+		request["assets"] = assets
+	}
+	return request
 }
 
 // systemoneQuestionItems renders the questions as the provider receives them, so the
@@ -267,17 +296,40 @@ func systemoneRequest(model string, input []decideSystemoneInputPart, questions 
 func systemoneQuestionItems(questions []decideSystemoneQuestion) map[string]any {
 	items := make(map[string]any, len(questions))
 	for _, question := range questions {
-		item := map[string]any{"instructions": question.Instructions}
+		item := map[string]any{}
+		switch {
+		case question.StructuredInstructions != nil:
+			item["instructions"] = question.StructuredInstructions
+		case question.Instructions != "":
+			item["instructions"] = question.Instructions
+		}
 		switch question.Type {
 		case "predicate":
 			item["type"] = "noul"
+			if question.Criteria != nil {
+				item["criteria"] = question.Criteria
+			}
 		case "choice":
+			if question.Native {
+				item["type"], item["criteria"] = "choice", decideSystemoneRawObject(question.Options)
+				break
+			}
 			criteria := make(map[string]string, len(question.Options))
 			for _, option := range question.Options {
 				criteria[option.Label] = firstNonEmpty(option.Description, option.Label)
 			}
 			item["type"], item["criteria"] = "choice", criteria
+		case "box":
+			item["type"] = "box"
 		case "score":
+			if question.Native {
+				criteria := make([]json.RawMessage, 0, len(question.Options))
+				for _, option := range question.Options {
+					criteria = append(criteria, option.Raw)
+				}
+				item["type"], item["criteria"] = "score", criteria
+				break
+			}
 			// OpenRouter takes the criteria in level order, and has no separate label.
 			criteria := make([]string, 0, len(question.Options))
 			for _, option := range question.Options {
@@ -326,6 +378,7 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (*d
 			Noul          *float64                   `json:"noul"`
 			Choice        json.RawMessage            `json:"choice"`
 			Score         *float64                   `json:"score"`
+			Box           json.RawMessage            `json:"box"`
 			Confidence    *float64                   `json:"confidence"`
 			Probabilities map[string]json.RawMessage `json:"probabilities"`
 			Legend        json.RawMessage            `json:"legend"`
@@ -337,7 +390,7 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (*d
 		answer := decideSystemoneAnswer{Confidence: item.Confidence}
 		// Retain legacy malformed-field handling for unrelated answer types.
 		// Only choice/score maps have the declared-key and null-entry policy.
-		if item.Type != "choice" && item.Type != "score" {
+		if item.Type != "choice" && item.Type != "score" && item.Type != "box" {
 			for _, raw := range item.Probabilities {
 				var probability float64
 				if json.Unmarshal(raw, &probability) != nil {
@@ -371,13 +424,23 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (*d
 			_ = json.Unmarshal(item.Legend, &legend)
 			for index, option := range question.Options {
 				key := strconv.Itoa(index)
-				answer.addProbability(option.Label, item.Probabilities[key])
+				label := option.Label
+				if question.Native {
+					// A native level has no label, so its index names it.
+					label = key
+				}
+				answer.addProbability(label, item.Probabilities[key])
 				value := bytes.TrimSpace(legend[key])
 				// The enclosing response is valid JSON. Keep structured values raw
 				// to preserve nested numbers exactly; omit invalid optional entries.
 				if len(value) > 0 && (value[0] == '"' || value[0] == '{' || value[0] == '[') {
 					answer.Legend = append(answer.Legend, decideSystemoneLegendEntry{Index: key, Value: value})
 				}
+			}
+		case "box":
+			answer.Type = "box"
+			if answer.Box = decideSystemoneBoxFromJSON(item.Box); answer.Box == nil {
+				answer.Broken = true
 			}
 		case "refusal":
 			answer.Type, answer.Refused = item.Type, true
@@ -396,6 +459,39 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (*d
 		result.OutputTokens = decideSystemoneTokenCount(usage["output_tokens"])
 	}
 	return result, nil
+}
+
+// decideSystemoneBoxFromJSON returns the box when raw is an object whose top, bottom, left and
+// right are all present JSON numbers within 0 to 1, with top < bottom and left < right, and nil
+// otherwise. A missing, null or non-numeric edge is never read as 0, and nothing is clamped or swapped.
+func decideSystemoneBoxFromJSON(raw json.RawMessage) *decideSystemoneBox {
+	var edges map[string]json.RawMessage
+	if json.Unmarshal(raw, &edges) != nil {
+		return nil
+	}
+	var values [4]float64
+	var kept [4]json.RawMessage
+	for index, name := range [4]string{"top", "bottom", "left", "right"} {
+		edge := edges[name]
+		// A number token starts with a digit or a minus sign; null, strings and containers do not.
+		if len(edge) == 0 || (edge[0] != '-' && (edge[0] < '0' || edge[0] > '9')) {
+			return nil
+		}
+		value, err := strconv.ParseFloat(string(edge), 64)
+		if err != nil || !decideSystemoneProbabilityFits(value) {
+			return nil
+		}
+		values[index], kept[index] = value, edge
+	}
+	if values[0] >= values[1] || values[2] >= values[3] {
+		return nil
+	}
+	return &decideSystemoneBox{Top: kept[0], Bottom: kept[1], Left: kept[2], Right: kept[3]}
+}
+
+// MarshalJSON writes the edges as received in the documented order.
+func (box decideSystemoneBox) MarshalJSON() ([]byte, error) {
+	return []byte(`{"top":` + string(box.Top) + `,"bottom":` + string(box.Bottom) + `,"left":` + string(box.Left) + `,"right":` + string(box.Right) + `}`), nil
 }
 
 // addProbability ignores missing/null entries, but invalid declared entries make
@@ -453,6 +549,8 @@ func renderDecideSystemoneAnswers(questions []decideSystemoneQuestion, answers m
 				item["probability"] = roundDecideSystemone(answer.Probability)
 			case "choice":
 				item["choice"] = answer.Choice
+			case "box":
+				item["box"] = answer.Box
 			case "score":
 				item["score"] = roundDecideSystemone(answer.Score)
 				if len(answer.Legend) > 0 {
@@ -495,6 +593,9 @@ func decideSystemoneAnswerFits(question decideSystemoneQuestion, answer decideSy
 	}
 	if question.Type == "predicate" {
 		return answer.HasNumber && decideSystemoneProbabilityFits(answer.Probability)
+	}
+	if question.Type == "box" {
+		return answer.Box != nil
 	}
 	if question.Type != "choice" {
 		return answer.HasNumber
@@ -576,7 +677,7 @@ func marshalDecideSystemoneItem(item map[string]any) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	first := true
-	for _, key := range []string{"name", "type", "probability", "choice", "score", "level", "confidence", "probabilities", "legend", "status"} {
+	for _, key := range []string{"name", "type", "probability", "choice", "score", "box", "level", "confidence", "probabilities", "legend", "status"} {
 		value, found := item[key]
 		if !found {
 			continue

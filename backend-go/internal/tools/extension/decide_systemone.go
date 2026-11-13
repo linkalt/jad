@@ -15,7 +15,7 @@ import (
 
 const DecideSystemoneToolID = "extension.decide_systemone"
 
-const decideSystemoneDescription = "Ask a fast classifier typed questions about some text or JSON. predicate: probability 0-1 that a condition holds. choice: the best of your choices, with confidence. score: a rating against ordered levels, lowest first. Use it for yes/no checks, routing and severity, not for open-ended answers."
+const decideSystemoneDescription = "Ask a fast classifier typed questions about some text or JSON. predicate: probability 0-1 that a condition holds. choice: the best of your choices, with confidence. score: a rating against ordered levels, lowest first. box: where a target is in an image sent in assets. Use it for yes/no checks, routing and severity, not for open-ended answers."
 
 var DecideSystemoneInputSchema = json.RawMessage(`{
   "type":"object",
@@ -37,14 +37,19 @@ var DecideSystemoneInputSchema = json.RawMessage(`{
         "type":"object",
         "properties":{
           "name":{"type":"string","minLength":1,"description":"Label of the answer. Defaults to q1, q2, ..."},
-          "type":{"type":"string","enum":["predicate","choice","score"],"description":"Inferred when omitted: choices gives choice, levels gives score, otherwise predicate."},
-          "instructions":{"type":"string","minLength":1,"description":"The question, with observable criteria."},
-          "choices":{"type":"array","minItems":2,"items":{"anyOf":[{"type":"string","minLength":1},{"type":"object","properties":{"value":{"type":"string","minLength":1},"description":{"type":"string"}},"required":["value"],"additionalProperties":false}]},"description":"Options for a choice question: a value, or a value with when it applies."},
-          "levels":{"type":"array","minItems":2,"items":{"anyOf":[{"type":"string","minLength":1},{"type":"object","properties":{"label":{"type":"string","minLength":1},"description":{"type":"string"}},"required":["label"],"additionalProperties":false}]},"description":"Ordered levels for a score question, lowest first: a label, or a label with its criteria."}
+          "type":{"type":"string","enum":["predicate","choice","score","box"],"description":"Inferred when omitted: choices gives choice, levels gives score, otherwise predicate. box is never inferred: set it, with instructions naming the target in an image."},
+          "instructions":{"anyOf":[{"type":"string","minLength":1},{"type":"object"},{"type":"array"},{"type":"null"}],"description":"The question, with observable criteria: text, or a JSON object or array. Optional."},
+          "criteria":{"anyOf":[{"type":"object"},{"type":"array","minItems":1},{"type":"null"}],"description":"Native criteria. predicate: {true,false} meanings; choice (set type): {label: meaning}, 1-255; score (set type): ordered meanings, lowest first, 1-10. Not with choices or levels."},
+          "choices":{"type":"array","minItems":1,"items":{"anyOf":[{"type":"string","minLength":1},{"type":"object","properties":{"value":{"type":"string","minLength":1},"description":{"type":"string"}},"required":["value"],"additionalProperties":false}]},"description":"Options for a choice question: a value, or a value with when it applies."},
+          "levels":{"type":"array","minItems":1,"items":{"anyOf":[{"type":"string","minLength":1},{"type":"object","properties":{"label":{"type":"string","minLength":1},"description":{"type":"string"}},"required":["label"],"additionalProperties":false}]},"description":"Ordered levels for a score question, lowest first: a label, or a label with its criteria."}
         },
-        "required":["instructions"],
         "additionalProperties":false
       }
+    },
+    "assets":{
+      "type":"object",
+      "additionalProperties":{"type":"object","properties":{"format":{"type":"string","enum":["png","jpg","jpeg"]},"data_base64":{"type":"string"},"type":{"type":"string","enum":["image"]}},"required":["format","data_base64"],"additionalProperties":false},
+      "description":"Images by reference. Key: a reference you choose (a UUID is safest), written verbatim in the input, instructions or criteria; every reference must appear. Value: a PNG or JPEG as standard padded base64. A box question needs one."
     }
   },
   "required":["input","questions"],
@@ -54,13 +59,23 @@ var DecideSystemoneInputSchema = json.RawMessage(`{
 // decideSystemoneQuestion is one question after normalization.
 type decideSystemoneQuestion struct {
 	Name         string
-	Type         string // predicate, choice or score
-	Instructions string
-	Options      []decideSystemoneOption // choices, or levels in order
+	Type         string // predicate, choice, score or box
+	Instructions string // text instructions; empty when none or structured
+	// StructuredInstructions is an object or array, kept as the JSON it arrived in.
+	StructuredInstructions json.RawMessage
+	// Criteria is a predicate's native {true,false} object.
+	Criteria json.RawMessage
+	Options  []decideSystemoneOption // choices, or levels in order
+	// Native is set when Options come from native criteria: each Raw is sent as given.
+	Native bool
 }
 
-// decideSystemoneOption is a choice (Label is its value) or a score level.
-type decideSystemoneOption struct{ Label, Description string }
+// decideSystemoneOption is a choice (Label is its value) or a score level. A native
+// option carries its criteria in Raw; a native score level has no label.
+type decideSystemoneOption struct {
+	Label, Description string
+	Raw                json.RawMessage
+}
 
 // decideSystemoneInputPart is one part of the input: text, or a JSON value when JSON is set.
 type decideSystemoneInputPart struct {
@@ -124,6 +139,13 @@ func normalizeDecideSystemoneArguments(arguments map[string]any) map[string]any 
 	normalized["input"] = normalizeDecideSystemoneInput(normalized["input"])
 	if normalized["input"] == nil {
 		delete(normalized, "input")
+	}
+	if assets, present := normalized["assets"]; present {
+		if assets = normalizeDecideSystemoneAssets(assets); assets == nil {
+			delete(normalized, "assets")
+		} else {
+			normalized["assets"] = assets
+		}
 	}
 	questions, ok := normalized["questions"].([]any)
 	if !ok {
@@ -207,22 +229,39 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 	for _, part := range input {
 		size += part.size()
 	}
-	questions, err := parseDecideSystemoneQuestions(arguments["questions"])
+	assets, err := parseDecideSystemoneAssets(arguments["assets"])
+	if err != nil {
+		return decideSystemoneError(callID, tools.StatusInvalidInput, "invalid_input", err.Error())
+	}
+	questions, err := parseDecideSystemoneQuestions(arguments["questions"], execution.RawArguments)
 	if err != nil {
 		return decideSystemoneError(callID, tools.StatusInvalidInput, "invalid_question", err.Error())
+	}
+	if len(assets) == 0 && decideSystemoneHasBox(questions) {
+		return decideSystemoneError(callID, tools.StatusInvalidInput, "invalid_question", "A box question needs an image: send it in assets, with its reference in the input or the instructions")
 	}
 	if int64(len(questions)) > settings.MaxQuestions {
 		return decideSystemoneError(callID, tools.StatusInvalidInput, "too_many_questions", fmt.Sprintf("%d questions; the limit is %d", len(questions), settings.MaxQuestions))
 	}
 	// One request goes out whole, so one counter covers it: every instruction, option
 	// label and description is in the questions, and max_input_bytes bounds the input
-	// parts and the questions together.
+	// parts, the questions and the assets together.
 	questionBytes, err := tools.MarshalJSON(systemoneQuestionItems(questions))
 	if err != nil {
 		return decideSystemoneError(callID, tools.StatusError, "bad_request", fmt.Sprintf("The questions cannot be encoded: %v", err))
 	}
-	if requestBytes := int64(size) + int64(len(questionBytes)); requestBytes > settings.MaxInputBytes {
-		return decideSystemoneError(callID, tools.StatusInvalidInput, "input_too_large", fmt.Sprintf("The request is %d bytes (%d input, %d questions); max_input_bytes is %d", requestBytes, size, len(questionBytes), settings.MaxInputBytes))
+	assetBytes := decideSystemoneAssetsSize(assets)
+	if requestBytes := int64(size) + int64(len(questionBytes)) + int64(assetBytes); requestBytes > settings.MaxInputBytes {
+		breakdown := fmt.Sprintf("%d input, %d questions", size, len(questionBytes))
+		if len(assets) > 0 {
+			breakdown += fmt.Sprintf(", %d assets", assetBytes)
+		}
+		return decideSystemoneError(callID, tools.StatusInvalidInput, "input_too_large", fmt.Sprintf("The request is %d bytes (%s); max_input_bytes is %d", requestBytes, breakdown, settings.MaxInputBytes))
+	}
+	// The scan comes after the size check, so an oversized request is refused without
+	// reading its images.
+	if err := checkDecideSystemoneAssetData(assets); err != nil {
+		return decideSystemoneError(callID, tools.StatusInvalidInput, "invalid_input", err.Error())
 	}
 	key := strings.TrimSpace(environment(settings.APIKeyEnv))
 	if key == "" {
@@ -231,7 +270,7 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutMS)*time.Millisecond)
 	defer cancel()
-	response, err := requestDecisions(ctx, client, settings, key, input, questions)
+	response, err := requestDecisions(ctx, client, settings, key, input, questions, assets)
 	if err != nil {
 		return decideSystemoneRequestError(callID, err)
 	}
@@ -311,8 +350,9 @@ const (
 // missing type from choices or levels, names the unnamed ones q1, q2, ..., and
 // refuses what the provider would refuse (a duplicate name, options that do not fit
 // the type), so a mistake costs no request.
-func parseDecideSystemoneQuestions(raw any) ([]decideSystemoneQuestion, error) {
+func parseDecideSystemoneQuestions(raw any, rawArguments json.RawMessage) ([]decideSystemoneQuestion, error) {
 	items, _ := raw.([]any)
+	original := decideSystemoneOriginal{arguments: rawArguments}
 	questions := make([]decideSystemoneQuestion, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for index, item := range items {
@@ -325,11 +365,25 @@ func parseDecideSystemoneQuestions(raw any) ([]decideSystemoneQuestion, error) {
 			return nil, fmt.Errorf("question name %q is used twice", question.Name)
 		}
 		seen[question.Name] = struct{}{}
-		question.Instructions, _ = fields["instructions"].(string)
+		// Instructions are optional: text, or an object or array sent as given.
+		switch value := fields["instructions"].(type) {
+		case string:
+			question.Instructions = value
+		case map[string]any, []any:
+			encoded, err := original.field(index, "instructions", value)
+			if err != nil {
+				return nil, fmt.Errorf("question %q: the instructions cannot be encoded: %v", question.Name, err)
+			}
+			question.StructuredInstructions = encoded
+		}
 		choices, hasChoices := fields["choices"].([]any)
 		levels, hasLevels := fields["levels"].([]any)
 		if hasChoices && hasLevels {
 			return nil, fmt.Errorf("question %q has both choices and levels", question.Name)
+		}
+		criteria := fields["criteria"]
+		if criteria != nil && (hasChoices || hasLevels) {
+			return nil, fmt.Errorf("question %q has criteria and also choices or levels; use one", question.Name)
 		}
 		question.Type, _ = fields["type"].(string)
 		if question.Type == "" {
@@ -343,16 +397,29 @@ func parseDecideSystemoneQuestions(raw any) ([]decideSystemoneQuestion, error) {
 			}
 		}
 		switch {
+		case question.Type == "box":
+			if err := checkDecideSystemoneBox(question.Name, fields["instructions"], criteria, hasChoices || hasLevels); err != nil {
+				return nil, err
+			}
+			questions = append(questions, question)
+			continue
 		case question.Type == "predicate" && (hasChoices || hasLevels):
 			return nil, fmt.Errorf("question %q is a predicate and takes no choices or levels", question.Name)
 		case question.Type == "choice" && hasLevels:
 			return nil, fmt.Errorf("question %q is a choice and cannot have levels; use choices, or type score", question.Name)
 		case question.Type == "score" && hasChoices:
 			return nil, fmt.Errorf("question %q is a score and cannot have choices; use levels, or type choice", question.Name)
-		case question.Type == "choice" && !hasChoices:
+		case question.Type == "choice" && !hasChoices && criteria == nil:
 			return nil, fmt.Errorf("question %q is a choice and needs choices", question.Name)
-		case question.Type == "score" && !hasLevels:
+		case question.Type == "score" && !hasLevels && criteria == nil:
 			return nil, fmt.Errorf("question %q is a score and needs levels", question.Name)
+		}
+		if criteria != nil {
+			if err := parseDecideSystemoneCriteria(&question, criteria, index, &original); err != nil {
+				return nil, err
+			}
+			questions = append(questions, question)
+			continue
 		}
 		labelKey, source := "value", choices
 		if question.Type == "score" {
@@ -388,6 +455,27 @@ func parseDecideSystemoneQuestions(raw any) ([]decideSystemoneQuestion, error) {
 		questions = append(questions, question)
 	}
 	return questions, nil
+}
+
+// checkDecideSystemoneBox refuses a box question the provider could not answer: a box is
+// located by its instructions alone, so they must name the target, and it takes no options.
+func checkDecideSystemoneBox(name string, instructions, criteria any, options bool) error {
+	meaningful := false
+	switch value := instructions.(type) {
+	case string:
+		meaningful = strings.TrimSpace(value) != ""
+	case map[string]any:
+		meaningful = len(value) > 0
+	case []any:
+		meaningful = len(value) > 0
+	}
+	switch {
+	case !meaningful:
+		return fmt.Errorf("question %q is a box and needs instructions that name the target to locate", name)
+	case criteria != nil || options:
+		return fmt.Errorf("question %q is a box and takes no criteria, choices or levels", name)
+	}
+	return nil
 }
 
 func decideSystemoneError(callID string, status tools.Status, code, summary string, information ...tools.Information) string {
