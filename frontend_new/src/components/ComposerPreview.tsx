@@ -28,6 +28,12 @@ const styles = stylex.create({
   frame: {
     width: '100%',
     minWidth: 0,
+    // The wrapping row is also a grid item with an automatic minimum width.
+    // A fenced line's intrinsic width otherwise sizes that row before our
+    // percentage width resolves, leaving the code scrollport outside the drawer.
+    // Contain only inline sizing: keep natural height and the default renderer's
+    // unwrapped, keyboard-scrollable code, but do not size ancestors from it.
+    contain: 'inline-size',
   },
   body: {
     maxHeight: '40vh',

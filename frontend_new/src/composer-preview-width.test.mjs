@@ -54,3 +54,12 @@ test('the preview styles introduce no literal colour or pixel length', () => {
   assert.doesNotMatch(declarations, /#[0-9a-fA-F]{3,8}\b/);
   assert.doesNotMatch(declarations, /\d+px/);
 });
+
+// Real layout coverage and a repeatable baseline/fixed procedure live in
+// ../test-fixtures/composer-preview.mjs; jsdom cannot exercise grid sizing.
+test('fenced code cannot contribute an intrinsic inline size to the drawer grid', () => {
+  const frame = styleBlock.slice(styleBlock.indexOf('frame: {'), styleBlock.indexOf('body: {'));
+  assert.match(frame, /contain: 'inline-size'/);
+  assert.doesNotMatch(frame, /overflow(?:X)?: '(?:hidden|clip)'/, 'do not hide inaccessible code');
+  assert.doesNotMatch(source, /components=|isWrapped/, 'preserve the default fenced-code renderer');
+});
