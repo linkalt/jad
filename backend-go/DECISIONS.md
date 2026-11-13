@@ -4983,3 +4983,44 @@ before (the v1 goldens and the T-036 suite are unchanged); every changed reader 
   rows are fixed.
 - *`deny` rewrite is per profile id in every session and workspace,* which can be stricter than the
   v1 entry (it denied the profile in the caller's session only).
+
+### Stage E: deletion sweep (done)
+
+The superseded code was deleted by the stage that replaced it; this stage checked that nothing is
+left behind. `rg` over `backend-go/internal` and `cmd` (non-test) for each removed name shows only
+the removed-key tables, the v1 paths and the migration text:
+
+- **Deleted in A:** `Layout.AcceptProfileMessagesFrom`, `AcceptsProfileMessagesFrom`, `acceptFromGlobPattern`,
+  `readProfileMessageAccept` (the key is now a removed-key error), `NamesWorkspace`,
+  `explicitLocalPrefix` and the `local:remote:` form, the colon branch of `localTarget`, the
+  "accept_from ignored" warning, the T-037 two-sided tests.
+- **Deleted in B:** `ErrContextTriggerForeignReset` and the `context_trigger_refused` answer
+  (`profile_denied` replaces it); v2 `deny_profiles` (removed key).
+- **Deleted in C/D:** the v2 reading of `token_env`, `token_file` and `default_session` (removed
+  keys in a binding), the colon form of a v2 remote address and its token-glob match, the v2
+  `<workspace>:` row globs, the migration `token_file` rebasing and its test.
+- **Kept on purpose (live in v1):** `localTarget` (v1 `sessions` and `deny_profiles`),
+  `remote.ParseProfile`/`ParseSubagent`/`Load`/`List` (v1 remote files), `matchAny` with its
+  qualified-session rule, `tokenProfiles.sessionNames` (v1 with several roots; tested by
+  `TestRemoteBareGlobTokenInV1WithSeveralRoots`), `checkProfileMessage` for v1.
+- **Check:** a script counted non-test references for every top-level name in the Go files T-040
+  touched (and, for names about profiles, remotes, messages, tokens, deny, accept or reset, in all
+  files): none is unreferenced. Two unreferenced functions turned up outside T-040 and were left
+  alone: `checkProfile` in `sessionfs/layout_profile.go` (unused since T-028 3c.2a) and
+  `currentMessage` in `httpapi/registry.go` (used only by tests). Neither is part of this work;
+  they are candidates for a separate cleanup.
+- v1 goldens were never changed by T-040 (`git diff c1ca4a2e..HEAD -- backend-go/internal/app/testdata`
+  is empty).
+
+### T-040 as a whole: open gaps
+
+- No key-issuing command; no migration of the server's token table (stage D).
+- Self-binding is recognised by address only; a message through one skips the caller's `local:` rules (stage C).
+- A `workspace.json`/`global.json` rule change needs a restart (accepted).
+- Local reach has no admission control by design ("one process, shared trust"): any profile with
+  `profile_message` reaches every session and profile of every listed workspace unless a `deny`
+  rule says otherwise. Without a sandbox nothing stops an agent from editing the files that hold
+  those rules (the same limit as the rest of the layout).
+- seatbelt (macOS) runs are untested, as in earlier phases.
+- The `profile_message` input schema text still shows the v1 wording (changing it breaks the v1
+  goldens and forces tool-definition refreshes); the generated description is layout-specific.
