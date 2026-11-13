@@ -45,16 +45,23 @@ func (c *hookCalls) counts() (resets, compacts []string) {
 	return append([]string(nil), c.resets...), append([]string(nil), c.compts...)
 }
 
+// isDenied reports whether err is the refusal of the policy by who for action.
+func isDenied(err error, by, action string) bool {
+	var denied *native.ProfileDeniedError
+	return errors.As(err, &denied) && denied.By == by && denied.Action == action
+}
+
 func withTrigger(action string, after int64) func(*native.ProfileMessageRequest) {
 	return func(request *native.ProfileMessageRequest) {
 		request.ContextTrigger = sessionfs.ProfileMessageContextTrigger{Action: action, After: after}
 	}
 }
 
-// A reset context_trigger of the caller is refused for a target of another workspace before
-// anything of the target is touched: the real reset is never run (b's transcript is the same
-// bytes, with and without the usage threshold), nothing is queued, and the refusal comes after
-// the target is found, so a workspace that is not listed still reads as unknown.
+// A reset context_trigger of the caller is refused for a target of another workspace unless the
+// target workspace's allow_reset says otherwise, before anything of the target is touched: the
+// real reset is never run (b's transcript is the same bytes, with and without the usage
+// threshold), nothing is queued, and the refusal comes after the target is found, so a
+// workspace that is not listed still reads as unknown.
 func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T) {
 	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	first, err := w.prepare(t, ownerA, "b:s1", "review/reviewer")
@@ -69,7 +76,7 @@ func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T
 	calls := w.hookTriggers()
 	for name, after := range map[string]int64{"after zero": 0, "after set": 1} {
 		plan, err := w.prepare(t, ownerA, "b:s1", "review/reviewer", withTrigger(sessionfs.ProfileMessageContextReset, after))
-		if !errors.Is(err, native.ErrContextTriggerForeignReset) || plan != nil {
+		if !isDenied(err, "workspace:b", "reset") || plan != nil {
 			t.Fatalf("%s: plan %v, err %v", name, plan, err)
 		}
 	}
@@ -81,7 +88,7 @@ func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T
 	}
 	// The real reset (no hook) leaves the file alone as well.
 	w.service.resolver.resetProfile, w.service.resolver.compactProfile = nil, nil
-	if _, err := w.prepare(t, ownerA, "b:s1", "review/reviewer", withTrigger(sessionfs.ProfileMessageContextReset, 0)); !errors.Is(err, native.ErrContextTriggerForeignReset) {
+	if _, err := w.prepare(t, ownerA, "b:s1", "review/reviewer", withTrigger(sessionfs.ProfileMessageContextReset, 0)); !isDenied(err, "workspace:b", "reset") {
 		t.Fatal(err)
 	}
 	if got := w.transcript(w.b, "s1", "review/reviewer"); got != transcript {

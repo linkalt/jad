@@ -111,7 +111,7 @@ var ownToolsetTools = map[string]map[string]ownKeyRule{
 		"profile": ownToolRule([]string{"max_entries", "scan_max_entries"},
 			refuseKeys(refusedToolReach, "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_remote", "remotes")),
 		"profile_message": ownToolRule([]string{"timeout_ms", "busy_wait_ms", "result_max_bytes", "default_block_ms"},
-			refuseKeys(refusedToolReach, "deny_profiles", "context_trigger", "remotes", "sessions", "model_choice", "sandbox_choice"),
+			refuseKeys(refusedToolReach, "deny_profiles", "deny", "context_trigger", "remotes", "sessions", "model_choice", "sandbox_choice"),
 			refuseKeys(refusedToolLimit, "max_chain", "max_queued_per_profile")),
 		"subagent": ownToolRule([]string{"result_max_bytes", "list_max_bytes", "changed_files_max", "default_block_ms", "remote_timeout_ms"},
 			refuseKeys(refusedToolReach, "agents", "deny_agents", "background_writers", "statecontext", "remotes", "model_choice", "sandbox_choice"),

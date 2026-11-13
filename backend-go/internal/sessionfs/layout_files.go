@@ -77,6 +77,12 @@ type Layout struct {
 	// file gave it and not one its own folder name or workspace.json chose. Only a listed
 	// workspace takes part in a cross-workspace profile_message (design §29).
 	Listed bool
+	// MessageDeny and MessageAllowReset are workspace.json profile_message.deny and allow_reset;
+	// GlobalMessageDeny is global.json profile_message.deny, the same for every workspace
+	// (design §30.3).
+	MessageDeny       []MessageRule
+	MessageAllowReset []MessageRule
+	GlobalMessageDeny []MessageRule
 	// MessageWorkspaces are the ids of the served workspaces global.json lists: the workspaces
 	// a profile_message may address with local:<workspace>/... (design §30). Empty unless
 	// this workspace is listed itself.

@@ -47,6 +47,9 @@ type messageWorkspaceOptions struct {
 	aProfile               string // a's dev/base file when the toolset alone is not enough
 	exec                   bool   // the tool definition of exec is loaded
 	bID                    string // the workspace id of b, "b" by default
+	talk                   string // the profile_message section of the toolset coding/talk, {"timeout_ms":60000} by default
+	global                 string // the profile_message section of global.json, none by default
+	aReviewer              bool   // a also has review/reviewer
 }
 
 func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *messageWorkspaces {
@@ -120,10 +123,14 @@ func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *mess
 		entries = append(entries, `{"id":"`+bID+`","path":"`+w.b+`"}`)
 	}
 	workspaces := strings.Join(entries, ",")
-	put(filepath.Join(global, "global.json"), `{"workspaces":[`+workspaces+`],"libraries":{"tool_definition_paths":[`+strings.Join(paths, ",")+`]}}`)
+	globalMessage := ""
+	if options.global != "" {
+		globalMessage = `,"profile_message":` + options.global
+	}
+	put(filepath.Join(global, "global.json"), `{"workspaces":[`+workspaces+`],"libraries":{"tool_definition_paths":[`+strings.Join(paths, ",")+`]}`+globalMessage+`}`)
 	put(filepath.Join(global, "models", "openai", "default.json"), `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY","base_url":"`+provider.URL+`/v1"}`)
 	put(filepath.Join(global, "tools", "coding", "none.json"), `{"native":{},"mcp":{}}`)
-	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":{"timeout_ms":60000}},"mcp":{}}`)
+	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":`+orDefault(options.talk, `{"timeout_ms":60000}`)+`},"mcp":{}}`)
 	put(filepath.Join(global, "tools", "coding", "exec.json"), `{"native":{"exec":{"spill":{"enabled":false}}},"mcp":{}}`)
 	put(filepath.Join(w.a, ".jad", "workspace.json"), orDefault(options.aWorkspace, `{}`))
 	put(filepath.Join(w.b, ".jad", "workspace.json"), orDefault(options.bWorkspace, `{}`))
@@ -132,6 +139,9 @@ func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *mess
 	}
 	put(filepath.Join(w.b, ".jad", "sessions", "only-b.json"), `{"schema_version":1}`)
 	put(filepath.Join(w.a, ".jad", "profiles", "dev", "base.json"), orDefault(options.aProfile, `{"models":["openai/default"],"model_default":"openai/default","toolset":"`+orDefault(options.aToolset, "coding/none")+`"}`))
+	if options.aReviewer {
+		put(filepath.Join(w.a, ".jad", "profiles", "review", "reviewer.json"), `{"models":["openai/default"],"model_default":"openai/default"}`)
+	}
 	put(filepath.Join(w.b, ".jad", "profiles", "dev", "base.json"), `{"models":["openai/default"],"model_default":"openai/default","toolset":"`+orDefault(options.bToolset, "coding/none")+`"}`)
 	put(filepath.Join(w.b, ".jad", "profiles", "review", "reviewer.json"), orDefault(options.bReviewer, `{"models":["openai/default"],"model_default":"openai/default"}`))
 	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: w.a, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOME": home, "FIXTURE_KEY": "key"}})

@@ -64,11 +64,9 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		if targetReference, foreign, err = m.otherSession(reference, request.Session, target); err != nil {
 			return nil, err
 		}
-		if foreign && request.ContextTrigger.Action == sessionfs.ProfileMessageContextReset {
-			// Refused before the target is looked at further, queued or run, and after the
-			// target's workspace has accepted the caller, so the refusal tells nothing new.
-			return nil, native.ErrContextTriggerForeignReset
-		}
+	}
+	if err := m.checkPolicy(request, reference, caller, targetReference, target); err != nil {
+		return nil, err
 	}
 	if request.Session == "" && target == caller {
 		return nil, native.ErrProfileCycle
@@ -309,4 +307,41 @@ func otherProfileError(ownerKey, profile string, err error) error {
 		return fmt.Errorf("profile %s: one of its own toolsets could not be loaded", profile)
 	}
 	return fmt.Errorf("profile %s: its selected model could not be loaded", profile)
+}
+
+// checkPolicy judges the call by the profile_message policy of the workspace layout (design
+// §30.3) before the target is looked at further, queued, reset, compacted or run: the global
+// rules, the deny rules of the caller's and the target's workspace, and a reset across
+// workspaces against the target workspace's allow_reset. A refusal names who refused and the
+// action, never a path or a rule. Outside the workspace layout there is no policy here (v1's
+// deny_profiles is the tool's).
+func (m profileMessenger) checkPolicy(request native.ProfileMessageRequest, callerReference, caller, targetReference, target string) error {
+	if !sessionfs.WorkspaceLayout(m.resolver.roots) {
+		return nil
+	}
+	from, err := sessionfs.Resolve(m.resolver.roots, callerReference)
+	if err != nil {
+		return native.ErrProfileUnknown
+	}
+	to, err := sessionfs.Resolve(m.resolver.roots, targetReference)
+	if err != nil {
+		return native.ErrProfileUnknown
+	}
+	actions := []string{sessionfs.MessageActionMessage}
+	switch request.ContextTrigger.Action {
+	case sessionfs.ProfileMessageContextReset:
+		actions = append(actions, sessionfs.MessageActionReset)
+	case sessionfs.ProfileMessageContextCompact:
+		actions = append(actions, sessionfs.MessageActionCompact)
+	}
+	if request.Model != "" {
+		actions = append(actions, sessionfs.MessageActionModelChoice)
+	}
+	fromAddress := sessionfs.MessageRef{Workspace: from.Root.ID, Session: from.SessionID, Profile: caller}.Canonical()
+	toAddress := sessionfs.MessageRef{Workspace: to.Root.ID, Session: to.SessionID, Profile: target}.Canonical()
+	policy := sessionfs.PolicyOf(from.Root.Layout, to.Root.Layout, from.Root.ID, to.Root.ID)
+	if refusal := policy.Check(fromAddress, toAddress, actions); refusal != nil {
+		return &native.ProfileDeniedError{By: refusal.By, Action: refusal.Action}
+	}
+	return nil
 }

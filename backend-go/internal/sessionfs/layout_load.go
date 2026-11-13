@@ -156,6 +156,7 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		config.SelfEditPaths = layout.selfEditPaths()
 		if settings := config.NativeProfileMessage; settings != nil {
 			settings.Caller.Profile = entry.ID()
+			settings.GlobalDeny, settings.WorkspaceDeny = layout.GlobalMessageDeny, layout.MessageDeny
 			if layout.Listed {
 				settings.Workspaces = otherThan(layout.MessageWorkspaces, settings.Caller.Workspace)
 			}

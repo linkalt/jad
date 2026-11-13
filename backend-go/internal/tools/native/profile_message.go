@@ -86,12 +86,15 @@ func (e *ContextTriggerError) Error() string {
 
 func (e *ContextTriggerError) Unwrap() error { return e.Err }
 
-// ErrContextTriggerForeignReset is returned by a ProfileMessenger when the caller's
-// context_trigger is reset and the target is in another workspace. Nothing is sent and nothing
-// of the target is touched: the trigger comes from the caller's settings, which can come with a
-// cloned repository, and the target workspace allowing the caller to message it did not allow
-// the caller to clear its history before every message. A compact is not refused.
-var ErrContextTriggerForeignReset = errors.New("context_trigger reset is not allowed across workspaces")
+// ProfileDeniedError is returned by a ProfileMessenger when the profile_message policy refuses
+// the call (design §30.3): By is who refused (global, workspace:<id>) and Action what was refused
+// (message, reset, compact or model_choice). Nothing was sent, queued, reset or compacted. It
+// names no path and no rule.
+type ProfileDeniedError struct{ By, Action string }
+
+func (e *ProfileDeniedError) Error() string {
+	return "profile_message to this profile is denied by " + e.By + " (" + e.Action + ")"
+}
 
 // ProfileTranscriptLabels is optionally implemented by a plan whose target transcript path must
 // not be shown to the model (the target is in another workspace): the text the tool shows for
@@ -416,7 +419,7 @@ func newProfileMessageTool(settings sessionfs.NativeProfileMessageSettings, suba
 			ID:          profileMessageToolID,
 			Source:      "native",
 			Name:        "profile_message",
-			Description: profileMessageDescription + profileMessageListText(settings, targets, remoteNames) + sandboxChoiceText(settings.SandboxChoices),
+			Description: profileMessageDescription + profileMessageListText(settings, settings.ShownTargets(targets), remoteNames) + sandboxChoiceText(settings.SandboxChoices),
 			InputSchema: schema,
 		},
 		Validator:          validator,
@@ -507,6 +510,9 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 			return p.unknownProfile(callID, profile), nil
 		}
 		session, target, label = address.session, address.target, address.label()
+		if refusal := p.settings.DeniedBy(label, p.requestedActions(model)); refusal != nil {
+			return p.deniedAnswer(callID, label, refusal), nil
+		}
 	} else {
 		var allowed bool
 		if session, target, allowed = p.localTarget(profile); !allowed {
@@ -554,6 +560,10 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 	if errors.As(err, &sandboxErr) {
 		return tools.ExecutionError(callID, tools.StatusForbidden, "sandbox_widens",
 			fmt.Sprintf("Profile %s cannot be messaged from this run: its sandbox reaches more than this run's (%s)", label, sandboxErr.Message)), nil
+	}
+	var denied *ProfileDeniedError
+	if errors.As(err, &denied) {
+		return p.deniedAnswer(callID, label, &sessionfs.MessageRefusal{By: denied.By, Action: denied.Action}), nil
 	}
 	var modelErr *ProfileModelError
 	if errors.As(err, &modelErr) {
@@ -670,8 +680,6 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 		return "profile_no_answer", fmt.Sprintf("Profile %s finished without an answer", profile)
 	case errors.Is(err, ErrProfileChainTooLong):
 		return "profile_chain_too_long", fmt.Sprintf("Profile %s cannot be messaged from here: the chain of profile messages would pass tools.native.profile_message.max_chain (%d)", profile, p.settings.MaxChain)
-	case errors.Is(err, ErrContextTriggerForeignReset):
-		return "context_trigger_refused", fmt.Sprintf("Profile %s was not sent the message: this run's context_trigger is reset, and a reset of a profile in another workspace is not allowed. Nothing was sent or changed", profile)
 	case errors.Is(err, ErrRunTreeParentGone):
 		return "profile_unavailable", fmt.Sprintf("Profile %s cannot be messaged from here: %s", profile, err)
 	case errors.Is(err, ErrRunTreeLimit):
@@ -699,6 +707,11 @@ func (p *profileMessageTool) failure(profile string, err error) (code, message s
 		message += ": " + failed.Message
 	}
 	return "profile_failed", message
+}
+
+// profileDeniedText says who refused and what; the message was not sent and nothing was changed.
+func profileDeniedText(profile, by, action string) string {
+	return fmt.Sprintf("Profile %s was not messaged: %s is denied by %s. Nothing was sent, reset or changed", profile, action, by)
 }
 
 func profileBusyText(profile string, err error) string {

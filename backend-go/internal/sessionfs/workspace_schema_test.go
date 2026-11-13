@@ -43,14 +43,27 @@ func TestWorkspaceSchemasAgreeWithTheLoader(t *testing.T) {
 			t.Errorf("global.json %s is accepted", refused)
 		}
 	}
+	if !schemaAccepts(t, global, `{"profile_message":{"deny":[{"from":"local:scratch/*/*/*"},{"to":"local:*/*/ops/*","actions":["reset"]}]}}`) {
+		t.Error("a global.json with deny rules is refused")
+	}
+	for _, refused := range []string{`{"profile_message":{"allow_reset":[{}]}}`, `{"profile_message":{"accept_from":["a"]}}`, `{"profile_message":{"deny":[{"to":"x"}]}}`} {
+		if schemaAccepts(t, global, refused) {
+			t.Errorf("global.json %s is accepted", refused)
+		}
+	}
 	workspace := compileSchema(t, "workspace.schema.json")
 	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"},"libraries":{"prompt_dirs":["prompts"],"skill_dirs":["skills"],"tool_definition_paths":["tools_defintion/native/exec.json"]}}`) {
 		t.Error("a valid workspace.json is refused")
 	}
-	if !schemaAccepts(t, workspace, `{"profile_message":{}}`) {
-		t.Error("a workspace.json with an empty profile_message is refused")
+	for _, accepted := range []string{`{"profile_message":{}}`, `{"profile_message":{"deny":[{},{"from":"local:scratch/*/*/*"},{"to":"remote:box-*/*/review/*","actions":["reset","compact"]}],"allow_reset":[{"from":"local:app/*/dev/*","to":"local:w/*/review/*"},{}]}}`} {
+		if !schemaAccepts(t, workspace, accepted) {
+			t.Errorf("workspace.json %s is refused", accepted)
+		}
 	}
-	for _, refused := range []string{`{"profile_message":{"accept_from":["a","b-*"]}}`, `{"profile_message":{"accept":["a"]}}`} {
+	for _, refused := range []string{`{"profile_message":{"accept_from":["a","b-*"]}}`, `{"profile_message":{"accept":["a"]}}`,
+		`{"profile_message":{"deny":[{"to":"review/*"}]}}`, `{"profile_message":{"deny":[{"from":"remote:b/*/*/*"}]}}`, `{"profile_message":{"deny":[{"actions":[]}]}}`,
+		`{"profile_message":{"deny":[{"actions":["delete"]}]}}`, `{"profile_message":{"deny":[{"x":"y"}]}}`, `{"profile_message":{"deny":[{},{}]}}`,
+		`{"profile_message":{"allow_reset":[{"actions":["reset"]}]}}`, `{"profile_message":{"allow_reset":[{"to":"remote:b/*/*/*"}]}}`} {
 		if schemaAccepts(t, workspace, refused) {
 			t.Errorf("workspace.json %s is accepted", refused)
 		}

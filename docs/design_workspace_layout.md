@@ -1466,6 +1466,10 @@ now says so. A unit test must not read `$HOME`; `jad check` judges the global fi
 
 ## 28. profile_message and the workspace layout (T-036)
 
+> Superseded for the workspace layout by §30 where they differ: the local address forms
+> (`<workspace>:<session>`, `local:remote:`) are gone and the qualified remote form is replaced
+> by bindings (stage C). v1 is as described.
+
 The user said `profile_message` still addressed only a session. Decider ruling for T-036 (step 41.6
 of the decider transcript), checked against the code before it was built.
 
@@ -1555,6 +1559,10 @@ is now pinned by `TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas`.
   the server's own entry is stopped by max_hops, not by cycle detection.
 
 ## 29. profile_message across workspaces, locally (T-037)
+
+> Superseded by §30: the target's consent (`accept_from`), the caller's colon `sessions` globs and
+> the reset refusal are replaced by listed-workspace trust, `deny` and the target's `allow_reset`.
+> The sandbox rules below still hold.
 
 The user asked to allow workspace to workspace for the local `profile_message`. This reverses Q6
 for `profile_message` only; it was checked against the code before it was built (decider T-037,
@@ -1722,7 +1730,56 @@ miss with the same `unknown_profile`.
   other profile still gets the tool, and `jad check` no longer calls that a mistake.
 - Sandbox, depth, `max_chain`, cycle, same-transcript and queue rules are unchanged (§29's sandbox
   table still holds: a sandboxed caller needs a target sandbox of its own across workspaces).
-- A reset `context_trigger` across workspaces is still refused in this stage; stage B replaces
-  the refusal with the target's `allow_reset`.
+- A reset `context_trigger` across workspaces needs the target's `allow_reset` (§30.3).
 - No credential is read and no HTTP is made on a local call: the local path never touches the
   remote directory.
+
+### 30.3 Policy: `deny` and the target's `allow_reset` (stage B, built)
+
+A call proceeds only if the address resolves, no applicable `deny` rule matches, a reset across
+workspaces matches the target workspace's `allow_reset`, and the existing checks pass. There is no
+rule order and `allow_reset` cannot override a `deny`.
+
+| Place | Applies to | Keys |
+|---|---|---|
+| caller toolset `tools.native.profile_message.deny` | calls made by profiles that use the toolset | `to`, `actions` (`from` is a load error) |
+| `W/.jad/workspace.json` `profile_message.deny` | every local call that touches W, as caller or as target | `from`, `to`, `actions` |
+| `W/.jad/workspace.json` `profile_message.allow_reset` | resets of W's profiles from another workspace | `from`, `to` (its workspace must be W's own id) |
+| `G/global.json` `profile_message.deny` | every local call | `from`, `to`, `actions` |
+
+- *Rules.* `{from?, to?, actions?}`; a missing `from` or `to` is any. Patterns are canonical
+  addresses (`local:<ws>/<session>/<category>/<name>`, and `remote:<binding>/...` for `to`), each of
+  the four segments a glob over `[A-Za-z0-9._*?-]`; `*` and `?` never cross `/`; no classes, no
+  negation, no short forms. Matching uses the expanded canonical address, so `reviewer`,
+  `s1/review/reviewer` and `local:a/s1/review/reviewer` are one profile to a rule.
+- *Actions.* `message` (the default) refuses the whole call and implies the rest; `reset` and
+  `compact` refuse a call whose caller's `context_trigger` has that action (judged before anything
+  is queued, whether or not the trigger would fire, as in T-037b); `model_choice` refuses a call
+  that names a model. A reset-only rule leaves the plain message alone.
+- *"Touching W".* One list for both directions: `{}` in W means W neither sends nor receives; a
+  rule `{"to": "local:billing/*/*/*"}` in `app` means `app` never sends to `billing`. It also
+  applies to calls inside W.
+- *Reset across workspaces* is allowed only when the target workspace's `allow_reset` has a rule
+  matching the caller and the target (none, or an empty list: refused). A reset inside one
+  workspace needs no rule. A refused reset refuses the call: it is never sent without the reset.
+- *Errors.* `profile_denied` (forbidden): `by` is `caller`, `workspace:<id>` or `global`, plus the
+  `action` and the canonical target; no path and no rule text. The first refusal names the error,
+  in this order: the caller's toolset (answered before anything is looked up), `global.json`, the
+  caller's workspace, the target's workspace, then `allow_reset`. A refusal that follows the
+  lookup comes after it, so a target that does not exist is `unknown_profile`, as before.
+- *Description.* The tool lists the caller's own-session profiles that no rule refuses as a whole;
+  a refused profile is still addressable (and answered `profile_denied`), only not advertised.
+  Other workspaces' sessions and profiles are never listed.
+- *Load errors* (file and key named): an unknown key or action, a bad pattern, a repeated rule or
+  action, `from` in a toolset, `remote:` in a `from`, an `allow_reset.to` outside the workspace,
+  `actions` or a non-local `to` in `allow_reset`, `allow_reset` in `global.json`, and `deny` in the
+  v1 layout. `deny_profiles` and `sessions` in a v2 toolset are removed keys; the hint for
+  `deny_profiles` gives the replacement `{"to": "local:*/*/<category>/<profile>"}` per entry, which
+  refuses at least what the entry refused (the entry named a profile in every session of the
+  caller's workspace). v1 keeps `deny_profiles`.
+- *Who can change them.* `workspace.json` and `global.json` are read-only in every sandbox and not
+  self-edit targets; `deny` is refused in an own toolset and `profile_message` in a profile file
+  (tested at `on` and `full`).
+- Not covered here (stage C): incoming remote messages are judged by the same rules without a
+  caller address, so `global.json` and the target workspace's rules without `from` apply to them;
+  rules with `from` never match a remote caller.

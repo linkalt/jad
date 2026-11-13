@@ -68,13 +68,12 @@ func TestProfileMessageRejectsTraversalInASessionTarget(t *testing.T) {
 	}
 }
 
-// A refused cross-workspace reset is its own error code, not a failed reset that "may need
-// attention", and it says nothing was sent or changed.
-func TestProfileMessageForeignResetRefusalIsItsOwnAnswer(t *testing.T) {
-	settings := crossSessionSettings()
-	messenger := &fakeMessenger{prepareErr: ErrContextTriggerForeignReset}
-	output := callProfileMessage(t, settings, messenger, `{"profile":"shared/review/reviewer","message":"hi"}`)
-	for _, want := range []string{"error_code: context_trigger_refused", "Nothing was sent or changed"} {
+// A call the policy refuses is its own answer, not a failed run: who refused and what, and that
+// nothing was sent, reset or changed. It names no path and no rule.
+func TestProfileMessagePolicyRefusalIsItsOwnAnswer(t *testing.T) {
+	messenger := &fakeMessenger{prepareErr: &ProfileDeniedError{By: "workspace:b", Action: "reset"}}
+	output := callProfileMessage(t, crossSessionSettings(), messenger, `{"profile":"shared/review/reviewer","message":"hi"}`)
+	for _, want := range []string{"error_code: profile_denied", "Nothing was sent, reset or changed", "reset is denied by workspace:b", `"status":"forbidden"`} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output lacks %q: %s", want, output)
 		}

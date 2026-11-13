@@ -101,6 +101,21 @@
       },
       "additionalProperties": false
     },
+    "profile_message": {
+      "type": "object",
+      "description": "The profile_message policy that applies to every workspace (docs/design_workspace_layout.md §30.3). Only deny exists here: the consent and the reset allowance belong to each workspace's own workspace.json.",
+      "properties": {
+        "deny": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "workspace.schema.json#/$defs/denyRule"
+          },
+          "description": "Calls refused everywhere, local and incoming remote ones alike (a rule with from never matches a remote caller). The refusal is profile_denied with by global."
+        }
+      },
+      "additionalProperties": false
+    },
     "profile_self_edit": {
       "enum": [
         "off",

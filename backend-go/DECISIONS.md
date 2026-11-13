@@ -4861,3 +4861,22 @@ colon form (stage C). v1 keeps every behaviour; the v1 goldens are unchanged.
 - Operator impact (reported, not edited): a toolset that sets `tools.native.profile_message.sessions`
   fails to load in v2 until the key is removed; a `workspace.json` with `profile_message.accept_from`
   fails to load until it is removed.
+
+### Stage B: `deny` and `allow_reset` (built)
+
+- One general `deny` rule list in a caller toolset, `workspace.json` and `global.json`; the
+  target's `allow_reset` for resets across workspaces (design §30.3). `profile_denied` with `by`
+  and `action` replaces the T-037b `context_trigger_refused` answer
+  (`native.ErrContextTriggerForeignReset` deleted). v2 `deny_profiles` is a removed key with an
+  exact replacement hint; v1 keeps it.
+- Rules are compiled at load; the messenger judges every v2 call once (`checkPolicy`), the tool
+  judges the caller's own toolset rules first (before any lookup). A refusal after the lookup
+  follows it, so a missing target is still `unknown_profile`.
+- Global and workspace rules are read at start, like every `workspace.json` setting: a change needs a
+  restart (accepted); a toolset's `deny` applies from the next run.
+- Judgement call: `allow_reset.to` must name the workspace's own id literally (not a glob), so a
+  rule can never allow a reset outside the workspace that wrote it.
+- Judgement call: a `{}` rule in `global.json` or a workspace closes every call; this is the user's
+  "empty denies", and is documented in the schemas.
+- Open: nothing changes the reset trigger's own meaning; a reset inside a workspace is still
+  unconditional. Incoming remote messages are covered in stage C.

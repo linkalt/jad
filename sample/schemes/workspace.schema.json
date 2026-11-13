@@ -52,8 +52,25 @@
     },
     "profile_message": {
       "type": "object",
-      "description": "The profile_message policy of this workspace (docs/design_workspace_layout.md §30). Workspaces listed in G/global.json workspaces trust each other: a profile reaches any profile of any listed workspace by local:<workspace>/<session>/<category>/<name>, and the target workspace's consent (accept_from) no longer exists. accept_from was removed and is refused by name. This file is read-only in every sandbox and a profile cannot change it.",
-      "properties": {},
+      "description": "The profile_message policy of this workspace (docs/design_workspace_layout.md §30.3). Workspaces listed in G/global.json workspaces trust each other: a profile reaches any profile of any listed workspace by local:<workspace>/<session>/<category>/<name>; the consent of the target (accept_from) no longer exists and is refused by name. deny rules only refuse; allow_reset is the one thing this workspace can allow. This file is read-only in every sandbox and a profile cannot change it.",
+      "properties": {
+        "deny": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/denyRule"
+          },
+          "description": "Calls this workspace refuses, one list for both directions: a rule that matches a call whose caller or target is in this workspace refuses it (so {} means this workspace neither sends nor receives profile_message). A rule without from matches any caller, including a remote one; a rule with from matches local callers only. The refusal is profile_denied with by workspace:<id>, never a path or a rule."
+        },
+        "allow_reset": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/allowResetRule"
+          },
+          "description": "Resets of this workspace's profiles that a profile of another workspace may cause with a reset context_trigger. Absent or empty: refused (profile_denied, action reset), and the call is not sent without the reset. A deny rule that matches wins. Resets inside this workspace need no rule, and a remote caller cannot reset."
+        }
+      },
       "additionalProperties": false
     },
     "profile_self_edit": {
@@ -65,5 +82,54 @@
       "description": "The profile_self_edit level of this workspace: off, on or full (see global.schema.json). It can only lower the level of G/global.json (on when unset): a workspace that sets full while global.json does not stays on."
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "localPattern": {
+      "type": "string",
+      "pattern": "^local:[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+$",
+      "description": "A glob over a canonical local address local:<workspace>/<session>/<category>/<name>: '*' and '?' never cross a '/', there are no classes and no short forms."
+    },
+    "anyPattern": {
+      "type": "string",
+      "pattern": "^(local|remote):[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+/[A-Za-z0-9._*?-]+$",
+      "description": "A glob over a canonical address, local:<workspace>/<session>/<category>/<name> or remote:<binding>/<session>/<category>/<name>."
+    },
+    "denyRule": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localPattern",
+          "description": "The calling profile (a local address); any caller when absent."
+        },
+        "to": {
+          "$ref": "#/$defs/anyPattern",
+          "description": "The target profile; any target when absent."
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["message", "reset", "compact", "model_choice"]
+          },
+          "description": "What the rule refuses. message (the default) refuses the whole call and so implies the others; reset and compact refuse a call whose caller's context_trigger has that action (judged before anything is queued); model_choice refuses a call that names a model."
+        }
+      },
+      "additionalProperties": false
+    },
+    "allowResetRule": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/localPattern",
+          "description": "The calling profile (a local address); any caller when absent."
+        },
+        "to": {
+          "$ref": "#/$defs/localPattern",
+          "description": "The target profile; its workspace must be this workspace's own id. Any profile of this workspace when absent."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

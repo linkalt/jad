@@ -28,7 +28,7 @@ const DefaultNativeAgentBlockMs int64 = 120_000
 const DefaultProfileMessageMaxChain = 2
 
 var (
-	nativeProfileMessageKeys = []string{"deny_profiles", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
+	nativeProfileMessageKeys = []string{"deny_profiles", "deny", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
 	// Same shape as the HTTP layer's profile name pattern; existence is not checked at load.
 	profileMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -89,12 +89,25 @@ type NativeProfileMessageSettings struct {
 	// the listed workspaces of this process, when the caller's own workspace is listed too. It
 	// only feeds the tool's description; the messenger decides.
 	Workspaces []string `json:"-"`
+	// Deny are the toolset's deny rules (workspace layout; tools.native.profile_message.deny):
+	// calls this toolset's profiles may not make. GlobalDeny and WorkspaceDeny are the rules of
+	// G/global.json and of the caller's workspace.json, set by the session loader; the messenger
+	// judges every call by all three again, this copy only keeps denied profiles out of the tool
+	// description.
+	Deny          []MessageRule `json:"-"`
+	GlobalDeny    []MessageRule `json:"-"`
+	WorkspaceDeny []MessageRule `json:"-"`
 }
 
 // removedProfileMessageSessionsHint: in the workspace layout the sessions globs no longer gate
 // anything; a profile reaches any profile of a session of its workspace and of a listed
 // workspace, and what it may not reach is a deny rule (design §30).
-const removedProfileMessageSessionsHint = "other sessions and listed workspaces are reachable without it, written <session>/<category>/<profile> or local:<workspace>/<session>/<category>/<profile>; delete the key"
+const removedProfileMessageSessionsHint = "other sessions and listed workspaces are reachable without it, written <session>/<category>/<profile> or local:<workspace>/<session>/<category>/<profile>; delete the key, and use deny to restrict what a profile may reach"
+
+// removedProfileMessageDenyProfilesHint: deny_profiles named profiles by <category>/<profile> in
+// the caller's workspace; deny is the one general rule list. The replacement for each entry is
+// {"to": "local:*/*/<category>/<profile>"}, which refuses at least what the entry refused.
+const removedProfileMessageDenyProfilesHint = `replace each entry <category>/<profile> with a deny rule {"to": "local:*/*/<category>/<profile>"} in tools.native.profile_message.deny, and delete the key`
 
 // normalizeNativeProfileMessageSettings reads tools.native.profile_message. caller is the
 // calling session in the workspace layout (v2) and the zero value in v1, whose keys and
@@ -139,6 +152,18 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	}
 	if _, removed := fields["sessions"]; removed && caller.Workspace != "" {
 		return nil, configError("%s: %s.sessions was removed in the workspace layout; %s", settingPath, section, removedProfileMessageSessionsHint)
+	}
+	if _, removed := fields["deny_profiles"]; removed && caller.Workspace != "" {
+		return nil, configError("%s: %s.deny_profiles was removed in the workspace layout; %s", settingPath, section, removedProfileMessageDenyProfilesHint)
+	}
+	var deny []MessageRule
+	if raw, present := fields["deny"]; present {
+		if caller.Workspace == "" {
+			return nil, configError("%s: %s.deny is a key of the workspace layout; the v1 layout uses deny_profiles", settingPath, section)
+		}
+		if deny, err = parseMessageRules(raw, settingPath+": "+section+".deny", false, true, ""); err != nil {
+			return nil, err
+		}
 	}
 	denyProfiles, err := normalizeProfileMessageDenyProfiles(fields["deny_profiles"], settingPath, section)
 	if err != nil {
@@ -191,7 +216,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{Caller: caller, ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
+	return &NativeProfileMessageSettings{Caller: caller, Deny: deny, ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.

@@ -198,7 +198,7 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
-		tool.Definition.Description = definition.Description + profileMessageListText(*config.NativeProfileMessage, targets, remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
+		tool.Definition.Description = definition.Description + profileMessageListText(*config.NativeProfileMessage, config.NativeProfileMessage.ShownTargets(targets), remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
 		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}

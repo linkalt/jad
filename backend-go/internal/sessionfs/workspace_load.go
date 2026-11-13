@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +28,7 @@ const (
 )
 
 var (
-	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries", profileSelfEditKey}
+	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries", profileSelfEditKey, profileMessageKey}
 	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries", profileSelfEditKey, profileMessageKey}
 	workspaceEntryKeys   = []string{"id", "label", "path"}
 	// globalCatalogKeys are the catalogs global.json may move; profiles and state belong to
@@ -150,6 +151,9 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 
 	base, err := globalLayout(setting, where, global)
 	if err != nil {
+		return Config{}, err
+	}
+	if base.GlobalMessageDeny, _, err = readProfileMessage(setting, where, ""); err != nil {
 		return Config{}, err
 	}
 	globalDefaults, err := workspaceDefaults(setting, where, global, global, home)
@@ -554,12 +558,14 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	if err != nil {
 		return nil, err
 	}
-	if err := readProfileMessage(spec.setting, where); err != nil {
+	messageDeny, messageAllowReset, err := readProfileMessage(spec.setting, where, spec.id)
+	if err != nil {
 		return nil, err
 	}
 	layout := base
 	layout.ProfileSelfEdit = effectiveSelfEdit(base.ProfileSelfEdit, ownSelfEdit)
 	layout.Listed = spec.listed
+	layout.MessageDeny, layout.MessageAllowReset = messageDeny, messageAllowReset
 	builtIn := map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}
 	layout.Defaults = mergeSettings(mergeSettings(builtIn, globalDefaults), own)
 	layout.DefaultLayers = []SettingLayer{{Name: SettingLayerBuiltIn, Values: builtIn}, {Name: SettingLayerGlobal, Values: globalDefaults}, {Name: SettingLayerWorkspace, Values: own}}
@@ -603,21 +609,34 @@ const profileMessageKey = "profile_message"
 // another workspace. Listed workspaces now trust each other (design §30).
 const removedAcceptFromHint = "cross-workspace messages are open between the workspaces global.json lists; delete the key"
 
-// readProfileMessage reads workspace.json profile_message.
-func readProfileMessage(setting map[string]json.RawMessage, where string) error {
+// readProfileMessage reads the profile_message section of workspace.json (deny and allow_reset)
+// or, with ownWorkspace empty, of global.json (deny only). id is the workspace's id; an
+// allow_reset rule may name only the workspace's own profiles.
+func readProfileMessage(setting map[string]json.RawMessage, where, ownWorkspace string) (deny, allowReset []MessageRule, err error) {
 	raw, exists := setting[profileMessageKey]
 	if !exists {
-		return nil
+		return nil, nil, nil
 	}
 	var section map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &section); err != nil || section == nil {
-		return configError("%s: %s must be an object", where, profileMessageKey)
+		return nil, nil, configError("%s: %s must be an object", where, profileMessageKey)
 	}
-	for key := range section {
-		if key == "accept_from" {
-			return configError("%s: %s.accept_from was removed; %s", where, profileMessageKey, removedAcceptFromHint)
+	for _, key := range slices.Sorted(maps.Keys(section)) {
+		switch {
+		case key == "accept_from":
+			return nil, nil, configError("%s: %s.accept_from was removed; %s", where, profileMessageKey, removedAcceptFromHint)
+		case key == "deny", key == "allow_reset" && ownWorkspace != "":
+		case key == "allow_reset":
+			return nil, nil, configError("%s: %s.allow_reset belongs in the workspace.json of the workspace whose profiles may be reset; global.json has deny only", where, profileMessageKey)
+		default:
+			return nil, nil, configError("%s: %s.%s is not a key (deny, allow_reset)", where, profileMessageKey, key)
 		}
-		return configError("%s: %s.%s is not a key", where, profileMessageKey, key)
 	}
-	return nil
+	if deny, err = parseMessageRules(section["deny"], where+": "+profileMessageKey+".deny", true, true, ""); err != nil {
+		return nil, nil, err
+	}
+	if allowReset, err = parseMessageRules(section["allow_reset"], where+": "+profileMessageKey+".allow_reset", true, false, ownWorkspace); err != nil {
+		return nil, nil, err
+	}
+	return deny, allowReset, nil
 }
