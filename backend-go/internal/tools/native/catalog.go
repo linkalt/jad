@@ -131,11 +131,13 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 			return CatalogSections{}, err
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
-		remotes, _, err := remoteDirectory(config, "transcript", config.NativeTranscript.Remotes, messenger)
+		remotes, remoteNames, err := remoteDirectory(config, "transcript", config.NativeTranscript.Remotes, messenger)
 		if err != nil {
 			return CatalogSections{}, err
 		}
-		tool, err := NewTranscriptToolWithRemotes(*config.NativeTranscript, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager, remotes)
+		transcriptSettings := *config.NativeTranscript
+		transcriptSettings.Remotes = remoteNames
+		tool, err := NewTranscriptToolWithRemotes(transcriptSettings, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, subagentManager, remotes)
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -149,11 +151,13 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		}
 		profiles, _ := messenger.(TranscriptProfiles)
 		sessions, _ := messenger.(TranscriptSessions)
-		remotes, _, err := remoteDirectory(config, "transcripts", config.NativeTranscripts.Remotes, messenger)
+		remotes, remoteNames, err := remoteDirectory(config, "transcripts", config.NativeTranscripts.Remotes, messenger)
 		if err != nil {
 			return CatalogSections{}, err
 		}
-		tool, err := NewTranscriptsToolWithRemotes(*config.NativeTranscripts, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager, remotes)
+		transcriptsSettings := *config.NativeTranscripts
+		transcriptsSettings.Remotes = remoteNames
+		tool, err := NewTranscriptsToolWithRemotes(transcriptsSettings, TranscriptFiles{Messages: config.StoragePaths.Messages, Backup: config.StoragePaths.MessagesBackup}, profiles, sessions, subagentManager, remotes)
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}
@@ -194,7 +198,9 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 && config.NativeProfileMessage.Caller.Workspace == "" {
 			return CatalogSections{}, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
-		tool, err := newProfileMessageTool(*config.NativeProfileMessage, config.NativeSubagent, targets, messenger, asyncHost, remotes)
+		messageSettings := *config.NativeProfileMessage
+		messageSettings.Remotes = remoteNames
+		tool, err := newProfileMessageTool(messageSettings, config.NativeSubagent, targets, messenger, asyncHost, remotes)
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
@@ -218,10 +224,11 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if profileMessageTool != nil {
 			childPool = append(append([]tools.Tool(nil), loaded...), *profileMessageTool)
 		}
-		subagentRemotes, _, err := remoteDirectory(config, "subagent", subagentSettings.Remotes, messenger)
+		subagentRemotes, subagentRemoteNames, err := remoteDirectory(config, "subagent", subagentSettings.Remotes, messenger)
 		if err != nil {
 			return CatalogSections{}, err
 		}
+		subagentSettings.Remotes = subagentRemoteNames
 		// A caller without MCP wiring still gets the nested hooks, so the handle is never nil here.
 		if mcp == nil {
 			mcp = NewSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
@@ -688,15 +695,32 @@ func remoteDirectory(config sessionfs.SessionConfig, tool string, names []string
 		return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s.remotes needs a catalog-layout session with a remotes folder", config.SettingPath, tool)}
 	}
 	directory := provider.RemoteDirectory(config.RemotesDir)
-	available, _ := remote.List(config.RemotesDir)
+	if config.WorkspaceLayout {
+		// The one place a credential is chosen: the session's effective keys, by binding. Every
+		// remote tool reads its entries and clients through this directory.
+		scope := remote.Scope{Workspace: true, Keys: make(map[string]remote.Key, len(config.RemoteKeys))}
+		for binding, key := range config.RemoteKeys {
+			scope.Keys[binding] = remote.Key{Name: key.Name, File: key.File}
+		}
+		directory = directory.Scoped(scope)
+	}
+	available, _ := directory.List()
 	have := make([]string, 0, len(available))
 	for _, entry := range available {
 		have = append(have, entry.Name)
 	}
+	usable := make([]string, 0, len(names))
 	for _, name := range names {
-		if _, err := directory.Entry(name); err != nil {
+		entry, err := directory.Entry(name)
+		if err != nil {
 			return nil, nil, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: tools.native.%s.remotes names remote %q: %v (remotes in %s: %s)", config.SettingPath, tool, name, remoteProblem(name, err), config.RemotesDir, strings.Join(have, ", "))}
 		}
+		// A binding this session has no key for is listed but cannot be used: it is left out of
+		// the tool, which answers unknown_remote for it (jad check warns about it).
+		if entry.Keyed() {
+			usable = append(usable, name)
+		}
 	}
+	names = usable
 	return directory, names, nil
 }

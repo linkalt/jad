@@ -1,123 +1,19 @@
 package app
 
 import (
-	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"jad/backend-go/internal/remoteapi"
 )
 
-// A token whose globs are written for bare session ids can start a run on a session of a server
-// with several workspaces. It reads that run's transcript too, with the bare id or the
-// <workspace>:<session> a cursor names, but only while the bare id still resolves to exactly
-// that session: a bare id two workspaces hold, a session of another workspace and a bare glob
-// that does not match give nothing (T-036b).
-func TestRemoteBareGlobTokenReadsWhatItCanStart(t *testing.T) {
-	const (
-		bare   = "bare_0123456789abcdef0123456789abcdefab"
-		onlyB  = "onlyb_0123456789abcdef0123456789abcdef"
-		wsOnly = "wsonly_0123456789abcdef0123456789abcdef"
-	)
-	grant := func(glob string) string {
-		return `"profiles":["` + glob + `"],"agents":["` + glob + `/*"],"actions":["message","subagent","status","stop","transcripts","profile"]`
-	}
-	w := startRemoteWorkspaces(t, tokenTable(
-		tokenRow("bare", bare, grant("s1/dev/*")),
-		tokenRow("onlyb", onlyB, grant("only-b/dev/*")),
-		tokenRow("wsonly", wsOnly, grant("a:*/dev/*")),
-		tokenRow("any", remoteTestSecret, fullGrant)))
-	var lines strings.Builder
-	for i := 0; i < 70; i++ {
-		lines.WriteString(remoteUser(fmt.Sprintf("question %d", i)))
-		lines.WriteString(remoteAnswer(i+1, fmt.Sprintf("answer %d", i)))
-	}
-	for workspace, texts := range map[string]map[string]string{
-		w.a: {"s1": "the words of a:s1"},
-		w.b: {"s1": "the words of b:s1", "only-b": lines.String()},
-	} {
-		for session, text := range texts {
-			content := text
-			if !strings.Contains(text, "answer 0") {
-				content = remoteUser("question") + remoteAnswer(1, text)
-			}
-			file := filepath.Join(workspace, ".jad", "state", session, "dev", "base", "messages.jsonl")
-			if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	read := func(secret, path string) (bool, string) {
-		t.Helper()
-		status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?path="+url.QueryEscape(path), secret, nil)
-		out, _ := body["output"].(string)
-		return status == 200 && !strings.Contains(out, "error_code"), out
-	}
-	expect := func(secret, path string, want bool, words string) {
-		t.Helper()
-		got, out := read(secret, path)
-		if got != want || (want && !strings.Contains(out, words)) || (!want && strings.Contains(out, "the words of")) {
-			t.Errorf("%s reading %s: readable %v, want %v:\n%s", secret[:5], path, got, want, out)
-		}
-	}
-
-	// s1 is held by both workspaces: the bare id is ambiguous for a bare token, so it reads
-	// nothing, as written or as a:s1; the token that reaches every session still reads a:s1.
-	expect(bare, "profile:s1/dev/base", false, "")
-	expect(bare, "profile:a:s1/dev/base", false, "")
-	expect(bare, "profile:b:s1/dev/base", false, "")
-	expect(remoteTestSecret, "profile:a:s1/dev/base", true, "the words of a:s1")
-	expect(remoteTestSecret, "profile:b:s1/dev/base", true, "the words of b:s1")
-
-	// With b's s1 gone, the bare id means a:s1 alone and the bare token reads it, written either
-	// way, but never b's.
-	if err := os.Rename(filepath.Join(w.b, ".jad", "sessions", "s1.json"), filepath.Join(w.b, ".jad", "sessions", "s1.hidden")); err != nil {
-		t.Fatal(err)
-	}
-	expect(bare, "profile:s1/dev/base", true, "the words of a:s1")
-	expect(bare, "profile:a:s1/dev/base", true, "the words of a:s1")
-	expect(bare, "profile:b:s1/dev/base", false, "")
-	expect(bare, "profile:s1/dev/other", false, "")
-	expect(wsOnly, "profile:s1/dev/base", false, "")
-	expect(wsOnly, "profile:a:s1/dev/base", true, "the words of a:s1")
-	// ... and a second workspace that later holds the id takes the access away again.
-	if err := os.Rename(filepath.Join(w.b, ".jad", "sessions", "s1.hidden"), filepath.Join(w.b, ".jad", "sessions", "s1.json")); err != nil {
-		t.Fatal(err)
-	}
-	expect(bare, "profile:s1/dev/base", false, "")
-	expect(bare, "profile:a:s1/dev/base", false, "")
-
-	// A session only b holds: its bare token reads it in b and never as a session of a.
-	expect(onlyB, "profile:only-b/dev/base", true, "answer 69")
-	expect(onlyB, "profile:b:only-b/dev/base", true, "answer 69")
-	expect(onlyB, "profile:a:only-b/dev/base", false, "")
-	expect(onlyB, "profile:s1/dev/base", false, "")
-
-	// The cursor of that read names the canonical session and continues for the same token.
-	_, first := read(onlyB, "profile:only-b/dev/base")
-	match := remoteCursorLine.FindStringSubmatch(first)
-	if match == nil {
-		t.Fatalf("140 steps exceed one page, so a cursor is expected:\n%s", first)
-	}
-	status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?cursor="+url.QueryEscape(match[1]), onlyB, nil)
-	if next, _ := body["output"].(string); status != 200 || strings.Contains(next, "error_code") || !strings.Contains(next, "1.0 ") {
-		t.Fatalf("the cursor did not continue: %d %v", status, body)
-	}
-	if status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?cursor="+url.QueryEscape(match[1]), bare, nil); status == 200 && !strings.Contains(fmt.Sprint(body["output"]), "error_code") {
-		t.Fatalf("another token read with a cursor of a session it does not reach: %v", body)
-	}
-}
-
-// The same decision for the sub-agent runs of a profile (the token's agents globs) and for the
-// profile and session lists, on the profile reader of the remote API.
+// The two-name rule of a v1 server with several session roots (T-036b), on the profile reader of
+// the remote API: the sub-agent runs of a profile (the token's agents globs) and the profile
+// lists. A workspace-layout server limits a row to its workspace before this reader is asked, so
+// the rule is exercised here with a token of the v1 kind directly (TestRemoteTranscriptsOfARow...).
 func TestRemoteBareGlobTokenSeesSubagentsOfWhatItCanStart(t *testing.T) {
-	w := startRemoteWorkspaces(t, tokenTable(tokenRow("any", remoteTestSecret, fullGrant)))
+	w := startRowWorkspaces(t)
 	token := remoteapi.Token{Profiles: []string{"only-b/dev/*"}, Agents: []string{"only-b/dev/*/explore"}}
 	profiles := tokenProfiles{inner: profileMessenger{resolver: w.service.resolver}, may: token.MayProfile, mayAgent: token.MayAgent}
 	target, err := profiles.Profile(t.Context(), remoteTranscriptCaller, "only-b", "dev/base")

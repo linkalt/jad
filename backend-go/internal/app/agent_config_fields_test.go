@@ -45,6 +45,9 @@ var agentConfigFields = map[string]agentConfigField{
 	"ProfileOwnDir": fieldCallerOnly, "ProfileDataDir": fieldCallerOnly, "SettingSources": fieldCallerOnly, "ProfileSelfEdit": fieldCallerOnly,
 	// SelfEditPaths is read by the run's checkpoint (checkpoint.ForSession), not by the tools.
 	"RemotesDir": fieldCallerOnly, "Warnings": fieldCallerOnly, "SelfEditPaths": fieldCallerOnly,
+	// RemoteKeys and RemoteKeyFault belong to the session's own remote tools: an agent toolset has
+	// no remotes folder (RemotesDir is the caller's), so no remote tool of a toolset agent uses them.
+	"RemoteKeys": fieldCallerOnly, "RemoteKeyFault": fieldCallerOnly,
 	"ModelPath": fieldCallerOnly, "ModelPaths": fieldCallerOnly, "ModelBases": fieldCallerOnly, "WorkspaceLayout": fieldCallerOnly, "ModelFault": fieldCallerOnly, "ReasoningEffort": fieldCallerOnly,
 
 	// Tool surface.

@@ -110,6 +110,12 @@ func judgeScope(layout Layout, location Location, session layoutSessionFile, ses
 			err = checkUnselectedProfile(entry.Path, file)
 		}
 		if err == nil {
+			err = refuseRemoteKeysInV1(layout, file.RemoteKeys, entry.Path)
+		}
+		if err == nil {
+			_, err = checkRemoteKeyNames(file.RemoteKeys, entry.Path+": "+remoteKeysKey)
+		}
+		if err == nil {
 			err = checkProfileCeilings(layout, session, entry.Path, file.Settings, scans)
 		}
 		if err == nil {

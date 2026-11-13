@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/sessionfs"
 	mcpclient "jad/backend-go/internal/tools/mcp"
 	"jad/backend-go/internal/tools/native"
@@ -28,6 +29,9 @@ func CheckFiles(roots []sessionfs.Root, w io.Writer) (bool, error) {
 		}
 	}
 	report.Problems = append(report.Problems, shareProblems(report.Shares, checkOverlay)...)
+	for _, note := range report.Notes {
+		fmt.Fprintf(w, "note: %s\n", note)
+	}
 	for _, note := range hostNotes(report.Sandboxes, checkOverlay, checkPlanFallback) {
 		fmt.Fprintf(w, "note: %s\n", note)
 	}
@@ -100,4 +104,27 @@ func hostNotes(sandboxes []sessionfs.CheckedSandbox, overlay func(context.Contex
 		notes = append(notes, "plan mode: the fallback sandbox does not start, so exec read_only does not count and plan mode refuses exec code where no sandbox covers exec: "+err.Error())
 	}
 	return notes
+}
+
+// CheckSelfBindings warns about each remote binding of the workspace layout that reaches this
+// server itself (its remote API's unix socket, or its own host and port). A call through such a
+// binding arrives as a remote message: the deny rules of workspace.json and global.json without
+// a from apply to it, the caller-side rules with a from or a local: target do not, and the hop
+// limit is what ends a loop. It never fails the check.
+func CheckSelfBindings(roots []sessionfs.Root, server sessionfs.ServerSettings, w io.Writer) {
+	if !server.RemoteAPI.Enabled {
+		return
+	}
+	for _, root := range roots {
+		if root.Layout == nil || root.Layout.Workspace == "" {
+			continue
+		}
+		entries, _ := remote.ListBindings(root.Layout.Remotes)
+		for _, entry := range entries {
+			if entry.PointsAt(server.RemoteAPI.ListenUnix, server.Host, server.Port) {
+				fmt.Fprintf(w, "warning: remote binding %s points at this server itself: a message through it is a remote message, which skips the caller-side local: deny rules and workspace allow_reset (a deny rule without from still applies), and a loop is stopped only by the hop limit\n", entry.Name)
+			}
+		}
+		return // one remotes folder, shared by every workspace
+	}
 }

@@ -29,7 +29,7 @@ const (
 
 var (
 	globalSettingKeys    = []string{"schema_version", "server", "cli", "workspaces", "catalogs", "defaults", "libraries", profileSelfEditKey, profileMessageKey}
-	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries", profileSelfEditKey, profileMessageKey}
+	workspaceSettingKeys = []string{"schema_version", "id", "label", "defaults", "libraries", profileSelfEditKey, profileMessageKey, remoteKeysKey}
 	workspaceEntryKeys   = []string{"id", "label", "path"}
 	// globalCatalogKeys are the catalogs global.json may move; profiles and state belong to
 	// each workspace and have fixed folders there.
@@ -566,6 +566,9 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	layout.ProfileSelfEdit = effectiveSelfEdit(base.ProfileSelfEdit, ownSelfEdit)
 	layout.Listed = spec.listed
 	layout.MessageDeny, layout.MessageAllowReset = messageDeny, messageAllowReset
+	if layout.RemoteKeys, err = readRemoteKeyNames(spec.setting[remoteKeysKey], where+": "+remoteKeysKey); err != nil {
+		return nil, err
+	}
 	builtIn := map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}
 	layout.Defaults = mergeSettings(mergeSettings(builtIn, globalDefaults), own)
 	layout.DefaultLayers = []SettingLayer{{Name: SettingLayerBuiltIn, Values: builtIn}, {Name: SettingLayerGlobal, Values: globalDefaults}, {Name: SettingLayerWorkspace, Values: own}}

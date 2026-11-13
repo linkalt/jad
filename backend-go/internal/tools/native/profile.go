@@ -266,7 +266,7 @@ func (t *profileTool) executeRemote(ctx context.Context, action, path string, ex
 	if !strings.HasPrefix(path, remote.Prefix+name+"/profile:") {
 		return t.fail(execution, tools.StatusInvalidInput, "bad_remote_reference", "a remote path is remote:<name>/profile:<session>/<category>/<name>")
 	}
-	target, err := remote.ParseProfile(strings.Replace(path, "/profile:", "/", 1), t.remotes.directory.Entry)
+	target, err := t.remotes.directory.ParseProfile(strings.Replace(path, "/profile:", "/", 1))
 	if err != nil {
 		return t.fail(execution, tools.StatusInvalidInput, "bad_remote_reference", err.Error())
 	}
@@ -281,7 +281,7 @@ func (t *profileTool) executeRemote(ctx context.Context, action, path string, ex
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "remote_unavailable", remoteProblem(name, err))
 	}
-	output, err := client.ProfileInfo(ctx, target.Session, target.Profile, execution.RemoteHops+1)
+	output, err := client.ProfileInfo(ctx, target.WireSession(), target.Profile, execution.RemoteHops+1)
 	if err != nil {
 		return t.fail(execution, tools.StatusError, "remote_failed", err.Error())
 	}

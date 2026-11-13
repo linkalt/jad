@@ -79,6 +79,12 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 	if err := session.refuseModelDefaults(sessionPath); err != nil {
 		return SessionConfig{}, err
 	}
+	if err := refuseRemoteKeysInV1(layout, session.RemoteKeys, sessionPath); err != nil {
+		return SessionConfig{}, err
+	}
+	if _, err := checkRemoteKeyNames(session.RemoteKeys, sessionPath+": "+remoteKeysKey); err != nil {
+		return SessionConfig{}, err
+	}
 	if err := checkLayoutSettings(session.Settings, sessionPath+": settings"); err != nil {
 		return SessionConfig{}, err
 	}
@@ -183,6 +189,11 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		}
 	}
 	config.RemotesDir = layout.Remotes
+	if layout.Workspace != "" {
+		// A broken key does not stop the session from loading and listing: a run fails with the
+		// named error (WithModel), and the remote tools see no key.
+		config.RemoteKeys, config.RemoteKeyFault = layout.resolveRemoteKeys(session, sessionPath, judged.verdicts[entry.ID()].file, entry.Path)
+	}
 	// The normalizers know a profile only by its storage key; callers get the ID.
 	config.Profile = entry.ID()
 	config.ProfilePath = entry.Path

@@ -5,6 +5,12 @@
   "description": "W/.jad/workspace.json turns the workspace layout on for a server started in W (docs/design_workspace_layout.md): W keeps its sessions (W/.jad/sessions), profiles (W/.jad/profiles), private models and tools (W/.jad/models, W/.jad/tools) and state (W/.jad/state); the shared catalogs come from the global folder (global.schema.json). A W/.jad/setting.json is then not read. Read once at start. Deleting this file goes back to the setting.json layout. An unknown key is refused; for the start workspace that refuses the start, for a listed one it skips the workspace.",
   "type": "object",
   "properties": {
+    "remote_keys": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+      "description": "Names of the key files (G/auth/keys/<key>.json, kind remote_key, mode 0600) whose credentials the workspace may use for the remote bindings (G/remotes/<binding>.json) the key files name. Every profile of this workspace unless its session or the profile sets its own list. Absent inherits from the level above, [] means no keys, a non-empty list replaces the levels above. A key only supplies the bearer token of its binding and never widens what a tool may reach: that is the remotes list of each tool. A broken key (missing file, wrong permissions, a binding that does not exist, two keys for one binding) fails the runs that use it, naming the key. Workspace layout only; never a key of a toolset."
+    },
     "schema_version": {
       "type": "integer",
       "const": 2,

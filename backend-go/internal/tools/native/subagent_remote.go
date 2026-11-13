@@ -116,14 +116,14 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 	}
 	if len(s.remotes.names) == 0 || s.remotes.directory == nil {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "remote_unavailable",
-			"This session does not enable remote agents (tools.native.subagent.remotes)"), nil
+			"This session does not enable remote agents (tools.native.subagent.remotes; in the workspace layout each binding also needs a key in remote_keys)"), nil
 	}
 	if !s.remotes.allowed(name) {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "unknown_remote",
 			fmt.Sprintf("Remote %s is not available for agents", name),
 			tools.Information{Key: "available", Value: strings.Join(s.remotes.names, ", ")}), nil
 	}
-	target, err := remote.ParseSubagent(reference, s.remotes.directory.Entry)
+	target, err := s.remotes.directory.ParseSubagent(reference)
 	if err != nil {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "bad_remote_reference", err.Error()), nil
 	}
@@ -184,7 +184,7 @@ func (s *subagentTool) startRemote(ctx context.Context, callID, reference, task 
 			return refuseRemoteCap(callID, err), nil
 		}
 	}
-	body := map[string]any{"session": target.Session, "profile": target.Profile, "agent": target.Agent, "task": task}
+	body := map[string]any{"session": target.WireSession(), "profile": target.Profile, "agent": target.Agent, "task": task}
 	if resume, _ := arguments["resume"].(string); resume != "" {
 		body["resume"] = resume
 	}

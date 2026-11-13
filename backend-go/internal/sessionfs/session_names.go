@@ -19,7 +19,7 @@ import (
 // sessionFileKeys are the top-level keys of layoutSessionFile.
 var sessionFileKeys = map[string]struct{}{
 	"schema_version": {}, "description": {}, "name": {}, "cwd": {}, "category": {}, "scope": {},
-	"model_defaults": {}, "settings": {},
+	"model_defaults": {}, "settings": {}, "remote_keys": {},
 }
 
 // sessionMarkerKeys are the session keys a bare {"name", "description"} object lacks. One of

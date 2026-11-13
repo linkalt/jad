@@ -5,6 +5,12 @@
   "description": "<.jad>/profiles/<category>/<name>.json. The profile name is the file name. A profile picks a prompt, the models it may use, one toolset or a list of toolsets and setting overrides. A session leaves out a profile whose file fails these rules (or that names a toolset that is missing or does not parse), with a warning in the server log, and loads with the others; the default profile is then the first one left. A profile asked for by name must be valid itself.",
   "type": "object",
   "properties": {
+    "remote_keys": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+      "description": "Names of the key files (G/auth/keys/<key>.json, kind remote_key, mode 0600) whose credentials the profile may use for the remote bindings (G/remotes/<binding>.json) the key files name. This profile only; replaces the session's and the workspace's lists. A profile cannot change it itself (self-edit refuses it). Absent inherits from the level above, [] means no keys, a non-empty list replaces the levels above. A key only supplies the bearer token of its binding and never widens what a tool may reach: that is the remotes list of each tool. A broken key (missing file, wrong permissions, a binding that does not exist, two keys for one binding) fails the runs that use it, naming the key. Workspace layout only; never a key of a toolset."
+    },
     "schema_version": {
       "const": 1
     },

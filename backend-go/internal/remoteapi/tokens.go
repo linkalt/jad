@@ -60,6 +60,9 @@ type Token struct {
 	Actions  map[string]bool
 	// MaxHops lowers the server's hop limit for this token; zero keeps the server's.
 	MaxHops int
+	// Workspace is the workspace this token reaches (the workspace layout's table; empty in a v1
+	// table). A request is limited to it and its globs are over the bare session inside it.
+	Workspace string
 }
 
 type tokenFile struct {
@@ -76,11 +79,23 @@ type tokenRow struct {
 	Agents   []string `json:"agents"`
 	Actions  []string `json:"actions"`
 	MaxHops  int      `json:"max_hops"`
+	// Workspace is required by the table of the workspace layout and refused by the v1 table.
+	Workspace string `json:"workspace"`
 }
 
-// ParseTokens reads a token table. Unknown keys, a duplicate id or hash, a malformed hash or
-// glob, and an unknown action are errors, so a typo never widens or silently drops a grant.
-func ParseTokens(data []byte) ([]Token, error) {
+// ParseTokens reads a token table of the v1 layout. Unknown keys, a duplicate id or hash, a
+// malformed hash or glob, and an unknown action are errors, so a typo never widens or silently
+// drops a grant.
+func ParseTokens(data []byte) ([]Token, error) { return parseTokens(data, false) }
+
+// ParseWorkspaceTokens reads a token table of the workspace layout: every row names the workspace
+// it reaches, and its globs are over session/category/name inside that workspace.
+func ParseWorkspaceTokens(data []byte) ([]Token, error) { return parseTokens(data, true) }
+
+// workspaceRowPattern is a workspace id as the server lists it.
+var workspaceRowPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+func parseTokens(data []byte, workspaceLayout bool) ([]Token, error) {
 	var file tokenFile
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -105,7 +120,13 @@ func ParseTokens(data []byte) ([]Token, error) {
 			return nil, fmt.Errorf("%s (%s): id and sha256 must be unique", where, row.ID)
 		}
 		ids[row.ID], hashes[hash] = true, true
-		token := Token{ID: row.ID, Revoked: row.Revoked, Profiles: row.Profiles, Agents: row.Agents, Actions: map[string]bool{}, MaxHops: row.MaxHops}
+		switch {
+		case workspaceLayout && !workspaceRowPattern.MatchString(row.Workspace):
+			return nil, fmt.Errorf("%s (%s): workspace is required: the id of the one workspace this token reaches (1 to 64 letters, digits, '.', '_' or '-'); a token for two workspaces is two rows", where, row.ID)
+		case !workspaceLayout && row.Workspace != "":
+			return nil, fmt.Errorf("%s (%s): workspace is a key of the workspace layout's token table", where, row.ID)
+		}
+		token := Token{ID: row.ID, Revoked: row.Revoked, Profiles: row.Profiles, Agents: row.Agents, Actions: map[string]bool{}, MaxHops: row.MaxHops, Workspace: row.Workspace}
 		raw, _ := hex.DecodeString(hash)
 		copy(token.hash[:], raw)
 		if row.Expires != "" {
@@ -121,6 +142,9 @@ func ParseTokens(data []byte) ([]Token, error) {
 		for _, glob := range append(append([]string(nil), row.Profiles...), row.Agents...) {
 			if _, err := path.Match(glob, "a/b/c/d"); err != nil || strings.TrimSpace(glob) == "" || strings.Contains(glob, "[") {
 				return nil, fmt.Errorf("%s (%s): %q is not a valid glob over session/category/name (no [classes])", where, row.ID, glob)
+			}
+			if workspaceLayout && strings.Contains(glob, ":") {
+				return nil, fmt.Errorf("%s (%s): %q has a colon: the globs of a workspace row are over session/category/name inside its workspace, with no <workspace>: part", where, row.ID, glob)
 			}
 		}
 		for _, action := range row.Actions {
@@ -180,10 +204,12 @@ func matchAny(globs []string, target string) bool {
 // row or a new expiry applies to the next request after that; if the file becomes unreadable,
 // invalid or open to group or others after it loaded, every request is refused until it is fixed.
 type TokenTable struct {
-	file     string
-	logger   *slog.Logger
-	now      func() time.Time
-	interval time.Duration
+	// workspaces says the table is the workspace layout's: every row names a workspace.
+	workspaces bool
+	file       string
+	logger     *slog.Logger
+	now        func() time.Time
+	interval   time.Duration
 
 	lastCheck atomic.Int64
 	mu        sync.RWMutex
@@ -200,13 +226,22 @@ type fileState struct {
 
 // NewTokenTable loads the file once and fails if it is not valid.
 func NewTokenTable(file string, logger *slog.Logger, now func() time.Time) (*TokenTable, error) {
+	return newTokenTable(file, logger, now, false)
+}
+
+// NewWorkspaceTokenTable is NewTokenTable for the workspace layout: every row names its workspace.
+func NewWorkspaceTokenTable(file string, logger *slog.Logger, now func() time.Time) (*TokenTable, error) {
+	return newTokenTable(file, logger, now, true)
+}
+
+func newTokenTable(file string, logger *slog.Logger, now func() time.Time, workspaces bool) (*TokenTable, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	if now == nil {
 		now = time.Now
 	}
-	table := &TokenTable{file: file, logger: logger, now: now, interval: tokenFileCheckInterval}
+	table := &TokenTable{workspaces: workspaces, file: file, logger: logger, now: now, interval: tokenFileCheckInterval}
 	tokens, state, err := table.read()
 	if err != nil {
 		return nil, err
@@ -242,7 +277,7 @@ func (t *TokenTable) read() ([]Token, fileState, error) {
 	if runtime.GOOS != "windows" && state.perm&0o077 != 0 {
 		return nil, state, fmt.Errorf("token table %s must not be accessible by group or others (chmod 600)", t.file)
 	}
-	tokens, err := ParseTokens(data)
+	tokens, err := parseTokens(data, t.workspaces)
 	if err != nil {
 		return nil, state, fmt.Errorf("%s: %w", t.file, err)
 	}

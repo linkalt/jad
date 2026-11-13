@@ -212,6 +212,9 @@ func (b remoteBackend) SendMessage(ctx context.Context, request remoteapi.Messag
 	if err != nil {
 		return nil, err
 	}
+	if err := b.checkPolicy(resolved); err != nil {
+		return nil, err
+	}
 	run := &remoteMessageRun{done: make(chan struct{})}
 	handle, err := b.resolver.StartRun(ctx, RunSpec{Kind: RunPersistent, Profile: httpapi.ProfileRunRequest{
 		Reference: resolved.Reference,
@@ -557,4 +560,26 @@ func (i *remoteRunIndex) entry(remoteID string) (remoteRunRef, bool) {
 // from that copy (childConfig).
 func remoteSubagentBase(config sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
 	return config.PinOwnModels().WithModel()
+}
+
+// checkPolicy applies the profile_message deny rules of global.json and of the target's
+// workspace to a message that comes in from another server (design §30.3, R5): a remote caller has
+// no local address, so only a rule without from can match it, and it can ask for the message
+// action alone (no reset or model choice crosses the wire). The refusal is ErrForbidden, which the
+// server answers like a token whose globs do not reach the target. Outside the workspace layout
+// there are no rules.
+func (b remoteBackend) checkPolicy(resolved httpapi.ResolvedSession) error {
+	if !sessionfs.WorkspaceLayout(b.resolver.roots) {
+		return nil
+	}
+	location, err := sessionfs.Resolve(b.resolver.roots, resolved.Reference)
+	if err != nil {
+		return remoteapi.ErrNoSession
+	}
+	to := sessionfs.MessageRef{Workspace: location.Root.ID, Session: location.SessionID, Profile: resolved.Profile}.Canonical()
+	policy := sessionfs.PolicyOf(nil, location.Root.Layout, "", location.Root.ID)
+	if refusal := policy.Check("", to, []string{sessionfs.MessageActionMessage}); refusal != nil {
+		return remoteapi.ErrForbidden
+	}
+	return nil
 }

@@ -84,7 +84,7 @@ func startRemoteWorkspacesWith(t *testing.T, tokens string, loop *remoteLoop) *r
 		put(filepath.Join(dir, ".jad", "profiles", "dev", "base.json"), `{"models":["openai/default"],"model_default":"openai/default"}`)
 	}
 	put(filepath.Join(w.b, ".jad", "sessions", "only-b.json"), `{"schema_version":1}`)
-	environment := map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOME": home, "FIXTURE_KEY": "key", "JAD_REMOTE_E2E": e2eToken}
+	environment := map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOME": home, "FIXTURE_KEY": "key", "JAD_REMOTE_E2E": e2eToken, "JAD_REMOTE_LOOP_B": loopTokenB}
 	var listener net.Listener
 	if loop != nil {
 		listener = loop.prepare(t, put, global, provider.URL, w.a, w.b)
@@ -121,185 +121,204 @@ func (w *remoteWorkspaces) send(t *testing.T, secret, session, message, requestI
 	return w.call(t, "POST", remoteapi.Prefix+"/messages", secret, map[string]any{"session": session, "profile": "dev/base", "message": message, "request_id": requestID})
 }
 
-func (w *remoteWorkspaces) sendAndWait(t *testing.T, session, message, requestID string) {
+// sendAndWaitAs sends with a token and waits for the run with the same token.
+func (w *remoteWorkspaces) sendAndWaitAs(t *testing.T, secret, session, message, requestID string) {
 	t.Helper()
-	status, body := w.send(t, remoteTestSecret, session, message, requestID)
+	status, body := w.send(t, secret, session, message, requestID)
 	if status != http.StatusAccepted {
 		t.Fatalf("send to %s: %d %v", session, status, body)
 	}
-	if done := w.waitDone(t, body["id"].(string)); done["state"] != "done" {
+	if done := w.waitDoneAs(t, secret, body["id"].(string)); done["state"] != "done" {
 		t.Fatalf("outcome for %s: %v", session, done)
 	}
 }
 
-// A session id that two workspaces hold is reached as <workspace>:<session>: each address runs
-// the profile of that workspace only, the bare id is refused as ambiguous before anything runs,
-// and an id only one workspace holds still works bare (T-036).
-func TestRemoteAPIReachesASessionOfEachWorkspaceByItsQualifiedName(t *testing.T) {
-	w := startRemoteWorkspaces(t, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+const rowBSecret = "rowb_0123456789abcdef0123456789abcdefab"
 
-	status, body := w.send(t, remoteTestSecret, "s1", "msg-bare", "req-ws-00001")
-	if status != http.StatusConflict || body["code"] != "ambiguous_session" {
-		t.Fatalf("bare s1: %d %v", status, body)
-	}
-	if text := fmt.Sprint(body["error"]); !strings.Contains(text, "<workspace>:<session>") || strings.Contains(text, w.a) || strings.Contains(text, w.b) {
-		t.Fatalf("the ambiguity text must give the form and no workspace path: %q", text)
-	}
-	if w.providerRuns() != 0 || w.transcript(w.a, "s1") != "" || w.transcript(w.b, "s1") != "" {
-		t.Fatal("an ambiguous message ran a profile")
-	}
-
-	w.sendAndWait(t, "a:s1", "msg-for-a", "req-ws-00002")
-	if !strings.Contains(w.transcript(w.a, "s1"), "msg-for-a") || w.transcript(w.b, "s1") != "" {
-		t.Fatalf("a:s1 must reach workspace a only: a=%q b=%q", w.transcript(w.a, "s1"), w.transcript(w.b, "s1"))
-	}
-	w.sendAndWait(t, "b:s1", "msg-for-b", "req-ws-00003")
-	if !strings.Contains(w.transcript(w.b, "s1"), "msg-for-b") || strings.Contains(w.transcript(w.a, "s1"), "msg-for-b") {
-		t.Fatalf("b:s1 must reach workspace b only: a=%q b=%q", w.transcript(w.a, "s1"), w.transcript(w.b, "s1"))
-	}
-	w.sendAndWait(t, "only-b", "msg-bare-unique", "req-ws-00004")
-	if !strings.Contains(w.transcript(w.b, "only-b"), "msg-bare-unique") {
-		t.Fatal("a bare id one workspace holds must keep working")
-	}
-
-	// Unknown workspace, a session the named workspace does not hold and a malformed name never
-	// run anything; the first two answer as a missing session, whichever workspace holds it.
-	index := 0
-	for session, want := range map[string]int{"c:s1": 404, "a:only-b": 404, "a:ghost": 404, "a:s1:x": 400, "a:": 400, ":s1": 400} {
-		before := w.providerRuns()
-		index++
-		status, body := w.send(t, remoteTestSecret, session, "x", fmt.Sprintf("req-bad-%02d", index))
-		if status != want || (want == 404 && body["code"] != "no_session") {
-			t.Errorf("%s: %d %v, want %d", session, status, body, want)
-		}
-		if w.providerRuns() != before {
-			t.Errorf("%s ran a profile", session)
-		}
-	}
-	for _, workspace := range []string{w.a, w.b} {
-		if _, err := os.Stat(filepath.Join(workspace, ".jad", "state", "ghost")); err == nil {
-			t.Fatal("a state folder was made for a session that does not exist")
-		}
-	}
-
-	// The profile list of a session answers as a missing one when the id is ambiguous, so it
-	// does not tell a token that the id exists twice; the qualified id lists.
-	if status, body := w.call(t, "GET", remoteapi.Prefix+"/profiles?session=s1", remoteTestSecret, nil); status != 404 || body["code"] != "no_session" {
-		t.Fatalf("profiles of the bare ambiguous id: %d %v", status, body)
-	}
-	if status, body := w.call(t, "GET", remoteapi.Prefix+"/profiles?session="+url.QueryEscape("b:s1"), remoteTestSecret, nil); status != 200 || fmt.Sprint(body["profiles"]) != "[dev/base]" {
-		t.Fatalf("profiles of b:s1: %d %v", status, body)
-	}
-	// profile info names the ambiguity (the token's globs have admitted the session id by then).
-	if status, body := w.call(t, "GET", remoteapi.Prefix+"/profile?session=s1&profile=dev/base", remoteTestSecret, nil); status != 409 || body["code"] != "ambiguous_session" {
-		t.Fatalf("info of the bare ambiguous id: %d %v", status, body)
-	}
-	if status, body := w.call(t, "GET", remoteapi.Prefix+"/profile?session=a:s1&profile=dev/base", remoteTestSecret, nil); status != 200 {
-		t.Fatalf("info of a:s1: %d %v", status, body)
-	}
+// workspaceRow is a token row of the workspace layout: it names the one workspace it reaches.
+func workspaceRow(id, secret, workspace, grant string) string {
+	return tokenRow(id, secret, `"workspace":"`+workspace+`",`+grant)
 }
 
-// A token's globs name sessions as the caller writes them: a glob that only means bare ids
-// ("*1", every id ending in 1) or one workspace does not reach another workspace's session, and one that names the
-// workspace ("a:*") reaches that workspace only. "*" still means every session.
-func TestRemoteAPITokenGlobsDoNotReachQualifiedSessionsByAccident(t *testing.T) {
+// startRowWorkspaces is the two-workspace server with one full-grant row for each workspace:
+// remoteTestSecret reaches a and rowBSecret reaches b.
+func startRowWorkspaces(t *testing.T) *remoteWorkspaces {
+	t.Helper()
+	return startRemoteWorkspaces(t, tokenTable(workspaceRow("peer", remoteTestSecret, "a", fullGrant), workspaceRow("peerb", rowBSecret, "b", fullGrant)))
+}
+
+// A token row of a server with several workspaces reaches the one workspace it names: the
+// session is written bare or as <that workspace>:<session> and means the same thing, a session
+// of another workspace answers as a session that does not exist (also when only the other
+// workspace holds it), and a session id both workspaces hold is no ambiguity for a row (T-040 C).
+func TestRemoteAPIRowReachesOnlyItsWorkspace(t *testing.T) {
+	w := startRowWorkspaces(t)
+
+	w.sendAndWaitAs(t, remoteTestSecret, "s1", "bare-for-a", "req-row-00001")
+	if !strings.Contains(w.transcript(w.a, "s1"), "bare-for-a") || w.transcript(w.b, "s1") != "" {
+		t.Fatalf("a bare s1 of row a must reach workspace a only: a=%q b=%q", w.transcript(w.a, "s1"), w.transcript(w.b, "s1"))
+	}
+	w.sendAndWaitAs(t, remoteTestSecret, "a:s1", "qualified-for-a", "req-row-00002")
+	if !strings.Contains(w.transcript(w.a, "s1"), "qualified-for-a") {
+		t.Fatal("a:s1 of row a must reach workspace a")
+	}
+	w.sendAndWaitAs(t, rowBSecret, "s1", "bare-for-b", "req-row-00003")
+	if !strings.Contains(w.transcript(w.b, "s1"), "bare-for-b") || strings.Contains(w.transcript(w.a, "s1"), "bare-for-b") {
+		t.Fatalf("a bare s1 of row b must reach workspace b only: a=%q", w.transcript(w.a, "s1"))
+	}
+	w.sendAndWaitAs(t, rowBSecret, "only-b", "bare-unique", "req-row-00004")
+	if !strings.Contains(w.transcript(w.b, "only-b"), "bare-unique") {
+		t.Fatal("a session only b holds must be reachable by row b")
+	}
+
+	// Another workspace, a workspace the server does not serve, a session the row's workspace
+	// does not hold and a malformed name run nothing; none of them is told apart from a missing
+	// session, so a row learns nothing about a workspace that is not its own.
+	runs := w.providerRuns()
+	index := 0
+	for _, c := range []struct{ secret, session string }{
+		{remoteTestSecret, "b:s1"}, {remoteTestSecret, "only-b"}, {remoteTestSecret, "a:only-b"}, {remoteTestSecret, "c:s1"},
+		{remoteTestSecret, "a:ghost"}, {rowBSecret, "a:s1"}, {rowBSecret, "b:ghost"},
+	} {
+		index++
+		status, body := w.send(t, c.secret, c.session, "x", fmt.Sprintf("req-bad-%02d", index))
+		if status != http.StatusNotFound || body["code"] != "no_session" {
+			t.Errorf("%s: %d %v, want a missing session", c.session, status, body)
+		}
+	}
+	for _, session := range []string{"a:s1:x", "a:", ":s1"} {
+		index++
+		if status, body := w.send(t, remoteTestSecret, session, "x", fmt.Sprintf("req-bad-%02d", index)); status != http.StatusBadRequest {
+			t.Errorf("%s: %d %v, want bad_request", session, status, body)
+		}
+	}
+	if w.providerRuns() != runs {
+		t.Error("a request outside the row's workspace ran a profile")
+	}
+	if _, err := os.Stat(filepath.Join(w.a, ".jad", "state", "ghost")); err == nil {
+		t.Fatal("a state folder was made for a session that does not exist")
+	}
+
+	// The same limit on the profile list and the profile info.
+	for query, want := range map[string]int{"s1": 200, "a:s1": 200, "b:s1": 404, "only-b": 404} {
+		if status, body := w.call(t, "GET", remoteapi.Prefix+"/profiles?session="+url.QueryEscape(query), remoteTestSecret, nil); status != want {
+			t.Errorf("profiles of %s: %d %v, want %d", query, status, body, want)
+		}
+		if status, body := w.call(t, "GET", remoteapi.Prefix+"/profile?session="+url.QueryEscape(query)+"&profile=dev/base", remoteTestSecret, nil); status != want {
+			t.Errorf("info of %s: %d %v, want %d", query, status, body, want)
+		}
+	}
+	if status, body := w.call(t, "GET", remoteapi.Prefix+"/profiles?session=only-b", rowBSecret, nil); status != 200 || fmt.Sprint(body["profiles"]) != "[dev/base]" {
+		t.Fatalf("profiles of only-b for row b: %d %v", status, body)
+	}
+
+	// A run is visible to the token that started it only.
+	status, body := w.send(t, remoteTestSecret, "s1", "mine", "req-row-00099")
+	if status != http.StatusAccepted {
+		t.Fatalf("%d %v", status, body)
+	}
+	id := body["id"].(string)
+	if status, _ := w.call(t, "GET", remoteapi.Prefix+"/runs/"+id, rowBSecret, nil); status != http.StatusNotFound {
+		t.Fatalf("another row saw the run: %d", status)
+	}
+	w.waitDoneAs(t, remoteTestSecret, id)
+}
+
+// A row's globs are matched on the bare session inside its workspace (a colon in a glob is a
+// load error, tested in remoteapi), and a glob that does not match refuses the start before any
+// lookup, whichever way the session is written.
+func TestRemoteAPIRowGlobsAreOverTheBareSession(t *testing.T) {
 	grant := func(glob string) string {
 		return `"profiles":["` + glob + `"],"actions":["message","status","stop","transcripts","profile"]`
 	}
+	const other = "other_0123456789abcdef0123456789abcdefab"
 	w := startRemoteWorkspaces(t, tokenTable(
-		tokenRow("suffix", "suffix_0123456789abcdef0123456789abcdef", grant("*1/dev/*")),
-		tokenRow("workspace", "workspace_0123456789abcdef0123456789abcd", grant("a:*/dev/*")),
-		tokenRow("bare", "bare_0123456789abcdef0123456789abcdefab", grant("only-b/dev/*")),
-		tokenRow("any", remoteTestSecret, grant("*/dev/*"))))
+		workspaceRow("peer", remoteTestSecret, "a", grant("s1/dev/*")),
+		workspaceRow("other", other, "a", grant("s2/dev/*")),
+		workspaceRow("suffix", rowBSecret, "b", grant("*1/dev/*"))))
 	for _, c := range []struct {
 		secret, session string
 		want            int
 	}{
-		{"suffix_0123456789abcdef0123456789abcdef", "a:s1", 403},
-		{"suffix_0123456789abcdef0123456789abcdef", "b:s1", 403},
-		{"workspace_0123456789abcdef0123456789abcd", "b:s1", 403},
-		{"workspace_0123456789abcdef0123456789abcd", "a:s1", 202},
-		{"workspace_0123456789abcdef0123456789abcd", "only-b", 403},
-		{"bare_0123456789abcdef0123456789abcdefab", "b:only-b", 403},
-		{"bare_0123456789abcdef0123456789abcdefab", "only-b", 202},
-		{remoteTestSecret, "b:s1", 202},
-		{remoteTestSecret, "a:s1", 202},
+		{remoteTestSecret, "s1", 202}, {remoteTestSecret, "a:s1", 202}, {remoteTestSecret, "b:s1", 404},
+		{other, "s1", 403}, {other, "a:s1", 403},
+		{rowBSecret, "s1", 202}, {rowBSecret, "b:s1", 202}, {rowBSecret, "a:s1", 404}, {rowBSecret, "only-b", 403},
 	} {
-		status, body := w.send(t, c.secret, c.session, "scoped", "req-tok-"+strings.ReplaceAll(c.session, ":", "-")+c.secret[:3])
+		status, body := w.send(t, c.secret, c.session, "scoped", "req-glob-"+strings.ReplaceAll(c.session, ":", "-")+c.secret[:3])
 		if status != c.want {
-			t.Errorf("%s with %s: %d %v, want %d", c.session, c.secret[:6], status, body, c.want)
+			t.Errorf("%s with %s: %d %v, want %d", c.session, c.secret[:5], status, body, c.want)
 		}
-	}
-	// The bare ambiguous id is refused as ambiguous only for a token whose globs admit it: a
-	// token that does not reach s1 gets the answer for a missing session.
-	if status, body := w.send(t, "suffix_0123456789abcdef0123456789abcdef", "s1", "x", "req-tok-ambig-01"); status != 409 || body["code"] != "ambiguous_session" {
-		t.Fatalf("a token admitted by *1: %d %v", status, body)
-	}
-	if status, body := w.send(t, "bare_0123456789abcdef0123456789abcdefab", "s1", "x", "req-tok-ambig-02"); status != 403 {
-		t.Fatalf("a token that does not reach s1 must not learn it is ambiguous: %d %v", status, body)
 	}
 }
 
-// The remote reads (transcript, transcripts) work in a server with several workspaces: the
-// reader of the remote API is not a session, so it is not confined to one workspace, and it
-// names a session as <workspace>:<session>.
-func TestRemoteTranscriptsReadTheQualifiedSessionOfEachWorkspace(t *testing.T) {
-	w := startRemoteWorkspaces(t, tokenTable(tokenRow("client", e2eToken, fullGrant)))
-	for workspace, text := range map[string]string{w.a: "the answer of workspace a", w.b: "the answer of workspace b"} {
+// The remote reads (transcript, transcripts) of a row see its workspace only, with the session
+// written bare or qualified, and a cursor of one row's read does not continue for another.
+func TestRemoteTranscriptsOfARowAreOfItsWorkspace(t *testing.T) {
+	w := startRowWorkspaces(t)
+	var lines strings.Builder
+	for i := 0; i < 70; i++ {
+		lines.WriteString(remoteUser(fmt.Sprintf("question %d", i)))
+		lines.WriteString(remoteAnswer(i+1, fmt.Sprintf("answer %d", i)))
+	}
+	for workspace, text := range map[string]string{w.a: remoteUser("q") + remoteAnswer(1, "the words of a:s1"), w.b: remoteUser("q") + remoteAnswer(1, "the words of b:s1")} {
 		file := filepath.Join(workspace, ".jad", "state", "s1", "dev", "base", "messages.jsonl")
 		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(file, []byte(remoteUser("question")+remoteAnswer(1, text)), 0o600); err != nil {
+		if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	readers := startRemoteReaders(t, w.remoteServer, true, "peer")
-	for session, want := range map[string]string{"a:s1": "workspace a", "b:s1": "workspace b"} {
-		out := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:" + session + "/dev/base"})
-		if !strings.Contains(out, want) || strings.Contains(out, "messages.jsonl") || strings.Contains(out, w.a) {
-			t.Errorf("%s:\n%s", session, out)
+	long := filepath.Join(w.b, ".jad", "state", "only-b", "dev", "base", "messages.jsonl")
+	if err := os.MkdirAll(filepath.Dir(long), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(long, []byte(lines.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(secret, path string) (bool, string) {
+		t.Helper()
+		status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?path="+url.QueryEscape(path), secret, nil)
+		out, _ := body["output"].(string)
+		return status == 200 && !strings.Contains(out, "error_code"), out
+	}
+	for _, c := range []struct {
+		secret, path string
+		want         string
+	}{
+		{remoteTestSecret, "profile:s1/dev/base", "the words of a:s1"}, {remoteTestSecret, "profile:a:s1/dev/base", "the words of a:s1"},
+		{rowBSecret, "profile:s1/dev/base", "the words of b:s1"}, {rowBSecret, "profile:b:s1/dev/base", "the words of b:s1"},
+		{rowBSecret, "profile:only-b/dev/base", "answer 69"},
+	} {
+		if ok, out := read(c.secret, c.path); !ok || !strings.Contains(out, c.want) || strings.Contains(out, "messages.jsonl") || strings.Contains(out, w.a) {
+			t.Errorf("%s reading %s: %v\n%s", c.secret[:5], c.path, ok, out)
 		}
 	}
-	if out := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:s1/dev/base"}); strings.Contains(out, "workspace a") || strings.Contains(out, "workspace b") || !strings.Contains(out, "error_code") {
-		t.Fatalf("a bare ambiguous id must read nothing:\n%s", out)
+	for _, c := range []struct{ secret, path string }{
+		{remoteTestSecret, "profile:b:s1/dev/base"}, {remoteTestSecret, "profile:only-b/dev/base"}, {remoteTestSecret, "profile:c:s1/dev/base"},
+		{rowBSecret, "profile:a:s1/dev/base"},
+	} {
+		if ok, out := read(c.secret, c.path); ok || strings.Contains(out, "the words of") {
+			t.Errorf("%s read %s outside its workspace:\n%s", c.secret[:5], c.path, out)
+		}
 	}
-	if out := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:c:s1/dev/base"}); strings.Contains(out, "workspace") || !strings.Contains(out, "error_code") {
-		t.Fatalf("an unknown workspace:\n%s", out)
+	_, first := read(rowBSecret, "profile:only-b/dev/base")
+	match := remoteCursorLine.FindStringSubmatch(first)
+	if match == nil {
+		t.Fatalf("140 steps exceed one page, so a cursor is expected:\n%s", first)
 	}
-}
-
-// The client end: the real profile_message tool of another JAD reaches the right workspace
-// of the server through remote:<name>/<workspace>:<session>/..., and the ambiguity of a bare id
-// is told with the form to write.
-func TestRemoteE2EProfileMessageNamesTheWorkspace(t *testing.T) {
-	w := startRemoteWorkspaces(t, tokenTable(tokenRow("client", e2eToken, fullGrant)))
-	client := startRemoteClient(t, w.url, "")
-	if out := client.call("remote:peer/b:s1/dev/base", 30_000); !strings.Contains(out, "ok") || strings.Contains(out, "error_code") {
-		t.Fatalf("b:s1:\n%s", out)
+	cursor := url.QueryEscape(match[1])
+	if status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?cursor="+cursor, rowBSecret, nil); status != 200 || strings.Contains(fmt.Sprint(body["output"]), "error_code") {
+		t.Fatalf("the cursor did not continue for its own row: %d %v", status, body)
 	}
-	if !strings.Contains(w.transcript(w.b, "s1"), "what is the answer") || w.transcript(w.a, "s1") != "" {
-		t.Fatalf("the message must reach workspace b only: a=%q", w.transcript(w.a, "s1"))
-	}
-	runs := w.providerRuns()
-	out := client.call("remote:peer/s1/dev/base", 30_000)
-	if !strings.Contains(out, "error_code: remote_ambiguous_session") || !strings.Contains(out, "<workspace>:<session>") {
-		t.Fatalf("bare s1:\n%s", out)
-	}
-	if w.providerRuns() != runs || w.transcript(w.a, "s1") != "" {
-		t.Fatal("an ambiguous message ran a profile")
-	}
-	if out := client.call("remote:peer/only-b/dev/base", 30_000); !strings.Contains(out, "ok") || strings.Contains(out, "error_code") {
-		t.Fatalf("only-b:\n%s", out)
-	}
-	if out := client.call("remote:peer/a:s1:x/dev/base", 30_000); !strings.Contains(out, "bad_remote_reference") {
-		t.Fatalf("two colons:\n%s", out)
+	if status, body := w.call(t, "GET", remoteapi.Prefix+"/transcript?cursor="+cursor, remoteTestSecret, nil); status == 200 && !strings.Contains(fmt.Sprint(body["output"]), "error_code") {
+		t.Fatalf("another row continued a cursor of a session outside its workspace: %v", body)
 	}
 }
 
-// A hop-limited request for a qualified session stops before any work, as an unqualified one.
+// A hop-limited request stops before any work, as before.
 func TestRemoteAPIHopLimitAppliesToQualifiedSessions(t *testing.T) {
-	w := startRemoteWorkspaces(t, tokenTable(tokenRow("peer", remoteTestSecret, fullGrant)))
+	w := startRowWorkspaces(t)
 	status, body := w.call(t, "POST", remoteapi.Prefix+"/messages", remoteTestSecret, map[string]any{
 		"session": "a:s1", "profile": "dev/base", "message": "x", "request_id": "req-hop-ws-01"}, remoteapi.HeaderHops, "4")
 	if status != http.StatusLoopDetected || body["code"] != "remote_hop_limit" || w.providerRuns() != 0 {

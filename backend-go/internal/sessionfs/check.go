@@ -28,7 +28,9 @@ type CheckReport struct {
 	Sandboxes []CheckedSandbox
 	// Shares are the isolation settings that name share_paths, which only the overlay
 	// materialiser can give: the caller tries it on this host for each.
-	Shares      []CheckedShares
+	Shares []CheckedShares
+	// Notes are findings that are not problems: a listed remote binding that no key reaches.
+	Notes       []string
 	seen        map[string]bool
 	seenSandbox map[string]bool
 	seenFolders map[string]bool
@@ -132,6 +134,7 @@ func CheckLayout(roots []Root, validateServer ServerFileValidator) (CheckReport,
 	report.checkOwnModels(*layout)
 	report.checkOwnToolsets(*layout, roots)
 	report.checkSandboxFolder(layout.Sandbox)
+	report.checkRemoteFiles(*layout)
 	report.checkSessions(roots)
 	return report, nil
 }
@@ -344,6 +347,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 		}
 		r.checkSandboxFolder(location.Root.Layout.SandboxTemplateDir(config.WorkingDir))
 		r.checkProfileMessage(file.ID, config)
+		r.checkRemoteKeysOf(file.ID, config)
 		r.addSandbox(file.ID, config)
 		r.addShares(file.ID, config)
 		r.addLeftOutByComposition(file.ID, location)
@@ -357,6 +361,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 				continue
 			}
 			r.checkProfileMessage(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
+			r.checkRemoteKeysOf(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addSandbox(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addShares(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 		}

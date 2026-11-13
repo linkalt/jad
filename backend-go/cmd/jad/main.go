@@ -94,6 +94,7 @@ func runCheckCommand(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	app.CheckSelfBindings(loaded.Roots, loaded.Server, stdout)
 	if !valid {
 		return errCheckFailed
 	}

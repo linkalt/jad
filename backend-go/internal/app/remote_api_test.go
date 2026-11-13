@@ -114,9 +114,15 @@ func (s *remoteServer) call(t *testing.T, method, path, secret string, body any,
 
 func (s *remoteServer) waitDone(t *testing.T, id string) map[string]any {
 	t.Helper()
+	return s.waitDoneAs(t, remoteTestSecret, id)
+}
+
+// waitDoneAs waits for a run with the token that started it (a run is visible to that token only).
+func (s *remoteServer) waitDoneAs(t *testing.T, secret, id string) map[string]any {
+	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		status, body := s.call(t, "GET", remoteapi.Prefix+"/runs/"+id+"?wait_ms=2000", remoteTestSecret, nil)
+		status, body := s.call(t, "GET", remoteapi.Prefix+"/runs/"+id+"?wait_ms=2000", secret, nil)
 		if status != 200 {
 			t.Fatalf("run status %d %v", status, body)
 		}

@@ -51,6 +51,10 @@ var remoteShapes = map[string]map[string][2]int{
 	"transcripts": {"profile": {2, 3}, "session": {1, 1}},
 }
 
+// bindingPathForms are the forms in the workspace layout: the binding is the workspace, so the
+// session is always bare and always written.
+const bindingPathForms = "remote:<binding>/profile:<session>/<category>/<name>, remote:<binding>/subagent:<session>/<category>/<name>/<run id>"
+
 const remotePathForms = "remote:<name>/profile:<session>/<category>/<name>, remote:<name>/subagent:<session>/<category>/<name>/<run id> (<session> is <workspace>:<session> when the remote holds that session id in several workspaces)"
 
 // selector turns "remote:<name>/<rest>" into the name and the remote's own path, after the
@@ -60,9 +64,14 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 	invalid := func(text string) (string, *remoteFailure) {
 		return "", &remoteFailure{status: tools.StatusInvalidInput, code: "bad_remote_reference", text: text}
 	}
+	forms := remotePathForms
+	binding := r.directory != nil && r.directory.Workspace()
+	if binding {
+		forms = bindingPathForms
+	}
 	name, rest, _ := remote.Split(reference)
 	if !remote.NamePattern.MatchString(name) {
-		return invalid("a remote path is " + remotePathForms)
+		return invalid("a remote path is " + forms)
 	}
 	if failure := r.check(name); failure != nil {
 		return "", failure
@@ -72,6 +81,9 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 		return "", &remoteFailure{status: tools.StatusError, code: "remote_unavailable", text: remoteProblem(name, err)}
 	}
 	if rest == "" {
+		if binding {
+			return invalid(fmt.Sprintf("name what to read on remote %s: %s", name, forms))
+		}
 		if tool != "transcripts" || entry.DefaultSession == "" {
 			return invalid(fmt.Sprintf("name what to read on remote %s: %s (remote:%s alone lists its default_session, when it has one)", name, remotePathForms, name))
 		}
@@ -81,9 +93,12 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 	shape, known := remoteShapes[tool][kind]
 	parts := strings.Split(body, "/")
 	if !found || !known || len(parts) < shape[0] || len(parts) > shape[1] {
-		return invalid("a remote path is " + remotePathForms + "; path: is never read on a remote")
+		return invalid("a remote path is " + forms + "; path: is never read on a remote")
 	}
 	if len(parts) == shape[0] && shape[0] != shape[1] {
+		if binding {
+			return invalid("a remote path is " + forms + ": the session is always written")
+		}
 		if entry.DefaultSession == "" {
 			return invalid(fmt.Sprintf("remote %s has no default_session, so the path must name the session", name))
 		}
@@ -92,17 +107,23 @@ func (r remoteReader) selector(tool, reference string) (path string, failure *re
 	for index, part := range parts {
 		valid := remote.NamePattern.MatchString(part)
 		switch {
+		case index == 0 && binding:
+			valid = remote.SessionPattern.MatchString(part)
 		case index == 0:
 			valid = remote.SessionRefPattern.MatchString(part)
 		case kind == "subagent" && index == 3:
 			valid = transcriptRunID.MatchString(part)
 		}
 		if !valid {
-			return invalid("a remote path is " + remotePathForms + " with plain names")
+			return invalid("a remote path is " + forms + " with plain names")
 		}
 	}
 	if kind != "session" && !entry.Allows(parts[1]+"/"+parts[2]) {
 		return "", &remoteFailure{status: tools.StatusForbidden, code: "remote_not_allowed", text: fmt.Sprintf("Profile %s/%s is not among the profiles this session may reach on remote %s", parts[1], parts[2], name)}
+	}
+	if binding {
+		// The binding is the workspace: the server is asked for <workspace>:<session>.
+		parts[0] = entry.WireSession(parts[0])
 	}
 	return kind + ":" + strings.Join(parts, "/"), nil
 }
@@ -153,7 +174,13 @@ func (r remoteReader) read(ctx context.Context, callID string, call remoteRead, 
 	if err != nil {
 		return remoteReadError(callID, call.name, err)
 	}
-	return rewriteRemoteOutput(output, call.name, contentMax)
+	workspace := ""
+	if r.directory.Workspace() {
+		if entry, err := r.directory.Entry(call.name); err == nil {
+			workspace = entry.Workspace
+		}
+	}
+	return rewriteRemoteOutput(output, call.name, workspace, contentMax)
 }
 
 func remoteReadError(callID, name string, err error) string {
@@ -182,7 +209,7 @@ func remoteReadError(callID, name string, err error) string {
 // rewriteRemoteOutput makes what the remote's tool printed usable here: the paths a line gives
 // and the cursor get the remote:<name>/ prefix, and the content is cut to contentMax bytes.
 // The text is the remote's and is only data; just these line shapes are touched.
-func rewriteRemoteOutput(output, name string, contentMax int) string {
+func rewriteRemoteOutput(output, name, workspace string, contentMax int) string {
 	prefix := remote.Prefix + name + "/"
 	head, content, hasContent := strings.Cut(output, "\n--- CONTENT ")
 	lines := strings.Split(head, "\n")
@@ -193,6 +220,11 @@ func rewriteRemoteOutput(output, name string, contentMax int) string {
 		case i == 0 && strings.HasPrefix(line, `{"id":`):
 			for _, kind := range []string{"profile:", "subagent:", "session:"} {
 				lines[i] = strings.Replace(lines[i], `"summary":"`+kind, `"summary":"`+prefix+kind, 1)
+			}
+			if workspace != "" {
+				for _, kind := range []string{"profile:", "subagent:", "session:"} {
+					lines[i] = strings.Replace(lines[i], prefix+kind+workspace+":", prefix+kind, 1)
+				}
 			}
 		}
 	}
@@ -212,6 +244,9 @@ func rewriteRemoteOutput(output, name string, contentMax int) string {
 			path, rest, more := strings.Cut(after, " | ")
 			for _, kind := range []string{"profile:", "subagent:", "session:"} {
 				if strings.HasPrefix(path, kind) {
+					if workspace != "" {
+						path = kind + strings.TrimPrefix(strings.TrimPrefix(path, kind), workspace+":")
+					}
 					row = before + " | path " + prefix + path
 					if more {
 						row += " | " + rest

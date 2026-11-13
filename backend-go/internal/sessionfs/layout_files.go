@@ -87,6 +87,10 @@ type Layout struct {
 	// a profile_message may address with local:<workspace>/... (design §30). Empty unless
 	// this workspace is listed itself.
 	MessageWorkspaces []string
+	// RemoteKeys are workspace.json remote_keys: the remote keys of every session of the
+	// workspace unless the session or the profile sets its own; nil when absent (workspace
+	// layout, design §30.4).
+	RemoteKeys *[]string
 
 	// scope and scopeUsers are set by ScopedCatalogLayout for the catalog routes only.
 	scope      catalogScope
@@ -127,6 +131,9 @@ type layoutSessionFile struct {
 	// profile's own model_default, which the model-default route now writes.
 	ModelDefaults json.RawMessage            `json:"model_defaults"`
 	Settings      map[string]json.RawMessage `json:"settings"`
+	// RemoteKeys are the remote keys this session's profiles may use (workspace layout; nil
+	// when absent: the workspace's apply, an empty list: none).
+	RemoteKeys *[]string `json:"remote_keys"`
 }
 
 // defaultProfile is the profile a request that names none uses: the first profile in
@@ -174,6 +181,9 @@ type layoutProfileFile struct {
 	Toolset      toolsetRefs                `json:"toolset"`
 	Tools        json.RawMessage            `json:"tools"`
 	Settings     map[string]json.RawMessage `json:"settings"`
+	// RemoteKeys are the remote keys of this profile (workspace layout), replacing the session's
+	// and the workspace's; nil when absent. A profile cannot change it itself.
+	RemoteKeys *[]string `json:"remote_keys"`
 }
 
 // toolsetRefs is the toolset key of a profile: one "<category>/<name>" string or an

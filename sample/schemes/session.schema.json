@@ -5,6 +5,12 @@
   "description": "<root>/<session id>.json; the file name without .json is the session id. A session is a working context: a cwd, the part of the catalogs it may use, and the active profile. It holds no model, tool or MCP definitions.",
   "type": "object",
   "properties": {
+    "remote_keys": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+      "description": "Names of the key files (G/auth/keys/<key>.json, kind remote_key, mode 0600) whose credentials the session may use for the remote bindings (G/remotes/<binding>.json) the key files name. Every profile of this session unless the profile sets its own list; replaces the workspace's list. Absent inherits from the level above, [] means no keys, a non-empty list replaces the levels above. A key only supplies the bearer token of its binding and never widens what a tool may reach: that is the remotes list of each tool. A broken key (missing file, wrong permissions, a binding that does not exist, two keys for one binding) fails the runs that use it, naming the key. Workspace layout only; never a key of a toolset."
+    },
     "schema_version": {
       "const": 1
     },

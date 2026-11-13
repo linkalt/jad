@@ -46,7 +46,7 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 	callID := execution.CallID
 	if p.remotes.directory == nil || len(p.remotes.names) == 0 {
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "remote_unavailable",
-			"This session does not enable remote profiles (tools.native.profile_message.remotes)"), nil
+			"This session does not enable remote profiles (tools.native.profile_message.remotes; in the workspace layout each binding also needs a key in remote_keys)"), nil
 	}
 	name, _, _ := remote.Split(reference)
 	if !p.remotes.allowed(name) {
@@ -54,8 +54,11 @@ func (p *profileMessageTool) executeRemote(ctx context.Context, arguments map[st
 			fmt.Sprintf("Remote %s is not available to message", name),
 			tools.Information{Key: "available", Value: strings.Join(p.remotes.names, ", ")}), nil
 	}
-	target, err := remote.ParseProfile(reference, p.remotes.directory.Entry)
+	target, err := p.remotes.directory.ParseProfile(reference)
 	if err != nil {
+		if p.remotes.directory.Workspace() {
+			return p.invalidProfileRef(callID, reference), nil
+		}
 		return tools.ExecutionError(callID, tools.StatusInvalidInput, "bad_remote_reference", err.Error()), nil
 	}
 	entry, err := p.remotes.directory.Entry(name)
@@ -126,7 +129,7 @@ func (p *remotePlan) Notes() []tools.Information { return p.notes }
 // reached before an answer; a message sent and then lost is the run's outcome.
 func (p *remotePlan) Start(ctx context.Context) (ProfileMessageRun, error) {
 	run, err := startRemoteRun(ctx, p.directory, p.target, "messages", map[string]any{
-		"session": p.target.Session, "profile": p.target.Profile, "message": p.message,
+		"session": p.target.WireSession(), "profile": p.target.Profile, "message": p.message,
 	}, p.hops, p.timeout, "profile")
 	if err != nil {
 		return nil, err

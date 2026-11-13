@@ -125,6 +125,9 @@ const (
 	APIChatCompletions   = "chat_completions"
 )
 
+// RemoteKey is a key file (G/auth/keys/<name>.json) a session may use for a binding.
+type RemoteKey struct{ Name, File string }
+
 // SessionConfig is the resolved filesystem-backed configuration for one
 // session/profile/model selection.
 type SessionStoragePaths struct {
@@ -225,6 +228,15 @@ type SessionConfig struct {
 	// RemotesDir is the remotes folder of the catalog layout (<name>.json entries of other
 	// JAD servers); empty outside the layout.
 	RemotesDir string
+	// RemoteKeys are the session's effective remote keys by binding name (workspace layout):
+	// the key files remote_keys of the workspace, the session and the profile resolved to, the
+	// nearest level that sets any replacing the ones above. They give a binding its credential
+	// and nothing else: what a tool may reach is its own remotes list. nil without keys, and in v1.
+	RemoteKeys map[string]RemoteKey
+	// RemoteKeyFault is why the session's remote_keys cannot be used (a key file that is missing
+	// or invalid, a binding that does not exist, two keys for one binding): RemoteKeys is then
+	// empty, and a run (WithModel) stops with this error.
+	RemoteKeyFault error
 	// AgentToolsets holds, by key, the merged settings of the toolsets a sub-agent names
 	// in its toolset key. The key is the ids joined with "+" (one id: the id itself). Only the tool settings and MCP servers of an
 	// entry are used; it has no subagent tool.
@@ -759,6 +771,9 @@ func LoadSessionConfig(location Location, requestedProfile, requestedModel strin
 // WithModel returns the configuration with the model file read and validated.
 // The file is the one LoadSessionSettings selected (ModelPath).
 func (c SessionConfig) WithModel() (SessionConfig, error) {
+	if c.RemoteKeyFault != nil {
+		return SessionConfig{}, c.RemoteKeyFault
+	}
 	if c.ModelPath == "" && c.ModelFault != nil {
 		return SessionConfig{}, c.ModelFault
 	}

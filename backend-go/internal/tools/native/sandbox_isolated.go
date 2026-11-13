@@ -221,7 +221,9 @@ func collectLauncher(execution tools.ExecutionContext, tree *worktree.Tree) work
 }
 
 // holderLauncher starts git in the holder of tree's overlay run without a sandbox, with the
-// host's environment as a collection on the host has.
+// host's environment as a collection on the host has, except the JAD_REMOTE_* variables: a remote
+// key file may name one as its token (token_env), and git here runs hooks and filters the run
+// could have left in the repository.
 func holderLauncher(tree *worktree.Tree) worktree.Launcher {
 	return func(git string, args []string, dir string) (worktree.Launch, error) {
 		resolved, err := exec.LookPath(git)
@@ -236,6 +238,20 @@ func holderLauncher(tree *worktree.Tree) worktree.Launcher {
 		if err != nil {
 			return worktree.Launch{}, err
 		}
-		return worktree.Launch{File: launch.resolved, Argv0: launch.configured, Args: launch.args, Env: os.Environ()}, nil
+		return worktree.Launch{File: launch.resolved, Argv0: launch.configured, Args: launch.args, Env: withoutRemoteKeys(os.Environ())}, nil
 	}
+}
+
+// remoteKeyEnvPrefix starts the variable names a remote key may read its token from.
+const remoteKeyEnvPrefix = "JAD_REMOTE_"
+
+// withoutRemoteKeys is environment without the variables whose names start with JAD_REMOTE_.
+func withoutRemoteKeys(environment []string) []string {
+	kept := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, remoteKeyEnvPrefix) {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }

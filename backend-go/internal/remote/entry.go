@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -53,7 +54,9 @@ var (
 	// <workspace>:<session> where the workspace is the root id the remote server lists for it
 	// (/api/workspaces), for a session id that more than one workspace of that server holds.
 	SessionRefPattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,63}:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-	tokenPattern      = regexp.MustCompile(`^[\x21-\x7e]+$`)
+	// workspacePattern is a workspace id as the remote server lists it (/api/workspaces).
+	workspacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	tokenPattern     = regexp.MustCompile(`^[\x21-\x7e]+$`)
 )
 
 // Entry is one remote file: <remotes>/<name>.json. It holds where to reach the remote and
@@ -75,6 +78,18 @@ type Entry struct {
 	PollMs           int64
 	LostAfterMs      int64
 	DefaultSession   string
+	// Workspace is the workspace of the server the binding reaches (workspace layout, v2); empty
+	// in the v1 layout, whose entry reaches a server and names the session itself. A v2 binding
+	// is one server and one workspace: a session is sent as <Workspace>:<session>.
+	Workspace string
+	// KeyFile is the key file (G/auth/keys/<key>.json) the calling session's remote_keys give
+	// this binding, and KeyName its name; both are set by a scoped Directory, never by the
+	// binding file, and are empty for an unkeyed binding and in v1.
+	KeyFile string
+	KeyName string
+	// V2 says the entry was read as a binding of the workspace layout, whose credential is its
+	// key and not a token source of its own.
+	V2 bool
 	// Profiles narrows what this client lets a model reach (globs of category/name for
 	// profiles and agents); empty allows everything the remote's token allows.
 	Profiles []string
@@ -98,6 +113,7 @@ type fileRemote struct {
 	PollMs           *int64   `json:"poll_ms"`
 	LostAfterMs      *int64   `json:"lost_after_ms"`
 	DefaultSession   string   `json:"default_session"`
+	Workspace        string   `json:"workspace"`
 	Profiles         []string `json:"profiles"`
 }
 
@@ -109,13 +125,29 @@ var inlineSecretKeys = []string{"token", "password", "secret", "authorization", 
 // for a connection this build no longer makes.
 var removedTLSKeys = []string{"ca_file", "insecure", "insecure_skip_verify", "skip_verify", "tls"}
 
-// ParseEntry reads one remote file. path is used for messages and to resolve relative paths.
+// ParseEntry reads one remote file of the v1 layout. path is used for messages and to resolve
+// relative paths.
 func ParseEntry(name, path string, data []byte) (Entry, error) {
+	return parseEntry(name, path, data, false)
+}
+
+// ParseBinding reads one remote file of the workspace layout (v2): a binding, which is one server
+// and one workspace on it. It has no credential of its own; the caller's key supplies it.
+func ParseBinding(name, path string, data []byte) (Entry, error) {
+	return parseEntry(name, path, data, true)
+}
+
+func parseEntry(name, path string, data []byte, v2 bool) (Entry, error) {
 	if !NamePattern.MatchString(name) {
 		return Entry{}, fmt.Errorf("%s: a remote name is 1 to 64 letters, digits, '_' or '-'", path)
 	}
 	if err := checkRemoteKeys(path, data); err != nil {
 		return Entry{}, err
+	}
+	if v2 {
+		if err := checkRemovedBindingKeys(path, data); err != nil {
+			return Entry{}, err
+		}
 	}
 	var file fileEntry
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -134,11 +166,21 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	}
 	r := file.Remote
 	base := filepath.Dir(path)
-	entry := Entry{Name: name, Description: file.Description, TokenEnv: r.TokenEnv, DefaultSession: r.DefaultSession, Profiles: append([]string(nil), r.Profiles...)}
+	entry := Entry{Name: name, Description: file.Description, TokenEnv: r.TokenEnv, DefaultSession: r.DefaultSession, Profiles: append([]string(nil), r.Profiles...), V2: v2}
 	if err := entry.setURL(path, r.URL); err != nil {
 		return Entry{}, err
 	}
+	if v2 {
+		if !workspacePattern.MatchString(r.Workspace) {
+			return Entry{}, fmt.Errorf("%s: remote.workspace is required: the id of the workspace on that server this binding reaches (1 to 64 letters, digits, '.', '_' or '-'); a second workspace on the same server is a second binding", path)
+		}
+		entry.Workspace = r.Workspace
+	} else if r.Workspace != "" {
+		return Entry{}, fmt.Errorf("%s: remote.workspace is a key of the workspace layout; a v1 remote names the session in the reference", path)
+	}
 	switch {
+	case v2:
+		// The credential is the caller's key: nothing in the binding names a token source.
 	case r.TokenEnv != "" && r.TokenFile != "":
 		return Entry{}, fmt.Errorf("%s: remote.token_env and remote.token_file are alternatives: set one", path)
 	case r.TokenEnv == "" && r.TokenFile == "":
@@ -149,7 +191,7 @@ func ParseEntry(name, path string, data []byte) (Entry, error) {
 	if r.TokenFile != "" {
 		entry.TokenFile = resolveFrom(base, r.TokenFile)
 	}
-	if r.DefaultSession != "" && !SessionRefPattern.MatchString(r.DefaultSession) {
+	if !v2 && r.DefaultSession != "" && !SessionRefPattern.MatchString(r.DefaultSession) {
 		return Entry{}, fmt.Errorf("%s: remote.default_session is not a valid session id (or <workspace>:<session>)", path)
 	}
 	for _, glob := range r.Profiles {
@@ -214,6 +256,33 @@ func checkRemoteKeys(path string, data []byte) error {
 			if _, has := level[key]; has {
 				return fmt.Errorf("%s: %q was removed: a remote is reached over plain http or a unix socket, so there is no TLS to configure and no certificate to trust; delete the key", path, key)
 			}
+		}
+	}
+	return nil
+}
+
+// removedBindingKeys are the keys of a v1 remote file a binding no longer has, with what to do
+// instead: they are refused by name, never ignored, so a file written for the v1 layout never
+// silently loses its credential or its default session.
+var removedBindingKeys = map[string]string{
+	"token_env":       "the secret moves to a key file G/auth/keys/<key>.json (its token_env, or token), the key is named in remote_keys, and the binding names no credential",
+	"token_file":      "move the secret to a key file G/auth/keys/<key>.json, list the key in remote_keys, and delete the key from the binding",
+	"default_session": "write the session in the address: remote:<binding>/<session>/<category>/<name>",
+}
+
+// checkRemovedBindingKeys refuses the v1 keys in a binding.
+func checkRemovedBindingKeys(path string, data []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return fmt.Errorf("%s: %v", path, err)
+	}
+	var inner map[string]json.RawMessage
+	if raw, ok := top["remote"]; ok {
+		_ = json.Unmarshal(raw, &inner)
+	}
+	for _, key := range []string{"token_env", "token_file", "default_session"} {
+		if _, has := inner[key]; has {
+			return fmt.Errorf("%s: remote.%s was removed in the workspace layout; %s", path, key, removedBindingKeys[key])
 		}
 	}
 	return nil
@@ -290,10 +359,46 @@ func (e Entry) SameHost() bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
+// PointsAt reports whether the entry reaches the server that listens on the unix socket
+// listenUnix, or, when that is empty, on host:port. It is a warning aid (jad check) and not a
+// refusal: another name for the same machine (a LAN address, a tunnel) is not recognised.
+func (e Entry) PointsAt(listenUnix, host string, port int) bool {
+	if listenUnix != "" {
+		return e.Unix != "" && e.Unix == filepath.Clean(listenUnix)
+	}
+	if e.Unix != "" || port == 0 {
+		return false
+	}
+	entryHost, entryPort, err := net.SplitHostPort(e.Host)
+	if err != nil || entryPort != strconv.Itoa(port) {
+		return false
+	}
+	own := net.ParseIP(strings.Trim(host, "[]"))
+	if host == "" || (own != nil && (own.IsLoopback() || own.IsUnspecified())) || strings.EqualFold(host, "localhost") {
+		return e.SameHost()
+	}
+	return strings.EqualFold(strings.Trim(entryHost, "[]"), host)
+}
+
+// Keyed reports whether the entry can authenticate: a v1 entry always has a token source, a
+// binding only when the calling session's remote_keys give it a key.
+func (e Entry) Keyed() bool { return !e.V2 || e.KeyFile != "" }
+
+// WireSession is the session as the remote server's routes take it: <workspace>:<session> for a
+// binding, the session as written for a v1 entry.
+func (e Entry) WireSession(session string) string {
+	if e.Workspace == "" {
+		return session
+	}
+	return e.Workspace + ":" + session
+}
+
 // Token reads the token from its source. Errors name the source, never a value.
 func (e Entry) Token(environment func(string) string) (string, error) {
 	var token string
 	switch {
+	case e.V2:
+		return e.keyToken(environment)
 	case e.TokenEnv != "":
 		if environment == nil {
 			environment = os.Getenv
@@ -367,12 +472,33 @@ func Load(dir, name string) (Entry, error) {
 	return ParseEntry(name, path, data)
 }
 
+// LoadBinding reads <dir>/<name>.json as a binding of the workspace layout.
+func LoadBinding(dir, name string) (Entry, error) {
+	if !NamePattern.MatchString(name) {
+		return Entry{}, ErrNotFound
+	}
+	path := filepath.Join(dir, name+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Entry{}, ErrNotFound
+		}
+		return Entry{}, fmt.Errorf("remote %s: %v", name, err)
+	}
+	return ParseBinding(name, path, data)
+}
+
 // ErrNotFound is a remote name with no file.
 var ErrNotFound = errors.New("unknown remote")
 
 // List reads every <dir>/<name>.json, sorted by name. A missing dir is empty. A broken
 // file is reported in problems and does not hide the others.
-func List(dir string) (entries []Entry, problems []error) {
+func List(dir string) (entries []Entry, problems []error) { return list(dir, Load) }
+
+// ListBindings is List for the bindings of the workspace layout.
+func ListBindings(dir string) (entries []Entry, problems []error) { return list(dir, LoadBinding) }
+
+func list(dir string, load func(dir, name string) (Entry, error)) (entries []Entry, problems []error) {
 	items, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -385,7 +511,7 @@ func List(dir string) (entries []Entry, problems []error) {
 		if !ok {
 			continue
 		}
-		entry, err := Load(dir, name)
+		entry, err := load(dir, name)
 		if err != nil {
 			problems = append(problems, err)
 			continue

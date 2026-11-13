@@ -4880,3 +4880,66 @@ colon form (stage C). v1 keeps every behaviour; the v1 goldens are unchanged.
   "empty denies", and is documented in the schemas.
 - Open: nothing changes the reset trigger's own meaning; a reset inside a workspace is still
   unconditional. Incoming remote messages are covered in stage C.
+
+### Stage C: remote bindings, keys and workspace rows (built)
+
+Layout-aware throughout: the v1 layout reads remote files, token tables and sessions exactly as
+before (the v1 goldens and the T-036 suite are unchanged); every changed reader is told the layout.
+
+- **Binding** (`G/remotes/<binding>.json`, v2): one server and one workspace, `remote.workspace`
+  required. `token_env`, `token_file` and `default_session` are removed keys with hints; the
+  binding has no credential. A session goes out as `<workspace>:<session>`. Address:
+  `remote:<binding>/<session>/<category>/<name>` (exactly four segments after the prefix; no
+  `<workspace>:` form, no default session).
+- **Key** (`G/auth/keys/<key>.json`, mode 0600, `kind: remote_key`): `binding` plus `token` or a
+  `token_env` (`JAD_REMOTE_*` only). Opened once and checked on the descriptor (regular, under
+  4096 bytes, closed to group and others), read at each request, never cached, never in an error,
+  a log, a description or a transcript. A key works for the binding it names only.
+- **`remote_keys`** (workspace.json, session file, profile file; nearest level wins, `[]` = none,
+  absent inherits). Refused in the v1 layout, in every toolset (not a toolset key) and by
+  self-edit (not in `selfEditTopKeys`). Resolved at session load; a broken key (missing file, open
+  permissions, missing or invalid binding, two keys for one binding) does not stop the session from
+  loading or listing but fails every run of it (`WithModel`) with the key's name. `jad check`
+  reports the same as a problem.
+- **Keys never grant reach.** A tool offers a binding only if its own list names it (profile_message
+  `remotes`; profile/transcript/transcripts `remotes` + `allow_remote`; subagent `remotes`) and the
+  session has a key for it (`remoteDirectory` drops unkeyed names from the tool's settings copy).
+  `jad check` notes listed-but-unkeyed bindings.
+- **One credential point:** every remote tool gets its entries and clients from the session's scoped
+  `remote.Directory`; clients are kept per key file so two sessions never share a credential. The
+  scope is built only in `remoteDirectory` from `SessionConfig.RemoteKeys`.
+- **Server rows (v2 layout):** every token row has `workspace`; globs are bare (`session/cat/name`
+  inside that workspace; a colon is a load error). `Server.qualify` turns the request's session into
+  `<row.workspace>:<session>` (a request qualified with another workspace, an unserved workspace
+  and a missing session all answer `no_session`) and the unchanged `Backend` resolves it to one
+  root. `Server.may` matches the transcript readers' canonical names inside the row's workspace
+  only. No `Backend` signature changed. Routes with no session argument (`/runs`, `result`, `stop`)
+  were already limited to the token that started the run (U13).
+- **Incoming deny (R5):** `remoteBackend.checkPolicy` applies the `global.json` and target
+  workspace `deny` rules that have no `from` to a message that arrives from another server (action
+  `message` only); the answer is the token-glob refusal (`remote_forbidden` at the caller), no rule
+  text. Reset cannot travel remotely (no field in the body).
+- **`git` in the overlay holder** no longer receives `JAD_REMOTE_*` (tested); the exec and
+  tool_smith child environment is an allowlist and never had them.
+- **`jad check`:** binding and key files are read and reported; each binding that points at this
+  server (unix socket, or own host:port) is a warning (`CheckSelfBindings`): a message through it
+  is a remote message, so caller-side `local:` rules and `allow_reset` do not apply to it.
+- Superseded T-036/T-036b v2 behaviour: a v2 server row no longer matches `<workspace>:` globs;
+  `startRemoteWorkspaces` tests and the loop test were rewritten for rows, bindings and keys. The
+  T-036b two-name rule (`tokenProfiles.sessionNames`) is now only reachable on a v1 server with
+  several roots and is kept for that.
+
+**Open gaps (stage C).**
+- *Judged at start or load:* a row for a workspace the server does not serve is accepted by the
+  table and answers `no_session` (fail closed); `jad check` does not read the server's token table.
+- *Self-binding:* detected by address equality only; another name for the same machine (a LAN
+  address, a tunnel) is not recognised. A message through a self-binding skips the caller's own
+  `local:` deny rules.
+- *Version skew:* a v2 client reaches a server built before T-036 as `no_session`; against a v1
+  server it needs row globs `*` or `<root>:…` (tested; the limit of a v2 client against a v1 server).
+- *`token_env` keys:* the variable lives in the server's environment; the engine's own child
+  processes do not receive it, but any process started outside the engine's environment policy
+  (hooks and MCP servers inherit what their settings allow) does. The inline `token` is the
+  recommended default.
+- *Not done in this stage:* migration of v1 remote files and rows, remote and key schemas and
+  samples, design text (stage D); the deletion sweep (stage E).

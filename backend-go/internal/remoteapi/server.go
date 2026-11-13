@@ -47,8 +47,12 @@ var (
 	// that session id (see handleProfiles for the one route that cannot know).
 	ErrAmbiguousSession = errors.New("session id is in more than one workspace")
 	ErrUnknownTarget    = errors.New("unknown profile or agent")
-	ErrBusy             = errors.New("target is busy")
-	ErrRefused          = errors.New("request refused")
+	// ErrForbidden is a request the server's own policy refuses (a profile_message deny rule of
+	// the workspace or of global.json): it answers exactly as a token whose globs do not reach the
+	// target does, so the remote caller learns no more than that.
+	ErrForbidden = errors.New("request not allowed")
+	ErrBusy      = errors.New("target is busy")
+	ErrRefused   = errors.New("request refused")
 )
 
 // Refusal is ErrRefused with a client-safe reason (cycle, chain too long, unavailable).
@@ -166,6 +170,9 @@ type Options struct {
 	WaitMax         time.Duration
 	BodyMaxBytes    int64
 	ResultMaxBytes  int
+	// Workspaces are the ids of the workspaces this server serves (the workspace layout); empty
+	// for a v1 server. A token row of the workspace layout reaches one of them.
+	Workspaces []string
 }
 
 // Server serves /api/remote/v1.
@@ -341,7 +348,12 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request, token To
 		writeError(w, http.StatusBadRequest, "bad_request", "session is required")
 		return
 	}
-	names, err := s.opts.Backend.Profiles(r.Context(), session)
+	bare, reference, inside := s.qualify(token, session)
+	if !inside {
+		writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+		return
+	}
+	names, err := s.opts.Backend.Profiles(r.Context(), reference)
 	if errors.Is(err, ErrAmbiguousSession) {
 		// The token is checked against profile names only after the list is read, so naming the
 		// ambiguity here would tell any token that a session id exists in two workspaces. The
@@ -355,7 +367,7 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request, token To
 	}
 	visible := make([]string, 0, len(names))
 	for _, name := range names {
-		if token.MayProfile(session + "/" + name) {
+		if token.MayProfile(bare + "/" + name) {
 			visible = append(visible, name)
 		}
 	}
@@ -422,7 +434,12 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		writeError(w, http.StatusBadRequest, "bad_request", "session, request_id (8 to 64 letters, digits, '_' or '-'), a category/name profile, an agent name (subagents only) and the text are required")
 		return
 	}
-	scope := body.Session + "/" + target
+	bare, reference, inside := s.qualify(token, body.Session)
+	if !inside {
+		writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+		return
+	}
+	scope := bare + "/" + target
 	allowed := token.MayProfile(scope)
 	if kind == "subagent" {
 		scope += "/" + body.Agent
@@ -433,13 +450,13 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request, token Token
 		return
 	}
 	key := token.ID + "\x00" + body.RequestID
-	fingerprint := sha256.Sum256([]byte(strings.Join([]string{kind, body.Session, target, body.Agent, text, body.Resume}, "\x00")))
+	fingerprint := sha256.Sum256([]byte(strings.Join([]string{kind, reference, target, body.Agent, text, body.Resume}, "\x00")))
 	entry, status := s.begin(r.Context(), token, key, kind, fingerprint, func(ctx context.Context, id string) (Run, error) {
 		caller := "remote:" + token.ID
 		if kind == "subagent" {
-			return s.opts.Backend.StartSubagent(ctx, SubagentRequest{Session: body.Session, Profile: target, Agent: body.Agent, Task: text, Resume: body.Resume, RunID: id, Caller: caller, Hops: hops})
+			return s.opts.Backend.StartSubagent(ctx, SubagentRequest{Session: reference, Profile: target, Agent: body.Agent, Task: text, Resume: body.Resume, RunID: id, Caller: caller, Hops: hops})
 		}
-		return s.opts.Backend.SendMessage(ctx, MessageRequest{Session: body.Session, Profile: target, Message: text, Caller: caller, Hops: hops})
+		return s.opts.Backend.SendMessage(ctx, MessageRequest{Session: reference, Profile: target, Message: text, Caller: caller, Hops: hops})
 	})
 	if entry == nil {
 		s.startFailure(w, token, status.err)
@@ -589,6 +606,9 @@ func (s *Server) backendError(w http.ResponseWriter, token Token, err error) {
 		writeError(w, http.StatusConflict, "ambiguous_session", "that session id is in more than one workspace of this server; write <workspace>:<session>")
 	case errors.Is(err, ErrUnknownTarget):
 		writeError(w, http.StatusNotFound, "unknown_target", "that profile or agent does not exist in the session")
+	case errors.Is(err, ErrForbidden):
+		s.opts.Logger.Warn("remote api: denied by policy", "token", token.ID)
+		writeError(w, http.StatusForbidden, "forbidden", "this token may not do that")
 	default:
 		s.opts.Logger.Error("remote api: backend error", "token", token.ID, "error", err.Error())
 		writeError(w, http.StatusInternalServerError, "internal", "the server could not do that")
@@ -828,7 +848,13 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, token Tok
 		writeError(w, http.StatusBadRequest, "bad_request", "session and profile are required")
 		return
 	}
-	output, err := backend.ProfileInfo(r.Context(), ProfileRequest{Session: session, Profile: profile, MayProfile: token.MayProfile})
+	_, reference, inside := s.qualify(token, session)
+	if !inside {
+		writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+		return
+	}
+	mayProfile, _ := s.may(token)
+	output, err := backend.ProfileInfo(r.Context(), ProfileRequest{Session: reference, Profile: profile, MayProfile: mayProfile})
 	if err != nil {
 		var refusal *Refusal
 		if errors.As(err, &refusal) {
@@ -883,7 +909,16 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request, token 
 			arguments[key] = values[0]
 		}
 	}
-	output, err := backend.Transcript(r.Context(), TranscriptRequest{Tool: tool, Arguments: arguments, MayProfile: token.MayProfile, MayAgent: token.MayAgent})
+	if path, ok := arguments["path"].(string); ok {
+		qualified, inside := s.qualifyPath(token, path)
+		if !inside {
+			writeError(w, http.StatusNotFound, "no_session", "that session does not exist on this server")
+			return
+		}
+		arguments["path"] = qualified
+	}
+	mayProfile, mayAgent := s.may(token)
+	output, err := backend.Transcript(r.Context(), TranscriptRequest{Tool: tool, Arguments: arguments, MayProfile: mayProfile, MayAgent: mayAgent})
 	if err != nil {
 		var refusal *Refusal
 		if errors.As(err, &refusal) {
