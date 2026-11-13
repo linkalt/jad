@@ -5311,3 +5311,10 @@ and `tmp/T-042-decisions.md` (which overrides it). Builds on T-042a (guard, read
   - The `messages-golden-diff` binary procedure (baseline worktree build) was not run; the in-tree run-baseline
     goldens (frozen pre-change outputs) with and without the normaliser are the comparison. Running the skill
     against a b9dc0c2a worktree would close it.
+  - Final gate (after 6149e322): `verify-go.sh --race "./internal/transcript ./internal/session ./internal/app"`
+    with `TMPDIR=/tmp/t042` (mode 711, so the bwrap tests run) gave gofmt, vet, full test (38 packages ok) and
+    diffcheck exit 0; the race step passed transcript and session (-count=3) but `internal/app` hit the default
+    10-minute `go test` timeout at -count=3 (no DATA RACE in the log; `TestRunMCPLoaderServersAreConfinedByTheSessionsSandbox`
+    was running). `go test -race -count=1 -timeout 40m ./internal/app` passed (249 s, no race). The script's fixed
+    -count=3 with the default timeout cannot cover `internal/app` under -race; a `-timeout` in the script would
+    close it. The 15 bwrap tests ran and passed, none skipped.
