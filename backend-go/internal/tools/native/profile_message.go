@@ -407,7 +407,7 @@ func profileMessageListText(targets, sessions, remotes []string) string {
 		text = " Profiles: " + strings.Join(targets, ", ") + "."
 	}
 	if len(sessions) > 0 {
-		text += " Profiles of other existing sessions (in the workspace layout, only those of your own workspace) are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + ")."
+		text += " Profiles of other existing sessions are written <session>/<category>/<profile> (sessions: " + strings.Join(sessions, ", ") + "); in the workspace layout a session without a workspace is one of your own workspace, and a glob <workspace>:<session> is a session of another workspace that also has to accept yours, written <workspace>:<session>/<category>/<profile>."
 	}
 	if len(remotes) > 0 {
 		text += " Remote profiles on other JAD servers are written remote:<name>/[<workspace>:]<session>/<category>/<profile> (remotes: " + strings.Join(remotes, ", ") + "); the remote decides what you may reach, and <workspace>: is needed only when the remote holds that session id in several workspaces."
@@ -531,7 +531,7 @@ func (p *profileMessageTool) execute(ctx context.Context, arguments map[string]a
 var localProfilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // localTarget splits a local profile argument: <category>/<profile> of the calling session, or
-// <session>/<category>/<profile> when a tools.native.profile_message.sessions glob allows the
+// <session>/<category>/<profile> (or <workspace>:<session>/... in the workspace layout) when a tools.native.profile_message.sessions glob allows the
 // session. A profile denied by deny_profiles is denied in every session.
 func (p *profileMessageTool) localTarget(profile string) (session, target string, allowed bool) {
 	switch len(strings.Split(profile, "/")) {
@@ -539,10 +539,17 @@ func (p *profileMessageTool) localTarget(profile string) (session, target string
 		return "", profile, slices.Contains(p.targets, profile)
 	case 3:
 		session, target, _ = strings.Cut(profile, "/")
-		if !remote.SessionPattern.MatchString(session) || session == "." || session == ".." || !localProfilePattern.MatchString(target) || slices.Contains(p.settings.DenyProfiles, target) {
+		// A session written <workspace>:<session> is matched only by the globs that name a
+		// workspace, and a bare one only by the globs that do not: a bare "*" has always meant
+		// the calling workspace and must not start to mean every workspace.
+		qualified := strings.Contains(session, ":")
+		if !remote.SessionRefPattern.MatchString(session) || !localProfilePattern.MatchString(target) || slices.Contains(p.settings.DenyProfiles, target) {
 			return "", "", false
 		}
 		for _, glob := range p.settings.Sessions {
+			if sessionfs.NamesWorkspace(glob) != qualified {
+				continue
+			}
 			if ok, err := path.Match(glob, session); err == nil && ok {
 				return session, target, true
 			}

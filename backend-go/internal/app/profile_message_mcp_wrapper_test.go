@@ -184,7 +184,7 @@ func TestConfinedRunsAndTheTargetsOwnRunKeepTheirOwnServers(t *testing.T) {
 	scopes := map[string]string{}
 	narrowed := func(tag string) boundRunner {
 		t.Helper()
-		confine := targetRunner(targetConfiner(loggingSandbox(wrapped, tag, filepath.Join(logs, tag)), place, nil), "dev/coder", "look", nil, nil, nil, nil)
+		confine := targetRunner(targetConfiner(loggingSandbox(wrapped, tag, filepath.Join(logs, tag)), place, nil, false), "dev/coder", "look", nil, nil, nil, nil)
 		runner, err := confine(boundRunnerOf(t, f, "review/reviewer"))
 		if err != nil {
 			t.Fatal(err)
@@ -267,11 +267,11 @@ func TestProfileMessageRunGetsAnMCPScopeOnlyWhenTheNarrowingMovesItsServers(t *t
 	}
 	execOnly := loggingSandbox("/dev/null", "x", t.TempDir())
 	execOnly.Tools = []string{"exec"}
-	if got := scope(targetConfiner(execOnly, place, nil)); got != "" {
+	if got := scope(targetConfiner(execOnly, place, nil, false)); got != "" {
 		t.Fatalf("a caller sandbox without mcp: scope %q", got)
 	}
 	covering := loggingSandbox("/dev/null", "x", t.TempDir())
-	first, second := scope(targetConfiner(covering, place, nil)), scope(targetConfiner(covering, place, nil))
+	first, second := scope(targetConfiner(covering, place, nil, false)), scope(targetConfiner(covering, place, nil, false))
 	if first == "" || first != second {
 		t.Fatalf("a caller sandbox covering mcp: scopes %q and %q, want one, the same for two runs narrowed alike", first, second)
 	}
@@ -281,7 +281,7 @@ func TestProfileMessageRunGetsAnMCPScopeOnlyWhenTheNarrowingMovesItsServers(t *t
 		t.Helper()
 		target := boundRunnerOf(t, f, "review/reviewer")
 		target.config.Isolation.Mode = sessionfs.SandboxIsolationWorktree
-		runner, err := targetRunner(targetConfiner(covering, place, nil), "dev/coder", "look", nil, nil, nil, nil)(target)
+		runner, err := targetRunner(targetConfiner(covering, place, nil, false), "dev/coder", "look", nil, nil, nil, nil)(target)
 		if err != nil {
 			t.Fatal(err)
 		}

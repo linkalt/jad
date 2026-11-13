@@ -172,7 +172,7 @@ func TestConfineTargetWithAChoice(t *testing.T) {
 	target := sessionfs.SessionConfig{SettingPath: "/root/sessions/t.json", WorkingDir: "/work/t", StateDir: "/state/t"}
 	choice := bwrapChoice("reader", "{tmp}")
 	choice.Sandbox.ReadOnlyPaths = []string{"/root/setting.json"}
-	got, err := confineTarget(nil, sessionfs.SandboxPlace{}, choice, target)
+	got, err := confineTarget(nil, sessionfs.SandboxPlace{}, choice, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestConfineTargetWithAChoice(t *testing.T) {
 	if choice.Sandbox.ReadOnlyPaths[0] != "/root/setting.json" || len(choice.Sandbox.ReadOnlyPaths) != 1 {
 		t.Fatalf("the choice itself changed: %v", choice.Sandbox.ReadOnlyPaths)
 	}
-	if got, err := confineTarget(nil, sessionfs.SandboxPlace{}, nil, target); err != nil || got.Sandbox != nil {
+	if got, err := confineTarget(nil, sessionfs.SandboxPlace{}, nil, target, false); err != nil || got.Sandbox != nil {
 		t.Fatalf("no caller, no choice: %+v %v", got.Sandbox, err)
 	}
 }

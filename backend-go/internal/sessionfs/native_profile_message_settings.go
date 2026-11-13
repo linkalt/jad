@@ -60,9 +60,14 @@ type NativeProfileMessageSettings struct {
 	// own beside tools.native.subagent.max_depth (NativeSubagentSettings.RunMaxDepth): a message
 	// must pass both, so a longer max_chain never lets a chain run deeper than max_depth.
 	MaxChain int
-	// Sessions are globs of session ids (not root-qualified; '*' and '?' only) whose profiles
-	// the model may message as <session>/<category>/<profile>, besides its own session's.
-	// None by default, so a session reaches only its own profiles unless it says so.
+	// Sessions are globs of session ids ('*' and '?' only) whose profiles the model may message
+	// as <session>/<category>/<profile>, besides its own session's. A glob without a colon is
+	// matched against a bare session id, which always means the calling workspace in the
+	// workspace layout. A glob <workspace glob>:<session glob> is matched against a session
+	// written <workspace>:<session> and only those: it is the only way to reach a session of
+	// another workspace, which that workspace must also accept (Layout.AcceptsProfileMessagesFrom,
+	// docs/design_workspace_layout.md §29). None by default, so a session reaches only its own
+	// profiles unless it says so.
 	Sessions []string
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
@@ -217,7 +222,16 @@ func normalizeProfileMessageDenyProfiles(raw json.RawMessage, settingPath, secti
 }
 
 // sessionGlobPattern allows no '[', '/' or ':' so a glob can neither cross a segment nor name a root.
-var sessionGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
+// workspaceSessionGlobPattern is the glob that names a workspace: exactly one colon, a glob of
+// workspace ids (root-id characters) before it and a session glob after it.
+var (
+	sessionGlobPattern          = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
+	workspaceSessionGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,63}:[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
+)
+
+// NamesWorkspace reports whether a profile_message sessions glob is <workspace glob>:<session
+// glob>, the form that is matched against a session written with its workspace.
+func NamesWorkspace(glob string) bool { return strings.Contains(glob, ":") }
 
 func normalizeSessionGlobs(raw json.RawMessage, settingPath, section string) ([]string, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
@@ -229,8 +243,8 @@ func normalizeSessionGlobs(raw json.RawMessage, settingPath, section string) ([]
 	}
 	seen := map[string]struct{}{}
 	for _, glob := range globs {
-		if !sessionGlobPattern.MatchString(glob) {
-			return nil, configError("%s: %s.sessions entry %q is not a session id glob (letters, digits, '.', '_', '-', '*' and '?')", settingPath, section, glob)
+		if !sessionGlobPattern.MatchString(glob) && !workspaceSessionGlobPattern.MatchString(glob) {
+			return nil, configError("%s: %s.sessions entry %q is not a session id glob, or a <workspace glob>:<session glob> (letters, digits, '.', '_', '-', '*' and '?')", settingPath, section, glob)
 		}
 		if _, dup := seen[glob]; dup {
 			return nil, configError("%s: %s.sessions lists %q more than once", settingPath, section, glob)

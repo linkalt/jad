@@ -58,9 +58,10 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 	}
 	target := request.Target
 	targetReference := reference
+	foreign := false
 	if request.Session != "" {
 		var err error
-		if targetReference, err = m.otherSession(reference, request.Session, target); err != nil {
+		if targetReference, foreign, err = m.otherSession(reference, request.Session, target); err != nil {
 			return nil, err
 		}
 	}
@@ -183,10 +184,10 @@ func (m profileMessenger) Prepare(ctx context.Context, request native.ProfileMes
 		if !ok {
 			return nil, errors.New("profile message needs the target's settings to confine it to the caller's sandbox")
 		}
-		if _, err := confineTarget(callerSandbox, request.CallerPlace, request.Sandbox, bound.config); err != nil {
+		if _, err := confineTarget(callerSandbox, request.CallerPlace, request.Sandbox, bound.config, foreign); err != nil {
 			return nil, profileSandboxError(err)
 		}
-		plan.confine = targetConfiner(callerSandbox, request.CallerPlace, request.Sandbox)
+		plan.confine = targetConfiner(callerSandbox, request.CallerPlace, request.Sandbox, foreign)
 	}
 	plan.beforeRun = m.contextStep(plan, request.ContextTrigger)
 	return plan, nil
@@ -206,20 +207,23 @@ func targetMaxRunsPerSession(runner httpapi.RunSession) int {
 // chainNode names a profile of a session in a message chain or wait edge.
 func chainNode(reference, profile string) string { return reference + "\x00" + profile }
 
-// otherSession is the reference of an existing catalog-layout session that has the profile.
-// A session or profile that does not exist is native.ErrProfileUnknown, whatever the reason,
-// so it reads like one the settings do not allow. The session is looked up as the caller sees it:
-// in the workspace layout, only in the caller's workspace.
-func (m profileMessenger) otherSession(caller, session, profile string) (string, error) {
-	location, err := sessionfs.ResolveFrom(m.resolver.roots, caller, session)
+// otherSession is the reference of an existing catalog-layout session that has the profile, and
+// whether it is in another workspace. A session or profile that does not exist is
+// native.ErrProfileUnknown, whatever the reason, so it reads like one the settings do not allow.
+// The session is looked up as the caller sees it: in the workspace layout in the caller's
+// workspace, or in another one that is written with its workspace and accepts the caller
+// (sessionfs.ResolveMessageTarget); a workspace that does not exist, does not accept the
+// caller or has no such session cannot be told apart.
+func (m profileMessenger) otherSession(caller, session, profile string) (string, bool, error) {
+	location, foreign, err := sessionfs.ResolveMessageTarget(m.resolver.roots, caller, session)
 	if err != nil || !location.UsesLayout() {
-		return "", native.ErrProfileUnknown
+		return "", false, native.ErrProfileUnknown
 	}
 	info, err := sessionfs.ReadLayoutProfileInfo(location)
 	if err != nil || !slices.Contains(info.Profiles, profile) {
-		return "", native.ErrProfileUnknown
+		return "", false, native.ErrProfileUnknown
 	}
-	return location.Reference, nil
+	return location.Reference, foreign, nil
 }
 
 // compactTarget compacts the target's transcript with the target's own compaction

@@ -26,8 +26,12 @@ import (
 
 // confineTarget is target narrowed by the caller's sandbox, then by the sandbox template the
 // call picked (chooseTargetSandbox); caller nil and choice nil leave it as it is.
-func confineTarget(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
-	target, err := confineByCaller(caller, callerPlace, target)
+//
+// otherWorkspace says the target is a session of another workspace (design §29): a target with
+// no sandbox of its own then takes nothing from the caller's, whose paths are the caller's
+// workspace's (confineByCaller).
+func confineTarget(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice, target sessionfs.SessionConfig, otherWorkspace bool) (sessionfs.SessionConfig, error) {
+	target, err := confineByCaller(caller, callerPlace, target, otherWorkspace)
 	if err != nil || choice == nil {
 		return target, err
 	}
@@ -74,12 +78,20 @@ func chooseTargetSandbox(choice *sessionfs.SandboxChoice, target sessionfs.Sessi
 }
 
 // confineByCaller is target narrowed by the caller's sandbox; caller nil leaves it as it is.
-func confineByCaller(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, target sessionfs.SessionConfig) (sessionfs.SessionConfig, error) {
+//
+// A target of another workspace that has no sandbox is refused, not given the caller's: the
+// caller's sandbox names the caller workspace's folders, which would be the only ones the run
+// could read, and the target's own folders would be outside it; and its paths would be handed to
+// a run of another workspace. A target that has one is narrowed with each side's own places.
+func confineByCaller(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, target sessionfs.SessionConfig, otherWorkspace bool) (sessionfs.SessionConfig, error) {
 	if caller == nil {
 		return target, nil
 	}
 	callerExpand := callerPlace.Expander()
 	var confined *sessionfs.SandboxSettings
+	if target.Sandbox == nil && otherWorkspace {
+		return sessionfs.SessionConfig{}, errors.New(sessionfs.SandboxWidensPrefix + "the profile is in another workspace and has no sandbox of its own, so there is none to narrow by this run's sandbox; give it one that this run's sandbox covers")
+	}
 	if target.Sandbox == nil {
 		confined = sessionfs.InheritSandbox(caller, callerExpand)
 		// The caller's read-only paths are its session's; the target's own session file is
@@ -129,13 +141,13 @@ func withRunSandbox(config sessionfs.SessionConfig, sandbox *sessionfs.SandboxSe
 // targetConfiner is the Confine hook of a profile_message run: the target's runner with its
 // config narrowed by the caller's sandbox and the call's sandbox choice. A runner it cannot
 // narrow fails the start.
-func targetConfiner(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice) func(httpapi.RunSession) (httpapi.RunSession, error) {
+func targetConfiner(caller *sessionfs.SandboxSettings, callerPlace sessionfs.SandboxPlace, choice *sessionfs.SandboxChoice, otherWorkspace bool) func(httpapi.RunSession) (httpapi.RunSession, error) {
 	return func(runner httpapi.RunSession) (httpapi.RunSession, error) {
 		bound, ok := runner.(boundRunner)
 		if !ok {
 			return nil, errors.New("the target's run cannot be confined to the caller's sandbox")
 		}
-		config, err := confineTarget(caller, callerPlace, choice, bound.config)
+		config, err := confineTarget(caller, callerPlace, choice, bound.config, otherWorkspace)
 		if err != nil {
 			return nil, profileSandboxError(err)
 		}

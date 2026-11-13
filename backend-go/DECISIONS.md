@@ -4730,3 +4730,63 @@ loop would reach the busy profile: each fails a test.
 - A remote entry that points at its own server remains an explicit way across workspaces; the loop
   is stopped by `max_hops` (remote hops are not chain nodes), not by cycle detection.
 - Still not built: a token limited to workspaces, and a workspace allow-list in the client entry.
+
+## profile_message across workspaces, locally (T-037, Go, 2026-11-13)
+
+**Decision.** The user asked for workspace to workspace in the local `profile_message`. This
+supersedes the T-036 entry's "local profile_message is unchanged" for `profile_message` only
+(Q6 for `transcript`, `transcripts`, `profile` and `subagent` stays). Decider T-037 step 44.9,
+checked against the code: addressing `<workspace>:<session>/<category>/<profile>`, bare means the
+caller's workspace, two-sided consent (caller's `sessions` colon globs, target's
+`workspace.json` `profile_message.accept_from`), both workspaces listed in global.json, off by
+default, a refusal reads like an unknown profile. Full description: `docs/design_workspace_layout.md`
+section 29. How to use: in A's toolset or workspace defaults
+`tools.native.profile_message.sessions: ["b:*"]`; in B's `workspace.json`
+`{"profile_message":{"accept_from":["a"]}}`; both workspaces listed in `~/.jad/global.json`.
+
+**Where I did not follow the decider, and why.**
+- *No self-edit key table change.* In the workspace layout a profile file may not carry `tools`
+  settings (the loader says so), and an own toolset can tune only four timing keys, so a self-edit
+  cannot write a `sessions` glob. A check I first wrote was dead code and was removed. A profile can
+  still switch to a visible toolset that has a colon glob; the target's `accept_from` still decides.
+- *The tool description lists the caller's configured globs, not only those whose workspace accepts
+  it.* The tool does not know the target's side; the globs are the caller's own configuration.
+- *A sandbox choice with a target that has no sandbox is allowed across workspaces.* The template's
+  placeholders stand for the target's places and nothing of the caller's is copied; only a *caller's
+  sandbox* with an unsandboxed target is refused (`sandbox_widens`), which is the leak the decider
+  named. Refusing the choice too would have made a harmless call unusable.
+- *Both workspaces must be listed in global.json* (decider: "only listed workspaces can be a target
+  or a caller"; I enforce it, `Layout.Listed`, and warn at start when an unlisted workspace has an
+  `accept_from`).
+
+**Built.** `sessionfs.ResolveMessageTarget` (the only resolver that crosses workspaces),
+`Layout.Listed`, `Layout.AcceptProfileMessagesFrom`, `Layout.AcceptsProfileMessagesFrom`,
+`readProfileMessageAccept` and the schema (`workspace.schema.json`), qualified `sessions` globs
+(`NamesWorkspace`, `setting.schema.json`), `localTarget` matching bare and qualified references against
+their own kind of glob, `otherSession` returning whether the target is foreign, and
+`confineTarget`/`confineByCaller`/`targetConfiner` refusing a foreign unsandboxed target under a
+sandboxed caller. The existing `confineTarget` call sites got a `false` argument.
+
+**Tests.** `sessionfs`: `ResolveMessageTarget` for each missing half, listing, symmetry and v1;
+`accept_from` parsing, the schema and the unlisted warning. `tools/native`: bare and qualified globs
+and the refusal rows. `app` (a real two-workspace service): a message that reaches b and writes only
+b's transcript, every refusal reads as an unknown profile, bare ids stay in the caller's workspace,
+the cycle across workspaces, queue keys, the sandbox cases with the check at the start again, the
+tool end to end through a run, and a real bwrap run in which the target of b writes b, cannot read
+or write a, and cannot read b's own `.jad` that a hides.
+
+**Open gaps.**
+- *Not isolation without a sandbox.* Where the sandbox is off the caller's tools read both workspaces
+  anyway; `accept_from` limits who can start a message run, nothing more.
+- *The target's transcript path reaches the caller* in the failure information, as it does for
+  another session of the same workspace.
+- *A workspace named `remote`* cannot be addressed locally (`remote:` is the remote prefix).
+- *A sandboxed caller must cover the target's folders.* With sandboxes on in both workspaces a
+  message is refused (`sandbox_widens`) unless the caller's sandbox covers what the target's sandbox
+  writes; the user lists the target's folder in the caller's sandbox. That is the safe reading of "the
+  target is never outside the caller's sandbox"; making it friendlier would loosen that rule.
+- *Each workspace is judged once at start*: changing `accept_from` needs a restart.
+- *Not built:* a UI for it, a `jad check` warning for a colon glob that names a workspace that does
+  not accept the caller, and seatbelt runs of the cross-workspace sandbox case.
+- *The caller's `context_trigger` reaches the target's transcript* (compact or reset before a
+  message), also across workspaces; it is part of what `accept_from` accepts.

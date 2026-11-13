@@ -472,7 +472,8 @@ put to the decider follow.
   in the global setting and `workspace.json` (`catalogs`, `libraries`, `workspaces`,
   `env_file`); keys that are cwd-relative today (`prompt_documents`, `agents_dir`, MCP config
   paths, `project_instructions`, `tool_storage_dir`) stay cwd-relative, like D2.
-- **Q6. Cross-workspace transcript reads** (blocks phase 1). Proposed: in v2 the `transcript`
+- **Q6. Cross-workspace transcript reads** (blocks phase 1; for `profile_message` superseded by
+  section 29, `transcript`, `transcripts` and the profile actions keep it). Proposed: in v2 the `transcript`
   and `transcripts` tools and `profile_message` reach only the own workspace; another
   workspace's sessions are not found.
 - **Q7. What a ceiling key "loosening" means** (blocks phase 1). The decider says a profile
@@ -1468,7 +1469,8 @@ now says so. A unit test must not read `$HOME`; `jad check` judges the global fi
 The user said `profile_message` still addressed only a session. Decider ruling for T-036 (step 41.6
 of the decider transcript), checked against the code before it was built.
 
-**Local calls do not change.** `<session>/<category>/<profile>` already goes through
+**Local calls did not change in T-036; section 29 changes them for `profile_message` only.**
+`<session>/<category>/<profile>` already goes through
 `sessionfs.ResolveFrom`: in the workspace layout only the caller's own workspace is searched, and a
 session of another workspace, written bare, as `b:s1` or as a name only that workspace holds, is
 `ErrProfileUnknown`, the same answer as a session that does not exist (Q6). That stays: a local
@@ -1551,3 +1553,83 @@ is now pinned by `TestProfileTranscriptsAndExecManifestsMatchTheGoSchemas`.
   3) before it reaches that busy profile, every run ends, and no profile gets a second run. The
   chain nodes of local messages are not involved: remote hops count hops only, so a cycle through
   the server's own entry is stopped by max_hops, not by cycle detection.
+
+## 29. profile_message across workspaces, locally (T-037)
+
+The user asked to allow workspace to workspace for the local `profile_message`. This reverses Q6
+for `profile_message` only; it was checked against the code before it was built (decider T-037,
+step 44.9, with the changes below).
+
+**Addressing.** `<workspace>:<session>/<category>/<profile>`, the grammar the remote path already
+uses (`remote.SessionRefPattern`); `<workspace>` is the root id of the workspace (the id
+global.json lists it under). A bare `<session>/<category>/<profile>` still means the caller's own
+workspace, so a session id held by two workspaces is never ambiguous locally. The caller's own
+workspace written qualified is the same as bare. A workspace called `remote` cannot be written
+this way (`remote:` is the remote prefix); it can still be reached by a remote entry.
+
+**Both sides must say yes, nothing by default.**
+
+1. *The caller's side.* `tools.native.profile_message.sessions` may hold
+   `<workspace glob>:<session glob>` (exactly one colon, `*` and `?` only). A qualified reference
+   is matched only by globs with a colon and a bare one only by globs without: a bare `*` has
+   always meant "my workspace" and still does (`localTarget`). `*:*` is allowed when written.
+2. *The target's side.* `W/.jad/workspace.json` gets `profile_message.accept_from`: globs of workspace
+   ids whose profiles may message this workspace's profiles. Unset or empty: nothing comes in. Why
+   both: the caller's globs can come from a cloned repository (`workspace.json` `defaults` may carry
+   tool settings), and a repository must not be able to drive the agents of every other workspace.
+   `workspace.json` is read-only in every sandbox, a profile cannot edit it, and the
+   `profile_self_edit` ceiling already keeps a repository from raising itself.
+3. *Both workspaces must be listed in global.json `workspaces`* (`Layout.Listed`). An unlisted start
+   directory gets its id from its folder name or from its own `workspace.json`, which whoever wrote
+   the repository chooses, so an `accept_from` naming that id could be satisfied by another
+   directory. An `accept_from` in an unlisted workspace is ignored with a start warning.
+
+The rule is `Layout.AcceptsProfileMessagesFrom`, called from `sessionfs.ResolveMessageTarget`, the
+one resolver that crosses workspaces; `ResolveFrom` still gates every other tool. A workspace that
+does not exist, one that does not accept the caller, one not listed, a session that does not exist
+and a profile that does not exist all answer `unknown_profile` with the caller's own list of
+profiles. It is not symmetric: b accepting a does not let b message a.
+
+**What did not change.** `transcript`, `transcripts`, the `profile` tool (info, compact, reset,
+config, edit, history) and `subagent` still reach only the caller's workspace. The caller reads the
+target's answer (that is the feature) but not its transcript. The remote path and its tokens are a
+separate permission and are unchanged. v1 is unchanged: outside the workspace layout a reference
+that names a root is refused (`ResolveMessageTarget`), and a colon glob is inert there.
+
+**Where the target runs.** In its own workspace: its profile file, `profile-own`, data folder,
+transcript and state folder, queue and chain identity (nodes are `<workspace>:<session>`
+references, so the same name in two workspaces is two nodes, and a message that returns to a profile
+the chain already holds is `profile_cycle`). The caller's `max_chain` and `max_depth` apply.
+
+**Sandbox.** A target that has no sandbox of its own used to take the caller's, filled in with the
+caller's paths. Across workspaces that carries the caller workspace's folders into the target's run
+(and the target's own folders are not among them), so it is refused with `sandbox_widens`: the
+target needs a sandbox of its own, and the usual narrowing applies with each side's own
+placeholders (`{workspace}` of the caller is the caller's folder, of the target the target's). The
+target's run never reaches more than the caller's, so a sandboxed caller can message another
+workspace only when its sandbox covers what the target's sandbox writes (the caller lists the
+target's folder). The fixed hidden and sealed paths are the target run's: it hides every other
+workspace's `.jad` and `G/auth`. A `sandbox` argument that names a template still works for a target
+without a sandbox: the template's placeholders stand for the target's places and nothing of the
+caller's is copied (decided against the code; the decider's blanket refusal would have made a
+harmless call unusable). The check runs again when the run starts, with the settings it starts with.
+
+**Limits (honest).**
+
+- Without an enabled sandbox nothing keeps the caller's tools from reading the other workspace's
+  files: `accept_from` is about who may *start a message run* in the workspace, not a file
+  isolation. It is stated by the existing "private means separate storage and names only" rule.
+- A profile that may switch toolsets (`on` and `full`) can switch to a visible toolset that carries
+  a colon glob; toolsets are user-managed files, and the target's `accept_from` still decides. A
+  profile file cannot carry tool settings in the workspace layout, and an own toolset can only tune
+  `timeout_ms`, `busy_wait_ms`, `result_max_bytes` and `default_block_ms`, so a self-edit cannot
+  write a colon glob (there is no self-edit key table change for it).
+- The transcript path of the target, in the tool's failure information, is the target's own file
+  in its workspace (it names a path in the other workspace's `.jad`).
+- A target workspace's own `accept_from` can be written by whoever wrote that repository; a
+  workspace that lists a repository it does not trust and also accepts `*` from the others lets that
+  repository's profiles be driven by the others' callers' prompts. List workspaces you trust.
+- The caller's own `context_trigger` (compact or reset the target's transcript before a message)
+  applies to a target in another workspace as it does to another session: accepting a caller
+  accepts that. A workspace that does not want its history compacted or reset by another does not
+  list that workspace in `accept_from`.

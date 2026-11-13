@@ -903,7 +903,7 @@ func TestRunMCPLoaderServersOfAPlanModeCallersTargetKeepThePlanForm(t *testing.T
 		inWorkspace, inPlanOut bool
 	}{{"normal form", caller, true, false}, {"plan-mode form", caller.ForPlanMode(), false, true}} {
 		t.Run(test.name, func(t *testing.T) {
-			target, err := confineTarget(test.sandbox, place, nil, f.config)
+			target, err := confineTarget(test.sandbox, place, nil, f.config, false)
 			if err != nil {
 				t.Fatal(err)
 			}

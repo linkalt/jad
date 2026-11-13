@@ -47,6 +47,14 @@ func TestWorkspaceSchemasAgreeWithTheLoader(t *testing.T) {
 	if !schemaAccepts(t, workspace, `{"schema_version":2,"id":"w","label":"W","defaults":{"cwd":"src"},"libraries":{"prompt_dirs":["prompts"],"skill_dirs":["skills"],"tool_definition_paths":["tools_defintion/native/exec.json"]}}`) {
 		t.Error("a valid workspace.json is refused")
 	}
+	if !schemaAccepts(t, workspace, `{"profile_message":{"accept_from":["a","b-*"]}}`) {
+		t.Error("a workspace.json with accept_from is refused")
+	}
+	for _, refused := range []string{`{"profile_message":{"accept_from":["a:b"]}}`, `{"profile_message":{"accept":["a"]}}`, `{"profile_message":{"accept_from":["a","a"]}}`} {
+		if schemaAccepts(t, workspace, refused) {
+			t.Errorf("workspace.json %s is accepted", refused)
+		}
+	}
 	for _, refused := range []string{`{"catalogs":{}}`, `{"libraries":{"max_asset_bytes":2048}}`, `{"libraries":{"tool_definition_paths":"x.json"}}`, `{"libraries":{"tool_definition_paths":[""]}}`, `{"id":"bad id"}`} {
 		if schemaAccepts(t, workspace, refused) {
 			t.Errorf("workspace.json %s is accepted", refused)

@@ -50,6 +50,22 @@
       },
       "additionalProperties": false
     },
+    "profile_message": {
+      "type": "object",
+      "description": "Which other workspaces may message the profiles of this one with profile_message (docs/design_workspace_layout.md §29). A profile of another workspace reaches a profile here only when both sides allow it: its tools.native.profile_message.sessions has a glob <workspace glob>:<session glob> that matches, and this workspace's accept_from has a glob that matches its workspace id. Both workspaces must be listed in global.json workspaces (an unlisted start directory takes its id from its own folder or file, which a cloned repository chooses). A refusal looks like a session that does not exist. This file is read-only in every sandbox and a profile cannot change it.",
+      "properties": {
+        "accept_from": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,63}$"
+          },
+          "description": "Globs (* and ? only) of the ids of the workspaces whose profiles may message the profiles of this workspace. None by default: nothing comes in from another workspace."
+        }
+      },
+      "additionalProperties": false
+    },
     "profile_self_edit": {
       "enum": [
         "off",
