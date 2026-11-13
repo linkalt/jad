@@ -5099,8 +5099,8 @@ mcp servers and sandbox templates in `G`), so every test that is not about v1 no
   gains the v2 address sentence** (`Profiles are written <name>, <category>/<name>, <session>/..., local:...,
   remote:...`), and **the tool output and cycle message name the canonical address**
   (`Profile local:local/demo/review/reviewer answered`). (3) is what a v2 start already sends to a model today
-  (T-040 shipped it); a v2 golden cannot avoid it. **This is a deviation from the stop rule; it needs the
-  decider's sign-off** (reported to master).
+  (T-040 shipped it); a v2 golden cannot avoid it. **Signed off by the decider (tmp/T-041-review.md 1):** it is
+  existing v2 output that became visible once the fixture is v2, not a change made by T-041.
 - **Not converted (their subject goes in b2):** see the list above; also `cmd/jad` `main_test` keeps nothing of v1.
 
 ## Workspace layout v1 retired at runtime (T-041b2, Go, 2026-11-13)
@@ -5129,7 +5129,8 @@ note about the start-workspace case, and the T-040 "kept for v1" parsers. Design
   mcp`, `plugin` and `run` use the same load (A4: none of them ran usefully without one).
 - **Decision 3.3 stop rule on `sample/jad`.** Tests copy `sample/jad` as a catalog fixture (profiles, models,
   tools, mcp, sandbox). I read the rule as "keep the fixture, drop the v1 shapes": only `setting.json` and the v1
-  remote files were deleted. Master should confirm.
+  remote files were deleted. Confirmed by the decider (tmp/T-041-review.md 2); T-041c added `sample/jad/README.md`
+  (examples and test fixture, not a startable workspace).
 - **Schemas.** `root-setting.schema.json` lost `session_roots`, `catalogs`, `schema_version` and `required`; it
   only holds `server`, `cli`, `libraries` and `defaults` (referenced by `global.schema.json` and
   `workspace.schema.json`; the sandbox folder text moved into `global.schema.json`). `remote.schema.json` lost
@@ -5138,13 +5139,68 @@ note about the start-workspace case, and the T-040 "kept for v1" parsers. Design
 - **Open gaps.**
   - The migration command exists only in old binaries. If commit `6ac57497` becomes unreachable, a v1 install has
     no tool; a tag on it is the user's to create.
-  - The T-041b1 golden deviation (the `profile_message` description and canonical-address output in the
-    regenerated goldens) still awaits the decider's sign-off.
   - Naming debt left on purpose: `Layout.RootSetting`, `app.Config.RootSettingWarnings`, `Root.GlobalJadRoot`
     (it is G now), the phrase "catalog layout" in many comments, `UsesLayout`; the design sections 2, 3, 4.2 and 5
     are history, not rewritten. Renaming them is churn with no behaviour change.
-  - `cmd/jad` paths other than `check` and `migrate` were checked by reading (A4), not each started without a
-    workspace.
+  - (closed by T-041c) `cmd/jad` paths without a workspace were checked by reading; they were then started
+    (see T-041c).
   - Comment sweep is by grep for `v1`, `legacy`, `root setting`; a stale comment that uses other words can remain.
-  - The earlier flaky `TestBaseCacheSurvivesServersChurningTogether` in `internal/worktree` is unrelated and not
-    investigated.
+  - The earlier flaky `TestBaseCacheSurvivesServersChurningTogether` in `internal/worktree` is unrelated; see
+    T-041c for the baseline check.
+
+## T-041 closing checks and model-visible wording (T-041c, Go, 2026-11-13)
+
+Scope: `tmp/T-041-review.md` sections 1-6. One production wording change, no behaviour change.
+
+- **Model-visible wording.** The `profile` parameter of `profile_message` said "or <session>/<category>/<profile>
+  for a profile of another session this session may reach"; "may reach" was the removed v1 `sessions` gate and the
+  text left out `local:` and `remote:`. It now reads "Profile to message: an available profile, or any address
+  form listed in this tool's description." (that description already lists every form, `sessionfs.MessageRefForms`).
+  Changed in `profile_message.go`, `model_choice_test.go`, `sample/tools/native/profile_message.json` and the three
+  run_baseline goldens that carry the schema (`mixed_chain_cycle`, `profile_sandbox_choice`,
+  `profile_target_subagent`); the diff of each golden is that string only. The remote goldens still say "may reach"
+  in the remote-profile sentence; that is about a remote's own gate and stays.
+- **Two error texts.** The unknown-command message of `jad` no longer lists `migrate` as a command (it was removed;
+  `jad migrate` still prints the notice with the commit), and the `JAD_ROOT_SETTING_PATH` error reads "...start jad
+  in a workspace (...), or migrate the v1 setting with a jad built from commit 6ac57497..." (it said "and see migrate").
+  `TestUnknownCommandListsOnlyLiveCommands` pins the first.
+- **Migration through the old binary (one-off check, temp dirs, `HOME` and the global folder in a temp dir, `env -i`).**
+  `jad` built from `6ac57497` (`/tmp/t041/bin/jad-old`, from a temp git worktree) and from HEAD (`jad-new`); the
+  repo's `backend-go/jad` was not touched. Fixture: a copy of `6ac57497:sample/jad` (with its `setting.json`, the two
+  v1 remotes) plus `sample/tools`, `sample/schemes`, `sample/subagents` as `.jad/subagents`, a `CLAUDE.md`, session
+  `cwd` and the MCP cache path pointed into the temp project, and `"category": "coding"` added to the session.
+  Results: old `jad migrate workspace` dry run exit 0, wrote nothing (listing of files and sha256 equal before and
+  after, the temp `HOME` still empty); `--apply` exit 0 ("8 files and 6 folders created, 2 session/profile pairs
+  compared with v1"); new `jad check` exit 0, "checked 7 files, 0 problems", with the notes "setting.json is not read
+  in the workspace layout", "session key category is no longer used and is ignored; delete the line", and
+  the sandbox/bwrap notes of the host; `jad check` changed no file. The two v1 remotes were reported "not migrated"
+  with manual steps, as designed. **Two fixture pitfalls, not defects:** (1) the first runs failed `jad check` on the
+  session because the sample session's `cwd` pointed at the real repository and so read its subagent toolset
+  (`jad/default` not available); the fixture was isolated. (2) a session whose `prompt_documents` file is missing
+  fails the same way in the old binary ("does not load in v1") and in the new one. No hand edit that an error
+  message does not name was needed, so the stop condition did not apply. **Not covered:** a shared model with
+  `based_on` (refused in every scope now, T-041b2) was not in the sample, so "run `jad check` after migrating
+  and remove `based_on` from a shared model file" is the only advice and was not exercised; a layout with real
+  secrets, remote bindings built by hand, and `--rollback` after the new binary has run were not tried.
+- **Command smoke (temp `HOME`, empty temp dir, `env -i`, HEAD build).** `--help`: exit 1, "unknown arguments ...;
+  the commands are ..." (there is no `--help` or `version` command; the old binary answered the same, so the
+  review's "`--help`, `version` succeed" did not hold and is not a regression); `migrate` and `migrate workspace
+  --apply`: exit 1 with the notice naming `6ac57497`; `check`, the bare server start, `run --session ...`, `mcp
+  login ...`, `plugin list`: exit 1 "no workspace: <dir>/.jad/workspace.json not found; start jad in a directory
+  that has .jad/workspace.json"; `eval` with a non-suite file: exit 1 (schema_version); `transcript strip-steer
+  --dry-run <empty dir>`: exit 0. With a v1 `.jad/setting.json` only: `check` and `run` exit 1 naming that file and
+  the commit; with `JAD_ROOT_SETTING_PATH` set: exit 1 naming the variable; with `JAD_SESSIONS_DIR` set: exit 1
+  naming it. A listing and sha256 of the directory before and after showed no change in any of these (the only
+  difference was a folder the check script itself created). `mcp login`, `plugin install` and `eval` with a real
+  suite were not run against a real workspace in this check. The A4 gap is closed.
+- **Worktree flake baseline.** `go test -race -count=20 -run TestBaseCacheSurvivesServersChurningTogether
+  ./internal/worktree/` on HEAD: ok, 20 of 20 passed (31 s). **Not reproduced**; `git diff 792e601d HEAD --
+  internal/worktree` is empty. The earlier failure happened once in a full-suite run under load and is left
+  alone (candidate T-042 only if it comes back).
+- **Open gaps.**
+  - `git tag jad-last-v1 6ac57497` and the push are the user's; until then the only way off v1 depends on a
+    local commit.
+  - The migration smoke used the sample catalog, not a real installation.
+  - `sample/workspace-layout` holds the global-side examples (remote binding, key) only, not a whole workspace;
+    the review called it "a startable layout"; the README of `sample/jad` says what it holds. A sample whole
+    workspace (a `workspace.json` plus a session) would be new work.

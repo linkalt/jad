@@ -28,7 +28,7 @@ const (
 	profileMessageSchemaWithoutModel = `{
   "type":"object",
   "properties":{
-    "profile":{"type":"string","minLength":1,"description":"Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."},
+    "profile":{"type":"string","minLength":1,"description":"Profile to message: an available profile, or any address form listed in this tool's description."},
     "message":{"type":"string","minLength":1,"description":"The message to send. The profile sees nothing of this conversation."},
     "block_ms":{"type":"integer","minimum":0,"description":"Most time to block for the answer before an id is returned; collect it with the async tool."}
   },

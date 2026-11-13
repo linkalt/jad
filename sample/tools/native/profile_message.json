@@ -12,7 +12,7 @@
           "profile": {
             "type": "string",
             "minLength": 1,
-            "description": "Profile to message: one of the available profiles, or <session>/<category>/<profile> for a profile of another session this session may reach."
+            "description": "Profile to message: an available profile, or any address form listed in this tool's description."
           },
           "message": {
             "type": "string",

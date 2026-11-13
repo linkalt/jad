@@ -95,3 +95,19 @@ func TestCheckCommandRefusesAV1SettingWithTheMigrationDirection(t *testing.T) {
 		t.Fatalf("the v1 setting changed: %q, %v", got, readErr)
 	}
 }
+
+// T-041c: an unknown command lists the commands that exist; migrate is not one of them (its own
+// notice names the build that still has it), and the notice is the same with or without a workspace.
+func TestUnknownCommandListsOnlyLiveCommands(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("JAD_GLOBAL_DIR", t.TempDir())
+	var out bytes.Buffer
+	err := runCommand([]string{"--help"}, &out)
+	if err == nil || !strings.Contains(err.Error(), `"transcript"`) || strings.Contains(err.Error(), "migrate") {
+		t.Fatalf("error = %v, want the live commands without migrate", err)
+	}
+	err = runCommand([]string{"migrate", "workspace"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "6ac57497") {
+		t.Fatalf("error = %v, want the migration notice", err)
+	}
+}

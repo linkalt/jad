@@ -252,7 +252,7 @@ func Load(options LoadOptions) (Config, error) {
 		return Config{}, errors.New("JAD_SESSIONS_DIR is no longer read; sessions live in <workspace>/.jad/sessions")
 	}
 	if strings.TrimSpace(env["JAD_ROOT_SETTING_PATH"]) != "" {
-		return Config{}, errors.New("JAD_ROOT_SETTING_PATH was removed with workspace layout v1; start jad in a workspace (a directory with .jad/workspace.json), and see " + legacyLayoutHint)
+		return Config{}, errors.New("JAD_ROOT_SETTING_PATH was removed with workspace layout v1; start jad in a workspace (a directory with .jad/workspace.json), or " + legacyLayoutHint)
 	}
 	workspace, err := workspaceAt(cwd)
 	if err != nil {

@@ -145,7 +145,7 @@ The user runs local -> VPN -> local and asked for the simpler thing: **there is 
 
 Everything else is unchanged: the bearer token table (hashes, globs, actions, expiry, revocation, reload), `token_env`/`token_file` and their permission checks, the hop guard, `request_id` idempotency, no redirects, no proxy from the environment, the response and body caps, token scrubbing from errors, and the unix socket ownership and directory checks.
 
-- **Clear-text token.** Over tcp the bearer token is readable by anyone on the path. The deployment must put that connection on a VPN or a private network; a unix socket is the local option. This is stated in `DECISIONS.md`, in this file, in the sample remote file (`sample/jad/remotes/build-box.json`) and in the schemas.
+- **Clear-text token.** Over tcp the bearer token is readable by anyone on the path. The deployment must put that connection on a VPN or a private network; a unix socket is the local option. This is stated in `DECISIONS.md`, in this file, in the sample remote binding (`sample/workspace-layout/remotes/build-box.json`) and in the schemas.
 - **Listen address.** A wildcard is refused: with `server.remote_api` enabled and no `listen_unix`, `server.host`/`HOST` must name one address (`app.LoadConfig`, which refuses a wildcard host); a socket-only server is never on TCP, so any host is accepted there. The default stays `127.0.0.1`; reaching the API from the VPN peer means writing that VPN address into `server.host`, so exposing the token-taking routes is always deliberate. There is no new listener: the remote routes share the main one.
 
 ## 12. Implemented (2026-10-29)

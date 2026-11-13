@@ -74,7 +74,7 @@ func dispatchCommand(args []string, streams commandStreams) error {
 			return runCheckCommand(streams.stdout)
 		}
 	}
-	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\", \"plugin\", \"transcript\" and \"migrate\"", args)
+	return fmt.Errorf("unknown arguments %q; the commands are \"check\", \"run\", \"eval\", \"mcp\", \"plugin\" and \"transcript\"", args)
 }
 
 // runCheckCommand runs "jad check": it reads the global and workspace settings and every catalog and session
