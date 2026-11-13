@@ -17,7 +17,8 @@ const (
 	// SessionInputSteerField marks an input record that a steering message stored in the
 	// middle of a run (AppendSteerInputItemsAt). It is true when present. Compaction keeps
 	// such a user message in the turn before it instead of starting a turn at it. Like the
-	// batch fields it is stripped before the item is sent anywhere.
+	// batch fields and MetaField (every reservedFieldPrefix key) it is stripped before the
+	// item is sent anywhere.
 	SessionInputSteerField = "__agent_session_input_steer"
 )
 
@@ -258,14 +259,10 @@ func ValidateInputItem(index int, item []byte) error {
 	if err := validateInputFields(fields); err != nil {
 		return fmt.Errorf("input item %d: %w", index, err)
 	}
-	if _, reserved := fieldValue(fields, SessionInputBatchIDField); reserved {
-		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
-	}
-	if _, reserved := fieldValue(fields, SessionInputBatchIndexField); reserved {
-		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
-	}
-	if _, reserved := fieldValue(fields, SessionInputSteerField); reserved {
-		return fmt.Errorf("input item %d: input items may not use reserved session batch metadata fields", index)
+	for _, field := range fields {
+		if isReservedField(field.key) {
+			return fmt.Errorf("input item %d: input items may not use reserved %s fields", index, reservedFieldPrefix)
+		}
 	}
 	return nil
 }
@@ -296,13 +293,7 @@ func expandTranscriptRecord(raw []byte) ([][]byte, error) {
 		}
 	}
 
-	if _, hasBatchID := fieldValue(fields, SessionInputBatchIDField); hasBatchID {
-		fields = removeInputBatchFields(fields)
-	} else if _, hasBatchIndex := fieldValue(fields, SessionInputBatchIndexField); hasBatchIndex {
-		fields = removeInputBatchFields(fields)
-	} else if _, hasSteer := fieldValue(fields, SessionInputSteerField); hasSteer {
-		fields = removeInputBatchFields(fields)
-	}
+	fields = removeReservedFields(fields)
 	if err := validateInputFields(fields); err != nil {
 		return nil, err
 	}
@@ -374,13 +365,26 @@ func canonicalJSONFields(fields []jsonField) ([]byte, error) {
 	return encodeJSONObject(canonicalFields), nil
 }
 
-func removeInputBatchFields(fields []jsonField) []jsonField {
-	filtered := make([]jsonField, 0, len(fields))
-	for _, field := range fields {
-		if field.key == SessionInputBatchIDField || field.key == SessionInputBatchIndexField || field.key == SessionInputSteerField {
-			continue
+// removeReservedFields drops every top-level reservedFieldPrefix key of an input record (the
+// batch fields, the steer marker, MetaField and any later one), so none reaches a provider.
+// It returns fields itself when there is none.
+func removeReservedFields(fields []jsonField) []jsonField {
+	first := -1
+	for index, field := range fields {
+		if isReservedField(field.key) {
+			first = index
+			break
 		}
-		filtered = append(filtered, field)
+	}
+	if first < 0 {
+		return fields
+	}
+	filtered := make([]jsonField, first, len(fields))
+	copy(filtered, fields[:first])
+	for _, field := range fields[first+1:] {
+		if !isReservedField(field.key) {
+			filtered = append(filtered, field)
+		}
 	}
 	return filtered
 }

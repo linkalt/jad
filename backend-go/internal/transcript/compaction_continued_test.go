@@ -168,3 +168,55 @@ func TestCompactHistorySplitsAtEveryUnmarkedUserMessage(t *testing.T) {
 		t.Fatalf("history = %s", all)
 	}
 }
+
+// A trailing MetaField after the steer marker (well-formed or malformed) changes nothing the
+// marker decides: the counted session turn, the backup turn window, and compaction keeping
+// the steering message in its run's turn, also across a second compaction.
+func TestSteerMarkWithTrailingMetaStillContinuesTheTurn(t *testing.T) {
+	for _, meta := range []string{testMeta, `,"` + MetaField + `":"malformed"`} {
+		f := newSteeredFixture(t, true)
+		path := filepath.Join(f.dir, "messages.jsonl")
+		wantTurn, err := f.store.NextSessionTurn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []byte
+		for _, line := range strings.SplitAfter(string(before), "\n") {
+			if strings.Contains(line, `"role":"user"`) {
+				line = strings.TrimSuffix(line, "}\n") + meta + "}\n"
+			}
+			out = append(out, line...)
+		}
+		if err := os.WriteFile(path, out, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if turn, err := f.store.NextSessionTurn(); err != nil || turn != wantTurn {
+			t.Fatalf("%s: next session turn = %d, %v; want %d", meta, turn, err, wantTurn)
+		}
+		for _, data := range [][]byte{before, out} {
+			window := newBackupTurnWindow(5)
+			if err := os.WriteFile(filepath.Join(f.dir, "scan.jsonl"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := scanBackupTurns(filepath.Join(f.dir, "scan.jsonl"), 0, window, nil); err != nil || window.turns != 2 {
+				t.Fatalf("%s: backup turns = %d, %v; want 2", meta, window.turns, err)
+			}
+		}
+		if result := f.compact(t, 1); !result.Compacted {
+			t.Fatalf("%s: compaction result = %+v", meta, result)
+		}
+		all := f.history(t)
+		if !strings.Contains(all, "run request") || !strings.Contains(all, "steering message") || strings.Contains(all, "older context") || strings.Contains(all, "__agent_") {
+			t.Fatalf("%s: history after compaction = %s", meta, all)
+		}
+		f.response("resp_more", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"`+strings.Repeat("more detail ", 40)+`"}]}`)
+		f.compact(t, 1)
+		if all := f.history(t); !strings.Contains(all, "run request") || !strings.Contains(all, "steering message") {
+			t.Fatalf("%s: the second compaction split the run at its steering message: %s", meta, all)
+		}
+	}
+}

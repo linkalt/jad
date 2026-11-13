@@ -5204,3 +5204,48 @@ Scope: `tmp/T-041-review.md` sections 1-6. One production wording change, no beh
   - `sample/workspace-layout` holds the global-side examples (remote binding, key) only, not a whole workspace;
     the review called it "a startable layout"; the README of `sample/jad` says what it holds. A sample whole
     workspace (a `workspace.json` plus a session) would be new work.
+
+## JAD-only record fields: provider guard and `strip-local` (T-042a, Go, 2026-11-13)
+
+Scope: the core of `tmp/T-042-decisions.md` D1, D5, D6 and the D8 normaliser, before any writer of `__agent_meta`
+(T-042b). No `messages.jsonl` byte changes in this commit: every golden is byte-identical without a normaliser.
+
+- **Provider guard.** `expandTranscriptRecord` (the one place a stored input record becomes request items: the
+  transcript reader, the request memo, the compaction cache's active tail, `preservedResponseTail`,
+  `HasUnansweredToolCall`, `readCompactionCache`) now drops every top-level key starting with `__agent_`
+  (`removeReservedFields`, it was the three named batch/steer keys). `ValidateInputItem` (run in
+  `appendInputItems`, `PersistInputWithImages`, `SteerQueue.Push`) refuses any top-level `__agent_` key with
+  "input items may not use reserved __agent_ fields" (it refused the three names). No production caller passes
+  such a key (grep of non-test Go code); HTTP run and steer input is converted by JAD before it gets there. A raw
+  item with an unknown `__agent_x` from a Go caller or `jad run` was sent to the provider before; it is refused
+  now. Nested keys inside `content` are content and pass. Tests: `TestReservedFieldsAreRefusedOnInputAndStrippedFromHistory`,
+  `TestProviderRequestIsTheSameWithAndWithoutAgentFields` (session: the request a run sends is byte-identical,
+  not normalised, with no field, a well-formed or malformed `__agent_meta`, and `__agent_x`; mutation of the prefix
+  rule CAUGHT).
+- **Reader.** `transcript.MetaValue(record, key, maxBytes)` is the one way to read an `__agent_meta` sub-key: a
+  missing, non-object or over-cap value (raw length checked before the value is decoded), a missing key or a
+  record that is not an object read as absent; it never errors. No production consumer yet.
+- **Tail locator.** `locateLocalTail` finds the trailing `[__agent_session_input_steer:true][__agent_meta:<any>]`
+  members of a record by offset, without re-encoding; either key elsewhere (also twice, also with an escaped key
+  name), or a steer value other than `true`, is an error.
+- **`jad transcript strip-local [--dry-run] [--meta-only]`**, `strip-steer` kept as an alias of `strip-local`
+  without `--meta-only` (`transcript.StripLocalFields`, was `StripSteerMarks`; `steer_strip*.go` renamed
+  `local_strip*.go`). It blanks the steer marker and `__agent_meta` (or with `--meta-only` the meta only) in place
+  with one `WriteAt` per record, `fsync`, size, inode and offsets kept; same lock, skip and refusal rules as
+  before; a malformed meta value is blanked; a line that is not a JSON object is left alone. The output now counts
+  records, steering markers and `__agent_meta` ("stripped N records in M (S steering markers, K __agent_meta)").
+  Behaviour change of the alias: `strip-steer` also blanks `__agent_meta` (a build from before the marker lacks it
+  too). Tests: `TestStripLocalFields*` (in place, meta with and without the marker read back as the record without
+  the field after `json.Compact`, malformed meta, refusals with the file unchanged), `TestTranscriptStripLocalBlanksMetaOnlyOrBoth`.
+- **Golden normaliser.** `transcript.DropTrailingMeta(line)` removes a trailing `,"__agent_meta":<v>` only; a
+  misplaced one is an error. Wired into the run-baseline masker in T-042b.
+- **Unchanged readers, proven with meta present.** `TestSteerMarkWithTrailingMetaStillContinuesTheTurn` (well-formed
+  and malformed meta after the steer marker: `NextSessionTurn`, the backup turn window and compaction keeping the
+  steered message in its run's turn, twice), `TestTranscriptDoesNotShowAgentMeta` (transcript tool output, and so
+  the remote transcript route, identical), `TestNormalizeTranscriptIgnoresAgentMeta` (web UI history identical).
+- **Known limits (open).** After `strip-local --meta-only` a steered record ends `"__agent_session_input_steer":true   }`
+  (spaces before the brace), so the `strip-steer` of a build from b9dc0c2a or earlier refuses it ("not last");
+  use this build's `strip-local` (without `--meta-only`) for a rollback past the steering marker. `strip-local`
+  now parses every line (the old command only lines holding the marker), so it reads a large transcript slower; it
+  is an offline command. A crash during the in-place writes can tear one record (unchanged from `strip-steer`; run
+  it with the server stopped). Closing them would need a rewrite-based strip, which loses the offset guarantee.
