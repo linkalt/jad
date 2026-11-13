@@ -191,14 +191,14 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if err != nil {
 			return CatalogSections{}, err
 		}
-		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 {
+		if len(targets) == 0 && len(remoteNames) == 0 && len(config.NativeProfileMessage.Sessions) == 0 && config.NativeProfileMessage.Caller.Workspace == "" {
 			return CatalogSections{}, sessionfs.ProfileMessageNoTargetsError(config.SettingPath, config.Profile)
 		}
 		tool, err := newProfileMessageTool(*config.NativeProfileMessage, config.NativeSubagent, targets, messenger, asyncHost, remotes)
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s (profile %s): %v", config.SettingPath, config.Profile, err)}
 		}
-		tool.Definition.Description = definition.Description + profileMessageListText(targets, config.NativeProfileMessage.Sessions, remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
+		tool.Definition.Description = definition.Description + profileMessageListText(*config.NativeProfileMessage, targets, remoteNames) + sandboxChoiceText(config.NativeProfileMessage.SandboxChoices)
 		hooked := WithToolEventHooks(tool, config.Hooks, config.Model.APIKeyEnv)
 		profileMessageTool = &hooked
 	}

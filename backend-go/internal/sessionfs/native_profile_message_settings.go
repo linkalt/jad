@@ -61,13 +61,9 @@ type NativeProfileMessageSettings struct {
 	// must pass both, so a longer max_chain never lets a chain run deeper than max_depth.
 	MaxChain int
 	// Sessions are globs of session ids ('*' and '?' only) whose profiles the model may message
-	// as <session>/<category>/<profile>, besides its own session's. A glob without a colon is
-	// matched against a bare session id, which always means the calling workspace in the
-	// workspace layout. A glob <workspace glob>:<session glob> is matched against a session
-	// written <workspace>:<session> and only those: it is the only way to reach a session of
-	// another workspace, which that workspace must also accept (Layout.AcceptsProfileMessagesFrom,
-	// docs/design_workspace_layout.md §29). None by default, so a session reaches only its own
-	// profiles unless it says so.
+	// as <session>/<category>/<profile>, besides its own session's. None by default, so a
+	// session reaches only its own profiles unless it says so. A v1 key: in the workspace
+	// layout every session of the workspace is reachable and the key is refused.
 	Sessions []string
 	// Remotes are the names of the remote entries (the remotes folder) the model may message
 	// with remote:<name>/...; none by default, so a session reaches no other server unless it says so.
@@ -85,9 +81,25 @@ type NativeProfileMessageSettings struct {
 	// catalog-layout loader in the caller's session.
 	SandboxChoice  []string
 	SandboxChoices []SandboxChoice `json:"-"`
+	// Caller is the calling session in the workspace layout (v2), whose Workspace is empty in
+	// v1. The workspace layout reads addresses by the grammar of message_address.go; v1 keeps
+	// its own. Set by the session loader, never by a setting.
+	Caller MessageCaller `json:"-"`
+	// Workspaces are the ids of the other workspaces a message may reach by local:<workspace>/...:
+	// the listed workspaces of this process, when the caller's own workspace is listed too. It
+	// only feeds the tool's description; the messenger decides.
+	Workspaces []string `json:"-"`
 }
 
-func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string) (*NativeProfileMessageSettings, error) {
+// removedProfileMessageSessionsHint: in the workspace layout the sessions globs no longer gate
+// anything; a profile reaches any profile of a session of its workspace and of a listed
+// workspace, and what it may not reach is a deny rule (design §30).
+const removedProfileMessageSessionsHint = "other sessions and listed workspaces are reachable without it, written <session>/<category>/<profile> or local:<workspace>/<session>/<category>/<profile>; delete the key"
+
+// normalizeNativeProfileMessageSettings reads tools.native.profile_message. caller is the
+// calling session in the workspace layout (v2) and the zero value in v1, whose keys and
+// addresses are unchanged.
+func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, settingPath string, caller MessageCaller) (*NativeProfileMessageSettings, error) {
 	nativeRaw, exists, err := nativeEnvelope(setting, settingPath)
 	if err != nil {
 		return nil, err
@@ -124,6 +136,9 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 		if !containsString(nativeProfileMessageKeys, key) {
 			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeProfileMessageKeys, "")
 		}
+	}
+	if _, removed := fields["sessions"]; removed && caller.Workspace != "" {
+		return nil, configError("%s: %s.sessions was removed in the workspace layout; %s", settingPath, section, removedProfileMessageSessionsHint)
 	}
 	denyProfiles, err := normalizeProfileMessageDenyProfiles(fields["deny_profiles"], settingPath, section)
 	if err != nil {
@@ -176,7 +191,7 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 	if err != nil {
 		return nil, err
 	}
-	return &NativeProfileMessageSettings{ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
+	return &NativeProfileMessageSettings{Caller: caller, ModelChoice: modelChoice, SandboxChoice: sandboxChoice, Sessions: sessions, Remotes: remotes, DenyProfiles: denyProfiles, TimeoutMs: int(timeoutMS), DefaultBlockMs: defaultBlockMS, BusyWaitMs: int(busyWaitMS), MaxQueued: int(maxQueued), ResultMaxBytes: int(resultMaxBytes), MaxChain: int(maxChain), ContextTrigger: contextTrigger}, nil
 }
 
 // ErrProfileMessageNoTargets is the reason a profile_message tool cannot be built.
@@ -228,10 +243,6 @@ var (
 	sessionGlobPattern          = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
 	workspaceSessionGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,63}:[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,127}$`)
 )
-
-// NamesWorkspace reports whether a profile_message sessions glob is <workspace glob>:<session
-// glob>, the form that is matched against a session written with its workspace.
-func NamesWorkspace(glob string) bool { return strings.Contains(glob, ":") }
 
 func normalizeSessionGlobs(raw json.RawMessage, settingPath, section string) ([]string, error) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {

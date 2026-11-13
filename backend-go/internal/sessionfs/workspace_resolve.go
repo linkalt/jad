@@ -73,13 +73,12 @@ func VisibleFrom(roots []Root, caller string, references []string) []string {
 
 // ResolveMessageTarget resolves the session a profile_message of the session caller addresses,
 // and says whether it is in another workspace. It is ResolveFrom except that a session written
-// <workspace>:<session> of another workspace is reached when both workspaces allow it: both are
-// listed in global.json and the target workspace's profile_message.accept_from matches the
-// caller's workspace id (Layout.AcceptsProfileMessagesFrom, design §29). A workspace that does
-// not exist, one that does not accept the caller and a session that does not exist all give
-// the same error, so the answer does not tell them apart. Outside the workspace layout a
-// reference naming a root is refused: the colon form is not a v1 way to reach another root.
-// Only profile_message calls this: ResolveFrom still gates every other tool.
+// <workspace>:<session> of another workspace is reached when both workspaces are listed in
+// global.json (design §30): listing is the only opt-in, and there is no consent of the target
+// beyond it. A workspace that is not listed, one that is not served and a session that does not
+// exist all give the same error, so the answer does not tell them apart. Outside the workspace
+// layout a reference naming a root is refused: the colon form is not a v1 way to reach another
+// root. Only profile_message calls this: ResolveFrom still gates every other tool.
 func ResolveMessageTarget(roots []Root, caller, reference string) (Location, bool, error) {
 	if !WorkspaceLayout(roots) {
 		if strings.Contains(reference, ":") {
@@ -104,7 +103,7 @@ func ResolveMessageTarget(roots []Root, caller, reference string) (Location, boo
 		if root.ID != rootID {
 			continue
 		}
-		if !root.Layout.AcceptsProfileMessagesFrom(from.Root.Layout, from.Root.ID) {
+		if root.Layout == nil || !root.Layout.Listed || !from.Root.Layout.Listed {
 			break
 		}
 		location := makeLocation(root, sessionID, len(roots))

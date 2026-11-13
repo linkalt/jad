@@ -16,7 +16,7 @@ func TestSubagentAndProfileMessageDefaultBlock(t *testing.T) {
 	if err != nil || subagent.DefaultBlockMs != 3000 {
 		t.Fatalf("subagent set = %+v, %v", subagent, err)
 	}
-	message, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"default_block_ms":4000}}`), "setting.json")
+	message, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"default_block_ms":4000}}`), "setting.json", MessageCaller{})
 	if err != nil || message.DefaultBlockMs != 4000 {
 		t.Fatalf("profile_message set = %+v, %v", message, err)
 	}
@@ -24,7 +24,7 @@ func TestSubagentAndProfileMessageDefaultBlock(t *testing.T) {
 		if _, err := normalizeNativeSubagentSettings(subagentSettingsFor(`{"agents":{"explore":{}},"default_block_ms":`+value+`}`), "/s/setting.json", "/w", ""); err == nil || !strings.Contains(err.Error(), "default_block_ms") {
 			t.Errorf("subagent default_block_ms %s: %v", value, err)
 		}
-		if _, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"default_block_ms":`+value+`}}`), "setting.json"); err == nil || !strings.Contains(err.Error(), "default_block_ms") {
+		if _, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{"profile_message":{"default_block_ms":`+value+`}}`), "setting.json", MessageCaller{}); err == nil || !strings.Contains(err.Error(), "default_block_ms") {
 			t.Errorf("profile_message default_block_ms %s: %v", value, err)
 		}
 	}

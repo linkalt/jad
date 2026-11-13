@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jad/backend-go/internal/httpapi"
+	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/tools/native"
 )
 
@@ -224,13 +225,17 @@ type profileMessagePlan struct {
 }
 
 // TranscriptLabels implements native.ProfileTranscriptLabels for a target of another
-// workspace: the qualified session and profile in place of the file of the target workspace,
+// workspace: its canonical address (local:<workspace>/<session>/<category>/<profile>) in place of the file of the target workspace,
 // which the caller has no business knowing (the caller's own file is shown as it is).
 func (p *profileMessagePlan) TranscriptLabels() (target, caller string) {
 	if !p.foreign {
 		return p.targetMessages, p.callerMessages
 	}
-	return p.reference + "/" + p.target, p.callerMessages
+	workspace, session, found := strings.Cut(p.reference, ":")
+	if !found {
+		return p.reference + "/" + p.target, p.callerMessages
+	}
+	return sessionfs.LocalPrefix + workspace + "/" + session + "/" + p.target, p.callerMessages
 }
 
 // Transcripts implements native.ProfileMessageTranscripts.

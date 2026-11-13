@@ -154,6 +154,12 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		config.WorkspaceLayout = true
 		config.ProfileSelfEdit = effectiveSelfEdit(layout.ProfileSelfEdit, "")
 		config.SelfEditPaths = layout.selfEditPaths()
+		if settings := config.NativeProfileMessage; settings != nil {
+			settings.Caller.Profile = entry.ID()
+			if layout.Listed {
+				settings.Workspaces = otherThan(layout.MessageWorkspaces, settings.Caller.Workspace)
+			}
+		}
 	}
 	if err := built.finishSandbox(&config); err != nil {
 		return SessionConfig{}, err
@@ -1067,4 +1073,15 @@ func deprecatedAgentToolsWarnings(settings *NativeSubagentSettings, sessionPath 
 		}
 	}
 	return warnings
+}
+
+// otherThan is ids without own, in order.
+func otherThan(ids []string, own string) []string {
+	var others []string
+	for _, id := range ids {
+		if id != own {
+			others = append(others, id)
+		}
+	}
+	return others
 }

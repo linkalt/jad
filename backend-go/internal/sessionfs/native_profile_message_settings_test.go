@@ -10,11 +10,11 @@ import (
 )
 
 func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
-	absent, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{}`), "setting.json")
+	absent, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(`{}`), "setting.json", MessageCaller{})
 	if err != nil || absent != nil {
 		t.Fatalf("absent = %+v, %v; want nil", absent, err)
 	}
-	noTools, err := normalizeNativeProfileMessageSettings(map[string]json.RawMessage{}, "setting.json")
+	noTools, err := normalizeNativeProfileMessageSettings(map[string]json.RawMessage{}, "setting.json", MessageCaller{})
 	if err != nil || noTools != nil {
 		t.Fatalf("no tools = %+v, %v; want nil", noTools, err)
 	}
@@ -42,7 +42,7 @@ func TestNormalizeNativeProfileMessageSettings(t *testing.T) {
 		"max chain set":             {`{"profile_message":{"max_chain":4}}`, NativeProfileMessageSettings{TimeoutMs: 600000, DefaultBlockMs: DefaultNativeAgentBlockMs, ResultMaxBytes: 16384, MaxChain: 4, MaxQueued: 4, ContextTrigger: ProfileMessageContextTrigger{Action: ProfileMessageContextOff}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
+			got, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json", MessageCaller{})
 			if err != nil || got == nil || !reflect.DeepEqual(*got, tc.want) {
 				t.Fatalf("settings = %+v, %v\nwant %+v", got, err, tc.want)
 			}
@@ -112,7 +112,7 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json")
+			_, err := normalizeNativeProfileMessageSettings(decideSystemoneSettingsFor(tc.native), "setting.json", MessageCaller{})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.want)
 			}

@@ -1667,3 +1667,62 @@ harmless call unusable). The check runs again when the run starts, with the sett
   of a failed run the provider reported, and the worktree line above.
 - *Workspace named `remote`:* the explicit `local:` form above. No warning at start or in
   `jad check` is added: the form works, and the tool description names it.
+
+## 30. profile_message redesign (T-040)
+
+Supersedes §28 and §29 for the workspace layout (v2) where they differ; the v1 layout keeps every
+behaviour it had (its goldens are the proof). Source: `tmp/decider_handoff.md` (T-040), with the
+user's rules: all local workspaces run in **one JAD process** and there is **no local hardening**
+(no local keys, hashes, HTTP or target admission lists); a reset across workspaces is optional and
+refused by the target by default; credentials exist only for remote servers.
+
+### 30.1 Address grammar (stage A, built)
+
+A profile is written in one of five forms with fixed segment counts; `/` separates segments and a
+colon appears only after the `local:` or `remote:` prefix.
+
+| Written | Means |
+|---|---|
+| `name` | `<caller category>/name`, caller's workspace and session |
+| `category/name` | caller's workspace and session |
+| `session/category/name` | caller's workspace |
+| `local:<workspace>/<session>/<category>/<name>` | a workspace global.json lists, in this process |
+| `remote:<binding>/<session>/<category>/<name>` | a remote binding (stage C) |
+
+Nothing is searched, defaulted or guessed. The canonical form is
+`local:<workspace>/<session>/<category>/<name>`; `local:<own workspace>/<own session>/c/n` is the
+same as `c/n`. Results, handle labels, chain entries and (stage B) deny rules use the canonical
+form; the label of a target in another workspace is its canonical form too (never a file path).
+Every other string, including every earlier colon form (`reports:daily/c/n`,
+`local:remote:s/c/n`), is `invalid_profile_ref`, whose text lists the five forms. A workspace
+named `remote` is an ordinary local workspace: `local:remote/s/c/n`; `remote:` always means a
+remote server. A profile id always has a category, so the one-segment form is defined by the
+caller alone (U1).
+
+Parsing is `sessionfs.ParseMessageRef` (one place); the tool reads the address
+(`profileMessageTool.parseLocalV2`), the messenger resolves it. A profile of the caller's own
+session must be one the session holds (`unknown_profile` otherwise, the caller itself included);
+any other session, workspace or profile is judged by `ResolveMessageTarget`, which answers every
+miss with the same `unknown_profile`.
+
+### 30.2 Local reach (stage A, built)
+
+- Listing a workspace in `G/global.json` is the only opt-in. A profile reaches any profile of any
+  listed workspace; the caller's own workspace must be listed too to cross (an unlisted start
+  directory takes its id from its own folder, which a cloned repository chooses). The consent of
+  the target (`workspace.json profile_message.accept_from`) no longer exists.
+- v2 removed keys (load errors naming the key and the replacement, never ignored):
+  `workspace.json profile_message.accept_from` and `tools.native.profile_message.sessions` of a
+  toolset. v1 keeps `sessions` (its reach is unchanged).
+- Widening, stated plainly: without `sessions`, a v2 profile with `profile_message` reaches every
+  session of its workspace, where `sessions` once limited it. That is the agreed design (the user
+  wants no local admission lists); `deny` (stage B) is how to restrict.
+- The tool description lists the five forms, the session's profiles and the reachable workspaces.
+  It does not list other workspaces' sessions or profiles. A v2 profile whose session holds no
+  other profile still gets the tool, and `jad check` no longer calls that a mistake.
+- Sandbox, depth, `max_chain`, cycle, same-transcript and queue rules are unchanged (§29's sandbox
+  table still holds: a sandboxed caller needs a target sandbox of its own across workspaces).
+- A reset `context_trigger` across workspaces is still refused in this stage; stage B replaces
+  the refusal with the target's `allow_reset`.
+- No credential is read and no HTTP is made on a local call: the local path never touches the
+  remote directory.

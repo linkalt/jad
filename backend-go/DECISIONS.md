@@ -4832,3 +4832,32 @@ of a foreign target that names no path in running result, polls or final result.
   the target's `accept_from` (both from the T-037 limits).
 - *Not built:* a per-caller key that lets a target accept a reset, a `jad check` warning for globs
   naming a workspace that does not accept the caller, a UI, seatbelt runs.
+
+
+## profile_message redesign (T-040, Go, 2026-11-13)
+
+Implements `tmp/decider_handoff.md` (T-040) in five stages, each its own commit; the design is
+`docs/design_workspace_layout.md` §30, which supersedes §28/§29 for the workspace layout and
+the T-036, T-037, T-037b access decisions on exactly these points: consent by `accept_from` and
+colon `sessions` globs (gone), the T-037b cross-workspace reset refusal (becomes the target's
+`allow_reset`, stage B), the `local:remote:` form (gone), and the client's `[<workspace>:]`
+colon form (stage C). v1 keeps every behaviour; the v1 goldens are unchanged.
+
+### Stage A: address grammar and open local reach (built)
+
+- Five address forms, one parser (`sessionfs.ParseMessageRef`), canonical `local:ws/s/c/n` for
+  results and labels, `invalid_profile_ref` for everything else.
+- Listed workspaces trust each other. `accept_from` and the v2 `sessions` are removed keys (load
+  errors with hints). A v2 `sessions` that used to limit a profile now has to be removed, and the
+  reach widens to every session of the workspace; this is the agreed trade-off.
+- Deleted: `Layout.AcceptProfileMessagesFrom`, `AcceptsProfileMessagesFrom`,
+  `readProfileMessageAccept`, the "accept_from ignored" warning, `NamesWorkspace`, the colon branch
+  of `localTarget` (v1 could never reach it through the messenger), `explicitLocalPrefix` and the
+  `local:remote:` special form. `checkProfileMessage` no longer calls a v2 profile without session
+  peers a mistake.
+- U1 answered: a profile id always has `<category>/<name>`, so `name` means `<caller category>/name`.
+- The tool schema is unchanged (no new argument), so no operator has to refresh a tool definition
+  for this stage.
+- Operator impact (reported, not edited): a toolset that sets `tools.native.profile_message.sessions`
+  fails to load in v2 until the key is removed; a `workspace.json` with `profile_message.accept_from`
+  fails to load until it is removed.

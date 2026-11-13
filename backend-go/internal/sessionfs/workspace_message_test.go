@@ -25,35 +25,30 @@ func twoMessageWorkspaces(t *testing.T, listA, listB bool, aJSON, bJSON string) 
 	return f, wsMustLoad(t, f, a)
 }
 
-// A workspace takes messages from another only when both are listed and its accept_from has a
-// glob for the caller's id (design §29); the answer is the one of a session that does not exist.
-func TestResolveMessageTargetNeedsBothWorkspacesToAgree(t *testing.T) {
-	accept := `{"profile_message":{"accept_from":["a"]}}`
+// A profile reaches another workspace when both are listed in global.json (design §30); there
+// is no consent of the target beyond that. The answer for a refusal is the one of a session that
+// does not exist.
+func TestResolveMessageTargetNeedsBothWorkspacesListed(t *testing.T) {
 	for name, test := range map[string]struct {
 		listA, listB bool
-		a, b         string
 		reference    string
 		want         string // "" means refused
 		foreign      bool
 	}{
-		"accepted":                  {true, true, `{}`, accept, "b:s1", "b:s1", true},
-		"a session only b has":      {true, true, `{}`, accept, "b:only-b", "b:only-b", true},
-		"glob":                      {true, true, `{}`, `{"profile_message":{"accept_from":["?"]}}`, "b:s1", "b:s1", true},
-		"star":                      {true, true, `{}`, `{"profile_message":{"accept_from":["*"]}}`, "b:s1", "b:s1", true},
-		"nothing configured":        {true, true, `{}`, `{}`, "b:s1", "", false},
-		"empty list":                {true, true, `{}`, `{"profile_message":{"accept_from":[]}}`, "b:s1", "", false},
-		"another workspace's glob":  {true, true, `{}`, `{"profile_message":{"accept_from":["c","aa"]}}`, "b:s1", "", false},
-		"caller not listed":         {false, true, `{}`, accept, "b:s1", "", false},
-		"target not listed":         {true, false, `{}`, accept, "b:s1", "", false},
-		"missing session":           {true, true, `{}`, accept, "b:nope", "", false},
-		"missing workspace":         {true, true, `{}`, accept, "c:s1", "", false},
-		"own workspace, qualified":  {true, true, `{}`, `{}`, "a:s1", "a:s1", false},
-		"own workspace, bare":       {true, true, `{}`, accept, "s1", "a:s1", false},
-		"bare id of b only":         {true, true, `{}`, accept, "only-b", "", false},
-		"bare id held by both is a": {true, true, `{}`, accept, "s1", "a:s1", false},
+		"listed both":               {true, true, "b:s1", "b:s1", true},
+		"a session only b has":      {true, true, "b:only-b", "b:only-b", true},
+		"caller not listed":         {false, true, "b:s1", "", false},
+		"target not listed":         {true, false, "b:s1", "", false},
+		"missing session":           {true, true, "b:nope", "", false},
+		"missing workspace":         {true, true, "c:s1", "", false},
+		"own workspace, qualified":  {true, true, "a:s1", "a:s1", false},
+		"own workspace, bare":       {true, true, "s1", "a:s1", false},
+		"bare id of b only":         {true, true, "only-b", "", false},
+		"bare id held by both is a": {true, true, "s1", "a:s1", false},
+		"own workspace unlisted":    {false, true, "s1", "a:s1", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, config := twoMessageWorkspaces(t, test.listA, test.listB, test.a, test.b)
+			_, config := twoMessageWorkspaces(t, test.listA, test.listB, `{}`, `{}`)
 			// A workspace that is not listed is not served (it is not the start directory).
 			if want := map[bool]int{true: 2, false: 1}[test.listB]; len(config.Roots) != want {
 				t.Fatalf("roots = %d, want %d", len(config.Roots), want)
@@ -77,17 +72,14 @@ func TestResolveMessageTargetNeedsBothWorkspacesToAgree(t *testing.T) {
 	}
 }
 
-// Acceptance is judged on the caller's own workspace, not on anything the reference says, and
-// is not symmetric: b accepting a does not let b message a.
-func TestResolveMessageTargetIsNotSymmetric(t *testing.T) {
-	_, config := twoMessageWorkspaces(t, true, true, `{}`, `{"profile_message":{"accept_from":["a"]}}`)
-	if _, _, err := ResolveMessageTarget(config.Roots, "a:s1", "b:s1"); err != nil {
-		t.Fatal(err)
+// Both directions work once both are listed; a caller that does not resolve reaches nothing.
+func TestResolveMessageTargetIsSymmetricBetweenListedWorkspaces(t *testing.T) {
+	_, config := twoMessageWorkspaces(t, true, true, `{}`, `{}`)
+	for _, pair := range [][2]string{{"a:s1", "b:s1"}, {"b:s1", "a:s1"}} {
+		if _, foreign, err := ResolveMessageTarget(config.Roots, pair[0], pair[1]); err != nil || !foreign {
+			t.Fatalf("%s to %s: foreign %v, %v", pair[0], pair[1], foreign, err)
+		}
 	}
-	if _, _, err := ResolveMessageTarget(config.Roots, "b:s1", "a:s1"); err == nil {
-		t.Fatal("a accepts nobody, yet b reached it")
-	}
-	// A caller that does not resolve reaches nothing.
 	if _, _, err := ResolveMessageTarget(config.Roots, "zzz:s1", "b:s1"); err == nil {
 		t.Fatal("an unknown caller reached b")
 	}
@@ -108,18 +100,26 @@ func TestResolveMessageTargetRefusesTheColonFormInV1(t *testing.T) {
 	}
 }
 
-func TestWorkspaceJSONProfileMessageAcceptFrom(t *testing.T) {
+// accept_from was the target's consent in the first cross-workspace design; it is refused by
+// name, with what to do instead, so a file that still has it never silently stops protecting.
+func TestWorkspaceJSONProfileMessageAcceptFromIsRemoved(t *testing.T) {
 	for name, text := range map[string]string{
-		"not an object":    `{"profile_message":[]}`,
-		"unknown key":      `{"profile_message":{"accept":["a"]}}`,
-		"not a list":       `{"profile_message":{"accept_from":"a"}}`,
-		"colon":            `{"profile_message":{"accept_from":["a:b"]}}`,
-		"slash":            `{"profile_message":{"accept_from":["a/b"]}}`,
-		"empty entry":      `{"profile_message":{"accept_from":[""]}}`,
-		"class":            `{"profile_message":{"accept_from":["a[b]"]}}`,
-		"duplicate":        `{"profile_message":{"accept_from":["a","a"]}}`,
-		"null section":     `{"profile_message":null}`,
-		"entry not string": `{"profile_message":{"accept_from":[1]}}`,
+		"list":  `{"profile_message":{"accept_from":["a"]}}`,
+		"empty": `{"profile_message":{"accept_from":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newWSFixture(t)
+			a := f.workspace(t, "a", text)
+			_, err := f.load(a)
+			if err == nil || !strings.Contains(err.Error(), "profile_message.accept_from was removed") || !strings.Contains(err.Error(), "delete the key") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	for name, text := range map[string]string{
+		"not an object": `{"profile_message":[]}`,
+		"unknown key":   `{"profile_message":{"accept":["a"]}}`,
+		"null section":  `{"profile_message":null}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newWSFixture(t)
@@ -127,39 +127,22 @@ func TestWorkspaceJSONProfileMessageAcceptFrom(t *testing.T) {
 			wsMustRefuse(t, f, a, "profile_message")
 		})
 	}
-	f := newWSFixture(t)
-	a := f.workspace(t, "a", `{"profile_message":{"accept_from":["x","y-*"]}}`)
-	f.globalJSON(t, `{"workspaces":[{"id":"a","path":"`+a+`"}]}`)
-	config := wsMustLoad(t, f, a)
-	layout := config.Roots[0].Layout
-	if !layout.Listed || len(layout.AcceptProfileMessagesFrom) != 2 {
-		t.Fatalf("layout: listed %v accept %q", layout.Listed, layout.AcceptProfileMessagesFrom)
+}
+
+// Only a listed workspace is reachable and reaches others: the layout says so and names the
+// listed workspaces the tool offers.
+func TestListedWorkspacesTakePartInProfileMessage(t *testing.T) {
+	_, config := twoMessageWorkspaces(t, true, true, `{}`, `{}`)
+	for _, root := range config.Roots {
+		if !root.Layout.Listed || len(root.Layout.MessageWorkspaces) != 2 {
+			t.Fatalf("%s: listed %v workspaces %q", root.ID, root.Layout.Listed, root.Layout.MessageWorkspaces)
+		}
 	}
 	// Unlisted start workspace: not Listed, so it takes part in no cross-workspace message.
 	g := newWSFixture(t)
-	b := g.workspace(t, "b", `{"profile_message":{"accept_from":["*"]}}`)
+	b := g.workspace(t, "b", `{}`)
 	config = wsMustLoad(t, g, b)
-	if config.Roots[0].Layout.Listed {
-		t.Fatal("an unlisted start workspace counts as listed")
-	}
-	if !strings.Contains(strings.Join(config.Warnings, "\n"), "accept_from is ignored") {
-		t.Fatalf("no warning that accept_from of an unlisted workspace does nothing: %q", config.Warnings)
-	}
-	if config.Roots[0].Layout.AcceptsProfileMessagesFrom(config.Roots[0].Layout, "b") {
-		t.Fatal("an unlisted workspace accepts")
-	}
-}
-
-func TestAcceptsProfileMessagesFromIsClosedOnNil(t *testing.T) {
-	var layout *Layout
-	if layout.AcceptsProfileMessagesFrom(&Layout{Listed: true}, "a") {
-		t.Fatal("nil layout accepts")
-	}
-	listed := &Layout{Listed: true, AcceptProfileMessagesFrom: []string{"a"}}
-	if listed.AcceptsProfileMessagesFrom(nil, "a") || !listed.AcceptsProfileMessagesFrom(&Layout{Listed: true}, "a") {
-		t.Fatal("caller layout nil must refuse and a listed one with a matching id must be accepted")
-	}
-	if listed.AcceptsProfileMessagesFrom(&Layout{Listed: true}, "b") {
-		t.Fatal("glob a matched b")
+	if layout := config.Roots[0].Layout; layout.Listed || len(layout.MessageWorkspaces) != 0 {
+		t.Fatalf("an unlisted start workspace counts as listed: %v %q", layout.Listed, layout.MessageWorkspaces)
 	}
 }

@@ -45,8 +45,8 @@ func twoWorkspaces(t *testing.T) profileMessenger {
 	return profileMessenger{resolver: &Resolver{roots: loaded.Roots}}
 }
 
-// Design Q6: a tool of a session in workspace a reaches only a (profile_message too, unless
-// the workspaces allow it both ways, §29). A session of b, named with or
+// Design Q6: a tool of a session in workspace a reaches only a (profile_message alone reaches
+// another listed workspace, §30). A session of b, named with or
 // without its workspace, answers like a session that does not exist.
 func TestWorkspaceToolsReachOnlyTheirOwnWorkspace(t *testing.T) {
 	m := twoWorkspaces(t)
@@ -66,10 +66,15 @@ func TestWorkspaceToolsReachOnlyTheirOwnWorkspace(t *testing.T) {
 		if profiles, sessions := m.Candidates(ctx, owner, foreign); profiles != nil || slices.ContainsFunc(sessions, func(s string) bool { return s[0] == 'b' }) {
 			t.Errorf("candidates of %s: %q %q", foreign, profiles, sessions)
 		}
-		// profile_message to another session: nothing is accepted from another workspace unless
-		// its workspace.json says so (§29, profile_message_workspace_test.go)
-		if _, _, err := m.otherSession("a:s1", foreign, "dev/coder"); !errors.Is(err, native.ErrProfileUnknown) {
-			t.Errorf("profile_message to %s: %v", foreign, err)
+		// profile_message alone reaches another listed workspace, and only by its workspace
+		// (design §30, profile_message_workspace_test.go): a bare id stays in a.
+		_, crossed, err := m.otherSession("a:s1", foreign, "dev/coder")
+		if foreign == "only-b" {
+			if !errors.Is(err, native.ErrProfileUnknown) {
+				t.Errorf("profile_message to bare %s: %v", foreign, err)
+			}
+		} else if err != nil || !crossed {
+			t.Errorf("profile_message to %s: crossed %v, %v", foreign, crossed, err)
 		}
 		// profile info, compact and reset
 		_, _, err = m.profileTarget(owner, foreign, "dev/coder")

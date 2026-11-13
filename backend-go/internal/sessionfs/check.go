@@ -225,6 +225,11 @@ func (r *CheckReport) checkProfileMessage(id string, config SessionConfig) {
 	if config.NativeProfileMessage == nil {
 		return
 	}
+	if config.NativeProfileMessage.Caller.Workspace != "" {
+		// The workspace layout reaches other sessions and workspaces by address, so a profile
+		// with no other profile in its session still has somebody to message.
+		return
+	}
 	if len(config.NativeProfileMessage.Sessions) == 0 && len(ProfileMessageTargets(config.Profiles, config.Profile, config.NativeProfileMessage.DenyProfiles)) == 0 {
 		r.add("session", id, ProfileMessageNoTargetsError(config.SettingPath, config.Profile))
 	}

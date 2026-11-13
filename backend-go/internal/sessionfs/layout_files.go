@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"path"
 	"sort"
 	"strings"
 
@@ -78,9 +77,10 @@ type Layout struct {
 	// file gave it and not one its own folder name or workspace.json chose. Only a listed
 	// workspace takes part in a cross-workspace profile_message (design §29).
 	Listed bool
-	// AcceptProfileMessagesFrom are the globs of workspace ids whose profiles may message the
-	// profiles of this workspace (workspace.json profile_message.accept_from); none by default.
-	AcceptProfileMessagesFrom []string
+	// MessageWorkspaces are the ids of the served workspaces global.json lists: the workspaces
+	// a profile_message may address with local:<workspace>/... (design §30). Empty unless
+	// this workspace is listed itself.
+	MessageWorkspaces []string
 
 	// scope and scopeUsers are set by ScopedCatalogLayout for the catalog routes only.
 	scope      catalogScope
@@ -295,19 +295,4 @@ func checkLayoutSettings(settings map[string]json.RawMessage, where string) erro
 		suggestion = "; did you mean " + closest + "?"
 	}
 	return configError("%s: settings may not carry %s; it has its own file or field in the catalog layout%s", where, strings.Join(unknown, ", "), suggestion)
-}
-
-// AcceptsProfileMessagesFrom reports whether a profile of the workspace with id caller may
-// message a profile of this workspace: both workspaces are listed in global.json and one of
-// this workspace's accept_from globs matches the caller's id. Nothing is accepted by default.
-func (l *Layout) AcceptsProfileMessagesFrom(caller *Layout, callerID string) bool {
-	if l == nil || caller == nil || !l.Listed || !caller.Listed {
-		return false
-	}
-	for _, glob := range l.AcceptProfileMessagesFrom {
-		if ok, err := path.Match(glob, callerID); err == nil && ok {
-			return true
-		}
-	}
-	return false
 }

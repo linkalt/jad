@@ -23,7 +23,7 @@ import (
 
 // messageWorkspaces is two workspaces, a (where the callers are) and b, with a scripted
 // provider: sessions s1 in both and only-b in b; a has dev/base, b has dev/base and
-// review/reviewer (design §29).
+// review/reviewer (design §30).
 type messageWorkspaces struct {
 	a, b    string
 	service *Service
@@ -40,6 +40,7 @@ type messageWorkspaces struct {
 type messageWorkspaceOptions struct {
 	aWorkspace, bWorkspace string // workspace.json texts; {} by default
 	unlistedA              bool   // a is only the start directory, not listed in global.json
+	unlistedB              bool   // b exists but global.json does not list it
 	aToolset               string // the toolset of a's dev/base, coding/none by default
 	bReviewer              string // b's review/reviewer file, a plain profile by default
 	bToolset               string // the toolset of b's dev/base, coding/none by default
@@ -47,8 +48,6 @@ type messageWorkspaceOptions struct {
 	exec                   bool   // the tool definition of exec is loaded
 	bID                    string // the workspace id of b, "b" by default
 }
-
-const acceptA = `{"profile_message":{"accept_from":["a"]}}`
 
 func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *messageWorkspaces {
 	t.Helper()
@@ -113,14 +112,18 @@ func startMessageWorkspaces(t *testing.T, options messageWorkspaceOptions) *mess
 		paths = append(paths, `"`+definition+`"`)
 	}
 	bID := orDefault(options.bID, "b")
-	workspaces := `{"id":"` + bID + `","path":"` + w.b + `"}`
+	var entries []string
 	if !options.unlistedA {
-		workspaces = `{"id":"a","path":"` + w.a + `"},` + workspaces
+		entries = append(entries, `{"id":"a","path":"`+w.a+`"}`)
 	}
+	if !options.unlistedB {
+		entries = append(entries, `{"id":"`+bID+`","path":"`+w.b+`"}`)
+	}
+	workspaces := strings.Join(entries, ",")
 	put(filepath.Join(global, "global.json"), `{"workspaces":[`+workspaces+`],"libraries":{"tool_definition_paths":[`+strings.Join(paths, ",")+`]}}`)
 	put(filepath.Join(global, "models", "openai", "default.json"), `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY","base_url":"`+provider.URL+`/v1"}`)
 	put(filepath.Join(global, "tools", "coding", "none.json"), `{"native":{},"mcp":{}}`)
-	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":{"sessions":["`+bID+`:*"],"timeout_ms":60000}},"mcp":{}}`)
+	put(filepath.Join(global, "tools", "coding", "talk.json"), `{"native":{"profile_message":{"timeout_ms":60000}},"mcp":{}}`)
 	put(filepath.Join(global, "tools", "coding", "exec.json"), `{"native":{"exec":{"spill":{"enabled":false}}},"mcp":{}}`)
 	put(filepath.Join(w.a, ".jad", "workspace.json"), orDefault(options.aWorkspace, `{}`))
 	put(filepath.Join(w.b, ".jad", "workspace.json"), orDefault(options.bWorkspace, `{}`))
@@ -189,11 +192,11 @@ func (w *messageWorkspaces) transcript(dir, session, profile string) string {
 	return string(data)
 }
 
-// Both sides allow it: the message runs the profile of b in b's own state (its transcript is in
+// Both workspaces are listed: the message runs the profile of b in b's own state (its transcript is in
 // b's state folder, the caller's workspace gets nothing), and the plan is keyed by the
 // qualified session, so the same name in a is another queue and another node of the chain.
-func TestProfileMessageReachesAProfileOfAnotherWorkspaceWhenBothAllow(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+func TestProfileMessageReachesAProfileOfAnotherListedWorkspace(t *testing.T) {
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	plan, err := w.prepare(t, ownerA, "b:s1", "review/reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -229,31 +232,25 @@ func TestProfileMessageReachesAProfileOfAnotherWorkspaceWhenBothAllow(t *testing
 	}
 }
 
-// Every missing half, a workspace that does not exist and a session that does not exist are the
-// same refusal, and a bare id stays in the caller's workspace even when b holds the id too and
-// accepts the caller.
-func TestProfileMessageToAnotherWorkspaceIsRefusedUnlessBothAllow(t *testing.T) {
+// A workspace that is not listed, one that does not exist and a session that does not exist are
+// the same refusal; an unlisted caller reaches no other workspace; a bare id stays in the
+// caller's workspace even when b holds the id too; listing is the only opt-in, so the target
+// needs nothing in its own workspace.json and the direction does not matter.
+func TestProfileMessageToAnotherWorkspaceNeedsBothListed(t *testing.T) {
 	for name, options := range map[string]messageWorkspaceOptions{
-		"b accepts nobody":          {},
-		"b accepts another":         {bWorkspace: `{"profile_message":{"accept_from":["c"]}}`},
-		"b accepts nothing":         {bWorkspace: `{"profile_message":{"accept_from":[]}}`},
-		"the caller is not listed":  {bWorkspace: acceptA, unlistedA: true},
-		"b accepts only the caller": {bWorkspace: `{"profile_message":{"accept_from":["a*"]}}`, unlistedA: true},
+		"the caller is not listed": {unlistedA: true},
+		"the target is not listed": {unlistedB: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := startMessageWorkspaces(t, options)
-			missing := func(session string) error {
-				_, err := w.prepare(t, ownerA, session, "review/reviewer")
-				return err
-			}
 			for _, session := range []string{"b:s1", "b:only-b", "b:nope", "c:s1"} {
-				if err := missing(session); !errors.Is(err, native.ErrProfileUnknown) {
+				if _, err := w.prepare(t, ownerA, session, "review/reviewer"); !errors.Is(err, native.ErrProfileUnknown) {
 					t.Errorf("%s: %v", session, err)
 				}
 			}
 		})
 	}
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	// s1 is held by both: bare means a's, which has no review/reviewer (b's has), so it is unknown.
 	if _, err := w.prepare(t, ownerA, "s1", "review/reviewer"); !errors.Is(err, native.ErrProfileUnknown) {
 		t.Fatalf("bare s1: %v", err)
@@ -264,8 +261,8 @@ func TestProfileMessageToAnotherWorkspaceIsRefusedUnlessBothAllow(t *testing.T) 
 			t.Errorf("own session as %s: %v, want a cycle", session, err)
 		}
 	}
-	// Not symmetric: b accepting a does not let b reach a.
-	if _, err := w.prepare(t, ownerB, "a:s1", "dev/base"); !errors.Is(err, native.ErrProfileUnknown) {
+	// Symmetric: b reaches a's dev/base as a reaches b's.
+	if _, err := w.prepare(t, ownerB, "a:s1", "dev/base"); err != nil {
 		t.Fatalf("b to a: %v", err)
 	}
 }
@@ -273,7 +270,7 @@ func TestProfileMessageToAnotherWorkspaceIsRefusedUnlessBothAllow(t *testing.T) 
 // A message that comes back to a profile the chain already holds is a cycle across workspaces:
 // the nodes are qualified, so the running b profile cannot message a's dev/base again.
 func TestProfileMessageCycleAcrossWorkspacesIsRefused(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{aWorkspace: `{"profile_message":{"accept_from":["b"]}}`, bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	w.mu.Lock()
 	w.holdOn, w.gate, w.reached = "hello", make(chan struct{}), make(chan struct{}, 4)
 	w.mu.Unlock()
@@ -322,7 +319,7 @@ func TestProfileMessageToAnotherWorkspaceNeedsASandboxOfItsOwnUnderASandboxedCal
 		"target inside the callers":       {own, sandbox("/"), ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA, bReviewer: test.reviewer})
+			w := startMessageWorkspaces(t, messageWorkspaceOptions{bReviewer: test.reviewer})
 			_, err := w.prepare(t, ownerA, "b:s1", "review/reviewer", func(r *native.ProfileMessageRequest) {
 				if test.caller != nil {
 					r.Environment = &tools.Environment{Sandbox: test.caller}
@@ -343,7 +340,7 @@ func TestProfileMessageToAnotherWorkspaceNeedsASandboxOfItsOwnUnderASandboxedCal
 	}
 	// The same sandboxed caller with a target of its own workspace is unchanged: the target with
 	// no sandbox takes the caller's (existing behaviour).
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	writeWorkspaceTestFile(t, filepath.Join(w.a, ".jad", "profiles", "review", "reviewer.json"), `{"models":["openai/default"],"model_default":"openai/default"}`)
 	if _, err := w.prepare(t, ownerA, "s1", "review/reviewer", func(r *native.ProfileMessageRequest) {
 		r.Environment = &tools.Environment{Sandbox: sandbox("{workspace}")}
@@ -365,20 +362,20 @@ func wsTrueExecutable() string {
 }
 
 // The whole path through the tool: a run of a's dev/base calls profile_message with
-// b:s1/review/reviewer, b answers in its own session, and the answer comes back as the tool's
-// result. a's setting names the workspace and b's workspace.json accepts it; neither alone is
-// enough (the refusal reads like an unknown profile).
+// local:b/s1/review/reviewer, b answers in its own session, and the answer comes back as the
+// tool's result. Listing both workspaces is all it takes; a target that is not listed reads like
+// an unknown profile.
 func TestProfileMessageToolCrossesWorkspacesEndToEnd(t *testing.T) {
 	for name, test := range map[string]struct {
-		bWorkspace string
-		want       string
+		unlistedB bool
+		want      string
 	}{
-		"accepted":     {acceptA, "answer-from-b"},
-		"not accepted": {`{}`, "unknown_profile"},
+		"listed":     {false, "answer-from-b"},
+		"not listed": {true, "unknown_profile"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: test.bWorkspace, aToolset: "coding/talk"})
-			call := scriptFunctionCall("profile_message", map[string]any{"profile": "b:s1/review/reviewer", "message": "question-for-b"})
+			w := startMessageWorkspaces(t, messageWorkspaceOptions{unlistedB: test.unlistedB, aToolset: "coding/talk"})
+			call := scriptFunctionCall("profile_message", map[string]any{"profile": "local:b/s1/review/reviewer", "message": "question-for-b"})
 			w.script = func(model, body string) string {
 				switch {
 				case strings.Contains(body, "question-for-b") && !strings.Contains(body, "ask-b"):
@@ -413,7 +410,7 @@ func TestProfileMessageToolCrossesWorkspacesEndToEnd(t *testing.T) {
 					t.Fatalf("b's transcript: %q", targetTranscript)
 				}
 			} else if targetTranscript != "" {
-				t.Fatalf("b was messaged without accepting: %s", targetTranscript)
+				t.Fatalf("b was messaged without being listed: %s", targetTranscript)
 			}
 		})
 	}
@@ -426,7 +423,7 @@ func TestProfileMessageToolCrossesWorkspacesEndToEnd(t *testing.T) {
 func TestProfileMessageTargetOfAnotherWorkspaceRunsInItsOwnNarrowedSandbox(t *testing.T) {
 	requireBwrap(t)
 	own := `{"models":["openai/default"],"model_default":"openai/default","toolset":"coding/exec","settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap","writable_paths":["{workspace}","{tmp}"],"plan_writable_paths":["{tmp}"]}}}`
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA, bReviewer: own, exec: true})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{bReviewer: own, exec: true})
 	command := "printf 'by b' > made.txt; " +
 		"( if cat " + filepath.Join(w.a, ".jad", "workspace.json") + " >/dev/null 2>&1; then echo reada=yes; else echo reada=no; fi; " +
 		"if echo x > " + filepath.Join(w.a, "planted.txt") + " 2>/dev/null; then echo writea=yes; else echo writea=no; fi; " +
@@ -487,7 +484,7 @@ func TestTargetConfinerRefusesAnUnsandboxedTargetOfAnotherWorkspace(t *testing.T
 // between the plan and the start is refused, not given the caller's.
 func TestProfileMessageToAnotherWorkspaceChecksTheSandboxAgainAtTheStart(t *testing.T) {
 	own := `{"models":["openai/default"],"model_default":"openai/default","settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"` + wsTrueExecutable() + `","writable_paths":["{workspace}","{tmp}"],"plan_writable_paths":["{tmp}"]}}}`
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA, bReviewer: own})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{bReviewer: own})
 	caller := &sessionfs.SandboxSettings{Backend: sessionfs.SandboxBackendBwrap, Executable: wsTrueExecutable(), ReadPaths: []string{"/"}, WritablePaths: []string{"/", "{tmp}"}, PlanWritablePaths: []string{"{tmp}"}}
 	plan, err := w.prepare(t, ownerA, "b:s1", "review/reviewer", func(r *native.ProfileMessageRequest) {
 		r.Environment = &tools.Environment{Sandbox: caller}

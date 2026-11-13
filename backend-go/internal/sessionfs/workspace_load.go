@@ -186,6 +186,12 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 		profileOwnRoots = appendNewStrings(profileOwnRoots, filepath.Join(jad, profileOwnFolder))
 		dataRoots = append(dataRoots, filepath.Join(jad, filepath.Dir(profileDataFolder)))
 	}
+	var listedIDs []string
+	for _, spec := range specs {
+		if spec.listed {
+			listedIDs = append(listedIDs, spec.id)
+		}
+	}
 	auth := appendNewStrings([]string{filepath.Join(global, "auth")}, filepath.Join(globalReal, "auth"))
 	roots := make([]Root, 0, len(specs))
 	for _, spec := range specs {
@@ -196,6 +202,9 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 		layout.FixedHidePaths = slices.Clone(auth)
 		ownJad := filepath.Join(spec.dir, ".jad")
 		layout.ProfileOwnRoots = appendNewStrings(slices.Clone(profileOwnRoots), filepath.Join(ownJad, profileOwnFolder))
+		if layout.Listed {
+			layout.MessageWorkspaces = slices.Clone(listedIDs)
+		}
 		layout.SealedPaths = appendNewStrings(appendNewStrings([]string{global}, globalReal), appendNewStrings([]string{ownJad}, realPath(ownJad))...)
 		// The default functions_dir of each tool when the session works in W (cwd W/.jad/<dir>).
 		layout.SealedHelpers = map[string]string{"exec": filepath.Join(ownJad, "exec"), "tool_smith": filepath.Join(ownJad, "functions")}
@@ -206,9 +215,6 @@ func loadWorkspaces(cwd, configuredGlobal string, env map[string]string) (Config
 		}
 		if err := layout.checkToolDefinitionPaths(dataRoots); err != nil {
 			return Config{}, configError("workspace %s: %v", spec.id, err)
-		}
-		if len(layout.AcceptProfileMessagesFrom) > 0 && !layout.Listed {
-			warnings = append(warnings, fmt.Sprintf("workspace %s: %s profile_message.accept_from is ignored: the workspace is not listed in %s workspaces, and only a listed workspace takes part in a profile_message across workspaces (docs/design_workspace_layout.md §29)", spec.id, filepath.Join(ownJad, workspaceSettingName), filepath.Join(global, globalSettingName)))
 		}
 		roots = append(roots, Root{ID: spec.id, Label: spec.label, Directory: layout.SessionsDir, GlobalJadRoot: global, Layout: layout})
 		if spec.start && !defaultsEnableSandbox(layout.Defaults) {
@@ -548,14 +554,12 @@ func (spec workspaceSpec) layout(base Layout, globalDefaults map[string]json.Raw
 	if err != nil {
 		return nil, err
 	}
-	accept, err := readProfileMessageAccept(spec.setting, where)
-	if err != nil {
+	if err := readProfileMessage(spec.setting, where); err != nil {
 		return nil, err
 	}
 	layout := base
 	layout.ProfileSelfEdit = effectiveSelfEdit(base.ProfileSelfEdit, ownSelfEdit)
 	layout.Listed = spec.listed
-	layout.AcceptProfileMessagesFrom = accept
 	builtIn := map[string]json.RawMessage{"cwd": mustJSON(spec.dir)}
 	layout.Defaults = mergeSettings(mergeSettings(builtIn, globalDefaults), own)
 	layout.DefaultLayers = []SettingLayer{{Name: SettingLayerBuiltIn, Values: builtIn}, {Name: SettingLayerGlobal, Values: globalDefaults}, {Name: SettingLayerWorkspace, Values: own}}
@@ -592,46 +596,28 @@ func defaultsEnableSandbox(defaults map[string]json.RawMessage) bool {
 	return json.Unmarshal(defaults["sandbox"], &sandbox) == nil && sandbox.Enabled
 }
 
-// profileMessageKey is the workspace.json section that says which other workspaces may message
-// the profiles of this one.
+// profileMessageKey is the workspace.json section of the profile_message policy.
 const profileMessageKey = "profile_message"
 
-// acceptFromGlobPattern is a glob of workspace ids: root-id characters, '*' and '?'.
-var acceptFromGlobPattern = regexp.MustCompile(`^[A-Za-z0-9*?][A-Za-z0-9._*?-]{0,63}$`)
+// removedAcceptFromHint: accept_from was the target workspace's consent to a message from
+// another workspace. Listed workspaces now trust each other (design §30).
+const removedAcceptFromHint = "cross-workspace messages are open between the workspaces global.json lists; delete the key"
 
-// readProfileMessageAccept reads workspace.json profile_message.accept_from: globs of the ids
-// of the workspaces whose profiles may message this workspace's profiles. Unset or empty: none.
-func readProfileMessageAccept(setting map[string]json.RawMessage, where string) ([]string, error) {
+// readProfileMessage reads workspace.json profile_message.
+func readProfileMessage(setting map[string]json.RawMessage, where string) error {
 	raw, exists := setting[profileMessageKey]
 	if !exists {
-		return nil, nil
+		return nil
 	}
 	var section map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &section); err != nil || section == nil {
-		return nil, configError("%s: %s must be an object", where, profileMessageKey)
+		return configError("%s: %s must be an object", where, profileMessageKey)
 	}
 	for key := range section {
-		if key != "accept_from" {
-			return nil, configError("%s: %s.%s is not a key (accept_from)", where, profileMessageKey, key)
+		if key == "accept_from" {
+			return configError("%s: %s.accept_from was removed; %s", where, profileMessageKey, removedAcceptFromHint)
 		}
+		return configError("%s: %s.%s is not a key", where, profileMessageKey, key)
 	}
-	rawGlobs, exists := section["accept_from"]
-	if !exists {
-		return nil, nil
-	}
-	var globs []string
-	if err := json.Unmarshal(rawGlobs, &globs); err != nil {
-		return nil, configError("%s: %s.accept_from must be an array of workspace id globs", where, profileMessageKey)
-	}
-	seen := map[string]bool{}
-	for _, glob := range globs {
-		if !acceptFromGlobPattern.MatchString(glob) {
-			return nil, configError("%s: %s.accept_from entry %q is not a workspace id glob (letters, digits, '.', '_', '-', '*' and '?')", where, profileMessageKey, glob)
-		}
-		if seen[glob] {
-			return nil, configError("%s: %s.accept_from lists %q more than once", where, profileMessageKey, glob)
-		}
-		seen[glob] = true
-	}
-	return globs, nil
+	return nil
 }

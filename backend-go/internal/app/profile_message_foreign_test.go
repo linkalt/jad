@@ -54,9 +54,9 @@ func withTrigger(action string, after int64) func(*native.ProfileMessageRequest)
 // A reset context_trigger of the caller is refused for a target of another workspace before
 // anything of the target is touched: the real reset is never run (b's transcript is the same
 // bytes, with and without the usage threshold), nothing is queued, and the refusal comes after
-// b's acceptance, so a workspace that does not accept the caller still reads as unknown.
+// the target is found, so a workspace that is not listed still reads as unknown.
 func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	first, err := w.prepare(t, ownerA, "b:s1", "review/reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +96,10 @@ func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T
 		t.Fatalf("outcome = %+v", outcome)
 	}
 
-	// A workspace that does not accept the caller is an unknown profile, trigger or not.
-	closed := startMessageWorkspaces(t, messageWorkspaceOptions{})
+	// A workspace that is not listed is an unknown profile, trigger or not.
+	closed := startMessageWorkspaces(t, messageWorkspaceOptions{unlistedB: true})
 	if _, err := closed.prepare(t, ownerA, "b:s1", "review/reviewer", withTrigger(sessionfs.ProfileMessageContextReset, 0)); !errors.Is(err, native.ErrProfileUnknown) {
-		t.Fatalf("not accepted: %v", err)
+		t.Fatalf("not listed: %v", err)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestProfileMessageForeignResetIsRefusedBeforeTouchingTheTarget(t *testing.T
 // backup and runs with the target's own settings. The hook is asked about the target's session
 // of b (the caller's workspace is never the one compacted), and the message is sent.
 func TestProfileMessageForeignCompactStillRuns(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	first, err := w.prepare(t, ownerA, "b:s1", "review/reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func TestProfileMessageForeignCompactStillRuns(t *testing.T) {
 // a session of the caller's workspace written with its workspace, are reset before the message
 // as before (the real reset: the first message is gone from the target's next request).
 func TestProfileMessageSameWorkspaceResetStillRuns(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	for name, session := range map[string]string{"own session": "", "own workspace, qualified": "b:s1"} {
 		first, err := w.prepare(t, ownerB, session, "review/reviewer", func(request *native.ProfileMessageRequest) { request.Message = "first-" + name })
 		if err != nil {
@@ -164,14 +164,14 @@ func TestProfileMessageSameWorkspaceResetStillRuns(t *testing.T) {
 // plan keeps the file for the host's own reads. A target of the caller's own workspace is
 // shown as before, by its file.
 func TestProfileMessageTranscriptOfAnotherWorkspaceIsLabelled(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{})
 	plan, err := w.prepare(t, ownerA, "b:s1", "review/reviewer")
 	if err != nil {
 		t.Fatal(err)
 	}
 	file, caller := plan.(native.ProfileMessageTranscripts).Transcripts()
 	label, callerLabel := plan.(native.ProfileTranscriptLabels).TranscriptLabels()
-	if file != filepath.Join(w.b, ".jad", "state", "s1", "review", "reviewer", "messages.jsonl") || label != "b:s1/review/reviewer" || callerLabel != caller || caller == "" {
+	if file != filepath.Join(w.b, ".jad", "state", "s1", "review", "reviewer", "messages.jsonl") || label != "local:b/s1/review/reviewer" || callerLabel != caller || caller == "" {
 		t.Fatalf("file %q label %q caller %q callerLabel %q", file, label, caller, callerLabel)
 	}
 	own, err := w.prepare(t, ownerB, "", "review/reviewer")
@@ -184,16 +184,16 @@ func TestProfileMessageTranscriptOfAnotherWorkspaceIsLabelled(t *testing.T) {
 	}
 }
 
-// A workspace named remote is reached by the explicit local form, which a caller's glob
-// remote:* allows and the workspace accepts; remote: itself still means a remote server and is
-// never read as this workspace. The tool end to end, then the transcript the model sees names
-// the target by label, not by the file of b.
+// A workspace named remote is an ordinary local workspace: local:remote/<session>/... reaches
+// it, and remote: itself still means a remote server and is never read as this workspace. The
+// tool end to end, then the transcript the model sees names the target by its canonical label,
+// not by the file of b.
 func TestProfileMessageReachesAWorkspaceNamedRemote(t *testing.T) {
-	w := startMessageWorkspaces(t, messageWorkspaceOptions{bWorkspace: acceptA, bID: "remote", aToolset: "coding/talk"})
+	w := startMessageWorkspaces(t, messageWorkspaceOptions{bID: "remote", aToolset: "coding/talk"})
 	if plan, err := w.prepare(t, ownerA, "remote:s1", "review/reviewer"); err != nil || plan.(*profileMessagePlan).reference != "remote:s1" {
 		t.Fatalf("the resolver reaches the workspace named remote: %v", err)
 	}
-	call := scriptFunctionCall("profile_message", map[string]any{"profile": "local:remote:s1/review/reviewer", "message": "question-for-b"})
+	call := scriptFunctionCall("profile_message", map[string]any{"profile": "local:remote/s1/review/reviewer", "message": "question-for-b"})
 	w.script = func(model, body string) string {
 		switch {
 		case strings.Contains(body, "question-for-b") && !strings.Contains(body, "ask-b"):
@@ -223,7 +223,7 @@ func TestProfileMessageReachesAWorkspaceNamedRemote(t *testing.T) {
 		t.Fatalf("a's transcript:\n%s\nb's: %q", callerTranscript, w.transcript(w.b, "s1", "review/reviewer"))
 	}
 	// The tool result shows the target by its qualified name and never by a file of b.
-	if !strings.Contains(callerTranscript, "transcript: remote:s1/review/reviewer") || strings.Contains(callerTranscript, w.b) {
+	if !strings.Contains(callerTranscript, "transcript: local:remote/s1/review/reviewer") || strings.Contains(callerTranscript, w.b) {
 		t.Fatalf("the caller's transcript shows b's file or lacks the label:\n%s", callerTranscript)
 	}
 }
