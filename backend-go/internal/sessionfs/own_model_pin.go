@@ -17,7 +17,7 @@ type ownModelPin struct {
 // that keeps the run's model) uses this copy and reads neither the own file nor its base again;
 // an edit applies from the next run. An own model the run could not reach when it started fails
 // closed, and is never read from the disk during the run. Shared models are still read from their
-// files as before, and a config with no own model (v1 and every shared-only profile) is returned
+// files as before, and a config with no own model (every shared-only profile) is returned
 // as it is. A pinned config pins nothing again.
 func (c SessionConfig) PinOwnModels() SessionConfig {
 	if len(c.ModelBases) == 0 {

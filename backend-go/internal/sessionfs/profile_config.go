@@ -19,8 +19,7 @@ type SettingSources struct {
 }
 
 // settingSources keeps the layers compose merged and the settings keys of the result. The
-// layers are the layout's default layers (built-in, global, workspace) or its one root
-// defaults layer in v1, then the session's and the profile's settings.
+// layers are the layout's default layers (built-in, global, workspace), then the session's and the profile's settings.
 func (c *layoutCompose) settingSources(profileSettings, composed map[string]json.RawMessage) *SettingSources {
 	layers := slices.Clone(c.layout.DefaultLayers)
 	if len(layers) == 0 {

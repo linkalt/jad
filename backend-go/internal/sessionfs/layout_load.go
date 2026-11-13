@@ -230,7 +230,7 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		// Refuse an effort the model does not offer now, before a run stores the user message.
 		// Only the effort is checked: a model file that fails the model rules is reported by
 		// the run that uses it, not by every load of the session.
-		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, true, config.ReasoningEffort); err != nil {
+		if err := checkModelEffortOnlyOf(config.ModelPath, config.ModelBases, config.ReasoningEffort); err != nil {
 			return SessionConfig{}, err
 		}
 	}
@@ -413,7 +413,7 @@ func (c *layoutCompose) sessionConfigPaths(config *SessionConfig) []string {
 		// Workspace layout only (empty otherwise): workspace.json, the private catalogs and
 		// every session file of the workspace.
 		c.layout.WorkspaceSetting, c.layout.WorkspaceModels, c.layout.WorkspaceTools, c.layout.SessionsDir}
-	// The workspace's own tool definition files (4c; none in v1): outside W/.jad they would
+	// The workspace's own tool definition files (4c): outside W/.jad they would
 	// be writable otherwise, and they say what the tools are.
 	candidates = append(candidates, c.layout.WorkspaceToolDefinitions...)
 	var paths []string

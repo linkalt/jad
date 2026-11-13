@@ -1,15 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "root-setting.schema.json",
-  "title": "Jad root setting.json",
-  "description": "Workspace-level session roots used by the web UI session list.",
+  "title": "Shared definitions of the global and workspace settings",
+  "description": "Definitions that global.schema.json and workspace.schema.json reference: server, cli, libraries and defaults. This is not a settings file: a root setting.json belonged to the retired workspace layout v1 and is refused at start (docs/design_workspace_layout.md).",
   "type": "object",
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 1,
-      "default": 1
-    },
     "server": {
       "type": "object",
       "description": "Local HTTP server defaults. Explicit server options and environment variables override these values.",
@@ -392,33 +387,9 @@
         "mcp_login_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000, "default": 600000, "description": "How long `jad mcp login` waits for the browser sign-in when --timeout is not given."}
       }
     },
-    "session_roots": {
-      "type": "array",
-      "description": "Directories containing session subdirectories.",
-      "items": {
-        "type": "object",
-        "required": ["path"],
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
-          },
-          "label": {
-            "type": "string",
-            "pattern": "\\S"
-          },
-          "path": {
-            "type": "string",
-            "pattern": "\\S",
-            "description": "Session-root directory relative to the system setting.json parent; absolute paths are used as-is."
-          }
-        },
-        "additionalProperties": true
-      }
-    },
     "libraries": {
       "type": "object",
-      "description": "Directories read at startup, relative to the system setting.json parent.",
+      "description": "Directories read at startup, relative to the folder of the file that lists them (G for global.json, W/.jad for workspace.json).",
       "properties": {
         "prompt_dirs": {
           "type": "array",
@@ -463,48 +434,10 @@
       },
       "additionalProperties": true
     },
-    "catalogs": {
-      "type": "object",
-      "description": "Folders of the catalogs, relative to the system setting.json parent. Each is read as <folder>/<category>/<name>.json (state is the exception: <folder>/<session>/<profile>/). The remotes folder holds <name>.json files of kind remote (other JAD servers this one may call), and the sandbox folder <name>.json sandbox templates; there is no category level in either. Defaults: the project's .jad/profiles, .jad/models, .jad/tools, .jad/mcp, .jad/remotes, .jad/state and .jad/sandbox. For a setting in a .jad folder (<project>/.jad/setting.json, or $HOME/.jad/setting.json) a catalog that is not named here is read from that .jad folder itself, <.jad>/<catalog>. Older versions read it from <.jad>/.jad/<catalog>, so when that doubled folder exists it stays the root of every unnamed catalog and a warning (also printed by jad check) names it; nothing is moved, and naming the folders here is always exact.",
-      "properties": {
-        "profiles": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "models": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "tools": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "mcp": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "remotes": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "state": {
-          "type": "string",
-          "pattern": "\\S"
-        },
-        "sandbox": {
-          "type": "string",
-          "pattern": "\\S",
-          "default": ".jad/sandbox",
-          "description": "Folder of the sandbox templates, flat files <name>.json that a sandbox value names as \"<name>\" (no category level; sandbox.schema.json). An absolute path (or ~/...), a path relative to this file's folder, or {cwd}/<folder>, taken from each session's cwd so a project keeps its own templates (never a sub-agent's worktree). No other placeholder is accepted. The folder is read-only in every bwrap and seatbelt sandbox, so a sandboxed call cannot edit the template of its next run. With {cwd}, the catalog file API cannot list the folder. A .json file here whose name is not an identifier (letters, digits, '-', '_', '.'; for example \"base (1).json\") is left out with a warning, never read, and jad check names it; rename it."
-        }
-      },
-      "additionalProperties": false
-    },
     "defaults": {
       "$ref": "setting.schema.json#/$defs/layout_settings",
       "description": "Setting values every session starts from. Objects merge key by key with the level below it (profile, session); arrays and scalars replace. Each value follows the same key in setting.schema.json. This file is read once when the server starts, so a change here (defaults included) applies only after a restart; the profile and session files are read on every request."
     }
   },
-  "required": ["session_roots"],
   "additionalProperties": true
 }

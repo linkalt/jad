@@ -6,7 +6,7 @@ import (
 
 // Catalog route scopes of the workspace layout (design §4.3, decider fix D): "global" is G's
 // models, toolsets, MCP servers and sandbox templates; "workspace:<id>" is that workspace's
-// profiles, models and toolsets. A request without a scope keeps the v1 target: in v2 the
+// profiles, models and toolsets. A request without a scope is the start workspace's profiles and the global shared catalogs: the
 // start workspace's profiles and the global models, toolsets, MCP servers and templates.
 
 // CatalogScopeGlobal is the scope of G's catalogs.

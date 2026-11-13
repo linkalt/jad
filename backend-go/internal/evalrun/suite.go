@@ -53,8 +53,8 @@ type Suite struct {
 	SchemaVersion int    `json:"schema_version"`
 	Name          string `json:"name"`
 	Description   string `json:"description,omitempty"`
-	// SessionRoot is the id of the session root the case sessions are written to; empty
-	// uses the first root of the root setting.
+	// SessionRoot is the id of the workspace whose sessions folder the case sessions are
+	// written to; empty uses the first served workspace.
 	SessionRoot string `json:"session_root,omitempty"`
 	// Session is merged into every case's session file (scope, settings); the
 	// runner sets schema_version, cwd and description itself.

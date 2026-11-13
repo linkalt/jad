@@ -201,8 +201,8 @@ func readScoped(ctx context.Context, dirs scopedDirectories, kind Kind, id strin
 	return asset, true, nil
 }
 
-// ListWorkspaceSkills is the skill tool's list in the workspace layout: the skills of both
-// scopes (in a scope the first folder that has a name wins, as in v1), without the names
+// ListWorkspaceSkills is the skill tool's list: the skills of both
+// scopes (in a scope the first folder that has a name wins), without the names
 // found in both.
 func ListWorkspaceSkills(ctx context.Context, libraries *sessionfs.Libraries) ([]Asset, error) {
 	dirs, err := scopedDirectoriesOf(libraries)

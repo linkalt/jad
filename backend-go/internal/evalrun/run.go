@@ -51,7 +51,7 @@ type Root struct {
 // Options are the parts of an eval run that do not come from the suite file.
 type Options struct {
 	Runner Runner
-	// Roots are the session roots of the root setting, in order.
+	// Roots are the served workspaces, in order.
 	Roots []Root
 	// Cases, when set, keeps only the cases whose name it matches.
 	Cases *regexp.Regexp
@@ -225,7 +225,7 @@ send:
 
 func pickRoot(roots []Root, id string) (Root, error) {
 	if len(roots) == 0 {
-		return Root{}, errors.New("the root setting has no session root")
+		return Root{}, errors.New("no workspace is served")
 	}
 	if id == "" {
 		return roots[0], nil
@@ -235,7 +235,7 @@ func pickRoot(roots []Root, id string) (Root, error) {
 			return root, nil
 		}
 	}
-	return Root{}, fmt.Errorf("session_root %q is not a session root of the root setting", id)
+	return Root{}, fmt.Errorf("session_root %q is not a served workspace", id)
 }
 
 // runAttempt runs one attempt; it never returns an error, only an attempt that says what

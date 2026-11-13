@@ -5102,3 +5102,49 @@ mcp servers and sandbox templates in `G`), so every test that is not about v1 no
   (T-040 shipped it); a v2 golden cannot avoid it. **This is a deviation from the stop rule; it needs the
   decider's sign-off** (reported to master).
 - **Not converted (their subject goes in b2):** see the list above; also `cmd/jad` `main_test` keeps nothing of v1.
+
+## Workspace layout v1 retired at runtime (T-041b2, Go, 2026-11-13)
+
+Second half of retiring layout v1 (tmp/T-041-decisions.md sections 3 and 4). Supersedes: design 4.2 (mode
+choice) and the copy-only rollback of section 5 ("delete workspace.json to return to v1"; rollback is now "run
+the previous binary"), the T-035 doubled-`.jad` fix and its warning (v1-only), the phase 5 "kept on purpose"
+note about the start-workspace case, and the T-040 "kept for v1" parsers. Design section 31 has the error table.
+
+- **What a start does.** `Load` always reads the workspace layout. No `.jad/workspace.json`, a v1
+  `setting.json` where the old discovery looked, `JAD_ROOT_SETTING_PATH` or `JAD_SESSIONS_DIR` are errors that
+  say what to do; a v1 file is only detected, never parsed or changed. `LastMigrateCommit` is `6ac57497`, the
+  last commit whose binary has `jad migrate workspace`; `jad migrate` itself prints that direction.
+- **Deleted.** `jad migrate` (planner, apply, rollback, compare), the `rootsetting` package, the v1
+  contentlibrary source, `LoadOptions.SessionsDir`/`RootSettingPath`, `rootsFromSetting`, `defaultSessionRoots`,
+  v1 catalog defaults, `remote.ParseEntry`, `remoteapi.ParseTokens` v1 form, `refuseRemoteKeysInV1`,
+  `profile_message` `sessions`/`deny_profiles`/`DenyProfiles` and the v1 local address forms,
+  `SessionConfig.WorkspaceLayout`, `SessionConfig.GlobalJadRoot`, `checkProfileMessage`, the `workspace bool`
+  of the model loaders (`loadWholeModel` is gone; `loadModel` is the whole-model read), the v1 model rule of
+  `validateModelFile`, `sample/jad/setting.json` and `sample/jad/remotes/`. The removed keys are refused by name with
+  their replacement (T-040 tables, `native_profile_message_settings.go`).
+- **Behaviour changes to know.** (1) A shared model file that sets `based_on` is now refused in every scope,
+  including the global-scope listing and a sub-agent's model effort check; before, those paths ignored the key.
+  An own model file named as a sub-agent model already failed at run time. (2) `eval` `session_root` names a
+  served workspace; the default is the first served one. (3) `jad check` and the server need a workspace; `jad
+  mcp`, `plugin` and `run` use the same load (A4: none of them ran usefully without one).
+- **Decision 3.3 stop rule on `sample/jad`.** Tests copy `sample/jad` as a catalog fixture (profiles, models,
+  tools, mcp, sandbox). I read the rule as "keep the fixture, drop the v1 shapes": only `setting.json` and the v1
+  remote files were deleted. Master should confirm.
+- **Schemas.** `root-setting.schema.json` lost `session_roots`, `catalogs`, `schema_version` and `required`; it
+  only holds `server`, `cli`, `libraries` and `defaults` (referenced by `global.schema.json` and
+  `workspace.schema.json`; the sandbox folder text moved into `global.schema.json`). `remote.schema.json` lost
+  `token_env`, `token_file`, `default_session` and requires `workspace`. `setting.schema.json` lost
+  `deny_profiles` and `sessions` of `profile_message`, and its two `env_file` texts name the new base.
+- **Open gaps.**
+  - The migration command exists only in old binaries. If commit `6ac57497` becomes unreachable, a v1 install has
+    no tool; a tag on it is the user's to create.
+  - The T-041b1 golden deviation (the `profile_message` description and canonical-address output in the
+    regenerated goldens) still awaits the decider's sign-off.
+  - Naming debt left on purpose: `Layout.RootSetting`, `app.Config.RootSettingWarnings`, `Root.GlobalJadRoot`
+    (it is G now), the phrase "catalog layout" in many comments, `UsesLayout`; the design sections 2, 3, 4.2 and 5
+    are history, not rewritten. Renaming them is churn with no behaviour change.
+  - `cmd/jad` paths other than `check` and `migrate` were checked by reading (A4), not each started without a
+    workspace.
+  - Comment sweep is by grep for `v1`, `legacy`, `root setting`; a stale comment that uses other words can remain.
+  - The earlier flaky `TestBaseCacheSurvivesServersChurningTogether` in `internal/worktree` is unrelated and not
+    investigated.

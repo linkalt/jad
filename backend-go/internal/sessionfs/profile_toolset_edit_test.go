@@ -282,8 +282,8 @@ func TestSelfEditCannotGrantAWorkspaceSessionGlob(t *testing.T) {
 		e := newToolsetEditFixture(t)
 		e.location.Root.Layout.ProfileSelfEdit = level
 		for _, tc := range []struct{ name, contents, toolset, want string }{
-			{"own toolset sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["b:*"]}}}}`, "set.native.profile_message.sessions cannot be changed"},
-			{"own toolset bare sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["*"]}}}}`, "set.native.profile_message.sessions cannot be changed"},
+			{"own toolset sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["b:*"]}}}}`, "set.native.profile_message.sessions is not one a profile's own toolset may change"},
+			{"own toolset bare sessions", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"sessions":["*"]}}}}`, "set.native.profile_message.sessions is not one a profile's own toolset may change"},
 			{"own toolset context_trigger", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"context_trigger":{"action":"reset"}}}}}`, "context_trigger"},
 			{"own toolset deny_profiles", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"deny_profiles":[]}}}}`, "deny_profiles"},
 			{"own toolset deny", "", `{"based_on":"global:coding/full","set":{"native":{"profile_message":{"deny":[]}}}}`, "set.native.profile_message.deny cannot be changed"},

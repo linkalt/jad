@@ -68,7 +68,7 @@ func cutPlaceholder(document, placeholder, value string) (string, bool, error) {
 }
 
 // expandProfileOwn fills a leading {profile_own} of a profile's prompt documents with its own
-// folder (workspace layout only; v1 keeps the text as it is).
+// folder (a layout without profile folders keeps the text as it is).
 func (l Layout) expandProfileOwn(documents []string, id, where string) ([]string, error) {
 	own := l.ProfileOwnDir(id)
 	if own == "" {
@@ -196,7 +196,7 @@ func (l Layout) profilePrivateRoots() []string {
 }
 
 // profileShown are the profile's own folder and data folder, as written and below the real
-// W/.jad (never by the target of a link at the folder itself); nil in v1.
+// W/.jad (never by the target of a link at the folder itself); nil without profile folders.
 func (l Layout) profileShown(id string) []string {
 	own, data := l.ProfileOwnDir(id), l.ProfileDataDir(id)
 	if own == "" {

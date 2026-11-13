@@ -38,8 +38,8 @@ type CatalogFile struct {
 // a configuration catalog (profiles). The kind is the URL word ("profiles"). Writes and
 // deletes carry the HTTP preconditions; the extension checks them.
 type CatalogFiles interface {
-	// scope is the "scope" query parameter (workspace layout: global or workspace:<id>; empty
-	// keeps the v1 target).
+	// scope is the "scope" query parameter (global or workspace:<id>; empty is the
+	// start workspace's profiles and the global shared catalogs).
 	ListCatalogFiles(ctx context.Context, kind, scope string) ([]CatalogFileInfo, error)
 	ReadCatalogFile(ctx context.Context, kind, id, scope string) (CatalogFile, error)
 	WriteCatalogFile(ctx context.Context, kind, id, scope string, data []byte, ifMatch, ifNoneMatch string) (info CatalogFileInfo, created bool, err error)

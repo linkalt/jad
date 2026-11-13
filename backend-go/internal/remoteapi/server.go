@@ -258,7 +258,7 @@ var (
 	runIDPattern     = regexp.MustCompile(`^rr_[0-9a-f]{16}$`)
 	namePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 	// sessionPattern is a session id or <workspace>:<session>, the root id the server lists
-	// for a workspace (a v1 server with several session roots takes <root>:<session> alike).
+	// for a workspace.
 	sessionPattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,63}:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 

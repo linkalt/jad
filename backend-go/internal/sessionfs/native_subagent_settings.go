@@ -194,7 +194,7 @@ type NativeSubagentAgent struct {
 	ReasoningEffort string
 	// Model is the `model` value as written. A catalog-layout session reads a value that
 	// does not end in .json as a model ID and replaces ModelPath with that model's file
-	// (resolveSubagentModels); a legacy session only uses ModelPath.
+	// (resolveSubagentModels).
 	Model        string
 	Instructions string
 	// PromptDocuments are the absolute paths of the files read into PromptText.

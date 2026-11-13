@@ -23,7 +23,7 @@ Treat a difference under about 5% as noise: two runs of the same code showed +4%
 
 ## Headless runs: `jad run`
 
-`jad run` runs one turn of a session without a server and exits, for scripts and CI. It reads the same root setting as the server (`JAD_ROOT_SETTING_PATH`), needs no `JAD_API_TOKEN`, and goes through the same run route in-process, so the transcript and locks are the server's.
+`jad run` runs one turn of a session without a server and exits, for scripts and CI. It starts in a workspace (the current directory must have `.jad/workspace.json`; `JAD_GLOBAL_DIR` names the global folder, default `~/.jad`) and reads the same settings as the server, needs no `JAD_API_TOKEN`, and goes through the same run route in-process, so the transcript and locks are the server's.
 
 ```sh
 jad run --session local:demo --profile dev/coder "Fix the failing test in sum.py"
@@ -46,7 +46,7 @@ The case sessions are kept, so each transcript can be opened in the web UI. Keep
 
 ## Tracing
 
-Set `server.tracing.enabled` in the root setting to export OpenTelemetry spans (one per run, model request and tool call, with GenAI attributes and token usage, never prompt or output text) over OTLP/HTTP with the JSON encoding to `server.tracing.endpoint` (`<endpoint>/v1/traces`), or to `OTEL_EXPORTER_OTLP_ENDPOINT`. Collector headers come from `OTEL_EXPORTER_OTLP_HEADERS`. See `DECISIONS.md` for the span shape.
+Set `server.tracing.enabled` in `global.json` or `workspace.json` to export OpenTelemetry spans (one per run, model request and tool call, with GenAI attributes and token usage, never prompt or output text) over OTLP/HTTP with the JSON encoding to `server.tracing.endpoint` (`<endpoint>/v1/traces`), or to `OTEL_EXPORTER_OTLP_ENDPOINT`. Collector headers come from `OTEL_EXPORTER_OTLP_HEADERS`. See `DECISIONS.md` for the span shape.
 
 ```json
 {"server": {"tracing": {"enabled": true, "endpoint": "http://127.0.0.1:4318"}}}

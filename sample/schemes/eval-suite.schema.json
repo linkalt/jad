@@ -21,7 +21,7 @@
     "session_root": {
       "type": "string",
       "minLength": 1,
-      "description": "Id of the session root (session_roots of the root setting) the case sessions are written to. Absent uses the first root."
+      "description": "Id of the workspace whose sessions folder the case sessions are written to. Absent uses the first served workspace."
     },
     "session": {
       "type": "object",

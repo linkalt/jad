@@ -232,7 +232,7 @@ export function PromptLibraryPanel({
     >
       <VStack gap={4}>
         <Text type="supporting" color="secondary">
-          Edit the Markdown files or directory arrays in the global setting.json; refresh to load saved changes.
+          Edit the Markdown files or directory arrays in global.json (or workspace.json); refresh to load saved changes.
         </Text>
         {error !== null ? (
           <Text type="supporting" color="secondary">{error}</Text>
@@ -243,7 +243,7 @@ export function PromptLibraryPanel({
           <Text type="supporting" color="secondary">
             {isSearching
               ? `No ${tab} match “${query.trim()}”.`
-              : `No ${tab} found. Configure libraries.${LIBRARY_DIRECTORY_KEY[tab]} in the global setting.json.`}
+              : `No ${tab} found. Configure libraries.${LIBRARY_DIRECTORY_KEY[tab]} in global.json.`}
           </Text>
         ) : (
           <List

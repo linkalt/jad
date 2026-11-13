@@ -334,7 +334,7 @@ func TestTrialScansReadOwnModelCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := loadModelOf(entry.Path, own.bases, true, "", "")
+	model, err := loadModelOf(entry.Path, own.bases, "", "")
 	if err != nil || len(model.Efforts) != 1 || model.Efforts[0] != "trial" {
 		t.Fatalf("trial model = %+v, %v", model, err)
 	}

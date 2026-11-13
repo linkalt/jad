@@ -12,16 +12,15 @@ import (
 	"strings"
 )
 
-// The workspace layout (v2, docs/design_workspace_layout.md). It is on only when the start
-// directory has .jad/workspace.json and no root setting is named; otherwise Load is v1 and
-// nothing here runs. The global folder G holds the shared catalogs; each workspace W keeps its
+// The workspace layout (v2, docs/design_workspace_layout.md). It is the only layout: Load needs
+// .jad/workspace.json in the start directory (workspace layout v1 was retired in T-041). The global folder G holds the shared catalogs; each workspace W keeps its
 // sessions, profiles, private models and tools, and state in W/.jad. Both files are read once
 // at start.
 
 const (
 	workspaceSettingName = "workspace.json"
 	globalSettingName    = "global.json"
-	// v1RootSettingName is the v1 setting a v2 start does not read in G or W.
+	// v1RootSettingName is the setting file of the retired layout v1: a start refuses it (findLegacySetting).
 	v1RootSettingName = "setting.json"
 	// workspaceSchemaVersion is the only schema_version global.json and workspace.json take.
 	workspaceSchemaVersion = 2
@@ -51,7 +50,7 @@ type Workspace struct {
 }
 
 // workspaceAt reports whether dir has .jad/workspace.json as a regular file. A directory of
-// that name is an error, so a typo never falls back to v1 silently.
+// that name is an error, so a typo is never taken for a missing workspace.
 func workspaceAt(dir string) (bool, error) {
 	path := filepath.Join(dir, ".jad", workspaceSettingName)
 	info, err := os.Stat(path)

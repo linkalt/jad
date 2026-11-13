@@ -26,14 +26,13 @@ type Layout struct {
 	// the path, taken from each session's cwd (SandboxTemplateDir).
 	Sandbox        string
 	SandboxFromCWD string
-	// RootSetting is the root setting file the layout was read from (the global setting in
-	// the workspace layout; empty when there is none).
+	// RootSetting is the global setting file the layout was read from; empty when there is none.
 	RootSetting         string
 	Defaults            map[string]json.RawMessage
 	ToolDefinitionPaths []string
 
-	// The fields below are set only by the workspace layout (v2, docs/design_workspace_layout.md);
-	// they are empty for a layout read from a root setting.json, so v1 is unchanged.
+	// The fields below are the workspace layout's (docs/design_workspace_layout.md); they are
+	// empty in the global scope, which has no workspace.
 	//
 	// Workspace is the workspace directory W; WorkspaceSetting is W/.jad/workspace.json and
 	// GlobalDir the global folder G. Models and Tools are the global folders,

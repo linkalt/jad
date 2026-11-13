@@ -339,7 +339,7 @@ func validateCatalogFile(layout Layout, roots []Root, kind CatalogKind, path str
 	case CatalogProfiles:
 		return validateProfileFile(layout, path, data)
 	case CatalogModels:
-		return validateModelFile(path, data, layout.Workspace != "")
+		return validateModelFile(path, data)
 	case CatalogToolsets:
 		return validateToolsetFile(layout, roots, path, data)
 	case CatalogMCP:
@@ -354,15 +354,12 @@ func validateCatalogFile(layout Layout, roots []Root, kind CatalogKind, path str
 	return nil
 }
 
-// validateModelFile applies the rules the loader applies to a model file the run uses, in the
-// workspace layout (workspace) or in v1, which ignores based_on (loadWholeModel).
-func validateModelFile(path string, data []byte, workspace bool) error {
+// validateModelFile applies the rules the loader applies to a model file read as a whole
+// model: based_on is refused (loadModel).
+func validateModelFile(path string, data []byte) error {
 	fields, err := parseSessionObject(path, data)
 	if err != nil {
 		return err
-	}
-	if !workspace {
-		delete(fields, "based_on")
 	}
 	_, err = modelFromFields(fields, path, "", "")
 	return err

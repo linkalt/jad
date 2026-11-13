@@ -40,7 +40,7 @@ type Config struct {
 	// run manifests when the service is created; see Resolver.RecoverStorages.
 	RecoverSubagentRunsAtStart bool
 	Roots                      []sessionfs.Root
-	// RootSettingWarnings are the notices of the root setting load: keys it does not read.
+	// RootSettingWarnings are the notices of the settings load: keys it does not read.
 	RootSettingWarnings []string
 	// SessionStoreIdle is server.session_store_idle_ms; see CatalogConfig.StoreIdle.
 	SessionStoreIdle time.Duration
@@ -57,7 +57,7 @@ type Config struct {
 	HTTP               httpapi.Config
 	Environment        map[string]string
 	RootLibraryOptions contentlibrary.Options
-	// Workspaces are the workspaces of the workspace layout, served or skipped; nil in v1.
+	// Workspaces are the workspaces of the workspace layout, served or skipped.
 	Workspaces []sessionfs.Workspace
 }
 

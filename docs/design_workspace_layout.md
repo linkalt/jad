@@ -1,10 +1,10 @@
 # Workspace layout (T-028): global shared catalogs, workspace-private sessions, profiles and state
 
-Status: **phase 1a built** (v2 loading, scoped names, fixed hidden and read-only sandbox paths,
-cross-workspace tool limits, ordered ceilings; section 10). Phase 1b (prompt libraries,
-`/api/workspaces`, `scope` on catalog routes) and phases 2 to 5 are not built. Mode v1 (today's
-single root setting) stays the default and is not changed by any phase. jad/decider settled
-Q1 to Q7 (section 9).
+Status: **built through phase 5; v1 retired (T-041, section 31).** The workspace layout is the
+only layout. Sections 2, 3, 4.2 and 5 describe the retired v1 (a single root `setting.json`),
+the mode choice between v1 and v2 and the copy-only migration; they are kept as the history of
+the design, and section 31 says what replaced them. `jad migrate` exists only in a binary built
+from commit `6ac57497` or earlier.
 
 Sources: the user's request (T-028), the two designer reports (kept unchanged by the user in
 `design-layout-catalog.md`), the jad/decider decisions for T-028 (layout, and the prompt
@@ -1845,3 +1845,37 @@ a session in the address: `remote:<binding>/<session>/<category>/<name>`.
   `workspace.schema.json` (`remote_keys`, `profile_message.deny`, `allow_reset`),
   `global.schema.json`, `session.schema.json`, `profile.schema.json`, and the token table text in
   `root-setting.schema.json`.
+
+## 31. T-041: session category and layout v1 retired
+
+*Session category.* The session `category` key is gone from the code, the API and the UI. A
+session file that still sets it loads, lists and saves as before; the key is ignored, warned in
+the server log and by `jad check`, and never rewritten. Profile categories (`<category>/<name>`)
+are untouched.
+
+*Layout v1.* The mode choice of 4.2 no longer exists. `Load` needs `<cwd>/.jad/workspace.json`
+and reads `G/global.json` (`G` is `$HOME/.jad` or `JAD_GLOBAL_DIR`). A start fails, with the way
+to migrate, when:
+
+| Found | Result |
+| --- | --- |
+| no `.jad/workspace.json` | error `no workspace: <dir>/.jad/workspace.json not found` |
+| a v1 `setting.json` where the old discovery looked (`<cwd>/.jad`, `$HOME/.jad`, `<cwd>`, `<cwd>/..`) | error naming the file and the migration direction below |
+| `JAD_ROOT_SETTING_PATH` or `JAD_SESSIONS_DIR` set | error saying the variable was removed |
+| a remote file with `token_env`, `token_file` or `default_session` | the T-040 removed-key error |
+| a token row without `workspace` | load error naming the row |
+| `profile_message` `sessions` or `deny_profiles` | removed-key error with the replacement (`deny`) |
+
+The detector only checks that a v1 file exists; it never parses or changes it. Nothing is moved or
+deleted. To migrate a v1 setup, build jad from commit `6ac57497` or earlier and run
+`jad migrate workspace` (dry run by default; `--apply` copies, `--rollback` restores) in the
+project, then start the current binary. Rolling back to v1 means running that older binary: the
+files the copy leaves in place still work with it.
+
+Removed with it: `jad migrate` and its planner, the `rootsetting` package, the v1 content-library
+source, v1 session roots and catalog defaults (including the doubled `<.jad>/.jad` rule of
+T-035), the v1 remote entry and token parsers, the `Workspace == ""` v1 arms and the
+`SessionConfig.WorkspaceLayout` field. `Layout.Workspace == ""` still means the global scope
+(catalog listing of G and the toolset check), which is not v1. `root-setting.schema.json` now only
+holds the shared `server`, `cli`, `libraries` and `defaults` definitions that `global.schema.json`
+and `workspace.schema.json` reference.

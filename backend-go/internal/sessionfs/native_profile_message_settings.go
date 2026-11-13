@@ -25,9 +25,10 @@ const DefaultNativeAgentBlockMs int64 = 120_000
 // through when max_chain is not set: the caller and one profile it reaches.
 const DefaultProfileMessageMaxChain = 2
 
-// nativeProfileMessageKeys are the keys the section knows; deny_profiles and sessions are the
-// removed v1 keys, listed so that they get their replacement hint, not a generic unknown key.
-var nativeProfileMessageKeys = []string{"deny_profiles", "deny", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "sessions", "default_block_ms", "model_choice", "sandbox_choice"}
+// nativeProfileMessageKeys are the keys the section knows. deny_profiles and sessions (the
+// removed v1 keys) are refused before this list is looked at, so that they get their replacement
+// hint, not a generic unknown key.
+var nativeProfileMessageKeys = []string{"deny", "timeout_ms", "busy_wait_ms", "result_max_bytes", "context_trigger", "max_chain", "max_queued_per_profile", "remotes", "default_block_ms", "model_choice", "sandbox_choice"}
 
 // NativeProfileMessageSettings holds the settings of native.profile_message. A nil
 // pointer in SessionConfig means the tool is not configured.
@@ -132,16 +133,16 @@ func normalizeNativeProfileMessageSettings(setting map[string]json.RawMessage, s
 			return nil, configError("%s: %s.%s was removed; %s", settingPath, section, key, removedProfileMessageCompactHint)
 		}
 	}
-	for _, key := range keys {
-		if !containsString(nativeProfileMessageKeys, key) {
-			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeProfileMessageKeys, "")
-		}
-	}
 	if _, removed := fields["sessions"]; removed {
 		return nil, configError("%s: %s.sessions was removed with workspace layout v1; %s", settingPath, section, removedProfileMessageSessionsHint)
 	}
 	if _, removed := fields["deny_profiles"]; removed {
 		return nil, configError("%s: %s.deny_profiles was removed with workspace layout v1; %s", settingPath, section, removedProfileMessageDenyProfilesHint)
+	}
+	for _, key := range keys {
+		if !containsString(nativeProfileMessageKeys, key) {
+			return nil, unsupportedToolKey(settingPath+": "+section, key, nativeProfileMessageKeys, "")
+		}
 	}
 	var deny []MessageRule
 	if raw, present := fields["deny"]; present {

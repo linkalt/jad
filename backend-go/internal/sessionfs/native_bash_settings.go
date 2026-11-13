@@ -109,7 +109,7 @@ type NativeBashSettings struct {
 	PlanSandbox *SandboxSettings
 	// ProfileOwnRoots are the profile-own folders (workspace layout) this tool's spill files
 	// and function library may not land in; each call judges them where its workspace root
-	// resolves them, after links (a worktree run resolves them against its worktree). Nil in v1.
+	// resolves them, after links (a worktree run resolves them against its worktree).
 	ProfileOwnRoots []string
 }
 

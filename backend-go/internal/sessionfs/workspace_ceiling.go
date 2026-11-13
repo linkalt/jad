@@ -11,7 +11,7 @@ import (
 // them, never loosen them, against the layers below it (the global and workspace defaults and
 // the session). A profile that loosens one is left out with a warning when it is not selected;
 // selected, its load fails. Keys without an order (hooks, env_file, cwd, tool_storage_dir, MCP
-// and exec command definitions) are not checked here; v1 layouts are never checked.
+// and exec command definitions) are not checked here.
 
 // ceilingCaps are the numeric caps, as paths into the merged settings: a set cap (above 0)
 // below the profile can only go down.

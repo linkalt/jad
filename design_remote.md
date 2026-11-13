@@ -2,7 +2,7 @@
 
 Status: design only, nothing implemented. Items marked **[unverified]** were not confirmed in code. Section 1 was read from code in `backend-go/internal/httpapi` (handler.go, profile_run.go, catalog_files_handlers.go) and `tools/native`.
 
-> **Workspace layout (v2).** This document describes the v1 layout (a remote file holds `token_env` or `token_file`, `default_session` and reaches every workspace its token's globs allow). In the workspace layout a remote file is a *binding* of one server workspace with no credential, the credential is a key file in `G/auth/keys` named in `remote_keys`, and every token row of the server names one workspace: see `docs/design_workspace_layout.md` §30.4 (T-040).
+> **Workspace layout.** This document describes the retired v1 layout (a remote file holds `token_env` or `token_file`, `default_session` and reaches every workspace its token's globs allow). In the workspace layout a remote file is a *binding* of one server workspace with no credential, the credential is a key file in `G/auth/keys` named in `remote_keys`, and every token row of the server names one workspace: see `docs/design_workspace_layout.md` §30.4 (T-040).
 
 ## 0. Goal
 A local JAD is the CLIENT. `profile_message` and `subagent` can target a profile/agent on another JAD over plain http or a unix socket, async through the existing handle model. `transcripts` / `transcript` list and read remote transcripts read-only, behind their own off-by-default switch. Permission is decided by the REMOTE (token table). No native bridge, no approvals.

@@ -256,15 +256,11 @@ func TestSubAgentModelChoiceLeavesOutOwnModels(t *testing.T) {
 	}
 }
 
-// In the workspace layout a shared model file that sets based_on is refused: only own model
-// files take it. v1 ignores the key, as it did before phase 3c (decider 3c.1b).
+// A shared model file that sets based_on is refused: only own model files take it.
 func TestSharedModelFileCannotSetBasedOn(t *testing.T) {
 	stray := []byte(`{"provider":"openai","model":"m","based_on":"global:openai/default"}`)
-	if err := validateModelFile("/g/m.json", stray, true); err == nil || !strings.Contains(err.Error(), "based_on") {
-		t.Fatalf("workspace layout: shared file with based_on = %v", err)
-	}
-	if err := validateModelFile("/g/m.json", stray, false); err != nil {
-		t.Fatalf("v1: shared file with based_on = %v", err)
+	if err := validateModelFile("/g/m.json", stray); err == nil || !strings.Contains(err.Error(), "based_on") {
+		t.Fatalf("shared file with based_on = %v", err)
 	}
 
 	o := newOwnModelFixture(t, `{"models":["openai/default","openai/mini"]}`)

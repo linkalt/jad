@@ -281,11 +281,11 @@ func ownModelFields(path string, base ModelBase) (map[string]json.RawMessage, er
 
 // loadModelOf is loadModel for a model that may be one of a profile's own: a file in bases is
 // composed from its base. A file outside bases is read as a whole model, so an own model file
-// reached by any other way fails in the workspace layout (modelFromFields refuses based_on).
-func loadModelOf(path string, bases map[string]ModelBase, workspace bool, promptRole, promptText string) (Model, error) {
+// reached by any other way fails (modelFromFields refuses based_on).
+func loadModelOf(path string, bases map[string]ModelBase, promptRole, promptText string) (Model, error) {
 	base, own := bases[path]
 	if !own {
-		return loadWholeModel(path, workspace, promptRole, promptText)
+		return loadModel(path, promptRole, promptText)
 	}
 	fields, err := ownModelFields(path, base)
 	if err != nil {
@@ -307,9 +307,6 @@ type ownModels struct {
 	ids map[string]string
 	// notes are warnings about own model files left out for their names or a link.
 	notes []string
-	// workspace is set in the workspace layout, where a model file read as a whole model may
-	// not set based_on (loadWholeModel).
-	workspace bool
 }
 
 // profileModels is the model catalog the profile id loads with: in the workspace layout the
@@ -322,7 +319,7 @@ func (l Layout) profileModels(scans *CatalogScans, id string) (ownModels, error)
 		return ownModels{}, err
 	}
 	shared := catalog.MergeScopes("model", scopes...)
-	own := ownModels{catalog: shared, workspace: l.Workspace != ""}
+	own := ownModels{catalog: shared}
 	if l.Workspace == "" || l.ProfileOwnDir(id) == "" {
 		return own, nil
 	}
@@ -434,7 +431,7 @@ func (o ownModels) problem(path string) error {
 	if err, failed := o.faults[path]; failed {
 		return err
 	}
-	_, err := loadModelOf(path, o.bases, o.workspace, "", "")
+	_, err := loadModelOf(path, o.bases, "", "")
 	return err
 }
 
@@ -444,17 +441,17 @@ func (o ownModels) check(scans *CatalogScans, path string) error {
 	if o.own(path) {
 		return scans.check("own model", path, o.problem)
 	}
-	return scans.check("model", path, func(path string) error { return modelFileProblem(path, o.workspace) })
+	return scans.check("model", path, modelFileProblem)
 }
 
 // effort refuses an effort the model at path does not offer; an empty effort is not checked.
 func (o ownModels) effort(path, effort string) error {
-	return checkModelEffortOf(path, o.bases, o.workspace, effort)
+	return checkModelEffortOf(path, o.bases, effort)
 }
 
 // effortOnly is effort for a model that may fail the model rules (checkModelEffortOnly).
 func (o ownModels) effortOnly(path, effort string) error {
-	return checkModelEffortOnlyOf(path, o.bases, o.workspace, effort)
+	return checkModelEffortOnlyOf(path, o.bases, effort)
 }
 
 // ownReference reports whether a model or toolset reference names a profile's own entry.
@@ -530,19 +527,3 @@ func (l Layout) profileIDOf(path string) string {
 
 // OwnModelScope is the scope name of a profile's own models, as a listing marks them.
 const OwnModelScope = catalog.ScopeProfile
-
-// loadWholeModel is loadModel under the layout's based_on rule (decider 3c.1b): the workspace
-// layout refuses based_on in a file read as a whole model, so an own model file reached another
-// way never runs without its base; v1, which has no own models, ignores the key as it ignored
-// it before phase 3c.
-func loadWholeModel(path string, workspace bool, promptRole, promptText string) (Model, error) {
-	if workspace {
-		return loadModel(path, promptRole, promptText)
-	}
-	fields, err := readSessionObject(path)
-	if err != nil {
-		return Model{}, err
-	}
-	delete(fields, "based_on")
-	return modelFromFields(fields, path, promptRole, promptText)
-}

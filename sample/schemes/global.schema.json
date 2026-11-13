@@ -67,7 +67,7 @@
         "sandbox": {
           "type": "string",
           "pattern": "\\S",
-          "description": "As catalogs.sandbox of root-setting.schema.json, relative to G."
+          "description": "Folder of the sandbox templates, flat files <name>.json that a sandbox value names as \"<name>\" (no category level; sandbox.schema.json). An absolute path (or ~/...) or a path relative to G. The folder is read-only in every bwrap and seatbelt sandbox, so a sandboxed call cannot edit the template of its next run. A .json file here whose name is not an identifier (letters, digits, '-', '_', '.') is left out with a warning, never read, and jad check names it."
         }
       },
       "additionalProperties": false

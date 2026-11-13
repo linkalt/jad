@@ -358,10 +358,9 @@ func (v *profileVerdict) selectionFault(requested string) error {
 	return err
 }
 
-// modelFileProblem is nil when the file at path passes the model rules of the layout
-// (workspace: the workspace layout, loadWholeModel).
-func modelFileProblem(path string, workspace bool) error {
-	_, err := loadWholeModel(path, workspace, "", "")
+// modelFileProblem is nil when the file at path passes the model rules, read as a whole model.
+func modelFileProblem(path string) error {
+	_, err := loadModel(path, "", "")
 	return err
 }
 

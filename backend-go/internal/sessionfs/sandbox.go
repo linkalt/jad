@@ -97,8 +97,8 @@ var sandboxPlaceholders = map[string]bool{"workspace": true, "cwd": true, "git_c
 
 const sandboxPlaceholderList = "{workspace}, {cwd}, {git_common_dir}, {tmp}, {home}, {session_dir}, {system}, {profile_data}"
 
-// ProfileDataPlaceholder is the running profile's data folder in a sandbox path (workspace
-// layout only, refused in v1). It names nothing where the sandbox is not that of the profile's
+// ProfileDataPlaceholder is the running profile's data folder in a sandbox path (always
+// the workspace layout). It names nothing where the sandbox is not that of the profile's
 // own top-level run (SandboxSettings.ProfileData is empty), so its path is left out there.
 const ProfileDataPlaceholder = "{profile_data}"
 

@@ -166,18 +166,18 @@ type SessionConfig struct {
 	// session still loads, so it can be listed and read; a run (WithModel) stops with this
 	// error, and no other model is run in its place.
 	ModelFault error
-	// ProfilePath is the selected profile's own file in a catalog-layout session; empty otherwise.
+	// ProfilePath is the selected profile's own file.
 	ProfilePath string
 	// ProfileOwnDir and ProfileDataDir are the selected profile's private folder and working
-	// data folder in the workspace layout (Layout.ProfileOwnDir, ProfileDataDir); empty in v1.
+	// data folder (Layout.ProfileOwnDir, ProfileDataDir).
 	ProfileOwnDir  string
 	ProfileDataDir string
-	// ProfileSelfEdit is the profile_self_edit level of the workspace (off, on, full); empty in v1.
+	// ProfileSelfEdit is the profile_self_edit level of the workspace (off, on, full).
 	ProfileSelfEdit string
 	// SelfEditPaths are the folders profile self-edit writes, which change only through the
 	// profile tool (its lock, history and revert): the profile-own folder of every known
 	// workspace and this workspace's profile catalog (each profile file is edited by its own
-	// profile). Checkpoints leave them out and a restore never writes them (3b.2). Empty in v1.
+	// profile). Checkpoints leave them out and a restore never writes them (3b.2).
 	SelfEditPaths []string
 	// SettingSources are the setting layers of a catalog-layout session and the settings they
 	// composed to, for the profile tool's config action; nil otherwise.
@@ -225,7 +225,7 @@ type SessionConfig struct {
 	// RemoteKeys are the session's effective remote keys by binding name (workspace layout):
 	// the key files remote_keys of the workspace, the session and the profile resolved to, the
 	// nearest level that sets any replacing the ones above. They give a binding its credential
-	// and nothing else: what a tool may reach is its own remotes list. nil without keys, and in v1.
+	// and nothing else: what a tool may reach is its own remotes list. nil without keys.
 	RemoteKeys map[string]RemoteKey
 	// RemoteKeyFault is why the session's remote_keys cannot be used (a key file that is missing
 	// or invalid, a binding that does not exist, two keys for one binding): RemoteKeys is then
@@ -331,10 +331,8 @@ func LoadSessionSettingsScoped(location Location, requestedProfile, requestedMod
 // SessionConfig. settingPath names the file the map came from in error messages and
 // is the base for relative storage paths. The layout loader (layout_load.go) feeds
 // it a map composed from the catalogs, so both layouts share every normalizer.
-// envFileBase is the folder a relative tools.native.*.env_file is
-// resolved against: the session folder for a legacy session, the global root for a
-// catalog-layout session, whose toolset many sessions share, and W/.jad in the workspace
-// layout (Root.pathBase; a global toolset's relative paths are made absolute from G first).
+// envFileBase is the folder a relative tools.native.*.env_file is resolved against: W/.jad
+// (Root.pathBase; a global toolset's relative paths are made absolute from G first).
 func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessage, settingPath, envFileBase, requestedProfile, requestedModel string) (SessionConfig, error) {
 	if err := validateSchemaVersion(setting, settingPath); err != nil {
 		return SessionConfig{}, err
@@ -767,7 +765,7 @@ func (c SessionConfig) WithModel() (SessionConfig, error) {
 	if c.ModelPath == "" && c.ModelFault != nil {
 		return SessionConfig{}, c.ModelFault
 	}
-	model, err := loadModelOf(c.ModelPath, c.ModelBases, true, c.Model.PromptRole, c.Model.PromptText)
+	model, err := loadModelOf(c.ModelPath, c.ModelBases, c.Model.PromptRole, c.Model.PromptText)
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -1186,9 +1184,9 @@ func hostedToolsField(fields map[string]json.RawMessage, path string) ([]json.Ra
 	return tools, nil
 }
 
-// loadPrompt reads the prompt. workspace is W in the workspace layout, where a prompt
-// document may start with {workspace} (design D1, D2); empty in v1, where the text is a path
-// as written.
+// loadPrompt reads the prompt. workspace is W, where a prompt document may start with
+// {workspace} (design D1, D2); empty where there is no workspace (the global scope), and the
+// text is a path as written.
 func loadPrompt(setting, profile map[string]json.RawMessage, cwd, workspace, path string, overlay *documentOverlay) (string, string, []string, error) {
 	role := "system"
 	if raw, ok := setting["prompt_role"]; ok {

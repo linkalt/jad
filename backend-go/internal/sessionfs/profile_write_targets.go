@@ -67,7 +67,7 @@ func (c SessionConfig) appendChildTargets(targets []writeTarget, section string,
 // target is judged where the loader resolved it, after the links of the part that exists, so
 // a relative path, .. or a link is judged by where it writes. A self-edit meets the same
 // refusal through its trial load; a profile file written by hand fails its load. Workspace
-// layout only: v1 has no profile-own folder.
+// a layout without profile folders (the global scope) has nothing to check.
 func (l Layout) checkWriteTargets(where string, config SessionConfig) error {
 	if len(l.ProfileOwnRoots) == 0 {
 		return nil

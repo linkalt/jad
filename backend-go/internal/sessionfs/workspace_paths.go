@@ -163,7 +163,7 @@ func absolutePolicyPaths(raw json.RawMessage, base string) (json.RawMessage, boo
 // hideFixedPaths gives the path rules of every in-process reader the layout's fixed hidden
 // paths (decider fix C): code_context, lsp, read_image, the transcript, transcripts and profile
 // tools, the UI file list and the cwd checks of exec and tool_smith answer a path in G/auth or
-// another workspace's .jad as missing, links followed, with or without a sandbox. Nothing in v1.
+// another workspace's .jad as missing, links followed, with or without a sandbox.
 func (c *SessionConfig) hideFixedPaths(hidden, except []string) {
 	if len(hidden) == 0 {
 		return
