@@ -2158,6 +2158,7 @@
                 "path": {"type": "string", "pattern": "^/[^/?#]", "default": "/decisions", "description": "Appended to base_url. /decisions for OpenRouter; /v1/systemone for the TypeSafe API (base_url https://api.typesafe.ai, model jev-latest, api_key_env for example TYPESAFE_API_KEY)."},
                 "api_key_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable holding the key. Default OPENROUTER_API_KEY."},
                 "model": {"type": "string", "minLength": 1, "description": "Default openai/gpt-6-luna-decisions."},
+                "long_context": {"type": "boolean", "default": false, "description": "Opt into TypeSafe-Danger-Zone-Long-Context: true. Default off; proxy/header support is unverified."},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000, "default": 30000, "description": "Whole-request time limit."},
                 "max_questions": {"type": "integer", "minimum": 1, "maximum": 128, "default": 16, "description": "Most questions one call may carry."},
                 "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 200000, "description": "Most bytes one call may send: the input parts plus the questions, as sent."},

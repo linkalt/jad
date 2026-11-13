@@ -340,3 +340,24 @@ func TestOwnToolsetClashAndCompositionErrors(t *testing.T) {
 		t.Fatalf("hooks twice through an own toolset: %v (marked %v)", err, IsOwnToolsetError(err))
 	}
 }
+
+func TestOwnToolsetDecideLongContext(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		o := newOwnToolsetFixture(t, leanCoder)
+		baseFlag := "true"
+		if enabled {
+			baseFlag = "false"
+		}
+		base := `{"schema_version":1,"extension":{"decide_systemone":{"long_context":` + baseFlag + `,"model":"base-model"}}}`
+		wsPut(t, o.base, base)
+		flag := "false"
+		if enabled {
+			flag = "true"
+		}
+		wsPut(t, o.own, `{"based_on":"global:coding/full","set":{"extension":{"decide_systemone":{"long_context":`+flag+`}}}}`)
+		config, err := o.load(t, "dev/coder")
+		if err != nil || config.ExtensionDecideSystemone == nil || config.ExtensionDecideSystemone.LongContext != enabled || config.ExtensionDecideSystemone.Model != "base-model" {
+			t.Fatalf("decide=%+v, err=%v", config.ExtensionDecideSystemone, err)
+		}
+	}
+}

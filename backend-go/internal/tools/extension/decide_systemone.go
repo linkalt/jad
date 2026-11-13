@@ -231,11 +231,11 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutMS)*time.Millisecond)
 	defer cancel()
-	answers, err := requestDecisions(ctx, client, settings, key, input, questions)
+	response, err := requestDecisions(ctx, client, settings, key, input, questions)
 	if err != nil {
 		return decideSystemoneRequestError(callID, err)
 	}
-	text, err := renderDecideSystemoneAnswers(questions, answers)
+	text, err := renderDecideSystemoneAnswers(questions, response.Answers)
 	if err != nil {
 		return decideSystemoneError(callID, tools.StatusError, "bad_response", err.Error())
 	}
@@ -243,11 +243,22 @@ func executeDecideSystemone(ctx context.Context, arguments map[string]any, setti
 	if len(questions) == 1 {
 		noun = "question"
 	}
+	model := response.Model
+	if strings.TrimSpace(model) == "" {
+		model = settings.Model
+	}
+	information := []tools.Information{{Key: "model", Value: model}}
+	if response.InputTokens != nil {
+		information = append(information, tools.Information{Key: "input_tokens", Value: *response.InputTokens})
+	}
+	if response.OutputTokens != nil {
+		information = append(information, tools.Information{Key: "output_tokens", Value: *response.OutputTokens})
+	}
 	result, err := tools.RenderToolResult(tools.ResultOptions{
 		ID:          callID,
 		Status:      tools.StatusOK,
 		Summary:     fmt.Sprintf("Answered %d %s", len(questions), noun),
-		Information: []tools.Information{{Key: "model", Value: settings.Model}},
+		Information: information,
 		Content:     &tools.Content{Encoding: "utf8", Text: text},
 	})
 	if err != nil {
@@ -288,6 +299,13 @@ func parseDecideSystemoneInput(raw any) ([]decideSystemoneInputPart, error) {
 	}
 	return parts, nil
 }
+
+// TypeSafe SystemOne protocol cardinalities, shared by both configured routes.
+// These are criteria-shape bounds, not configurable resource budgets.
+const (
+	decideSystemoneMaxScoreLevels = 10
+	decideSystemoneMaxChoices     = 255
+)
 
 // parseDecideSystemoneQuestions turns the validated arguments into questions: it infers a
 // missing type from choices or levels, names the unnamed ones q1, q2, ..., and
@@ -360,6 +378,12 @@ func parseDecideSystemoneQuestions(raw any) ([]decideSystemoneQuestion, error) {
 			}
 			labels[parsed.Label] = struct{}{}
 			question.Options = append(question.Options, parsed)
+		}
+		if question.Type == "score" && len(question.Options) > decideSystemoneMaxScoreLevels {
+			return nil, fmt.Errorf("question %q has %d levels; the maximum is %d", question.Name, len(question.Options), decideSystemoneMaxScoreLevels)
+		}
+		if question.Type == "choice" && len(question.Options) > decideSystemoneMaxChoices {
+			return nil, fmt.Errorf("question %q has %d choices; the maximum is %d", question.Name, len(question.Options), decideSystemoneMaxChoices)
 		}
 		questions = append(questions, question)
 	}

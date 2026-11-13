@@ -12,6 +12,7 @@ const (
 	defaultExtensionDecideSystemonePath                   = "/decisions"
 	defaultExtensionDecideSystemoneAPIKeyEnv              = "OPENROUTER_API_KEY"
 	defaultExtensionDecideSystemoneModel                  = "openai/gpt-6-luna-decisions"
+	defaultExtensionDecideSystemoneLongContext            = false
 	defaultExtensionDecideSystemoneTimeoutMS        int64 = 30_000
 	maxExtensionDecideSystemoneTimeoutMS            int64 = 300_000
 	defaultExtensionDecideSystemoneMaxQuestions     int64 = 16
@@ -21,7 +22,7 @@ const (
 )
 
 var (
-	extensionDecideSystemoneKeys    = []string{"base_url", "path", "api_key_env", "model", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
+	extensionDecideSystemoneKeys    = []string{"base_url", "path", "api_key_env", "model", "long_context", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"}
 	extensionDecideSystemoneEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -34,8 +35,10 @@ type ExtensionDecideSystemoneSettings struct {
 	Path string
 	// APIKeyEnv names the environment variable holding the key. It is read on each call.
 	APIKeyEnv string
-	Model     string
-	TimeoutMS int64
+	// LongContext opts into the provider long-context header; default false.
+	LongContext bool
+	Model       string
+	TimeoutMS   int64
 	// MaxQuestions is the most questions one call may carry.
 	MaxQuestions int64
 	// MaxInputBytes is the most bytes one call may send: the input parts plus the
@@ -102,6 +105,9 @@ func normalizeExtensionDecideSystemoneSettings(setting map[string]json.RawMessag
 		return nil, configError("%s: %s.api_key_env must be an environment variable name", settingPath, section)
 	}
 	if settings.Model, err = extensionDecideSystemoneString(fields, "model", defaultExtensionDecideSystemoneModel, settingPath); err != nil {
+		return nil, err
+	}
+	if settings.LongContext, err = bashBool(fields, "long_context", defaultExtensionDecideSystemoneLongContext, settingPath+": "+section); err != nil {
 		return nil, err
 	}
 	if settings.TimeoutMS, err = configuredInteger(fields, "timeout_ms", defaultExtensionDecideSystemoneTimeoutMS, 1, maxExtensionDecideSystemoneTimeoutMS, settingPath, section); err != nil {

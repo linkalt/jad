@@ -33,8 +33,8 @@ func TestNormalizeExtensionDecideSystemoneSettingsDefaults(t *testing.T) {
 		want   ExtensionDecideSystemoneSettings
 	}{
 		"empty object":           {`{"decide_systemone":{}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://openrouter.ai/api/alpha", Path: "/decisions", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"nulls use the defaults": {`{"decide_systemone":{"base_url":null,"model":null,"timeout_ms":null}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://openrouter.ai/api/alpha", Path: "/decisions", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
-		"every key set":          {`{"decide_systemone":{"base_url":"https://api.typesafe.ai/","path":"/v1/systemone","api_key_env":"TYPESAFE_API_KEY","model":"jev-latest","timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://api.typesafe.ai", Path: "/v1/systemone", APIKeyEnv: "TYPESAFE_API_KEY", Model: "jev-latest", TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9}},
+		"nulls use the defaults": {`{"decide_systemone":{"base_url":null,"model":null,"timeout_ms":null,"long_context":null}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://openrouter.ai/api/alpha", Path: "/decisions", APIKeyEnv: "OPENROUTER_API_KEY", Model: "openai/gpt-6-luna-decisions", TimeoutMS: 30000, MaxQuestions: 16, MaxInputBytes: 200000, MaxResponseBytes: 1048576}},
+		"every key set":          {`{"decide_systemone":{"base_url":"https://api.typesafe.ai/","path":"/v1/systemone","api_key_env":"TYPESAFE_API_KEY","model":"jev-latest","long_context":true,"timeout_ms":5,"max_questions":2,"max_input_bytes":7,"max_response_bytes":9}}`, ExtensionDecideSystemoneSettings{BaseURL: "https://api.typesafe.ai", Path: "/v1/systemone", APIKeyEnv: "TYPESAFE_API_KEY", Model: "jev-latest", LongContext: true, TimeoutMS: 5, MaxQuestions: 2, MaxInputBytes: 7, MaxResponseBytes: 9}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := normalizeExtensionDecideSystemoneSettings(extensionSettingsFor(tc.native), "setting.json")
@@ -51,7 +51,7 @@ func TestNormalizeExtensionDecideSystemoneSettingsRejectsInvalidSettings(t *test
 		"max_images removed":      {`{"decide_systemone":{"max_images":2}}`, "tools.extension.decide_systemone.max_images is not supported"},
 		"max_image_bytes removed": {`{"decide_systemone":{"max_image_bytes":2}}`, "tools.extension.decide_systemone.max_image_bytes is not supported"},
 		"paths removed":           {`{"decide_systemone":{"paths":{"allow":["/tmp"]}}}`, "tools.extension.decide_systemone.paths is not supported"},
-		"unrelated":               {`{"decide_systemone":{"approval":"ask"}}`, "tools.extension.decide_systemone.approval is not supported; supported keys are api_key_env, base_url, max_input_bytes, max_questions, max_response_bytes, model, path, timeout_ms"},
+		"unrelated":               {`{"decide_systemone":{"approval":"ask"}}`, "tools.extension.decide_systemone.approval is not supported; supported keys are api_key_env, base_url, long_context, max_input_bytes, max_questions, max_response_bytes, model, path, timeout_ms"},
 		"not object":              {`{"decide_systemone":[]}`, "tools.extension.decide_systemone must be an object"},
 		"null":                    {`{"decide_systemone":null}`, "tools.extension.decide_systemone must be an object"},
 		"path no slash":           {`{"decide_systemone":{"path":"v1/systemone"}}`, "tools.extension.decide_systemone.path must start with a single / and be a path only"},
@@ -132,6 +132,9 @@ func TestDecideSystemoneSchemaListsTheKeysTheLoaderAccepts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("schema keys %v, loader accepts %v", got, want)
 	}
+	if properties["long_context"].Default != defaultExtensionDecideSystemoneLongContext {
+		t.Errorf("long_context default = %v", properties["long_context"].Default)
+	}
 	defaults := map[string]float64{"timeout_ms": float64(defaultExtensionDecideSystemoneTimeoutMS), "max_questions": float64(defaultExtensionDecideSystemoneMaxQuestions), "max_input_bytes": float64(defaultExtensionDecideSystemoneMaxInputBytes), "max_response_bytes": float64(defaultExtensionDecideSystemoneMaxResponseBytes)}
 	for key, value := range defaults {
 		if properties[key].Default != value {
@@ -203,5 +206,23 @@ func TestOldDecideNameIsAnUnknownToolWithNoAlias(t *testing.T) {
 	}
 	if err := checkProfileToolEntry("decide"); err == nil || !strings.Contains(err.Error(), `"decide" is not a native tool`) {
 		t.Fatalf("profile entry decide error = %v", err)
+	}
+}
+
+func TestDecideSystemoneLongContextSetting(t *testing.T) {
+	for _, raw := range []string{"null", "false", "true", "0", `"true"`, `[]`, `{}`} {
+		t.Run(raw, func(t *testing.T) {
+			settings, err := normalizeExtensionDecideSystemoneSettings(extensionSettingsFor(`{"decide_systemone":{"long_context":`+raw+`}}`), "setting.json")
+			valid := raw == "null" || raw == "false" || raw == "true"
+			if !valid {
+				if err == nil || !strings.Contains(err.Error(), "tools.extension.decide_systemone.long_context must be a boolean") {
+					t.Fatalf("settings=%+v, error=%v", settings, err)
+				}
+				return
+			}
+			if err != nil || settings.LongContext != (raw == "true") {
+				t.Fatalf("settings=%+v, error=%v", settings, err)
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,7 @@ type decideSystemoneRig struct {
 
 type decideSystemoneRecorded struct {
 	Method, Path, Authorization string
+	LongContext, Images         string
 	Body                        map[string]any
 	Raw                         []byte
 }
@@ -39,7 +41,7 @@ func newDecideSystemoneRig(t *testing.T, status int, reply string, adjust func(*
 	rig := &decideSystemoneRig{}
 	rig.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
-		recorded := decideSystemoneRecorded{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), Raw: data}
+		recorded := decideSystemoneRecorded{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization"), LongContext: r.Header.Get("TypeSafe-Danger-Zone-Long-Context"), Images: r.Header.Get("TypeSafe-Danger-Zone-Images"), Raw: data}
 		_ = json.Unmarshal(data, &recorded.Body)
 		rig.requests = append(rig.requests, recorded)
 		w.Header().Set("Content-Type", "application/json")
@@ -152,6 +154,9 @@ func TestDecideSystemoneRequestAndAnswers(t *testing.T) {
 	if third["score"] != 1.6 || third["level"] != "Blocked" || third["probabilities"].(map[string]any)["Cosmetic"] != 0.1 {
 		t.Fatalf("score answer = %#v", third)
 	}
+	if got := third["legend"].(map[string]any); len(got) != 3 || got["0"] != "a" || got["1"] != "b" || got["2"] != "c" {
+		t.Fatalf("legend = %#v", got)
+	}
 	if !strings.Contains(output, `{"name":"billing","type":"predicate","probability":0.9235}`) {
 		t.Fatalf("answer field order changed:\n%s", output)
 	}
@@ -224,6 +229,7 @@ func TestDecideSystemoneSchemaRejectsMissingParts(t *testing.T) {
 		"no instructions": `{"input":"x","questions":[{"name":"a"}]}`,
 		"unknown field":   `{"input":"x","questions":[{"instructions":"?"}],"model":"other"}`,
 		"unknown type":    `{"input":"x","questions":[{"type":"rank","instructions":"?"}]}`,
+		"one level":       `{"input":"x","questions":[{"instructions":"?","levels":["only"]}]}`,
 		"one choice":      `{"input":"x","questions":[{"instructions":"?","choices":["only"]}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -857,8 +863,8 @@ func TestDecideSystemoneRefusesQuestionsPastTheByteBudget(t *testing.T) {
 	if !strings.Contains(output, "max_input_bytes is 1000") {
 		t.Fatalf("the error does not name the setting:\n%s", output)
 	}
-	// The option count is bounded by the same budget, which is why there is no
-	// max_options: 40 long options cannot fit either.
+	// Within the protocol choice-count bound, long options still share the byte
+	// budget: these 40 options cannot fit.
 	options := make([]string, 0, 40)
 	for index := range 40 {
 		options = append(options, `"option `+strconv.Itoa(index)+` `+strings.Repeat("o", 40)+`"`)
@@ -902,5 +908,252 @@ func TestDecideSystemoneQuestionNameWithAControlCharacterRoundTrips(t *testing.T
 	// already parses it); U+007F is legal unescaped, so only the former is asserted.
 	if strings.ContainsRune(output, '\u0001') {
 		t.Fatalf("a raw control character reached the result: %q", output)
+	}
+}
+
+func TestDecideSystemoneMetadata(t *testing.T) {
+	for _, path := range []string{"/decisions", "/v1/systemone"} {
+		for _, tc := range []struct{ name, metadata, information string }{
+			{"absent", ``, "model: m-1"},
+			{"actual", `,"model":"jev-resolved","usage":{"input_tokens":0,"output_tokens":9007199254740993}`, "model: jev-resolved\ninput_tokens: 0\noutput_tokens: 9007199254740993"},
+			{"maximum", `,"usage":{"input_tokens":18446744073709551615,"output_tokens":2}`, "model: m-1\ninput_tokens: 18446744073709551615\noutput_tokens: 2"},
+			{"null", `,"model":null,"usage":null`, "model: m-1"},
+			{"blank", `,"model":"  ","usage":{"input_tokens":null}`, "model: m-1"},
+			{"model number", `,"model":42,"usage":{"input_tokens":2}`, "model: m-1\ninput_tokens: 2"},
+			{"usage number", `,"usage":42`, "model: m-1"},
+			{"count containers", `,"usage":{"input_tokens":[],"output_tokens":{}}`, "model: m-1"},
+			{"bad model", `,"model":{},"usage":{"output_tokens":3}`, "model: m-1\noutput_tokens: 3"},
+			{"usage array", `,"model":"resolved","usage":[]`, "model: resolved"},
+			{"usage string", `,"usage":"bad"`, "model: m-1"},
+			{"usage scalar", `,"usage":true`, "model: m-1"},
+			{"fraction", `,"usage":{"input_tokens":1.5,"output_tokens":0}`, "model: m-1\noutput_tokens: 0"},
+			{"negative", `,"usage":{"input_tokens":1,"output_tokens":-1}`, "model: m-1\ninput_tokens: 1"},
+			{"overflow", `,"usage":{"input_tokens":18446744073709551616,"output_tokens":4}`, "model: m-1\noutput_tokens: 4"},
+			{"wrong types", `,"usage":{"input_tokens":"3","output_tokens":false},"cost":1,"provider":"hidden","id":"hidden"`, "model: m-1"},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"noul","noul":0.5}}`+tc.metadata+`}`, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Path = path })
+				output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
+				start := strings.Index(output, "--- INFORMATION ---\n")
+				end := strings.Index(output, "\n\n--- CONTENT")
+				if start < 0 || end < 0 || output[start+len("--- INFORMATION ---\n"):end] != tc.information {
+					t.Fatalf("metadata mismatch: %s", output)
+				}
+				if !strings.Contains(output, `"probability":0.5`) {
+					t.Fatalf("lost answer: %s", output)
+				}
+			})
+		}
+	}
+}
+
+func TestDecideSystemoneProbabilities(t *testing.T) {
+	for _, kind := range []string{"choice", "score"} {
+		for _, tc := range []struct {
+			name, suffix, probabilities string
+			unusable                    bool
+		}{
+			{"absent", ``, ``, false},
+			{"null map", `,"probabilities":null`, ``, false},
+			{"null entry", `,"probabilities":{"FIRST":null,"SECOND":0.4}`, `{"First":0.4}`, false},
+			{"all null", `,"probabilities":{"FIRST":null,"SECOND":null}`, ``, false},
+			{"not normalized", `,"probabilities":{"FIRST":0.8,"SECOND":0.8}`, `{"Second":0.8,"First":0.8}`, false},
+			{"zero", `,"probabilities":{"FIRST":0}`, `{"Second":0}`, false},
+			{"endpoints", `,"probabilities":{"SECOND":1,"FIRST":0}`, `{"Second":0,"First":1}`, false},
+			{"partial", `,"probabilities":{"SECOND":0.123456}`, `{"First":0.1235}`, false},
+			{"negative", `,"probabilities":{"FIRST":-0.1}`, ``, true},
+			{"above one", `,"probabilities":{"SECOND":1.1}`, ``, true},
+			{"string", `,"probabilities":{"FIRST":"0.5"}`, ``, true},
+			{"object", `,"probabilities":{"FIRST":{}}`, ``, true},
+			{"bool", `,"probabilities":{"FIRST":false}`, ``, true},
+			{"bad container", `,"probabilities":[]`, ``, true},
+			{"unknown", `,"probabilities":{"unknown":{},"FIRST":0.5}`, `{"Second":0.5}`, false},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				first, second, options, value := "Second", "First", `"choices":["Second","First"]`, `"choice":"Second"`
+				if kind == "score" {
+					first, second, options, value = "0", "1", `"levels":["Second","First"]`, `"score":4`
+				}
+				suffix := strings.ReplaceAll(strings.ReplaceAll(tc.suffix, "FIRST", first), "SECOND", second)
+				rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"`+kind+`",`+value+suffix+`},"q2":{"type":"noul","noul":0}}}`, nil)
+				output := rig.call(t, `{"input":"x","questions":[{"instructions":"?",`+options+`},{"instructions":"?"}]}`)
+				answers := decideSystemoneContent(t, output)["answers"].([]any)
+				answer := answers[0].(map[string]any)
+				if tc.unusable {
+					if answer["status"] != "unusable" || len(answer) != 3 {
+						t.Fatalf("invalid answer emitted: %s", output)
+					}
+				} else {
+					if answer["status"] != nil {
+						t.Fatalf("usable answer lost: %s", output)
+					}
+					if kind == "score" && (answer["score"] != float64(4) || answer["level"] != "First") {
+						t.Fatalf("score clamping changed: %s", output)
+					}
+					if tc.probabilities == "" {
+						if answer["probabilities"] != nil {
+							t.Fatalf("fabricated map: %s", output)
+						}
+					} else if !strings.Contains(output, `"probabilities":`+tc.probabilities) {
+						t.Fatalf("probabilities mismatch: %s", output)
+					}
+				}
+				if answers[1].(map[string]any)["probability"] != float64(0) {
+					t.Fatalf("independent answer lost: %s", output)
+				}
+			})
+		}
+	}
+}
+
+func TestDecideSystemoneLongContext(t *testing.T) {
+	for _, path := range []string{"/decisions", "/v1/systemone"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", path, enabled), func(t *testing.T) {
+				rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"noul","noul":0}}}`, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Path = path; s.LongContext = enabled })
+				output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
+				request := rig.requests[0]
+				wantHeader := ""
+				if enabled {
+					wantHeader = "true"
+				}
+				if request.LongContext != wantHeader || request.Images != "" || request.Path != path || request.Method != "POST" || request.Authorization != "Bearer secret-key" {
+					t.Fatalf("request: %+v", request)
+				}
+				if string(request.Raw) != `{"model":"m-1","questions":{"q1":{"instructions":"?","type":"noul"}},"state":"x"}` {
+					t.Fatalf("body changed: %s", request.Raw)
+				}
+				if !strings.Contains(output, `"probability":0`) {
+					t.Fatal(output)
+				}
+			})
+		}
+	}
+}
+
+func TestDecideSystemoneLegacyProbabilityFields(t *testing.T) {
+	for _, kind := range []string{"noul", "refusal"} {
+		for _, entry := range []string{`null`, `0`, `"bad"`} {
+			t.Run(kind+"/"+entry, func(t *testing.T) {
+				rig := newDecideSystemoneRig(t, 200, `{"answers":{"q1":{"type":"`+kind+`","noul":0.5,"probabilities":{"ignored":`+entry+`}}}}`, nil)
+				output := rig.call(t, `{"input":"x","questions":[{"instructions":"?"}]}`)
+				answer := decideSystemoneContent(t, output)["answers"].([]any)[0].(map[string]any)
+				if entry == `"bad"` {
+					if answer["status"] != "unusable" {
+						t.Fatal(output)
+					}
+				} else if kind == "refusal" {
+					if answer["status"] != "refused" {
+						t.Fatal(output)
+					}
+				} else if answer["probability"] != 0.5 {
+					t.Fatal(output)
+				}
+			})
+		}
+	}
+}
+
+func TestDecideSystemoneLegend(t *testing.T) {
+	for _, path := range []string{"/v1/systemone", "/decisions"} {
+		for _, tc := range []struct{ name, field, want string }{
+			{"strings", `,"legend":{"2":"c","0":" a ","1":"b"}`, `,"legend":{"0":" a ","1":"b","2":"c"}`},
+			{"structured", `,"legend":{"2":[null,false,1.23000000000000000001],"0":{"n":9007199254740993,"v":[true,null,{"s":" x "}]},"1":""}`, `,"legend":{"0":{"n":9007199254740993,"v":[true,null,{"s":" x "}]},"1":"","2":[null,false,1.23000000000000000001]}`},
+			{"empty values", `,"legend":{"2":[],"1":{},"0":""}`, `,"legend":{"0":"","1":{},"2":[]}`},
+			{"partial", `,"legend":{"1":[1]}`, `,"legend":{"1":[1]}`},
+			{"bad siblings", `,"legend":{"0":false,"1":{"yes":null},"2":3}`, `,"legend":{"1":{"yes":null}}`},
+			{"null sibling", `,"legend":{"0":null,"1":"yes","2":true}`, `,"legend":{"1":"yes"}`},
+			{"unknown keys", `,"legend":{"01":"bad","-1":"bad","3":"bad","100":"bad","a":"bad","2":"ok"}`, `,"legend":{"2":"ok"}`},
+			{"only unknown", `,"legend":{"01":"bad","-1":"bad","3":"bad"}`, ""},
+			{"all invalid", `,"legend":{"0":null,"1":1,"2":true}`, ""},
+			{"absent", "", ""}, {"null", `,"legend":null`, ""}, {"empty", `,"legend":{}`, ""},
+			{"array", `,"legend":["bad"]`, ""}, {"string", `,"legend":"bad"`, ""},
+			{"number", `,"legend":1`, ""}, {"boolean", `,"legend":false`, ""},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				reply := `{"answers":{"billing":{"type":"noul","noul":0.5,"legend":false},"team":{"type":"choice","choice":"billing","legend":[null]},"severity":{"type":"score","score":1.6,"confidence":0.7,"probabilities":{"2":0.7,"0":0.1,"1":0.2}` + tc.field + `}}}`
+				rig := newDecideSystemoneRig(t, 200, reply, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Path = path })
+				output := rig.call(t, mixedQuestions)
+				want := `{"name":"severity","type":"score","score":1.6,"level":"Blocked","confidence":0.7,"probabilities":{"Cosmetic":0.1,"Workaround":0.2,"Blocked":0.7}` + tc.want + `}`
+				legendCount := 0
+				if tc.want != "" {
+					legendCount = 1
+				}
+				if !strings.Contains(output, want) || strings.Count(output, `"legend"`) != legendCount || !strings.Contains(output, `{"name":"billing","type":"predicate","probability":0.5}`) || !strings.Contains(output, `{"name":"team","type":"choice","choice":"billing"}`) || !strings.Contains(output, `"status":"ok"`) {
+					t.Fatalf("unexpected rendered envelope/content:\n%s\nwant %s", output, want)
+				}
+			})
+		}
+		t.Run(path+"/isolation", func(t *testing.T) {
+			reply := `{"answers":{"good":{"type":"score","score":0,"legend":{"0":"yes"}},"bad":{"type":"score","score":1,"legend":false},"unusable":{"type":"score","legend":{"0":"hidden"}},"refused":{"type":"refusal","legend":false}}}`
+			rig := newDecideSystemoneRig(t, 200, reply, func(s *sessionfs.ExtensionDecideSystemoneSettings) {
+				s.Path = path
+				s.MaxQuestions = 5
+				s.MaxInputBytes = 5000
+			})
+			output := rig.call(t, `{"input":"x","questions":[{"name":"good","instructions":"?","levels":["a","b"]},{"name":"bad","instructions":"?","levels":["a","b"]},{"name":"unusable","instructions":"?","levels":["a","b"]},{"name":"refused","instructions":"?","levels":["a","b"]},{"name":"missing","instructions":"?","levels":["a","b"]}]}`)
+			for _, want := range []string{`{"name":"good","type":"score","score":0,"level":"a","legend":{"0":"yes"}}`, `{"name":"bad","type":"score","score":1,"level":"b"}`, `{"name":"unusable","type":"score","status":"unusable"}`, `{"name":"refused","type":"score","status":"refused"}`, `{"name":"missing","type":"score","status":"missing"}`} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("missing %s:\n%s", want, output)
+				}
+			}
+			if strings.Count(output, `"legend"`) != 1 {
+				t.Fatal(output)
+			}
+		})
+	}
+}
+
+func TestDecideSystemoneOptionCounts(t *testing.T) {
+	for _, path := range []string{"/v1/systemone", "/decisions"} {
+		for _, kind := range []string{"score", "choice"} {
+			for _, explicit := range []bool{false, true} {
+				maximum, key, noun := 10, "levels", "levels"
+				if kind == "choice" {
+					maximum, key, noun = 255, "choices", "choices"
+				}
+				for _, count := range []int{maximum, maximum + 1} {
+					t.Run(path+"/"+kind+"/explicit="+strconv.FormatBool(explicit)+"/"+strconv.Itoa(count), func(t *testing.T) {
+						options := make([]string, count)
+						for i := range options {
+							options[i] = "option-" + strconv.Itoa(i)
+						}
+						q := map[string]any{"name": "bounded", "instructions": "?", key: options}
+						if explicit {
+							q["type"] = kind
+						}
+						arguments, _ := json.Marshal(map[string]any{"input": "x", "questions": []any{map[string]any{"name": "first", "instructions": "?"}, q}})
+						answer := `{"type":"score","score":9,"probabilities":{"0":0,"9":1}}`
+						if kind == "choice" {
+							answer = `{"type":"choice","choice":"option-254","probabilities":{"option-0":0,"option-254":1}}`
+						}
+						rig := newDecideSystemoneRig(t, 200, `{"answers":{"first":{"type":"noul","noul":1},"bounded":`+answer+`}}`, func(s *sessionfs.ExtensionDecideSystemoneSettings) { s.Path = path; s.MaxInputBytes = 20000 })
+						output := rig.call(t, string(arguments))
+						if count > maximum {
+							want := `question "bounded" has ` + strconv.Itoa(count) + " " + noun + "; the maximum is " + strconv.Itoa(maximum)
+							if len(rig.requests) != 0 || !strings.Contains(output, `"status":"invalid_input"`) || !strings.Contains(output, "error_code: invalid_question") || !strings.Contains(strings.ReplaceAll(output, `\"`, `"`), want) {
+								t.Fatalf("not locally refused: %s; requests %d", output, len(rig.requests))
+							}
+							return
+						}
+						if len(rig.requests) != 1 || !strings.Contains(output, `"status":"ok"`) {
+							t.Fatalf("boundary refused: %s", output)
+						}
+						wire := rig.requests[0].Body["questions"].(map[string]any)["bounded"].(map[string]any)
+						if kind == "score" {
+							criteria := wire["criteria"].([]any)
+							if len(criteria) != count || criteria[0] != options[0] || criteria[count-1] != options[count-1] || !strings.Contains(output, `"score":9,"level":"option-9","probabilities":{"option-0":0,"option-9":1}`) {
+								t.Fatalf("bad score mapping: %#v\n%s", wire, output)
+							}
+						} else {
+							criteria := wire["criteria"].(map[string]any)
+							if len(criteria) != count || criteria[options[0]] != options[0] || criteria[options[count-1]] != options[count-1] || !strings.Contains(output, `"choice":"option-254","probabilities":{"option-0":0,"option-254":1}`) {
+								t.Fatalf("bad choice mapping: %#v\n%s", wire, output)
+							}
+						}
+					})
+				}
+			}
+		}
 	}
 }

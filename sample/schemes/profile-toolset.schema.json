@@ -881,6 +881,7 @@
               "type": "object",
               "description": "Tuning keys merged into the base's extension.decide_systemone; every other key is refused. Refused by name: api_key_env, base_url, model, path: the endpoint, the credential, the provider and the model come from the base toolset.",
               "properties": {
+                "long_context": {"type": "boolean", "default": false, "description": "Profile tuning: opt into the TypeSafe long-context header; default off."},
                 "max_input_bytes": {
                   "type": [
                     "string",

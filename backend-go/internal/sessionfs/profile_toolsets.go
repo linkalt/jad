@@ -131,7 +131,7 @@ var ownToolsetTools = map[string]map[string]ownKeyRule{
 			refuseKeys(refusedToolReach, "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_remote", "remotes")),
 	},
 	"extension": {
-		"decide_systemone": ownToolRule([]string{"timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"},
+		"decide_systemone": ownToolRule([]string{"long_context", "timeout_ms", "max_questions", "max_input_bytes", "max_response_bytes"},
 			refuseKeys(refusedToolEndpoint, "base_url", "path", "api_key_env", "model")),
 		"web_search": ownToolRule([]string{"default_results", "max_results", "timeout_ms", "max_response_bytes", "max_snippet_chars", "max_query_chars"},
 			refuseKeys(refusedToolEndpoint, "provider", "base_url", "api_key_env", "user_agent"),

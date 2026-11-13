@@ -26,6 +26,7 @@ type decideSystemoneAnswer struct {
 	Score         float64
 	Confidence    *float64
 	Probabilities []decideSystemoneProbability
+	Legend        orderedDecideSystemoneLegend
 	Refused       bool
 	// HasNumber is set when the provider gave the number its type needs (probability
 	// or score). A missing or null number is not a 0.
@@ -76,8 +77,16 @@ type decideSystemoneResponseError struct{ Message string }
 
 func (e *decideSystemoneResponseError) Error() string { return e.Message }
 
-// requestDecisions sends one request and returns the answers by question name.
-func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
+// decideSystemoneResponse keeps optional metadata separate from per-question validity.
+type decideSystemoneResponse struct {
+	Answers      map[string]decideSystemoneAnswer
+	Model        string
+	InputTokens  *uint64
+	OutputTokens *uint64
+}
+
+// requestDecisions sends one request and returns answers and optional metadata.
+func requestDecisions(ctx context.Context, client *http.Client, settings sessionfs.ExtensionDecideSystemoneSettings, key string, input []decideSystemoneInputPart, questions []decideSystemoneQuestion) (*decideSystemoneResponse, error) {
 	// The shared marshaler keeps <, > and & as they are, so the bytes max_input_bytes
 	// counted for the JSON input parts are the bytes on the wire.
 	payload, err := tools.MarshalJSON(systemoneRequest(settings.Model, input, questions))
@@ -91,6 +100,9 @@ func requestDecisions(ctx context.Context, client *http.Client, settings session
 	request.Header.Set("Authorization", "Bearer "+key)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	if settings.LongContext {
+		request.Header.Set("TypeSafe-Danger-Zone-Long-Context", "true")
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, &decideSystemoneTransportError{Err: err, Key: key}
@@ -291,9 +303,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (map[string]decideSystemoneAnswer, error) {
+func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (*decideSystemoneResponse, error) {
 	var response struct {
 		Answers map[string]json.RawMessage `json:"answers"`
+		Model   json.RawMessage            `json:"model"`
+		Usage   json.RawMessage            `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, fmt.Errorf("the response is not valid JSON: %w", err)
@@ -308,18 +322,34 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (ma
 			continue
 		}
 		var item struct {
-			Type          string             `json:"type"`
-			Noul          *float64           `json:"noul"`
-			Choice        json.RawMessage    `json:"choice"`
-			Score         *float64           `json:"score"`
-			Confidence    *float64           `json:"confidence"`
-			Probabilities map[string]float64 `json:"probabilities"`
+			Type          string                     `json:"type"`
+			Noul          *float64                   `json:"noul"`
+			Choice        json.RawMessage            `json:"choice"`
+			Score         *float64                   `json:"score"`
+			Confidence    *float64                   `json:"confidence"`
+			Probabilities map[string]json.RawMessage `json:"probabilities"`
+			Legend        json.RawMessage            `json:"legend"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
 			answers[question.Name] = decideSystemoneAnswer{Broken: true}
 			continue
 		}
 		answer := decideSystemoneAnswer{Confidence: item.Confidence}
+		// Retain legacy malformed-field handling for unrelated answer types.
+		// Only choice/score maps have the declared-key and null-entry policy.
+		if item.Type != "choice" && item.Type != "score" {
+			for _, raw := range item.Probabilities {
+				var probability float64
+				if json.Unmarshal(raw, &probability) != nil {
+					answer.Broken = true
+					break
+				}
+			}
+			if answer.Broken {
+				answers[question.Name] = answer
+				continue
+			}
+		}
 		switch item.Type {
 		case "noul":
 			answer.Type = "predicate"
@@ -329,19 +359,24 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (ma
 		case "choice":
 			answer.Type, answer.Choice = "choice", decideSystemoneScalarText(item.Choice)
 			for _, option := range question.Options {
-				if probability, found := item.Probabilities[option.Label]; found {
-					answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: option.Label, Probability: probability})
-				}
+				answer.addProbability(option.Label, item.Probabilities[option.Label])
 			}
 		case "score":
 			answer.Type = "score"
 			if item.Score != nil {
 				answer.Score, answer.HasNumber = *item.Score, true
 			}
-			// The keys are the 0-based level indices; show the level labels instead.
+			// Probabilities retain legacy labels; legends retain canonical level indices.
+			var legend map[string]json.RawMessage
+			_ = json.Unmarshal(item.Legend, &legend)
 			for index, option := range question.Options {
-				if probability, found := item.Probabilities[strconv.Itoa(index)]; found {
-					answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: option.Label, Probability: probability})
+				key := strconv.Itoa(index)
+				answer.addProbability(option.Label, item.Probabilities[key])
+				value := bytes.TrimSpace(legend[key])
+				// The enclosing response is valid JSON. Keep structured values raw
+				// to preserve nested numbers exactly; omit invalid optional entries.
+				if len(value) > 0 && (value[0] == '"' || value[0] == '{' || value[0] == '[') {
+					answer.Legend = append(answer.Legend, decideSystemoneLegendEntry{Index: key, Value: value})
 				}
 			}
 		case "refusal":
@@ -352,7 +387,42 @@ func parseSystemoneAnswers(data []byte, questions []decideSystemoneQuestion) (ma
 		}
 		answers[question.Name] = answer
 	}
-	return answers, nil
+	result := &decideSystemoneResponse{Answers: answers}
+	// Decode optional fields independently so malformed metadata cannot lose answers.
+	_ = json.Unmarshal(response.Model, &result.Model)
+	var usage map[string]json.RawMessage
+	if json.Unmarshal(response.Usage, &usage) == nil {
+		result.InputTokens = decideSystemoneTokenCount(usage["input_tokens"])
+		result.OutputTokens = decideSystemoneTokenCount(usage["output_tokens"])
+	}
+	return result, nil
+}
+
+// addProbability ignores missing/null entries, but invalid declared entries make
+// the question unusable. Unknown provider keys are never passed here.
+func (answer *decideSystemoneAnswer) addProbability(label string, raw json.RawMessage) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return
+	}
+	var probability float64
+	if json.Unmarshal(raw, &probability) != nil || !decideSystemoneProbabilityFits(probability) {
+		answer.Broken = true
+		return
+	}
+	answer.Probabilities = append(answer.Probabilities, decideSystemoneProbability{Label: label, Probability: probability})
+}
+
+// Decode directly as integers, never float64 (which loses precision above 2^53).
+// Missing, null, negative, fractional, wrong-type and overflowing counts are omitted.
+func decideSystemoneTokenCount(raw json.RawMessage) *uint64 {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var count uint64
+	if json.Unmarshal(raw, &count) != nil {
+		return nil
+	}
+	return &count
 }
 
 // ---- Result ----
@@ -385,6 +455,9 @@ func renderDecideSystemoneAnswers(questions []decideSystemoneQuestion, answers m
 				item["choice"] = answer.Choice
 			case "score":
 				item["score"] = roundDecideSystemone(answer.Score)
+				if len(answer.Legend) > 0 {
+					item["legend"] = answer.Legend
+				}
 				if level := nearestDecideSystemoneLevel(question, answer.Score); level != "" {
 					item["level"] = level
 				}
@@ -475,12 +548,35 @@ func (p orderedDecideSystemoneProbabilities) MarshalJSON() ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// decideSystemoneLegendEntry retains one declared index and its original JSON value.
+type decideSystemoneLegendEntry struct {
+	Index string
+	Value json.RawMessage
+}
+
+// orderedDecideSystemoneLegend preserves declared index order and raw JSON semantics.
+type orderedDecideSystemoneLegend []decideSystemoneLegendEntry
+
+func (legend orderedDecideSystemoneLegend) MarshalJSON() ([]byte, error) {
+	var out bytes.Buffer
+	out.WriteByte('{')
+	for index, entry := range legend {
+		if index > 0 {
+			out.WriteByte(',')
+		}
+		fmt.Fprintf(&out, "%q:", entry.Index)
+		out.Write(entry.Value)
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
+}
+
 // marshalDecideSystemoneItem writes the answer fields in a fixed, readable order.
 func marshalDecideSystemoneItem(item map[string]any) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	first := true
-	for _, key := range []string{"name", "type", "probability", "choice", "score", "level", "confidence", "probabilities", "status"} {
+	for _, key := range []string{"name", "type", "probability", "choice", "score", "level", "confidence", "probabilities", "legend", "status"} {
 		value, found := item[key]
 		if !found {
 			continue
