@@ -5249,3 +5249,65 @@ Scope: the core of `tmp/T-042-decisions.md` D1, D5, D6 and the D8 normaliser, be
   now parses every line (the old command only lines holding the marker), so it reads a large transcript slower; it
   is an offline command. A crash during the in-place writes can tear one record (unchanged from `strip-steer`; run
   it with the server stopped). Closing them would need a rewrite-based strip, which loses the offset guarantee.
+
+## User message stored time in `__agent_meta` (T-042b, Go, 2026-11-13)
+
+User-requested `messages.jsonl` format change (root CLAUDE.md rule 2), per `tmp/messages-optional-decisions.md` R3
+and `tmp/T-042-decisions.md` (which overrides it). Builds on T-042a (guard, reader, strip, normaliser).
+
+- **Field.** Every input record with `type` `message` and `role` `user` that `appendInputItems` writes now ends with
+  `"__agent_meta":{"stored_at":"2026-11-13T07:01:02.345Z"}`: last, after the batch fields and the steer marker. The
+  value is the server's UTC time with milliseconds, taken once per input batch under the store lock before the
+  append (every user message of a batch has the same value; a failed append is cut back and never retried, so no
+  record is re-stamped; input records are never staged, so recovery never writes one). Name `stored_at`, not R3's
+  `received_at`: a steering message is stored at the next round boundary, a queued `profile_message` input when it
+  is persisted, so it is when JAD stored it, not when it arrived. A hint only: nothing orders, dedupes or splits
+  turns by it. Covered sources: UI/API/CLI/headless run input, `profile_message` input, steering, stop-hook and hook
+  messages whose role is `user`, trigger prompts, a sub-agent's task in the child transcript. Not stamped:
+  `developer`/`system` messages (default `prompt_submit`/`session_start` context, stop messages of those roles),
+  `function_call_output` (also repaired missing outputs), other item types, `response.completed`.
+- **Setting.** `persistence.meta` (strict object; `sample/schemes/setting.schema.json`, `additionalProperties: false`):
+  `user_timestamp` (boolean, default `true`) and `max_bytes` (integer 64..65536, default 4096, the cap on the encoded
+  `__agent_meta` value for writing and `MetaValue`). Null or missing means the default; an unknown key, a wrong type
+  or an out-of-range value is a config error. `sessionfs.PersistenceMeta`; wired into `TurnStoreOptions.UserTimestamp`
+  and `MetaMaxBytes` by `Resolver.sharedStore` and the sub-agent child store (inherits the parent session's
+  setting like `response_metadata`). The store-level zero value is off, so store-level tests and the session and
+  transcript goldens are unchanged. The clock is an unexported `TurnStore.now` (time.Now; tests fix it), not an
+  option: `TurnStoreOptions` must stay comparable, the resolver compares the options of a shared store. A changed
+  setting applies when the store is opened again; two profiles sharing one transcript with different
+  `persistence.meta` are refused like any other persistence mismatch (422).
+- **Goldens.** No golden file was rewritten. The run-baseline masker drops a trailing `__agent_meta` per line
+  (`transcript.DropTrailingMeta`; a misplaced one stays in and fails the comparison); every run-baseline golden is
+  byte-identical after it. Off proof without normalising: `TestRunBaselineProfileMessageChainUserTimestamp`
+  runs the profile_message chain with `user_timestamp: false` against the existing `profile_chain_*.jsonl` with
+  the drop disabled (equal), then with the default asserts every user record (run input and the reviewer's
+  `profile_message` input) ends with the stamp and no other record has it, and that the request bodies the fake
+  upstream (raw Responses API path) received are byte-identical on and off (paths masked, meta never dropped).
+  `messages-golden-diff` skill (`.jad/prompts`, ignored by git, so edited in place and not committed): builds
+  `./cmd/jad` (it said `cmd/agent-backend`) and drops only a trailing `__agent_meta`.
+- **Tests.** `TestUserMessagesGetTheStoredTimeOfTheirBatch` (batch shares the value, format, steer then meta,
+  non-user items unstamped, off = bytes without the field, same history), `TestStripMetaOnlyReadsAsTheTranscriptWrittenWithoutTheSetting`
+  (in-tree replacement for a pre-change binary smoke), `TestRecoveryAndFrontCompactionWithMeta`,
+  `TestConcurrentAppendsStampEachBatchOnce` (-race), `TestRunInputSteeringAndUserStopMessagesGetTheStoredTime`
+  (session; stop role user stamped, developer not; requests equal on and off), `TestSubagentChildTranscriptInheritsTheUserTimestamp`,
+  `TestLoadSessionConfigPersistenceMeta`, `TestPersistenceMetaSchemaMatchesTheLoader`, two layout-settings cases.
+  The app suite runs with the default on, so its fork, compaction, history and remote tests now run over stamped
+  records. Mutations CAUGHT: user-only rule, resolver wiring, sub-agent wiring, guard (wire test).
+- **Rollback.** Any build from b9dc0c2a or earlier (the 6ac57497 migration build included) sends `__agent_meta` to
+  the provider, which most providers refuse. Run `jad transcript strip-local --meta-only` (server stopped) before
+  going back to a build that knows the steer marker, `strip-local` before going back further. Backups and
+  compaction archives keep the field; no build sends them to a provider. The command usage says the same.
+- **Open gaps.**
+  - Default on: every session writes the field after the upgrade, so a rollback without the strip breaks requests
+    of every session with a stored user message (user decision R3; the strip is the remedy). Closing it would need
+    the default off, which the user did not choose.
+  - After a compaction the retained user messages lose `stored_at` in the live view (the compaction cache holds
+    canonical items); the backup keeps it. No consumer reads it yet, so nothing shows; a later UI task must accept
+    absence.
+  - The transcript tool skips lines over `tools.native.transcript.line_max_bytes`; the ~65 extra bytes can push a
+    user record that was just under the limit over it. Not measured; a later task could exclude the field from the
+    length.
+  - No production reader of `stored_at` yet (web UI display and the history API are later tasks, R3 out of scope).
+  - The `messages-golden-diff` binary procedure (baseline worktree build) was not run; the in-tree run-baseline
+    goldens (frozen pre-change outputs) with and without the normaliser are the comparison. Running the skill
+    against a b9dc0c2a worktree would close it.

@@ -49,8 +49,8 @@ func TestLayoutFileRefusesDataAfterTheObject(t *testing.T) {
 func TestLayoutSettingsCases(t *testing.T) {
 	var cases []layoutSettingsCase
 	readJSONFile(t, "testdata/layout-settings.cases.json", &cases)
-	if len(cases) != 138 {
-		t.Fatalf("%d cases, want 138", len(cases))
+	if len(cases) != 140 {
+		t.Fatalf("%d cases, want 140", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {

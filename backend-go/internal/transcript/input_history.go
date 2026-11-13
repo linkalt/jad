@@ -85,9 +85,15 @@ func (s *TurnStore) appendInputItems(steer bool, items [][]byte) (InputAppendRes
 		return InputAppendResult{}, fmt.Errorf("create input batch ID: %w", err)
 	}
 	batchID := hex.EncodeToString(batchBytes[:])
+	// One time for the whole batch, fixed before the append: a failed append is cut back and
+	// never retried, so no record is ever written with another value.
+	var meta []byte
+	if s.options.UserTimestamp {
+		meta = encodeMeta(s.now().UTC().Format(metaStoredAtLayout), s.options.MetaMaxBytes)
+	}
 	persisted := make([][]byte, len(canonicalItems))
 	for index, item := range canonicalItems {
-		persistedItem, err := persistInputItem(item, batchID, index, steer)
+		persistedItem, err := persistInputItem(item, batchID, index, steer, meta)
 		if err != nil {
 			return InputAppendResult{}, fmt.Errorf("persist input item %d: %w", index, err)
 		}
@@ -129,7 +135,7 @@ func isVisibleUserInput(item []byte) bool {
 	return false
 }
 
-func persistInputItem(canonicalItem []byte, batchID string, index int, steer bool) ([]byte, error) {
+func persistInputItem(canonicalItem []byte, batchID string, index int, steer bool, meta []byte) ([]byte, error) {
 	fields, err := objectFields(canonicalItem)
 	if err != nil {
 		return nil, fmt.Errorf("read canonical input item: %w", err)
@@ -140,6 +146,11 @@ func persistInputItem(canonicalItem []byte, batchID string, index int, steer boo
 	)
 	if steer {
 		fields = append(fields, jsonField{key: SessionInputSteerField, value: []byte("true")})
+	}
+	// MetaField goes last, after the steer marker, and only on user messages: the trailing
+	// order locateLocalTail and strip-local rely on.
+	if meta != nil && isTranscriptUserMessage(fields) {
+		fields = append(fields, jsonField{key: MetaField, value: meta})
 	}
 	return encodeJSONObject(fields), nil
 }

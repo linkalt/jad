@@ -221,6 +221,8 @@ func (r *Resolver) openEphemeralStore(config sessionfs.SessionConfig, spec RunSp
 		Logger:              r.logger,
 		MaxItemBytes:        config.Persistence.MaxItemBytes,
 		ResponseMetadata:    transcript.ResponseMetadataMode(config.Persistence.ResponseMetadata),
+		UserTimestamp:       config.Persistence.Meta.UserTimestamp,
+		MetaMaxBytes:        config.Persistence.Meta.MaxBytes,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("create sub-agent turn store: %w", err)

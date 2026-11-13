@@ -57,6 +57,8 @@ type Persistence struct {
 	CursorCacheCheckpointBytes int64
 	// RunErrorCacheMaxEntries caps the failed-run records kept outside the transcript.
 	RunErrorCacheMaxEntries int
+	// Meta configures the optional __agent_meta data of the transcript (persistence.meta).
+	Meta PersistenceMeta
 }
 
 // Compaction contains the normalized settings used by the session compact action.
@@ -830,6 +832,7 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 		ResponseMetadata:           "minimal",
 		CursorCacheCheckpointBytes: defaultCursorCacheCheckpointBytes,
 		RunErrorCacheMaxEntries:    defaultRunErrorCacheMaxEntries,
+		Meta:                       defaultPersistenceMeta(),
 	}
 	if len(raw) == 0 {
 		return settings, nil
@@ -875,6 +878,11 @@ func normalizePersistence(raw json.RawMessage, path string) (Persistence, error)
 		}
 		settings.RunErrorCacheMaxEntries = int(configured)
 	}
+	meta, err := normalizePersistenceMeta(fields["meta"], path)
+	if err != nil {
+		return Persistence{}, err
+	}
+	settings.Meta = meta
 	return settings, nil
 }
 

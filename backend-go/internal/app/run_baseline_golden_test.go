@@ -19,6 +19,7 @@ import (
 	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/sessionfs"
 	"jad/backend-go/internal/sessionfs/layouttest"
+	"jad/backend-go/internal/transcript"
 )
 
 // R0 baseline of the unified agent run design (docs/design_unified_agent_runs.md): golden
@@ -27,7 +28,9 @@ import (
 // registry change how these runs are started. Every later phase (R1 to R5) must leave these files
 // byte for byte equal. Only values that differ between two runs of the same scenario are masked:
 // the temporary folders, the random suffix of a run folder, the remote run ids, the input batch ids
-// and the content tokens of tool results.
+// and the content tokens of tool results. The optional "__agent_meta" (the stored time of a user
+// message) is dropped first when it is the last member of a line (transcript.DropTrailingMeta); one
+// anywhere else stays and fails the comparison.
 //
 // Set JAD_UPDATE_RUN_BASELINE=1 to rewrite the files; a rewrite is a contract change and needs a
 // decision of its own.
@@ -38,6 +41,9 @@ const runBaselineDir = "testdata/run_baseline"
 type runBaselineMasker struct {
 	paths []string // longest first
 	names []string
+	// keepMeta leaves "__agent_meta" in, for the proof that a run with persistence.meta off
+	// writes the golden bytes without any normalising.
+	keepMeta bool
 }
 
 // runBaselineRules mask the random values the paths do not cover.
@@ -79,6 +85,9 @@ func newRunBaselineMasker(paths map[string]string) *runBaselineMasker {
 }
 
 func (m *runBaselineMasker) mask(text string) string {
+	if !m.keepMeta {
+		text = dropTrailingMeta(text)
+	}
 	for index, path := range m.paths {
 		escaped, _ := json.Marshal(path)
 		text = strings.ReplaceAll(text, strings.Trim(string(escaped), `"`), m.names[index])
@@ -97,6 +106,23 @@ func (m *runBaselineMasker) mask(text string) string {
 		})
 	}
 	return text
+}
+
+// dropTrailingMeta removes the trailing "__agent_meta" of every line of text that has one.
+func dropTrailingMeta(text string) string {
+	if !strings.Contains(text, `"`+transcript.MetaField+`"`) {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		if !strings.Contains(line, `"`+transcript.MetaField+`"`) {
+			continue
+		}
+		if dropped, err := transcript.DropTrailingMeta([]byte(line)); err == nil {
+			lines[index] = string(dropped)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // compareRunBaseline compares got with the golden file name, or rewrites it when asked.
@@ -266,10 +292,32 @@ func TestRunBaselineRemoteSubagentStartAndResume(t *testing.T) {
 // A profile_message chain dev/coder -> review/reviewer, where the reviewer messages dev/coder back
 // and is refused as a cycle: both persistent transcripts as written.
 func TestRunBaselineProfileMessageChain(t *testing.T) {
+	coder, reviewer, m, _ := runProfileMessageChain(t, nil)
+	compareRunBaseline(t, "profile_chain_coder.jsonl", m.mask(coder))
+	compareRunBaseline(t, "profile_chain_reviewer.jsonl", m.mask(reviewer))
+}
+
+// runProfileMessageChain runs the chain dev/coder -> review/reviewer -> dev/coder (refused as a
+// cycle) with the given session settings and returns both transcripts as written and the provider
+// request bodies as the fake upstream received them.
+func runProfileMessageChain(t *testing.T, settings map[string]any) (string, string, *runBaselineMasker, []string) {
+	t.Helper()
 	f := newLayoutFixture(t)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{}},"mcp":{}}`)
+	if settings != nil {
+		session, err := json.Marshal(map[string]any{
+			"schema_version": 1, "cwd": f.cwd,
+			"scope":    map[string]any{"profiles": []string{"dev", "review"}},
+			"settings": settings,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.overwrite(t, "sessions/demo.json", string(session))
+	}
 	coderCall := scriptFunctionCall("profile_message", map[string]any{"profile": "review/reviewer", "message": "please review"})
 	reviewerCall := scriptFunctionCall("profile_message", map[string]any{"profile": "dev/coder", "message": "back to you"})
+	f.captureBodies = true
 	f.script = func(model, body string) string {
 		if model == "model-large" {
 			return reviewerCall(model, body)
@@ -293,8 +341,57 @@ func TestRunBaselineProfileMessageChain(t *testing.T) {
 	if !strings.Contains(string(reviewer), "profile_cycle") {
 		t.Fatalf("the reviewer's call back to dev/coder was not refused as a cycle:\n%s", reviewer)
 	}
-	compareRunBaseline(t, "profile_chain_coder.jsonl", m.mask(string(coder)))
-	compareRunBaseline(t, "profile_chain_reviewer.jsonl", m.mask(string(reviewer)))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return string(coder), string(reviewer), m, append([]string(nil), f.bodies...)
+}
+
+// With persistence.meta.user_timestamp false a run writes the golden bytes as they are, with no
+// normalising of __agent_meta; with the default every user message record (the run input and the
+// profile_message input of the reviewer) ends with its stored time, and no other record has one.
+// The request bodies the fake upstream (raw Responses API) received are the same bytes either way,
+// compared with __agent_meta kept in (paths masked only).
+func TestRunBaselineProfileMessageChainUserTimestamp(t *testing.T) {
+	coder, reviewer, m, offBodies := runProfileMessageChain(t, map[string]any{"persistence": map[string]any{"meta": map[string]any{"user_timestamp": false}}})
+	m.keepMeta = true
+	if strings.Contains(coder+reviewer, transcript.MetaField) {
+		t.Fatalf("user_timestamp false wrote %s", transcript.MetaField)
+	}
+	compareRunBaseline(t, "profile_chain_coder.jsonl", m.mask(coder))
+	compareRunBaseline(t, "profile_chain_reviewer.jsonl", m.mask(reviewer))
+
+	coder, reviewer, onMasker, onBodies := runProfileMessageChain(t, nil)
+	onMasker.keepMeta = true
+	if len(onBodies) != len(offBodies) || len(onBodies) < 2 {
+		t.Fatalf("provider requests on %d, off %d", len(onBodies), len(offBodies))
+	}
+	for index := range onBodies {
+		on, off := onMasker.mask(onBodies[index]), m.mask(offBodies[index])
+		if on != off || strings.Contains(on, "__agent_") {
+			t.Fatalf("request %d differs with the user timestamp on:\n%s\noff:\n%s", index, on, off)
+		}
+	}
+	stamp := regexp.MustCompile(`,"` + transcript.MetaField + `":\{"` + transcript.MetaStoredAt + `":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"\}\}$`)
+	users := 0
+	for _, line := range strings.Split(strings.TrimSpace(coder+reviewer), "\n") {
+		isUser := strings.HasPrefix(line, `{"type":"message","role":"user"`)
+		if isUser {
+			users++
+		}
+		if stamp.MatchString(line) != isUser || strings.Count(line, transcript.MetaField) != boolCount(isUser) {
+			t.Errorf("user=%v record: %s", isUser, line)
+		}
+	}
+	if users < 2 {
+		t.Fatalf("user records = %d, want the run input and the reviewer's input", users)
+	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // layoutCall is one function_call output item of the layout fixture's provider (f.script).

@@ -1034,6 +1034,26 @@
           "maximum": 10000,
           "description": "Failed-run records kept in the run-error cache outside messages.jsonl; the oldest are dropped first. Defaults to 50.",
           "default": 50
+        },
+        "meta": {
+          "type": "object",
+          "description": "Optional data JAD writes for itself as the last field `__agent_meta` of a messages.jsonl record. It is never sent to a provider, and a missing or malformed value is ignored. A change applies when the transcript store is opened again (like response_metadata). A jad build from b9dc0c2a or earlier sends the field to the provider: run `jad transcript strip-local --meta-only` before such a rollback.",
+          "properties": {
+            "user_timestamp": {
+              "type": "boolean",
+              "description": "Write `stored_at` (UTC, RFC 3339 with milliseconds: when JAD stored the message, not when it was typed; a steering message is stored at the next round) on every user message record. With false nothing is written and the file is byte-identical to a build without the field.",
+              "default": true
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 65536,
+              "description": "Cap on the encoded `__agent_meta` value of one record: a larger value is not written, and is read as absent.",
+              "default": 4096
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
         }
       },
       "additionalProperties": true,

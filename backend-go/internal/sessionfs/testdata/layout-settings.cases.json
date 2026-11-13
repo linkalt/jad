@@ -1352,5 +1352,27 @@
    }
   },
   "error": "persistence.run_error_cache_max_entries must be a safe integer between 1 and 10000"
+ },
+ {
+  "name": "persistence meta max_bytes below the minimum",
+  "settings": {
+   "persistence": {
+    "meta": {
+     "max_bytes": 63
+    }
+   }
+  },
+  "error": "persistence.meta.max_bytes must be a safe integer between 64 and 65536"
+ },
+ {
+  "name": "persistence meta unknown key",
+  "settings": {
+   "persistence": {
+    "meta": {
+     "received_at": true
+    }
+   }
+  },
+  "error": "persistence.meta.received_at is not supported; the keys are user_timestamp and max_bytes"
  }
 ]

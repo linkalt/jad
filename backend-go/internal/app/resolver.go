@@ -1069,6 +1069,8 @@ func (r *Resolver) sharedStore(config sessionfs.SessionConfig) (*sharedSession, 
 		RunErrorCachePath:          config.StoragePaths.RunErrorCache,
 		CursorCacheCheckpointBytes: config.Persistence.CursorCacheCheckpointBytes,
 		StateContextPath:           config.StoragePaths.StateContext,
+		UserTimestamp:              config.Persistence.Meta.UserTimestamp,
+		MetaMaxBytes:               config.Persistence.Meta.MaxBytes,
 	}
 	storageKey := filepath.Clean(config.MessagesPath)
 	durability := transcript.DurabilityMode(config.Persistence.Durability)

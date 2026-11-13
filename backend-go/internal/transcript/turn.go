@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"jad/backend-go/internal/logging"
 )
@@ -44,6 +45,9 @@ type TurnStore struct {
 	compactionGeneration atomic.Uint64
 	activeTurns          map[*ResponseTurn]struct{}
 	recovering           bool
+	// now is the clock of MetaStoredAt (time.Now; tests fix it). It is not an option, so
+	// TurnStoreOptions stays comparable (the resolver compares the options of a shared store).
+	now func() time.Time
 }
 
 // TurnStoreOptions contains session persistence settings that affect staged
@@ -63,6 +67,12 @@ type TurnStoreOptions struct {
 	CursorCachePath   string
 	RunErrorCachePath string
 	StateContextPath  string
+	// UserTimestamp writes MetaField with MetaStoredAt on every user message record
+	// (persistence.meta.user_timestamp). The zero value writes nothing, as before the field.
+	UserTimestamp bool
+	// MetaMaxBytes caps the encoded MetaField value (persistence.meta.max_bytes); zero or less
+	// means DefaultMetaMaxBytes.
+	MetaMaxBytes int
 }
 
 // TurnManifest is the durable per-turn state record.
@@ -140,6 +150,9 @@ func NewTurnStore(journal *Journal, stagingDir string, options TurnStoreOptions)
 	if metadata != ResponseMetadataMinimal && metadata != ResponseMetadataFull {
 		return nil, fmt.Errorf("unsupported response metadata mode %q", metadata)
 	}
+	if options.MetaMaxBytes <= 0 {
+		options.MetaMaxBytes = DefaultMetaMaxBytes
+	}
 	store := &TurnStore{
 		journal:     journal,
 		stagingDir:  filepath.Clean(stagingDir),
@@ -147,6 +160,7 @@ func NewTurnStore(journal *Journal, stagingDir string, options TurnStoreOptions)
 		metadata:    metadata,
 		options:     options,
 		activeTurns: make(map[*ResponseTurn]struct{}),
+		now:         time.Now,
 	}
 	cleanupOrphanedPartialFiles(store.stagingDir, logging.Or(options.Logger))
 	return store, nil
