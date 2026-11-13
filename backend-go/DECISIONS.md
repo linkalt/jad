@@ -5024,3 +5024,45 @@ the removed-key tables, the v1 paths and the migration text:
 - seatbelt (macOS) runs are untested, as in earlier phases.
 - The `profile_message` input schema text still shows the v1 wording (changing it breaks the v1
   goldens and forces tool-definition refreshes); the generated description is layout-specific.
+
+## Session category removed (T-041a, Go, 2026-11-13)
+
+The user asked to remove session categories. Decider ruling (tmp/T-041-decisions.md section 1).
+**This supersedes** the phase 5 entry "Kept on purpose: `category` in `session.json`, the list
+record and the list ETag, the eval runner's `category: "eval"`", and the 2026-10-10 entry "Session
+category in the session list". The profile category (`<category>/<name>` of profile, model,
+toolset and MCP ids, `profile-own/<category>/<name>`, `<state>/<session>/<category>/<name>`, every
+address) is the id format, not a session field, and is untouched.
+
+- **Data rule: accepted, ignored, reported, never rewritten.** `layoutSessionFile` keeps one
+  tolerated key, `category` (a `json.RawMessage`, any value), read only to warn. Refusing it would
+  break every existing session file, including every `jad eval` session; ignoring it changes no
+  behaviour (it was display-only, and the UI has not read it since phase 5). This is unlike
+  `deny_profiles` (T-040), where ignoring would have widened access, so there a load error was right.
+- **Warnings.** A session load adds `<file>: session key category is no longer used and is ignored;
+  delete the line` to `config.Warnings` (the server log, deduplicated per session by the list's
+  `warned` reporter, so no per-request spam); `jad check` prints the same text as a `note:` once
+  per file, and a file without the key gets none. Neither rewrites the file. Checked (A1): the only
+  session writer, `PUT /api/catalog/sessions/<id>` (and the catalog create), stores the client's
+  bytes as they are, so the key stays until its owner deletes the line; no code re-encodes a session
+  file, so the warning text promises nothing more than "delete the line".
+- **Removed from the runtime and the wire:** `SessionConfig.Category`, `CatalogFileInfo.Category`,
+  `SessionRef.Category`, `fileCategory`, `sessionListRecord.category`, the list ETag input (the
+  list ETag of a session that set it changes once), `httpapi.CatalogFileInfo.Category` and
+  `CatalogSessionRef.Category`, the migration comparison value, `evalrun.DefaultSessionCategory`,
+  `layouttest.Spec.Category`, `SessionSnapshot.category` in the frontend. `category` is no longer
+  a marker key of `looksLikeSession` (it says nothing now), but stays in `sessionFileKeys`, so a
+  misnamed copy that sets it is still reported.
+- **Eval.** `jad eval` writes no category. A suite whose `session` sets `category` has it dropped
+  with one warning (`Suite.Warnings`, printed by `jad eval`); the suite schema still accepts the key.
+- **Schemas and samples.** `session.schema.json` keeps `category`, `deprecated: true`, any value
+  (the schema is `additionalProperties: false`, so editors would otherwise flag a user's file; the
+  frontend editor uses it, a test pins that such a file is not underlined). `eval-suite.schema.json`
+  describes the drop. `sample/jad/sessions/default.json` no longer sets it.
+- **Tests changed on purpose:** the category pins of sessionfs, app, evalrun and the frontend were
+  replaced by `TestLayoutSessionWithALegacyCategoryLoadsAndWarns`,
+  `TestCheckNotesASessionThatStillSetsTheRemovedCategory`,
+  `TestALegacySessionCategoryIsIgnoredOnTheWire`, `TestSuiteSessionCategoryIsDroppedWithAWarning`
+  and a frontend editor test; the cache and replace tests edit `name` instead.
+- **User-owned:** deleting the `category` line from `.jad/sessions/jad.json` and `test.json` (never
+  done by code or by the executor).

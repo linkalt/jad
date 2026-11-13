@@ -25,7 +25,7 @@
     },
     "session": {
       "type": "object",
-      "description": "Keys merged into every case's session file (see session.schema.json), for example scope and settings. category defaults to \"eval\". schema_version, cwd and description are set by the runner and refused here.",
+      "description": "Keys merged into every case's session file (see session.schema.json), for example scope and settings. A category key is dropped with a warning (the session category was removed). schema_version, cwd and description are set by the runner and refused here.",
       "not": {
         "anyOf": [
           {"required": ["schema_version"]},

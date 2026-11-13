@@ -2,7 +2,6 @@
   "schema_version": 1,
   "description": "My main work session.",
   "cwd": "/home/www/Downloads/tmp/myagent3",
-  "category": "work",
   "scope": {
     "profiles": [
       "dev",

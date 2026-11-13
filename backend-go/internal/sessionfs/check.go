@@ -346,6 +346,7 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			continue
 		}
 		r.checkSandboxFolder(location.Root.Layout.SandboxTemplateDir(config.WorkingDir))
+		r.checkLegacyCategory(location)
 		r.checkProfileMessage(file.ID, config)
 		r.checkRemoteKeysOf(file.ID, config)
 		r.addSandbox(file.ID, config)
@@ -365,5 +366,13 @@ func (r *CheckReport) checkSessions(roots []Root) {
 			r.addSandbox(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 			r.addShares(fmt.Sprintf("%s (profile %s)", file.ID, profile), profileConfig)
 		}
+	}
+}
+
+// checkLegacyCategory notes a session file that still sets the removed category. The key is
+// ignored and the file is never rewritten, so only its owner can delete the line.
+func (r *CheckReport) checkLegacyCategory(location Location) {
+	if session, err := readLayoutSession(location); err == nil && session.LegacyCategory != nil {
+		r.note(legacyCategoryNote(location.SettingFile()))
 	}
 }

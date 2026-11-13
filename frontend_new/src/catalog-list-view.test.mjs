@@ -8,7 +8,7 @@ const models = [
   {id: 'openai/small', etag: '2'},
   {id: 'local/llama', etag: '3', name: 'Llama'},
 ];
-// Sessions of two workspaces are listed as <root>:<name>; one carries a legacy category that is ignored.
+// Sessions of two workspaces are listed as <root>:<name>.
 const sessions = [
   {id: 'main:alpha', etag: '1', name: 'Alpha'},
   {id: 'side:beta', etag: '2'},
@@ -32,11 +32,6 @@ test('a category is the folder part of the id, and a session is in the workspace
   assert.equal(groupOf('sessions', sessions[0]), 'main');
   assert.equal(groupOf('sessions', {id: 'bare', etag: '1'}), '');
   assert.equal(groupOf('sessions', {id: 'x/y', etag: '1'}), '');
-});
-
-test('a session\'s legacy category is never read: the group is the same with or without it', () => {
-  assert.equal(groupOf('sessions', {id: 'main:a', etag: '1', category: 'work'}), 'main');
-  assert.equal(catalogRows('sessions', [{id: 'main:a', etag: '1', category: 'work'}], labels)[0].category, 'Main project');
 });
 
 test('the group shows a workspace label for sessions, and the group itself for other kinds', () => {

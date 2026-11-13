@@ -56,9 +56,6 @@ type CatalogFileInfo struct {
 	ETag string
 	// Name is the display name the file sets; empty when unset.
 	Name string
-	// Category is the folder a session file sets to group its listing; empty for every other
-	// kind, whose category is the first part of the ID, and when unset.
-	Category string
 	// Efforts are the reasoning efforts a model file lists; nil for other kinds and when none.
 	Efforts []string
 	// Error is set when the file could not be read; the entry then has no ETag, so it can
@@ -70,9 +67,8 @@ type CatalogFileInfo struct {
 
 // SessionRef names a session in a listing.
 type SessionRef struct {
-	ID       string
-	Name     string
-	Category string
+	ID   string
+	Name string
 }
 
 // CatalogFile is one catalog file with its bytes.
@@ -204,15 +200,6 @@ func fileEfforts(data []byte) []string {
 		return nil
 	}
 	return model.Efforts
-}
-
-// fileCategory is the trimmed "category" a session file sets, with the same leniency as fileDisplayName.
-func fileCategory(data []byte) string {
-	var grouped struct {
-		Category string `json:"category"`
-	}
-	_ = json.Unmarshal(data, &grouped)
-	return strings.TrimSpace(grouped.Category)
 }
 
 // ReadCatalogFile returns one file as it is on disk.

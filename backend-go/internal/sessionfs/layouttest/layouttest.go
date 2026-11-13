@@ -16,8 +16,6 @@ type Spec struct {
 	SessionID string
 	// CWD is the session's working directory; default a fresh temp dir.
 	CWD string
-	// Category is the session's category.
-	Category string
 	// Settings is the session's `settings` object.
 	Settings map[string]any
 	// StateDir is where transcripts and staging live; default <root>/state. A test sets it
@@ -230,9 +228,6 @@ func Write(t *testing.T, spec Spec) Fixture {
 	}
 
 	session := map[string]any{"schema_version": 1, "cwd": spec.CWD}
-	if spec.Category != "" {
-		session["category"] = spec.Category
-	}
 	if spec.Settings != nil || spec.RawSettings != nil {
 		settings := map[string]any{}
 		for key, value := range spec.Settings {

@@ -87,7 +87,7 @@ func listSessionFiles(roots []Root, budget int64, onUnreadable func(location Loc
 				continue
 			}
 			read += int64(len(data))
-			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data), Category: fileCategory(data), scope: fileScope(data)})
+			infos = append(infos, CatalogFileInfo{ID: location.Reference, ETag: CatalogETag(data), Name: fileDisplayName(data), scope: fileScope(data)})
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
@@ -124,7 +124,7 @@ func ProfileSessions(layout Layout, roots []Root) (map[string][]SessionRef, erro
 			continue
 		}
 		for _, id := range narrowed.IDs() {
-			byProfile[id] = append(byProfile[id], SessionRef{ID: session.ID, Name: session.Name, Category: session.Category})
+			byProfile[id] = append(byProfile[id], SessionRef{ID: session.ID, Name: session.Name})
 		}
 	}
 	return byProfile, nil

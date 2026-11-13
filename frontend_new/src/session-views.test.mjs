@@ -382,11 +382,6 @@ test('a session with no profile rows carries its workspace too', () => {
   assert.deepEqual(group.children, []);
 });
 
-test('a session group never carries a category, even when the list row has one', () => {
-  const [group] = sessionListGroups([{...inRoot('a', 'proj'), category: 'work'}]);
-  assert.equal('category' in group, false);
-});
-
 test('a profile is labelled by the name its file sets, else by its ID', () => {
   assert.equal(profileLabel('dev/coder'), 'dev/coder');
   assert.equal(profileLabel('dev/coder', {}), 'dev/coder');

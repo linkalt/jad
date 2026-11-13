@@ -16,7 +16,7 @@ const evalUsage = `usage: jad eval [--out <report.json>] [--cases <regexp>] [--r
                 [--no-commands] [--log-level <level>] <suite.json>
 
 Runs an eval suite (sample/schemes/eval-suite.schema.json): each case gets a fresh copy of
-its workspace and a new session in the "eval" category, one headless turn, then its checks.
+its workspace and a new session, one headless turn, then its checks.
 Progress goes to stderr; the JSON report goes to --out, or to stdout without it.
 
 A case prompt that starts with a slash command runs it as jad run does: /prompt:,
@@ -63,6 +63,9 @@ func runEvalCommand(args []string, streams commandStreams) error {
 	suite, err := evalrun.LoadSuiteWith(flags.Arg(0), evalrun.LoadOptions{NoCommands: *noCommands})
 	if err != nil {
 		return &exitError{code: exitFailed, err: err}
+	}
+	for _, warning := range suite.Warnings {
+		fmt.Fprintf(streams.stderr, "warning: %s: %s\n", flags.Arg(0), warning)
 	}
 	config, runner, closeService, err := headlessService(*logLevel, streams.stderr)
 	if err != nil {

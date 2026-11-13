@@ -99,11 +99,11 @@ test('one workspace is a flat list without a heading, and no sessions give no se
   assert.deepEqual(groupByWorkspace([], [only]), []);
 });
 
-test('several workspaces give one section each, in order, with the sessions in list order and no category section', () => {
+test('several workspaces give one section each, in order, with the sessions in list order', () => {
   const sessions = [
-    row('beta:b1', 'beta', 'Beta', {category: 'work'}),
+    row('beta:b1', 'beta', 'Beta'),
     row('start:s1', 'start', 'Start here'),
-    row('beta:b2', 'beta', 'Beta', {category: 'test'}),
+    row('beta:b2', 'beta', 'Beta'),
     row('start:s2', 'start', 'Start here'),
   ];
   const sections = groupByWorkspace(sessionListGroups(sessions), workspacesOf(listed, sessions));
@@ -128,7 +128,7 @@ test('a session with no root keeps its place when it is the only kind there is',
   assert.deepEqual(names(groupByWorkspace(sessionListGroups(sessions), workspaces)), [[undefined, ['old']]]);
 });
 
-test('a session row maps its root and no category (the wire still sends it, the UI never reads it)', () => {
+test('a session row maps its root and its label', () => {
   const mapping = read('session-mapping.ts');
   assert.match(mapping, /snapshot\.root_id \? \{rootId: snapshot\.root_id\}/);
   assert.match(mapping, /snapshot\.root_label \? \{rootLabel: snapshot\.root_label\}/);

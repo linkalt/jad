@@ -350,9 +350,6 @@ func writeSession(root Root, id string, suite *Suite, workspace string, c *Case,
 	for key, value := range suite.Session {
 		session[key] = value
 	}
-	if _, set := session["category"]; !set {
-		session["category"] = DefaultSessionCategory
-	}
 	session["schema_version"] = 1
 	session["cwd"] = workspace
 	session["description"] = fmt.Sprintf("Eval %s, case %s, attempt %d.", suite.Name, c.Name, attempt)

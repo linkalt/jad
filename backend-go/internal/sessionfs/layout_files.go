@@ -123,10 +123,12 @@ type layoutSessionFile struct {
 	SchemaVersion int    `json:"schema_version"`
 	Description   string `json:"description"`
 	// Name is the display name; it defaults to the folder name.
-	Name     string      `json:"name"`
-	CWD      string      `json:"cwd"`
-	Category string      `json:"category"`
-	Scope    layoutScope `json:"scope"`
+	Name  string      `json:"name"`
+	CWD   string      `json:"cwd"`
+	Scope layoutScope `json:"scope"`
+	// LegacyCategory is the removed session category (T-041). It is tolerated so that a file
+	// that still sets it loads and lists as before, and read only to warn; nothing uses its value.
+	LegacyCategory json.RawMessage `json:"category"`
 	// ModelDefaults is only read to refuse it: the model a profile uses is the
 	// profile's own model_default, which the model-default route now writes.
 	ModelDefaults json.RawMessage            `json:"model_defaults"`
@@ -311,4 +313,10 @@ func checkLayoutSettings(settings map[string]json.RawMessage, where string) erro
 		suggestion = "; did you mean " + closest + "?"
 	}
 	return configError("%s: settings may not carry %s; it has its own file or field in the catalog layout%s", where, strings.Join(unknown, ", "), suggestion)
+}
+
+// legacyCategoryNote is the warning for a session file that still sets the removed category.
+// JAD never rewrites the file: the key stays until its owner deletes the line.
+func legacyCategoryNote(path string) string {
+	return path + ": session key category is no longer used and is ignored; delete the line"
 }

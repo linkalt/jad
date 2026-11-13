@@ -148,7 +148,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 	write("profiles/dev/coder.json", map[string]any{"models": []string{"openai/small", "openai/large"}, "model_default": "openai/small", "toolset": "coding/none"})
 	write("profiles/review/reviewer.json", map[string]any{"models": []string{"openai/large"}, "toolset": "coding/none"})
 	write("sessions/demo.json", map[string]any{
-		"schema_version": 1, "cwd": f.cwd, "category": "work",
+		"schema_version": 1, "cwd": f.cwd,
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
 	writeNotesSkill(t, f.root, "the secret is 42\n")
@@ -264,36 +264,39 @@ func TestLayoutRemovedProfileAndReadmeRoutesAreGone(t *testing.T) {
 	}
 }
 
-// The session list carries the category of session.json, so a client can group
-// sessions without reading the folder layout.
-func TestLayoutSessionListCarriesTheSessionCategory(t *testing.T) {
+// The session category was removed (T-041). A session file that still sets it loads and is
+// listed, with no category on the wire (the session list or the catalog listing), a warning
+// for the file, and no change to the session's id.
+func TestALegacySessionCategoryIsIgnoredOnTheWire(t *testing.T) {
 	f := newLayoutFixture(t)
+	legacy := `{"schema_version":1,"cwd":"` + f.cwd + `","category":"work","scope":{"profiles":["dev","review"]}}`
+	if err := os.WriteFile(filepath.Join(f.root, "sessions", "legacy.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	status, body := f.do(t, http.MethodGet, "/api/sessions", "")
 	if status != 200 {
 		t.Fatalf("session list: %d %s", status, body)
 	}
 	var list struct {
 		Sessions []struct {
-			ID       string `json:"id"`
-			Category string `json:"category"`
+			ID string `json:"id"`
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal([]byte(body), &list); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
-	if len(list.Sessions) != 1 || list.Sessions[0].Category != "work" {
-		t.Fatalf("sessions = %+v, want one session in category work", list.Sessions)
+	if len(list.Sessions) != 2 {
+		t.Fatalf("sessions = %+v, want demo and legacy", list.Sessions)
 	}
-}
-
-// A category edit must change the list ETag, or a client holding the old list
-// would get 304 and keep showing the session under the old group.
-func TestSessionVersionChangesWithTheCategory(t *testing.T) {
-	base := sessionfs.SessionConfig{Profile: "a/b", DefaultProfile: "a/b", Category: "work"}
-	moved := base
-	moved.Category = "test"
-	if sessionVersion(base) == sessionVersion(moved) {
-		t.Fatal("sessionVersion ignores the category")
+	if strings.Contains(body, `"category"`) {
+		t.Fatalf("the session list still carries a category: %s", body)
+	}
+	listing := f.catalogCall(t, "GET", "/api/catalog/sessions", "", nil)
+	if listing.status != 200 || !strings.Contains(listing.body, `"legacy"`) || strings.Contains(listing.body, `"category"`) {
+		t.Fatalf("catalog listing = %d %s", listing.status, listing.body)
+	}
+	if status, body := f.do(t, http.MethodGet, "/api/sessions/local:legacy", ""); status != 200 || strings.Contains(body, `"category"`) {
+		t.Fatalf("session read = %d %s", status, body)
 	}
 }
 

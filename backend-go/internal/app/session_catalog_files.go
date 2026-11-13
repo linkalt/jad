@@ -23,7 +23,7 @@ func (r *Resolver) ListSessionConfigs(ctx context.Context) ([]httpapi.CatalogFil
 	}
 	listing := make([]httpapi.CatalogFileInfo, 0, len(result.Files)+len(result.Skipped))
 	for _, file := range result.Files {
-		listing = append(listing, httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name, Category: file.Category})
+		listing = append(listing, httpapi.CatalogFileInfo{ID: file.ID, ETag: file.ETag, Name: file.Name})
 	}
 	for _, skipped := range result.Skipped {
 		listing = append(listing, httpapi.CatalogFileInfo{ID: skipped.ID, Error: skipped.Error})

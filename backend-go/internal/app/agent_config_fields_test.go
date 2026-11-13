@@ -41,7 +41,7 @@ const (
 var agentConfigFields = map[string]agentConfigField{
 	// Profile identity and the caller's selection.
 	"Profile": fieldCallerOnly, "DefaultProfile": fieldCallerOnly, "Profiles": fieldCallerOnly,
-	"ProfileNames": fieldCallerOnly, "ProfilePath": fieldCallerOnly, "Category": fieldCallerOnly,
+	"ProfileNames": fieldCallerOnly, "ProfilePath": fieldCallerOnly,
 	"ProfileOwnDir": fieldCallerOnly, "ProfileDataDir": fieldCallerOnly, "SettingSources": fieldCallerOnly, "ProfileSelfEdit": fieldCallerOnly,
 	// SelfEditPaths is read by the run's checkpoint (checkpoint.ForSession), not by the tools.
 	"RemotesDir": fieldCallerOnly, "Warnings": fieldCallerOnly, "SelfEditPaths": fieldCallerOnly,

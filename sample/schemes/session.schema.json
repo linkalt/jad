@@ -28,9 +28,8 @@
       "description": "Working directory of every run in this session. Absolute path (or ~). Beats settings.cwd of this file and the root defaults; a profile's settings.cwd beats it."
     },
     "category": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-      "description": "Legacy: accepted and kept, but the UI no longer reads it. The session list groups sessions by workspace (the session root), not by this text. It does not change the session id."
+      "deprecated": true,
+      "description": "Removed (T-041): ignored, with a warning in the server log and from jad check. It is only still accepted so an old session file keeps loading; delete the line. JAD never rewrites the file. The session list groups sessions by workspace."
     },
     "scope": {
       "type": "object",

@@ -173,7 +173,7 @@ func TestRunCopiesTheWorkspaceRunsChecksAndKeepsFailures(t *testing.T) {
 	if err := json.Unmarshal(raw, &session); err != nil {
 		t.Fatal(err)
 	}
-	if session["category"] != DefaultSessionCategory || session["cwd"] != pass.Workspace || session["schema_version"] != float64(1) || session["scope"] == nil {
+	if _, set := session["category"]; set || session["cwd"] != pass.Workspace || session["schema_version"] != float64(1) || session["scope"] == nil {
 		t.Fatalf("session file = %s", raw)
 	}
 	if runner.requests[0].Profile != "dev/coder" || runner.requests[1].Model != "openai/large" || runner.requests[0].Timeout != DefaultRunTimeoutMS*time.Millisecond {
@@ -373,5 +373,35 @@ func TestRunCountsAttemptsWhoseStopHooksWereSkipped(t *testing.T) {
 	encoded, _ := json.Marshal(report.Summary)
 	if !strings.Contains(string(encoded), `"stop_hooks_skipped":1`) {
 		t.Fatalf("summary json = %s", encoded)
+	}
+}
+
+// The session category was removed (T-041): a suite that still sets session.category is read, the
+// key is dropped with one warning, and no case session file is written with it.
+func TestSuiteSessionCategoryIsDroppedWithAWarning(t *testing.T) {
+	suite, err := ParseSuite([]byte(`{"schema_version":1,"name":"s","session":{"category":"bench","settings":{"x":1}},"cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suite.Warnings) != 1 || !strings.Contains(suite.Warnings[0], "session.category") {
+		t.Fatalf("warnings = %q", suite.Warnings)
+	}
+	if _, set := suite.Session["category"]; set || suite.Session["settings"] == nil {
+		t.Fatalf("session = %v: category must go and the other keys stay", suite.Session)
+	}
+	root := Root{ID: "local", Directory: t.TempDir()}
+	if err := writeSession(root, "one", suite, "/work", &suite.Cases[0], 1); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(filepath.Join(root.Directory, "one.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), "category") {
+		t.Fatalf("case session file = %s", written)
+	}
+	clean, err := ParseSuite([]byte(`{"schema_version":1,"name":"s","cases":[{"name":"a","prompt":"p","expect_text":["x"]}]}`), t.TempDir())
+	if err != nil || len(clean.Warnings) != 0 {
+		t.Fatalf("a suite without it warns: %v %q", err, clean.Warnings)
 	}
 }

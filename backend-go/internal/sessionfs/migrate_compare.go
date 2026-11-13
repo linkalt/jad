@@ -53,7 +53,7 @@ func (p *migrationPlanner) sessionPrints(roots []Root, rootID string, layout Lay
 
 func printOf(config SessionConfig) migrationPrint {
 	print := migrationPrint{
-		"session": config.SessionName, "category": config.Category, "profile": config.Profile,
+		"session": config.SessionName, "profile": config.Profile,
 		"default_profile": config.DefaultProfile, "profiles": strings.Join(config.Profiles, ","),
 		"model_default": config.ModelDefault, "models": strings.Join(sortedCopy(config.Models), ","),
 		"cwd": config.WorkingDir, "tool_definition_paths": strings.Join(sortedCopy(config.ToolDefinitionPaths), ","),

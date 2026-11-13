@@ -69,3 +69,28 @@ func TestCheckNotesAListedBindingWithoutAKey(t *testing.T) {
 		t.Fatalf("notes: %q", report.Notes)
 	}
 }
+
+// A session file that still sets the removed category (T-041) is a note, not a problem, once per
+// file; a file without it gets none. jad check never rewrites the file.
+func TestCheckNotesASessionThatStillSetsTheRemovedCategory(t *testing.T) {
+	k := newKeysFixture(t, `{}`, `{"schema_version":1,"category":"work"}`, "")
+	wsPut(t, filepath.Join(k.w, ".jad", "sessions", "clean.json"), `{"schema_version":1}`)
+	path := filepath.Join(k.w, ".jad", "sessions", "s1.json")
+	before, _ := os.ReadFile(path)
+	report := checkKeys(t, k)
+	if len(report.Problems) != 0 {
+		t.Fatalf("problems: %s", problemText(report))
+	}
+	var notes []string
+	for _, note := range report.Notes {
+		if strings.Contains(note, "category") {
+			notes = append(notes, note)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "s1.json") || !strings.Contains(notes[0], "delete the line") {
+		t.Fatalf("category notes = %q, want one for s1.json only", notes)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatal("jad check rewrote the session file")
+	}
+}

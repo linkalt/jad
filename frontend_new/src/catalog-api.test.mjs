@@ -43,13 +43,8 @@ test('fetchCatalogFiles keeps a session name, trims it, and drops a blank or non
   await assert.rejects(fetchCatalogFiles('sessions'), /invalid catalog list/);
 });
 
-test('fetchCatalogFiles never exposes a session category: the legacy text is neither kept nor checked', async () => {
-  reply = () => json({files: [{id: 'a', etag: '"1"', category: ' work '}, {id: 'b', etag: '"2"', category: 7}]});
-  assert.deepEqual(await fetchCatalogFiles('sessions'), [{id: 'a', etag: '"1"'}, {id: 'b', etag: '"2"'}]);
-});
-
 test('fetchCatalogFiles keeps the sessions of a profile, trimmed, and rejects a malformed list of them', async () => {
-  reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{id: 's', name: ' S ', category: ' c '}, {id: 't', name: '  '}]}, {id: 'c/d', etag: '"2"', sessions: []}]});
+  reply = () => json({files: [{id: 'a/b', etag: '"1"', sessions: [{id: 's', name: ' S '}, {id: 't', name: '  '}]}, {id: 'c/d', etag: '"2"', sessions: []}]});
   assert.deepEqual(await fetchCatalogFiles('profiles'), [
     {id: 'a/b', etag: '"1"', sessions: [{id: 's', name: 'S'}, {id: 't'}]},
     {id: 'c/d', etag: '"2"'},

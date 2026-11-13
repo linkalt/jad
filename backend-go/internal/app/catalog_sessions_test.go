@@ -119,7 +119,7 @@ func TestCatalogSessionReplaceNeedsTheCurrentVersion(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := catalogSessionsPath + "/demo"
 	before := f.catalogCall(t, "GET", path, "", nil)
-	next := `{"schema_version":1,"cwd":"` + f.cwd + `","category":"other","scope":{"profiles":["dev","review"]}}`
+	next := `{"schema_version":1,"name":"other","cwd":"` + f.cwd + `","scope":{"profiles":["dev","review"]}}`
 	if reply := f.catalogCall(t, "PUT", path, next, nil); reply.status != http.StatusPreconditionRequired {
 		t.Fatalf("replace without If-Match = %d", reply.status)
 	}
@@ -136,7 +136,7 @@ func TestCatalogSessionReplaceNeedsTheCurrentVersion(t *testing.T) {
 	if onDisk, _ := os.ReadFile(filepath.Join(f.root, "sessions", "demo.json")); string(onDisk) != next {
 		t.Fatalf("stored %q", onDisk)
 	}
-	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK || !strings.Contains(body, `"category":"other"`) {
+	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK || !strings.Contains(body, `"session_name":"other"`) {
 		t.Fatalf("the edit is not served: %d %s", status, body)
 	}
 }

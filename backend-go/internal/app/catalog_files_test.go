@@ -354,15 +354,15 @@ func TestCatalogListShowsTheNameEveryKindSets(t *testing.T) {
 	create("/api/catalog/models/openai/named", `{"name":" Named model ","model":"gpt-x"}`)
 	create("/api/catalog/toolsets/coding/named", `{"name":"Named toolset"}`)
 	create("/api/catalog/mcp/ext/named", `{"name":"Named server","transport":{"type":"streamable_http","url":"http://127.0.0.1:1/mcp"}}`)
-	create("/api/catalog/sessions/grouped", `{"name":"Named session","category":" work ","cwd":"`+f.cwd+`","scope":{"profiles":["dev"]}}`)
-	for _, c := range []struct{ kind, id, name, category string }{
-		{"models", "openai/named", "Named model", ""},
-		{"toolsets", "coding/named", "Named toolset", ""},
-		{"mcp", "ext/named", "Named server", ""},
-		{"sessions", "grouped", "Named session", "work"},
+	create("/api/catalog/sessions/grouped", `{"name":"Named session","cwd":"`+f.cwd+`","scope":{"profiles":["dev"]}}`)
+	for _, c := range []struct{ kind, id, name string }{
+		{"models", "openai/named", "Named model"},
+		{"toolsets", "coding/named", "Named toolset"},
+		{"mcp", "ext/named", "Named server"},
+		{"sessions", "grouped", "Named session"},
 	} {
 		var listing struct {
-			Files []struct{ ID, Name, Category string }
+			Files []struct{ ID, Name string }
 		}
 		list := f.catalogCall(t, "GET", "/api/catalog/"+c.kind, "", nil)
 		if err := json.Unmarshal([]byte(list.body), &listing); err != nil {
@@ -372,8 +372,8 @@ func TestCatalogListShowsTheNameEveryKindSets(t *testing.T) {
 		for _, file := range listing.Files {
 			if file.ID == c.id {
 				found = true
-				if file.Name != c.name || file.Category != c.category {
-					t.Errorf("%s %s = name %q category %q, want %q %q", c.kind, c.id, file.Name, file.Category, c.name, c.category)
+				if file.Name != c.name {
+					t.Errorf("%s %s = name %q, want %q", c.kind, c.id, file.Name, c.name)
 				}
 			}
 		}
@@ -405,13 +405,13 @@ func TestCatalogProfileListNamesTheSessionsThatCanUseEachProfile(t *testing.T) {
 		}
 	}
 	create("/api/catalog/profiles/solo/only", `{"models":["openai/small"],"toolset":"coding/none"}`)
-	create("/api/catalog/sessions/narrow", `{"name":"Narrow","category":"lab","cwd":"`+f.cwd+`","scope":{"profiles":["dev/coder"]}}`)
+	create("/api/catalog/sessions/narrow", `{"name":"Narrow","cwd":"`+f.cwd+`","scope":{"profiles":["dev/coder"]}}`)
 	create("/api/catalog/sessions/open", `{"cwd":"`+f.cwd+`"}`)
 
 	var listing struct {
 		Files []struct {
 			ID       string
-			Sessions []struct{ ID, Name, Category string }
+			Sessions []struct{ ID, Name string }
 		}
 	}
 	list := f.catalogCall(t, "GET", "/api/catalog/profiles", "", nil)
@@ -439,8 +439,8 @@ func TestCatalogProfileListNamesTheSessionsThatCanUseEachProfile(t *testing.T) {
 	for _, file := range listing.Files {
 		if file.ID == "dev/coder" {
 			for _, session := range file.Sessions {
-				if session.ID == "narrow" && (session.Name != "Narrow" || session.Category != "lab") {
-					t.Errorf("session ref = %+v, want its name and category", session)
+				if session.ID == "narrow" && session.Name != "Narrow" {
+					t.Errorf("session ref = %+v, want its name", session)
 				}
 			}
 		}

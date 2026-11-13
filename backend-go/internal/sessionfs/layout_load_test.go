@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,14 +125,40 @@ func TestLayoutLoadsTheSampleSession(t *testing.T) {
 	}
 }
 
-func TestLayoutSessionCategoryIsLoaded(t *testing.T) {
+// The session category was removed (T-041): a session file that still sets it loads as before
+// and the load says it is ignored; a file without it says nothing. The file is never rewritten.
+func TestLayoutSessionWithALegacyCategoryLoadsAndWarns(t *testing.T) {
 	layout, location, _ := sampleLayout(t)
 	config, err := LoadLayoutSessionConfig(location, layout, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Category != "work" {
-		t.Fatalf("category = %q, want work (the sample session.json sets it)", config.Category)
+	for _, warning := range config.Warnings {
+		if strings.Contains(warning, "category") {
+			t.Fatalf("a session without a category warns: %q", warning)
+		}
+	}
+	editJSON(t, location.File, func(m map[string]any) { m["category"] = "work" })
+	before, err := os.ReadFile(location.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err = LoadLayoutSessionConfig(location, layout, "", "")
+	if err != nil {
+		t.Fatalf("a session that sets category must still load: %v", err)
+	}
+	if !slices.Contains(config.Warnings, legacyCategoryNote(location.File)) {
+		t.Fatalf("warnings = %q, want the ignored-category note", config.Warnings)
+	}
+	if after, _ := os.ReadFile(location.File); string(after) != string(before) {
+		t.Fatal("a load rewrote the session file")
+	}
+	// Whatever the value is, it is only read to warn.
+	for _, value := range []any{nil, 7, []string{"a"}, ""} {
+		editJSON(t, location.File, func(m map[string]any) { m["category"] = value })
+		if _, err := LoadLayoutSessionConfig(location, layout, "", ""); err != nil {
+			t.Fatalf("category %v: %v", value, err)
+		}
 	}
 }
 

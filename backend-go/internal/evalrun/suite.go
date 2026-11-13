@@ -25,7 +25,6 @@ const (
 	DefaultRunTimeoutMS        = 30 * 60 * 1000
 	DefaultCheckTimeoutMS      = 10 * 60 * 1000
 	DefaultCheckOutputMaxBytes = 16 * 1024
-	DefaultSessionCategory     = "eval"
 	DefaultKeepWorkspaces      = KeepFailed
 )
 
@@ -57,7 +56,7 @@ type Suite struct {
 	// SessionRoot is the id of the session root the case sessions are written to; empty
 	// uses the first root of the root setting.
 	SessionRoot string `json:"session_root,omitempty"`
-	// Session is merged into every case's session file (scope, settings, category); the
+	// Session is merged into every case's session file (scope, settings); the
 	// runner sets schema_version, cwd and description itself.
 	Session             map[string]json.RawMessage `json:"session,omitempty"`
 	Profile             string                     `json:"profile,omitempty"`
@@ -80,6 +79,10 @@ type Suite struct {
 	// Plan runs every case in plan mode unless the case says otherwise.
 	Plan  bool   `json:"plan,omitempty"`
 	Cases []Case `json:"cases"`
+
+	// Warnings are the notices of the suite file that do not stop it (the removed session
+	// category); jad eval prints them.
+	Warnings []string `json:"-"`
 
 	// dir is the folder of the suite file; relative paths in the suite are resolved from it.
 	dir string
@@ -183,6 +186,12 @@ func (s *Suite) normalize() error {
 		if _, set := s.Session[key]; set {
 			return fmt.Errorf("session.%s is set by the runner and must not be given", key)
 		}
+	}
+	// The session category was removed (T-041): the key is dropped, with a notice, so no case
+	// file is written with it.
+	if _, set := s.Session["category"]; set {
+		delete(s.Session, "category")
+		s.Warnings = append(s.Warnings, "session.category is no longer used and is ignored; delete the line")
 	}
 	if s.Repeat == 0 {
 		s.Repeat = DefaultRepeat

@@ -14,8 +14,6 @@ type CatalogFileInfo struct {
 	ETag string `json:"etag,omitempty"`
 	// Name is the display name the file sets; it is left out when unset.
 	Name string `json:"name,omitempty"`
-	// Category is the folder a session file sets; it is left out when unset and for other kinds.
-	Category string `json:"category,omitempty"`
 	// Sessions lists the sessions that can use a profile; it is set for profiles only.
 	Sessions []CatalogSessionRef `json:"sessions,omitempty"`
 	// Efforts are the reasoning efforts a model file lists; set for models only, left out when none.
@@ -26,9 +24,8 @@ type CatalogFileInfo struct {
 
 // CatalogSessionRef names one session in a profile's listing.
 type CatalogSessionRef struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Category string `json:"category,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // CatalogFile is one catalog file as stored.

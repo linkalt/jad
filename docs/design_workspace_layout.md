@@ -1366,7 +1366,7 @@ and rolls back. No key other than `libraries.tool_definition_paths` was added.
 ## 26. Phase 5 as built: the session rail groups by workspace
 
 Decider (phase 5 ruling). "Session category" is gone from the UI; a session's **workspace** takes
-its place. Nothing in the backend, the API, a session file or an id changed.
+its place. Nothing in the backend, the API, a session file or an id changed in phase 5.
 
 **What a workspace is in the UI.** The session root a session is stored in: `root_id` and
 `root_label` of every list record. In the workspace layout each served workspace is one root, in
@@ -1374,8 +1374,8 @@ the old layout the roots of the setting are the workspaces, so one rule serves b
 labels (a workspace's label defaults to its id, the old default root keeps "Local sessions") and
 never a directory: `GET /api/workspaces` still sends `directory`, `parseWorkspaces` drops it.
 `sessionRef` is unchanged (`root:name` with more than one root, the bare name with one), so stored
-views and pinned panes keep working. A session's `category` is still accepted, listed and part of
-the list ETag; the UI neither shows nor checks it (`session.schema.json` calls it legacy). The
+views and pinned panes keep working. (T-041a removed the rest: a session's `category` is now ignored with a warning, is no longer listed
+and is not part of the list ETag; see DECISIONS "Session category removed".) The
 profile `<category>/<name>` of a profile id is another thing and is untouched (fork and
 duplicate of a profile still take it from the id).
 

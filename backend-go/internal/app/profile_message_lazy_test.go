@@ -96,7 +96,6 @@ func newProfileLazyFixture(t *testing.T, callerLazy, targetLazy []string, target
 	spec := layouttest.Spec{
 		SessionID:           "demo",
 		CWD:                 t.TempDir(),
-		Category:            "work",
 		Session:             map[string]any{"scope": map[string]any{"profiles": []string{"dev/coder", "review/reviewer"}}},
 		ToolDefinitionPaths: []string{toolPath("profile_message.json"), toolPath("load_tool.json")},
 		Models: map[string]map[string]any{

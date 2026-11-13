@@ -120,7 +120,8 @@ func TestWorkspaceRoutesListWorkspacesAndScopeCatalogWrites(t *testing.T) {
 
 // The UI groups sessions by workspace and creates one in the workspace it shows, so the server
 // must keep three things the UI relies on: every session record names its root (root_id and
-// root_label, next to the legacy category the UI no longer reads), a session written as
+// root_label; the removed session category is not sent, and a session file that still sets it
+// loads and lists), a session written as
 // <workspace>:<name> lands in that workspace only, and a bare name is refused while more than
 // one workspace is served instead of landing in some default one.
 func TestWorkspaceSessionsAreCreatedInTheNamedWorkspaceAndABareNameIsRefused(t *testing.T) {
@@ -202,13 +203,18 @@ func TestWorkspaceSessionsAreCreatedInTheNamedWorkspaceAndABareNameIsRefused(t *
 	if err := json.Unmarshal([]byte(body), &list); err != nil {
 		t.Fatal(err)
 	}
-	roots := map[string][3]any{}
+	roots := map[string][2]any{}
+	for _, record := range list.Sessions {
+		if _, sent := record["category"]; sent {
+			t.Errorf("record %v still carries a category", record["id"])
+		}
+	}
 	for _, record := range list.Sessions {
 		id, _ := record["id"].(string)
-		roots[id] = [3]any{record["root_id"], record["root_label"], record["category"]}
+		roots[id] = [2]any{record["root_id"], record["root_label"]}
 	}
-	if got := roots["a:s1"]; got != [3]any{"a", "a", "legacy"} {
-		t.Errorf("a:s1 = %v, want root a, label a and its legacy category", got)
+	if got := roots["a:s1"]; got != [2]any{"a", "a"} {
+		t.Errorf("a:s1 = %v, want root a and label a (its legacy category file still lists)", got)
 	}
 	if got := roots["b:fresh"]; got[0] != "b" || got[1] != "Bee" {
 		t.Errorf("b:fresh = %v, want root b and label Bee", got)

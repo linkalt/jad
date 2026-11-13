@@ -198,13 +198,19 @@ test('a valid session has no problems and an unknown key is underlined', () => {
   const session = {
     schema_version: 1,
     cwd: '/tmp/work',
-    category: 'work',
     scope: {profiles: ['dev']},
   };
   assert.deepEqual(validator.validate('sessions', pretty(session)), []);
   const text = pretty({...session, bogus: 1});
   const [problem] = validator.validate('sessions', text);
   assert.equal(sliceOf(text, problem), '"bogus"');
+});
+
+// The session category was removed; a file that still sets it keeps loading, so the editor does not
+// underline it (the schema marks it deprecated).
+test('a session that still sets the removed category is not underlined', () => {
+  const text = pretty({schema_version: 1, cwd: '/tmp/work', category: 'work'});
+  assert.deepEqual(validator.validate('sessions', text), []);
 });
 
 test('a session that still names an active_profile is underlined', () => {

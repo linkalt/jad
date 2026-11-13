@@ -198,7 +198,6 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 	config.Profile = entry.ID()
 	config.ProfilePath = entry.Path
 	config.DefaultProfile = defaultProfile
-	config.Category = session.Category
 	config.Profiles = profiles.IDs()
 	config.ProfileNames = built.profileNames
 	name := config.ModelDefault
@@ -251,6 +250,9 @@ func loadLayoutSessionOnce(location Location, layout Layout, requestedProfile, r
 		return SessionConfig{}, err
 	}
 	config.Warnings = append(built.warnings, deprecatedAgentToolsWarnings(config.NativeSubagent, sessionPath)...)
+	if session.LegacyCategory != nil {
+		config.Warnings = append(config.Warnings, legacyCategoryNote(sessionPath))
+	}
 	return config, nil
 }
 

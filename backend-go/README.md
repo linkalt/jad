@@ -35,7 +35,7 @@ jad run --session demo --format jsonl --timeout 10m "..." > events.jsonl
 
 ## Evals: `jad eval`
 
-`jad eval suite.json` runs a suite of tasks (format: `sample/schemes/eval-suite.schema.json`, example: `sample/evals/smoke/suite.json`). Each attempt gets a fresh copy of the case's workspace and its own session (category `eval`), one headless turn, then the case's `checks` (shell commands that must exit 0) and `expect_text` patterns. The JSON report goes to stdout or `--out`; progress and a summary go to stderr; the exit status is 0 only when every attempt passed.
+`jad eval suite.json` runs a suite of tasks (format: `sample/schemes/eval-suite.schema.json`, example: `sample/evals/smoke/suite.json`). Each attempt gets a fresh copy of the case's workspace and its own session, one headless turn, then the case's `checks` (shell commands that must exit 0) and `expect_text` patterns. The JSON report goes to stdout or `--out`; progress and a summary go to stderr; the exit status is 0 only when every attempt passed.
 
 ```sh
 jad eval --out report.json ../sample/evals/smoke/suite.json

@@ -82,7 +82,7 @@ func TestListSessionsLoadsAgainAfterTheSessionFileChanges(t *testing.T) {
 	if err := json.Unmarshal(data, &session); err != nil {
 		t.Fatal(err)
 	}
-	session["category"] = "edited-category"
+	session["name"] = "edited-name"
 	data, err = json.Marshal(session)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestListSessionsLoadsAgainAfterTheSessionFileChanges(t *testing.T) {
 		t.Fatal("an edited session file still answered 304")
 	}
 	body := string(response.Body)
-	if strings.Contains(body, "from-the-cache") || !strings.Contains(body, "edited-category") {
+	if strings.Contains(body, "from-the-cache") || !strings.Contains(body, "edited-name") {
 		t.Fatalf("the list did not reload the edited session: %s", body)
 	}
 }

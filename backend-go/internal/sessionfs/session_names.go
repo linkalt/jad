@@ -16,7 +16,9 @@ import (
 // and at least one that says it is not some other object (sessionMarkerKeys). The file is never
 // loaded or listed under that name; its name is the only fault, and renaming it brings it back.
 
-// sessionFileKeys are the top-level keys of layoutSessionFile.
+// sessionFileKeys are the top-level keys of layoutSessionFile. "category" is the removed session
+// category (T-041): it is tolerated, so a file that sets it is still known as a session, but it is
+// no marker, since it says nothing now.
 var sessionFileKeys = map[string]struct{}{
 	"schema_version": {}, "description": {}, "name": {}, "cwd": {}, "category": {}, "scope": {},
 	"model_defaults": {}, "settings": {}, "remote_keys": {},
@@ -24,7 +26,7 @@ var sessionFileKeys = map[string]struct{}{
 
 // sessionMarkerKeys are the session keys a bare {"name", "description"} object lacks. One of
 // them must be present.
-var sessionMarkerKeys = []string{"schema_version", "cwd", "category", "scope", "model_defaults", "settings"}
+var sessionMarkerKeys = []string{"schema_version", "cwd", "scope", "model_defaults", "settings"}
 
 const sessionNameRule = "a session id may only hold letters, digits, '.', '_' and '-', must start with a letter or digit and may be at most 128 characters"
 

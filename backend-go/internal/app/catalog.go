@@ -106,7 +106,6 @@ type sessionListRecord struct {
 	RootID         string            `json:"root_id"`
 	RootLabel      string            `json:"root_label"`
 	SessionName    string            `json:"session_name"`
-	Category       string            `json:"category,omitempty"`
 	Turns          int64             `json:"turns"`
 	ProfileTurns   map[string]int64  `json:"profile_turns,omitempty"`
 	ActiveProfile  string            `json:"active_profile,omitempty"`
@@ -717,7 +716,6 @@ func makeSessionListRecord(location sessionfs.Location, config sessionfs.Session
 		RootID:          location.Root.ID,
 		RootLabel:       location.Root.Label,
 		SessionName:     config.SessionName,
-		Category:        config.Category,
 		Turns:           turns,
 		ActiveProfile:   config.Profile,
 		DefaultProfile:  config.DefaultProfile,
@@ -814,7 +812,6 @@ func sessionVersion(config sessionfs.SessionConfig) string {
 	parts := []string{
 		config.Profile,
 		config.DefaultProfile,
-		config.Category,
 		config.ModelDefault,
 		faultText(config.ModelFault),
 		strings.Join(config.Profiles, "\x00"),

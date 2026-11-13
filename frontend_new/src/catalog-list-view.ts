@@ -22,7 +22,7 @@ export function filtersBySession(kind: CatalogKind): boolean {
 /**
  * The group a file is listed and filtered under. A session is in the workspace its reference
  * names (`<root>:<name>`; a bare name names none, which is the only case with one root); every
- * other kind is in the folder part of its ID. A session's own `category` text is not read.
+ * other kind is in the folder part of its ID.
  */
 export function groupOf(kind: CatalogKind, file: CatalogFileInfo): string {
   if (kind === 'sessions') return workspaceOfSessionRef(file.id) ?? '';

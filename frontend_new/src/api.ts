@@ -275,8 +275,6 @@ export interface SessionSnapshot {
   session_id?: string;
   root_id?: string;
   root_label?: string;
-  /** Legacy session.json grouping text: still sent, never read or shown by the UI (the workspace groups the list). */
-  category?: string;
   active_profile?: string;
   /** The session's stored default profile (the first by id); the own row follows it. */
   default_profile?: string;
