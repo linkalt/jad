@@ -86,7 +86,7 @@ func TestCatalogFilterOfNothingKeptIsAnEmptyCatalog(t *testing.T) {
 	}
 }
 
-// A profile with no tools.lazy and no load_tool sends exactly these bytes: the same
+// A profile with no lazy list and no load_tool sends exactly these bytes: the same
 // definitions in catalog order, each in the fixed response shape. A change to the order, the
 // shape, or the Listed rule for a non-lazy tool shows up here.
 func TestNonLazyCatalogSendsItsToolsInCatalogOrderAsExactBytes(t *testing.T) {

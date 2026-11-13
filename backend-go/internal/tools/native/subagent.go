@@ -380,7 +380,7 @@ type subagentTool struct {
 	// remotes is the other JAD servers a call may start an agent on; empty offers none.
 	remotes remoteAgentSettings
 	// lazy is the owning profile's lazy set and loadTool its load_tool, both given by SubagentMCP.SetLazy;
-	// nil when the owner has no tools.lazy or no load_tool.
+	// nil when the owner has no lazy list (tools.native.load_tool.lazy) or no load_tool.
 	lazy     *tools.LazySet
 	loadTool *tools.Tool
 	// runMCP starts the stdio MCP servers of an isolated run's own (SubagentMCP.SetRunMCP); nil

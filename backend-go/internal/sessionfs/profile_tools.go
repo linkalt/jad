@@ -25,41 +25,26 @@ type ProfileToolSettings struct {
 	// Deny lists what is taken away, in the same entry form. It wins over Allow, and
 	// it also limits the profile's sub-agents: a denied tool is in no child's catalog.
 	Deny []string
-	// Lazy lists the tools the model sees by name and summary only, through load_tool: it
-	// describes a tool (full definition) and runs it; a call that names a lazy tool is refused.
-	// Same entry forms as Allow and Deny. A lazy entry counts as allowed, and so does
-	// load_tool while Lazy is non-empty, so neither needs an Allow entry; Deny still wins.
-	// Nil when the block has no lazy list.
+	// Lazy is the runtime view of the lazy list: the tools the model sees by name and
+	// summary only, through load_tool. It is never read from the profile's JSON: the list is
+	// owned by the load_tool tool (tools.native.load_tool.lazy, in a toolset), and the loader copies
+	// it here (loadSessionSettingsFrom) so that ProfileShows, the lazy set, the tool_smith bridge
+	// and the app checks keep one rule. A lazy entry counts as allowed, and so does load_tool
+	// while Lazy is non-empty, so neither needs an Allow entry; Deny still wins. It is set for
+	// a profile with no tools block too (Restricted false). Nil when there is no list.
 	Lazy []string
-	// LazySummaryBytes bounds the first line of a lazy tool's description that the
-	// model sees in place of the full description.
-	LazySummaryBytes int64
-	// LazyLoadMax bounds how many lazy tools one load_tool describe call (names) may match, and how
-	// many items one load_tool runs call may list.
-	LazyLoadMax int64
 }
 
 // profileToolsKeys are the keys paths.profiles.<name>.tools accepts.
-var profileToolsKeys = []string{"allow", "deny", "lazy", "lazy_summary_bytes", "lazy_load_max"}
+var profileToolsKeys = []string{"allow", "deny"}
 
-// Bounds of tools.lazy_summary_bytes; the default keeps one summary line short enough
-// that a long list of lazy tools stays small in the model's context.
-const (
-	defaultLazySummaryBytes = 256
-	minLazySummaryBytes     = 1
-	maxLazySummaryBytes     = 4096
-)
-
-// Bounds of tools.lazy_load_max, the most lazy tools one load_tool describe call may match.
-const (
-	defaultLazyLoadMax = 16
-	minLazyLoadMax     = 1
-	maxLazyLoadMax     = 100
-)
+// movedProfileToolsKeys (sorted) were keys of a profile's tools block that now belong to the load_tool
+// tool (tools.native.load_tool, in a toolset). They are refused by name, with where they went.
+var movedProfileToolsKeys = []string{"lazy", "lazy_load_max", "lazy_summary_bytes"}
 
 // LoadToolName is the native tool that lists, describes and runs the lazy tools. It
-// is enabled only by tools.native.load_tool, like every native tool; tools.lazy needs it
-// (checkLazyNeedsLoadTool).
+// is enabled only by tools.native.load_tool, like every native tool, and that key also carries
+// the lazy list it runs.
 const LoadToolName = "load_tool"
 
 // ProfileToolMCPPrefix starts every MCP entry of the allow and deny lists.
@@ -73,6 +58,11 @@ func normalizeProfileTools(raw json.RawMessage, profilePath string) (ProfileTool
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return ProfileToolSettings{}, configError("%s.tools must be an object", profilePath)
 	}
+	for _, key := range movedProfileToolsKeys {
+		if _, moved := fields[key]; moved {
+			return ProfileToolSettings{}, configError("%s.tools.%s is not a key of a tools block any more: it belongs to the load_tool tool, so remove it here and set tools.native.load_tool.%s in a toolset file the profile names ({\"native\": {\"load_tool\": {\"%s\": ...}}}); a sub-agent uses the lazy list of the profile that owns it", profilePath, key, key, key)
+		}
+	}
 	for key := range fields {
 		if !containsString(profileToolsKeys, key) {
 			return ProfileToolSettings{}, unsupportedToolKey(profilePath+".tools", key, profileToolsKeys, "")
@@ -85,45 +75,26 @@ func normalizeProfileTools(raw json.RawMessage, profilePath string) (ProfileTool
 	}
 	settings := ProfileToolSettings{Restricted: true, HasAllow: hasAllow}
 	var err error
-	if settings.LazySummaryBytes, err = configuredInteger(fields, "lazy_summary_bytes", defaultLazySummaryBytes, minLazySummaryBytes, maxLazySummaryBytes, profilePath, "tools"); err != nil {
-		return ProfileToolSettings{}, err
-	}
-	if settings.LazyLoadMax, err = configuredInteger(fields, "lazy_load_max", defaultLazyLoadMax, minLazyLoadMax, maxLazyLoadMax, profilePath, "tools"); err != nil {
-		return ProfileToolSettings{}, err
-	}
-	if lazyRaw, hasLazy := fields["lazy"]; hasLazy {
-		if settings.Lazy, err = normalizeProfileToolList(lazyRaw, "lazy", profilePath); err != nil {
-			return ProfileToolSettings{}, err
-		}
-	}
 	if hasAllow {
-		if settings.Allow, err = normalizeProfileToolList(allowRaw, "allow", profilePath); err != nil {
+		if settings.Allow, err = normalizeToolEntries(allowRaw, profilePath+".tools.allow", false); err != nil {
 			return ProfileToolSettings{}, err
 		}
 	}
 	if hasDeny {
-		if settings.Deny, err = normalizeProfileToolList(denyRaw, "deny", profilePath); err != nil {
+		if settings.Deny, err = normalizeToolEntries(denyRaw, profilePath+".tools.deny", false); err != nil {
 			return ProfileToolSettings{}, err
 		}
 	}
 	return settings, nil
 }
 
-// checkLazyNeedsLoadTool refuses a profile whose tools.lazy is set while tools.native.load_tool is
-// not enabled. Nothing else can show a lazy tool, so without load_tool the lazy tools could never be
-// loaded and the profile would be silently unusable. A profile with no lazy tools needs nothing.
-func checkLazyNeedsLoadTool(settingPath, profile string, settings ProfileToolSettings, nativeLoadTool *NativeLoadToolSettings) error {
-	if len(settings.Lazy) == 0 || nativeLoadTool != nil {
-		return nil
-	}
-	return configError("%s: paths.profiles.%s.tools.lazy lists %d tool(s), but tools.native.%s is not enabled: add \"%s\": {} under tools.native, or remove tools.lazy", settingPath, profile, len(settings.Lazy), LoadToolName, LoadToolName)
-}
-
-// normalizeProfileToolList validates one tools.allow or tools.deny array.
-func normalizeProfileToolList(raw json.RawMessage, name, profilePath string) ([]string, error) {
+// normalizeToolEntries validates one array of tool entries: field names it in messages
+// (<path>.tools.allow, <path>.tools.native.load_tool.lazy), and an error continues "field[i] ...".
+// lazy applies the lazy-list rule (checkLazyEntry) on top of the entry form.
+func normalizeToolEntries(raw json.RawMessage, field string, lazy bool) ([]string, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil || items == nil {
-		return nil, configError("%s.tools.%s must be an array of tool names", profilePath, name)
+		return nil, configError("%s must be an array of tool names", field)
 	}
 	entries := make([]string, 0, len(items))
 	for index, item := range items {
@@ -131,25 +102,25 @@ func normalizeProfileToolList(raw json.RawMessage, name, profilePath string) ([]
 		// whitespace, so the loader must refuse it too (checkProfileToolEntry).
 		var entry string
 		if err := json.Unmarshal(item, &entry); err != nil || strings.TrimSpace(entry) == "" {
-			return nil, configError("%s.tools.%s[%d] must be a non-empty string", profilePath, name, index)
+			return nil, configError("%s[%d] must be a non-empty string", field, index)
 		}
 		if err := checkProfileToolEntry(entry); err != nil {
-			return nil, configError("%s.tools.%s[%d] %v", profilePath, name, index, err)
+			return nil, configError("%s[%d] %v", field, index, err)
 		}
-		if name == "lazy" {
+		if lazy {
 			if err := checkLazyEntry(entry); err != nil {
-				return nil, configError("%s.tools.lazy[%d] %v", profilePath, index, err)
+				return nil, configError("%s[%d] %v", field, index, err)
 			}
 		}
 		if containsString(entries, entry) {
-			return nil, configError("%s.tools.%s[%d] repeats %q", profilePath, name, index, entry)
+			return nil, configError("%s[%d] repeats %q", field, index, entry)
 		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
 }
 
-// checkLazyEntry refuses a tools.lazy entry that names a native tool: only MCP tools and extension
+// checkLazyEntry refuses a lazy entry that names a native tool: only MCP tools and extension
 // tools can be lazy, since a native tool is always in the model's tools array. load_tool is a native
 // tool and also the one that loads the others. The error text continues "lazy[i] ...".
 func checkLazyEntry(entry string) error {
@@ -157,7 +128,7 @@ func checkLazyEntry(entry string) error {
 	case entry == LoadToolName:
 		return fmt.Errorf("%q cannot be lazy: it is the tool that loads the others", entry)
 	case containsString(nativeToolNames, entry):
-		return fmt.Errorf("%q is a native tool and cannot be lazy: tools.lazy takes MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (%s)", entry, strings.Join(extensionToolNames, ", "))
+		return fmt.Errorf("%q is a native tool and cannot be lazy: tools.native.load_tool.lazy takes MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (%s)", entry, strings.Join(extensionToolNames, ", "))
 	}
 	return nil
 }

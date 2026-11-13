@@ -12,11 +12,26 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// profileSession is the extra session setting of a profile with a tools block.
-// profileSession puts a tools block into the session's only profile; the fixture builder
-// writes it into the profile file.
+// profileSession is the extra session setting of a profile with a tools block. The profile keeps
+// allow and deny; lazy, lazy_load_max and lazy_summary_bytes belong to load_tool, so they go to the
+// session's own toolset (tools.native.load_tool, the shape the loader reads); the fixture builder
+// writes both.
 func profileSession(tools map[string]any) map[string]any {
-	return map[string]any{"__profile_extra": map[string]any{"tools": tools}}
+	profile := map[string]any{}
+	loadTool := map[string]any{}
+	for key, value := range tools {
+		switch key {
+		case "lazy", "lazy_load_max", "lazy_summary_bytes":
+			loadTool[key] = value
+		default:
+			profile[key] = value
+		}
+	}
+	session := map[string]any{"__profile_extra": map[string]any{"tools": profile}}
+	if len(loadTool) > 0 {
+		session["__load_tool_config"] = loadTool
+	}
+	return session
 }
 
 // A profile that shows its model only the subagent tool: its child is another profile, so the profile's

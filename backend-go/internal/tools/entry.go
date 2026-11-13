@@ -31,7 +31,7 @@ func CanBeLazy(definition Definition) bool {
 	return definition.Source == "mcp" || definition.Source == "extension"
 }
 
-// LazyEntryMatches reports whether one entry of a profile's tools.lazy names the definition: it
+// LazyEntryMatches reports whether one entry of the lazy list (tools.native.load_tool.lazy, as ProfileToolSettings.Lazy) names the definition: it
 // is EntryMatches, and only for a tool that can be lazy (CanBeLazy). A native tool is never named
 // by a lazy entry, whatever the entry says.
 func LazyEntryMatches(entry string, definition Definition) bool {
@@ -49,7 +49,7 @@ func AnyEntryMatches(entries []string, definition Definition) bool {
 }
 
 // ProfileShows reports whether the profile's model sees the tool: no deny entry may
-// cover it, and an allow list (when the block has one) must cover it. A tools.lazy
+// cover it, and an allow list (when the block has one) must cover it. A lazy-list
 // entry counts as allowed (see lazyAllows), so a lazy tool need not be repeated in
 // allow; while the profile has lazy tools, load_tool counts as allowed too, since it is
 // their only way to load. Deny still wins over both. Every surface that hides or
@@ -64,7 +64,7 @@ func ProfileShows(settings sessionfs.ProfileToolSettings, definition Definition)
 	return len(settings.Lazy) > 0 && definition.Source == "native" && definition.Name == sessionfs.LoadToolName
 }
 
-// lazyAllows reports whether a tools.lazy entry allows the definition. An entry that
+// lazyAllows reports whether a lazy-list entry allows the definition. An entry that
 // names one tool does. A whole-server entry ("mcp:<server>:*") does only while allow
 // names nothing of that server: when allow lists some of the server's tools, allow
 // decides which of them are shown and the wildcard only makes those lazy, so a lazy

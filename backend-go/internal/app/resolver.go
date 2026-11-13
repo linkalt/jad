@@ -745,7 +745,7 @@ func (r *Resolver) acquireCatalogParts(ctx context.Context, config sessionfs.Ses
 	// Its children's catalogs are built by assembleRegisteredCatalog, once, from every part.
 	subagentMCP := native.NewAssembledSubagentMCP(config.Hooks, config.Model.APIKeyEnv)
 	// One lazy set per prepare, passed to both the native pass (extension tools) and the MCP pass
-	// below. Nil when the profile has no tools.lazy.
+	// below. Nil when the profile's load_tool has no lazy list.
 	lazy := openLazySet(config)
 	sections, err := native.BuildCatalogSections(config, r.mutationLock, taskStore, recordsStore, r.subagentLauncherFor(config), subagentMCP, r.sharedSubagentManager(config), r, profileMessenger{resolver: r}, r, lazy)
 	if err != nil {

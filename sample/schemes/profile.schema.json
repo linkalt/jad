@@ -69,7 +69,7 @@
       "properties": {
         "allow": {
           "type": "array",
-          "description": "Tools the model sees, as the names of a tool or an mcp:<server>:<tool> entry. tools.lazy entries, and load_tool while tools.lazy is non-empty, count as allowed and need not be repeated here. A tool_smith script can call only the tools this shows.",
+          "description": "Tools the model sees, as the names of a tool or an mcp:<server>:<tool> entry. The entries of the lazy list (tools.native.load_tool.lazy, set in a toolset), and load_tool while that list is non-empty, count as allowed and need not be repeated here. A tool_smith script can call only the tools this shows.",
           "items": {
             "type": "string",
             "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
@@ -84,29 +84,6 @@
             "pattern": "^(read|write|edit|apply_patch|notebook|lsp|grep|glob|read_image|bash|exec|process|async|task|code_context|records|fetch|web_search|request_draft|skill|subagent|decide_systemone|profile_message|tool_smith|transcript|transcripts|profile|load_tool|mcp:[A-Za-z0-9_-]+:\\S+)$"
           },
           "uniqueItems": true
-        },
-        "lazy": {
-          "type": "array",
-          "description": "Tools the model sees by name and one-line summary only, through load_tool: it lists them, describes them (full description and inputSchema), runs one with run and arguments, and runs several in one call with runs (a list of {run, arguments}). A lazy tool is never in the tools array, and a call that names it directly is refused with lazy_tool_not_loaded and a pointer to load_tool run. Only MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (decide_systemone, web_search) can be lazy: a native tool (skill, subagent, task, exec, read_image, records, load_tool and the others) is always in the tools array and is refused as a lazy entry at load, with an error naming the entry; load_tool cannot be lazy either. A lazy entry counts as allowed, so it need not be repeated in allow (a whole-server entry \"mcp:<server>:*\" only while allow names nothing of that server: otherwise allow decides which of its tools are shown, and the wildcard makes them lazy), and while the list is non-empty load_tool counts as allowed too; deny still wins, and a lazy entry that deny covers, or a deny that names load_tool, is a configuration error. Needs tools.native.load_tool, or the profile is refused at load. A sub-agent, a nested subagent or profile_message child gets its owner's lazy tools gated with the same set (its load_tool dispatches through its own catalog), and load_tool only when the owner enables it and the agent lists it.",
-          "items": {
-            "type": "string",
-            "pattern": "^(web_search|decide_systemone|mcp:[A-Za-z0-9_-]+:\\S+)$"
-          },
-          "uniqueItems": true
-        },
-        "lazy_summary_bytes": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4096,
-          "default": 256,
-          "description": "Largest size of the one-line summary the model sees for each lazy tool, cut at a character boundary. The full description and inputSchema are returned by load_tool names."
-        },
-        "lazy_load_max": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100,
-          "default": 16,
-          "description": "Most lazy tools one load_tool describe call (names) may match, and most items one load_tool runs call may list; a longer batch is refused and nothing is described or run."
         }
       },
       "anyOf": [{"required": ["allow"]}, {"required": ["deny"]}],

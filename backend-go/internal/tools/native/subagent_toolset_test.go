@@ -261,7 +261,7 @@ func sameIDStub(t *testing.T, description, property string, calls *int) tools.To
 }
 
 // A toolset child whose MCP server has the ID of one of the owner's lazy servers keeps the toolset's
-// copy. The owner's tools.lazy gates that copy, and load_tool shows the owner's description and schema,
+// copy. The owner's lazy list (the `load_tool` config) gates that copy, and load_tool shows the owner's description and schema,
 // but a run executes the toolset's connection, and a direct call (refused) and a run each fire the
 // toolset's hooks once and the owner's never.
 func TestToolsetChildKeepsItsOwnCopyOfALazyOwnerServer(t *testing.T) {

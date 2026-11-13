@@ -314,8 +314,23 @@
             },
             "load_tool": {
               "type": "object",
-              "description": "Tuning keys merged into the base's native.load_tool; every other key is refused.",
-              "properties": {},
+              "description": "Tuning keys merged into the base's native.load_tool; every other key is refused. Refused by name: lazy: it changes what the tool can reach: a lazy entry names a tool the model may use through load_tool and counts as allowed; the list belongs to the shared toolset that carries load_tool.",
+              "properties": {
+                "lazy_load_max": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "lazy_summary_bytes": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
               "additionalProperties": false
             },
             "lsp": {

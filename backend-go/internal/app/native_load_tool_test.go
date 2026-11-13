@@ -43,20 +43,21 @@ func sessionToolNames(t *testing.T, f subagentFixture) []string {
 	return eager
 }
 
-// load_tool is not added by the app: a profile without tools.native.load_tool has no load_tool. Its
-// tools.lazy is refused at load for the missing key, so the profile never runs without load_tool.
+// load_tool is not added by the app: it exists only where tools.native.load_tool is configured. A lazy
+// list lives in that config, so a toolset that configures load_tool without its definition file is refused
+// at load, and the session never runs with a lazy list and no load_tool.
 func TestLoadToolIsAbsentWithoutItsNativeKey(t *testing.T) {
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(map[string]any{"allow": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}})}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
 	status, body := f.sessionTools(t)
 	if status == http.StatusOK {
-		t.Fatalf("a profile with tools.lazy and no load_tool key was not refused: %s", body)
+		t.Fatalf("a session with a load_tool lazy list and no load_tool definition was not refused: %s", body)
 	}
-	if !strings.Contains(body, "tools.native.load_tool is not enabled") {
+	if !strings.Contains(body, "tools.native.load_tool is configured but native.load_tool is missing") {
 		t.Fatalf("refusal = %s, want the missing load_tool key named", body)
 	}
 }
 
-// A tools.lazy entry is allowed without an allow entry, and so is load_tool while the profile has lazy
+// A tools.native.load_tool.lazy entry is allowed without an allow entry, and so is load_tool while the profile has lazy
 // tools: an allow that names neither still lists load_tool, and the lazy web_search is never listed, before or
 // after load_tool runs it.
 func TestLazyToolsNeedNoAllowEntry(t *testing.T) {
@@ -80,7 +81,7 @@ func TestLazyToolsNeedNoAllowEntry(t *testing.T) {
 	}
 }
 
-// deny still wins over tools.lazy: a lazy profile whose deny names load_tool is refused, since load_tool
+// deny still wins over tools.native.load_tool.lazy: a lazy profile whose deny names load_tool is refused, since load_tool
 // is the only way to load its lazy tools.
 func TestLoadToolHiddenByDenyRefusesALazyProfile(t *testing.T) {
 	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"deny": []string{"load_tool"}, "lazy": []string{"web_search"}}, nil, nil)
@@ -93,7 +94,7 @@ func TestLoadToolHiddenByDenyRefusesALazyProfile(t *testing.T) {
 	}
 }
 
-// With tools.native.load_tool enabled and tools.lazy set, the session lists load_tool.
+// With tools.native.load_tool enabled and tools.native.load_tool.lazy set, the session lists load_tool.
 func TestLoadToolIsListedWhenEnabled(t *testing.T) {
 	f, _ := lazyFixture(t, []string{"web_search"}, nil)
 	if !slices.Contains(sessionToolNames(t, f), "load_tool") {
@@ -132,7 +133,8 @@ func TestLazyRouteListsALazyMCPToolAsLazyOnly(t *testing.T) {
 	}
 }
 
-// tools.lazy without tools.native.load_tool refuses the session at load, and the error names both.
+// A tools.native.load_tool lazy list without the load_tool definition refuses the session at load, and the
+// error names the key and the missing definition.
 func TestLazyWithoutLoadToolRefusesTheSession(t *testing.T) {
 	profileTools := map[string]any{"allow": []string{"skill", "mcp:fixture:lookup"}, "lazy": []string{"mcp:fixture:lookup"}}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": profileSession(profileTools)}, false, nil, &mcpFixture{calls: &atomic.Int32{}})
@@ -140,7 +142,7 @@ func TestLazyWithoutLoadToolRefusesTheSession(t *testing.T) {
 	if status == 200 {
 		t.Fatalf("tools status = 200 with lazy and no load_tool; body %s", body)
 	}
-	for _, want := range []string{"tools.lazy", "tools.native.load_tool"} {
+	for _, want := range []string{"tools.native.load_tool", "tool_definition_paths"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("refusal %s does not name %s", body, want)
 		}
@@ -202,7 +204,7 @@ func TestNativeToolStaysEagerBesideLazyExtensionAndMCPTools(t *testing.T) {
 	}
 }
 
-// A profile whose tools.lazy names a native tool does not load: the error names the entry and the kinds that
+// A profile whose tools.native.load_tool.lazy names a native tool does not load: the error names the entry and the kinds that
 // can be lazy.
 func TestLazyEntryNamingANativeToolRefusesTheSession(t *testing.T) {
 	f, _ := lazyFixtureWithExtraTools(t, map[string]any{"allow": []string{"skill", "load_tool"}, "lazy": []string{"skill"}}, nil, nil)
@@ -210,7 +212,7 @@ func TestLazyEntryNamingANativeToolRefusesTheSession(t *testing.T) {
 	if status == http.StatusOK {
 		t.Fatalf("a profile with a native lazy entry loaded: %s", body)
 	}
-	for _, want := range []string{`tools.lazy[0]`, `\"skill\" is a native tool and cannot be lazy`, "decide_systemone, web_search"} {
+	for _, want := range []string{`tools.native.load_tool.lazy[0]`, `\"skill\" is a native tool and cannot be lazy`, "decide_systemone, web_search"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("refusal %s does not contain %q", body, want)
 		}

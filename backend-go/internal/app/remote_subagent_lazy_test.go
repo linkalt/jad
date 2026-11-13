@@ -12,7 +12,7 @@ import (
 
 // addCallerProfile adds a second profile, dev/caller, to a session that is already built and
 // running. It writes the profile file and its toolset, and lists the profile in the session's
-// scope, which the server reads on each request. The caller has no tools.lazy and no subagent.
+// scope, which the server reads on each request. The caller has no tools.native.load_tool.lazy and no subagent.
 func addCallerProfile(t *testing.T, f subagentFixture) string {
 	t.Helper()
 	layoutRoot := filepath.Dir(filepath.Dir(f.modelsDir))
@@ -46,7 +46,7 @@ func writeJSON(t *testing.T, path string, value any) {
 	writeFile(t, path, data)
 }
 
-// A remote subagent call on a target profile with tools.lazy: the child's tools array never lists the lazy
+// A remote subagent call on a target profile with tools.native.load_tool.lazy: the child's tools array never lists the lazy
 // MCP tool, its load_tool runs it, and the caller profile's state folder is never created.
 func TestRemoteSubagentRunsTheTargetsLazyToolThroughItsLoadTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")

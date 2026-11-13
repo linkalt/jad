@@ -47,6 +47,7 @@ const (
 	refusedToolEngine   = "it tunes how the engine runs the tool, not what the profile's runs see"
 	refusedToolEndpoint = "the endpoint, the credential, the provider and the model come from the base toolset"
 	refusedToolAccept   = "it decides when a draft is accepted without the user"
+	refusedToolLazy     = "it changes what the tool can reach: a lazy entry names a tool the model may use through load_tool and counts as allowed; the list belongs to the shared toolset that carries load_tool"
 )
 
 // ownScalar is a tuning value: a string, a number or a boolean. The tool's own rules (its
@@ -107,7 +108,7 @@ var ownToolsetTools = map[string]map[string]ownKeyRule{
 			refuseKeys(refusedToolCommand, "servers"), refuseKeys(refusedToolPath, "paths"), refuseKeys(refusedToolEngine, "idle_shutdown_ms")),
 		"read_image": ownToolRule([]string{"max_image_bytes"}, refuseKeys(refusedToolPath, "paths")),
 		"skill":      ownToolRule([]string{"max_bytes"}),
-		"load_tool":  ownToolRule(nil),
+		"load_tool":  ownToolRule([]string{"lazy_summary_bytes", "lazy_load_max"}, refuseKeys(refusedToolLazy, "lazy")),
 		"profile": ownToolRule([]string{"max_entries", "scan_max_entries"},
 			refuseKeys(refusedToolReach, "allow_other_sessions", "allow_other_profiles", "allow_children", "allow_remote", "remotes")),
 		"profile_message": ownToolRule([]string{"timeout_ms", "busy_wait_ms", "result_max_bytes", "default_block_ms"},

@@ -38,11 +38,11 @@ func assemblyFixture(t *testing.T) (*layoutFixture, sessionfs.SessionConfig, str
 	libraries["tool_definition_paths"] = append(libraries["tool_definition_paths"].([]any), filepath.Join(filepath.Dir(libraries["tool_definition_paths"].([]any)[0].(string)), "load_tool.json"))
 	body, _ := json.Marshal(setting)
 	writeFile(t, settingPath, body)
-	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"load_tool":{},"subagent":{"background_writers":true,"max_background_writers":2,`+
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"load_tool":{"lazy":["mcp:stdio:ask"]},"subagent":{"background_writers":true,"max_background_writers":2,`+
 		`"agents":{"finder":{"description":"Uses the server."},"scout":{"description":"Searches.","toolset":"extra/search"},"lister":{"description":"Lists.","tools":["mcp:stdio:lookup"]}}}},`+
 		`"mcp":{"m/stdio":{}},"hooks":{"enabled":true,"timeout_ms":5000,"post_tool":[{"name":"audit","argv":["true"],"match":"mcp:stdio:ask"}]}}`))
 	writeFile(t, filepath.Join(f.global, "tools", "extra", "search.json"), []byte(`{"native":{"load_tool":{}},"mcp":{"m/stdio":{}},"hooks":{"enabled":true,"timeout_ms":5000,"pre_tool":[{"name":"gate","argv":["true"],"match":"*"}]}}`))
-	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large","openai/small"],"model_default":"openai/large","toolset":"review/stdio","tools":{"allow":["subagent","load_tool","mcp:stdio:ask","mcp:stdio:lookup"],"lazy":["mcp:stdio:ask"]}}`)
+	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large","openai/small"],"model_default":"openai/large","toolset":"review/stdio","tools":{"allow":["subagent","load_tool","mcp:stdio:ask","mcp:stdio:lookup"]}}`)
 	// The root setting is read when the fixture starts; reload it for the load_tool definition.
 	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.cwd, GlobalDir: f.global, Environment: map[string]string{"FIXTURE_KEY": "k"}})
 	if err != nil {

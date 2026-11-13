@@ -251,7 +251,7 @@ func buildCatalogSections(config sessionfs.SessionConfig, locks *PathLocks, task
 		if err != nil {
 			return CatalogSections{}, err
 		}
-		tool, err := NewLoadToolTool(lazy, int(config.ProfileTools.LazyLoadMax))
+		tool, err := NewLoadToolTool(lazy, int(config.NativeLoadTool.LoadMax))
 		if err != nil {
 			return CatalogSections{}, &sessionfs.ConfigError{Message: fmt.Sprintf("%s: %v", config.SettingPath, err)}
 		}

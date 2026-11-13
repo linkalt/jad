@@ -12,10 +12,22 @@ import (
 // applyProfileTools narrows the registered tools to what the selected profile's model
 // may see. It runs on the merged catalog, after the sub-agent tool built the catalogs
 // of its agents, so a tool the profile hides stays available to a child that lists it.
-// A profile without a tools block gets the catalog back unchanged.
+// A profile without a tools block gets the catalog back unchanged (its load_tool lazy list, if any,
+// is still checked).
 func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog) (*tools.Catalog, []tools.Definition, error) {
 	settings := config.ProfileTools
 	if !settings.Restricted {
+		// No tools block, but load_tool's lazy list (a toolset's) still has to name tools that
+		// exist: the same checks, and the catalog comes back unchanged.
+		if len(settings.Lazy) > 0 {
+			definitions := registered.Definitions()
+			if err := checkLazyEntriesVisible(config, settings, definitions); err != nil {
+				return nil, nil, err
+			}
+			if err := checkLazyLoadToolShown(config, settings, definitions); err != nil {
+				return nil, nil, err
+			}
+		}
 		return registered, nil, nil
 	}
 	definitions := registered.Definitions()
@@ -40,20 +52,24 @@ func applyProfileTools(config sessionfs.SessionConfig, registered *tools.Catalog
 	return exposed, hidden, nil
 }
 
-// openLazySet builds the profile's lazy set for one prepare, from its tools.lazy entries and
-// summary bound. It is nil when the profile has no lazy tools. The set lives in memory only (no state
-// file, so no catalog layout is needed), and each prepare builds its own, so a profile_message target
-// with its own tools.lazy never shares the caller's.
+// openLazySet builds the profile's lazy set for one prepare, from the lazy list and summary bound
+// of its load_tool config (tools.native.load_tool, in a toolset). It is nil when the profile has no lazy
+// tools. The set lives in memory only (no state file, so no catalog layout is needed), and each
+// prepare builds its own, so a profile_message target with its own lazy list never shares the
+// caller's.
 func openLazySet(config sessionfs.SessionConfig) *tools.LazySet {
-	if len(config.ProfileTools.Lazy) == 0 {
+	// The loader fills ProfileTools.Lazy from tools.native.load_tool only, so a list with no
+	// load_tool config cannot come from a loaded session.
+	if len(config.ProfileTools.Lazy) == 0 || config.NativeLoadTool == nil {
 		return nil
 	}
 	shown := func(definition tools.Definition) bool { return tools.ProfileShows(config.ProfileTools, definition) }
-	return tools.NewLazySet(config.ProfileTools.Lazy, int(config.ProfileTools.LazySummaryBytes), shown)
+	return tools.NewLazySet(config.ProfileTools.Lazy, int(config.NativeLoadTool.SummaryBytes), shown)
 }
 
-// checkLazyLoadToolShown refuses a profile whose tools.lazy is set while its deny hides load_tool
-// (allow cannot: tools.lazy shows load_tool, see tools.ProfileShows). The lazy tools would then have no
+// checkLazyLoadToolShown refuses a profile whose load_tool config lists lazy tools
+// (tools.native.load_tool.lazy) while its deny hides load_tool (allow cannot: a lazy list shows
+// load_tool, see tools.ProfileShows). The lazy tools would then have no
 // way to load, so the profile is refused rather than run with them unreachable. A profile with no lazy
 // tools is not checked.
 func checkLazyLoadToolShown(config sessionfs.SessionConfig, settings sessionfs.ProfileToolSettings, registered []tools.Definition) error {
@@ -64,13 +80,13 @@ func checkLazyLoadToolShown(config sessionfs.SessionConfig, settings sessionfs.P
 		if definition.Name != sessionfs.LoadToolName || definition.Source != "native" || tools.ProfileShows(settings, definition) {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools hides %q, but tools.lazy lists %d tool(s) that only %q can load: remove %q from tools.deny, or remove tools.lazy",
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools hides %q, but tools.native.load_tool.lazy lists %d tool(s) that only %q can load: remove %q from tools.deny, or remove tools.native.load_tool.lazy from its toolset",
 			config.SettingPath, config.Profile, sessionfs.LoadToolName, len(settings.Lazy), sessionfs.LoadToolName, sessionfs.LoadToolName)}
 	}
 	return nil
 }
 
-// checkLazyEntriesVisible refuses a tools.lazy entry that names no MCP or extension tool the profile
+// checkLazyEntriesVisible refuses a tools.native.load_tool.lazy entry that names no MCP or extension tool the profile
 // shows: a lazy tool that is denied could never be run (a lazy entry needs no allow entry:
 // tools.ProfileShows counts it as allowed), and a native tool is never lazy, so it would stay in
 // the array. Either way the entry is a configuration error and not a tool that is quietly absent
@@ -87,7 +103,7 @@ func checkLazyEntriesVisible(config sessionfs.SessionConfig, settings sessionfs.
 		if visible {
 			continue
 		}
-		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: paths.profiles.%s.tools.lazy[%d] lists %q, which names no MCP or extension tool the profile shows (a denied tool cannot be lazy, and a native tool never is)",
+		return &sessionfs.ConfigError{Message: fmt.Sprintf("%s: profile %s: tools.native.load_tool.lazy[%d] lists %q, which names no MCP or extension tool the profile shows (a denied tool cannot be lazy, and a native tool never is)",
 			config.SettingPath, config.Profile, index, entry)}
 	}
 	return nil

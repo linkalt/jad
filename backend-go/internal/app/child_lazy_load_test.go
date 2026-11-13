@@ -32,7 +32,7 @@ func TestChildOfAParentWithLazyToolsRunsThemThroughItsLoadToolInTheOwningProfile
 	requireNoLazyFile(t, f)
 }
 
-// An owner that enables load_tool but has no tools.lazy still gives its children one, as its own model
+// An owner that enables load_tool but has no tools.native.load_tool.lazy still gives its children one, as its own model
 // has: it is the owner's, and lists and runs nothing because the set is empty.
 func TestChildOfAParentWithoutLazyToolsGetsALoadToolOverAnEmptySet(t *testing.T) {
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "tools": []string{"skill", "load_tool"}, "__load_tool": true}, false, nil, nil)

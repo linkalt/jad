@@ -120,6 +120,24 @@ func TestNativeToolSchemasAgreeWithTheLoader(t *testing.T) {
 		{"tool_smith duplicate tool", "tool_smith", `{"tools":["lsp","lsp"]}`, false},
 		{"tool_smith empty interpreter", "tool_smith", `{"interpreter":[]}`, false},
 		{"tool_smith empty functions_dir", "tool_smith", `{"functions_dir":""}`, false},
+		{"load_tool no keys", "load_tool", `{}`, true},
+		{"load_tool every key", "load_tool", `{"lazy":["web_search","decide_systemone","mcp:docs:search","mcp:docs:*"],"lazy_summary_bytes":64,"lazy_load_max":3}`, true},
+		{"load_tool empty lazy", "load_tool", `{"lazy":[]}`, true},
+		{"load_tool unknown", "load_tool", `{"nope":1}`, false},
+		{"load_tool lazy native tool", "load_tool", `{"lazy":["exec"]}`, false},
+		{"load_tool lazy itself", "load_tool", `{"lazy":["load_tool"]}`, false},
+		{"load_tool lazy duplicate", "load_tool", `{"lazy":["web_search","web_search"]}`, false},
+		{"load_tool lazy bad entry", "load_tool", `{"lazy":["mcp:docs"]}`, false},
+		{"load_tool lazy whitespace", "load_tool", `{"lazy":["mcp:docs:a b"]}`, false},
+		{"load_tool lazy not a list", "load_tool", `{"lazy":"web_search"}`, false},
+		{"load_tool summary at the minimum", "load_tool", `{"lazy_summary_bytes":1}`, true},
+		{"load_tool summary at the maximum", "load_tool", `{"lazy_summary_bytes":4096}`, true},
+		{"load_tool summary zero", "load_tool", `{"lazy_summary_bytes":0}`, false},
+		{"load_tool summary over the maximum", "load_tool", `{"lazy_summary_bytes":4097}`, false},
+		{"load_tool summary text", "load_tool", `{"lazy_summary_bytes":"256"}`, false},
+		{"load_tool load max at the maximum", "load_tool", `{"lazy_load_max":100}`, true},
+		{"load_tool load max zero", "load_tool", `{"lazy_load_max":0}`, false},
+		{"load_tool load max over the maximum", "load_tool", `{"lazy_load_max":101}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,7 +193,7 @@ func TestExecAndReadImageSchemaKeysMatchTheLoader(t *testing.T) {
 	if strings.Join(decideSystemoneKeys, ",") != strings.Join(wantDecideSystemone, ",") {
 		t.Errorf("decide_systemone schema keys\n  %v\nloader accepts\n  %v", decideSystemoneKeys, wantDecideSystemone)
 	}
-	for tool, want := range map[string][]string{"exec": nativeExecKeys, "read_image": nativeReadImageKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
+	for tool, want := range map[string][]string{"exec": nativeExecKeys, "load_tool": nativeLoadToolKeys, "read_image": nativeReadImageKeys, "profile_message": nativeProfileMessageKeys, "tool_smith": nativeToolSmithKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys} {
 		got := flattenSchemaKeys(native[tool].(map[string]any), defs)
 		sort.Strings(got)
 		want = append([]string(nil), want...)

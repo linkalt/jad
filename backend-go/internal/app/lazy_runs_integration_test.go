@@ -47,7 +47,7 @@ func TestLazyRunsRunSeveralToolsInOneCall(t *testing.T) {
 	requireNoLazyFile(t, f)
 }
 
-// A batch over tools.lazy_load_max runs nothing, and one that mixes runs with another key is refused
+// A batch over tools.native.load_tool.lazy_load_max runs nothing, and one that mixes runs with another key is refused
 // before any tool starts; the next request replays the refusal.
 func TestLazyRunsRefusedBatchesRunNothing(t *testing.T) {
 	for name, tc := range map[string]struct {

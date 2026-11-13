@@ -21,7 +21,7 @@ type catalogParts struct {
 	// (nil-safe when the profile has no subagent tool): its agents are resolved, their catalogs are
 	// not built until assembly gives it the lazy set, the run MCP loader and the MCP copies.
 	subagentMCP *native.SubagentMCP
-	// lazy is the profile's lazy set for this build, nil without tools.lazy; the native pass shares it.
+	// lazy is the profile's lazy set for this build, nil without a lazy list (tools.native.load_tool.lazy); the native pass shares it.
 	lazy *tools.LazySet
 	// mcpTools are the profile's MCP tools as their manager listed them: neither gated nor hooked.
 	mcpTools []tools.Tool

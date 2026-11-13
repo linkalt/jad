@@ -6,7 +6,7 @@ import (
 	"jad/backend-go/internal/sessionfs"
 )
 
-// A tools.lazy entry counts as allowed, and load_tool too while the profile has lazy tools; deny wins
+// A lazy-list entry counts as allowed, and load_tool too while the profile has lazy tools; deny wins
 // over both, and a profile without lazy tools still needs load_tool in its allow list.
 func TestProfileShowsCountsLazyEntriesAsAllowed(t *testing.T) {
 	read := Definition{ID: "native.read", Source: "native", Name: "read"}

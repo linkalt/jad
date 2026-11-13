@@ -320,8 +320,14 @@ func (c *layoutCompose) loadAgentToolsets(config *SessionConfig, selected catalo
 			var derived SessionConfig
 			if derived, err = loadSessionSettingsFrom(c.location, setting, c.sessionPath, c.location.Root.pathBase(), c.keys[selected.ID()], ""); err == nil && derived.NativeProfileMessage != nil {
 				err = configError("%s: tools.native.profile_message is not allowed in a toolset used by an agent (toolset %s); a sub-agent cannot message a profile", c.sessionPath, strings.Join(agent.Toolset, ", "))
+			} else if err == nil && derived.NativeLoadTool != nil && len(derived.NativeLoadTool.Lazy) > 0 {
+				err = configError("%s: tools.native.load_tool.lazy lists %d tool(s) in a toolset used by an agent (toolset %s), but a sub-agent uses the lazy list of the profile that owns it: remove lazy from this toolset's load_tool, or name another toolset for the agent", c.sessionPath, len(derived.NativeLoadTool.Lazy), strings.Join(agent.Toolset, ", "))
 			} else if err == nil {
 				derived.NativeSubagent = nil
+				// The owner's view (allow, deny and its lazy list), not the agent toolset's: the
+				// children share the owner's lazy set, and every visibility decision made over
+				// this toolset's tools (the tool_smith bridge) is the owner's.
+				derived.ProfileTools = config.ProfileTools
 				if derived.Sandbox != nil && config.Sandbox != nil {
 					derived.Sandbox.ReadOnlyPaths = config.Sandbox.ReadOnlyPaths
 					c.addFixedHidePaths(derived.Sandbox)

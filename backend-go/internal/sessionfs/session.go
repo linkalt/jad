@@ -557,8 +557,10 @@ func loadSessionSettingsFrom(location Location, setting map[string]json.RawMessa
 	if err != nil {
 		return SessionConfig{}, err
 	}
-	if err := checkLazyNeedsLoadTool(settingPath, profile, profileTools, nativeLoadTool); err != nil {
-		return SessionConfig{}, err
+	if nativeLoadTool != nil {
+		// The lazy list is owned by load_tool; ProfileTools.Lazy is the view every visibility
+		// decision reads (tools.ProfileShows). Filled for a profile with no tools block too.
+		profileTools.Lazy = slices.Clone(nativeLoadTool.Lazy)
 	}
 	applySandbox(sandbox, sandboxObject, nativeExec, nativeToolSmith, &hooks, nativeLSP)
 	nativeAsync, err := normalizeNativeAsyncSettings(setting, settingPath)

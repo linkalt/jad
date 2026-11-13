@@ -1651,7 +1651,32 @@
             },
             "load_tool": {
               "type": "object",
-              "description": "Go backend only. The runner for the profile's tools.lazy tools (MCP and extension tools only; a native tool is always listed and never lazy): with no arguments it lists them (name and one-line summary), with names it describes them (name, id, description, inputSchema), with run and arguments it runs one by its exact name or mcp:<server>:<tool>, with runs (a list of {run, arguments}, at most tools.lazy_load_max) it runs several in one call: together when none can change state, otherwise one after another, and the results come back in the order sent. A lazy tool is never in the model's tools array, so using load_tool never changes the array a provider caches. Read-only, and it takes no keys. A profile with tools.lazy needs this key: without it the profile is refused at load. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent has it too, over the owning profile's lazy set, unless its own tools key leaves it out; it describes and runs only the tools its own catalog holds.",
+              "description": "Go backend only. The runner for the lazy tools listed under lazy (MCP and extension tools only; a native tool is always listed and never lazy): with no arguments it lists them (name and one-line summary), with names it describes them (name, id, description, inputSchema), with run and arguments it runs one by its exact name or mcp:<server>:<tool>, with runs (a list of {run, arguments}, at most lazy_load_max) it runs several in one call: together when none can change state, otherwise one after another, and the results come back in the order sent. A lazy tool is never in the model's tools array, so using load_tool never changes the array a provider caches. Read-only. Owns the lazy list: it is not a key of a profile's tools block (that is refused by name). {} enables the tool with no lazy tools and the default bounds. Off unless this key is present. Needs load_tool in tool_definition_paths. A sub-agent has it too, over the owning profile's lazy set, unless its own tools key leaves it out; it describes and runs only the tools its own catalog holds.",
+              "properties": {
+                "lazy": {
+                  "type": "array",
+                  "description": "The tools the model sees by name and one-line summary only, through load_tool: it lists them, describes them (full description and inputSchema), runs one with run and arguments, and runs several in one call with runs (a list of {run, arguments}). A lazy tool is never in the tools array, and a call that names it directly is refused with lazy_tool_not_loaded and a pointer to load_tool run. Only MCP tools (mcp:<server>:<tool> or mcp:<server>:*) and extension tools (decide_systemone, web_search) can be lazy: a native tool (skill, subagent, task, exec, read_image, records, load_tool and the others) is always in the tools array and is refused as a lazy entry at load, with an error naming the entry; load_tool cannot be lazy either. A lazy entry counts as allowed, so it need not be repeated in the profile's tools.allow (a whole-server entry \"mcp:<server>:*\" only while allow names nothing of that server: otherwise allow decides which of its tools are shown, and the wildcard makes them lazy), and while the list is non-empty load_tool counts as allowed too; the profile's tools.deny still wins, and a lazy entry that deny covers, or a deny that names load_tool, is a configuration error for every profile that uses this toolset. A sub-agent, a nested subagent or profile_message child gets its owner's lazy tools gated with the same set. The list is the owner's: a toolset used by an agent (tools.native.subagent agents[].toolset) must not give load_tool a lazy list. A profile's own toolset (profile:) cannot set it.",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(web_search|decide_systemone|mcp:[A-Za-z0-9_-]+:\\S+)$"
+                  },
+                  "uniqueItems": true
+                },
+                "lazy_summary_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4096,
+                  "default": 256,
+                  "description": "Largest size of the one-line summary the model sees for each lazy tool, cut at a character boundary. The full description and inputSchema are returned by load_tool names. A profile's own toolset (profile:) may tune it."
+                },
+                "lazy_load_max": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "default": 16,
+                  "description": "Most lazy tools one load_tool describe call (names) may match, and most items one load_tool runs call may list; a longer batch is refused and nothing is described or run. A profile's own toolset (profile:) may tune it."
+                }
+              },
               "additionalProperties": false
             },
             "task": {

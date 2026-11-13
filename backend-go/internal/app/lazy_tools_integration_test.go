@@ -16,14 +16,14 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// lazyFixture is a session whose parent profile lists lazy tools in tools.lazy, scripted to
+// lazyFixture is a session whose parent profile lists lazy tools in tools.native.load_tool.lazy, scripted to
 // make the given calls in order. It has the in-process MCP server with a "lookup" tool.
 func lazyFixture(t *testing.T, lazy []string, steps []subagentStep) (subagentFixture, *atomic.Int32) {
 	t.Helper()
 	return lazyFixtureWithProfile(t, map[string]any{"allow": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "lazy": lazy}, steps)
 }
 
-// lazyFixtureWithMax is lazyFixture with tools.lazy_load_max set, for the batch limit.
+// lazyFixtureWithMax is lazyFixture with tools.native.load_tool.lazy_load_max set, for the batch limit.
 func lazyFixtureWithMax(t *testing.T, lazy []string, max int, steps []subagentStep) (subagentFixture, *atomic.Int32) {
 	t.Helper()
 	return lazyFixtureWithProfile(t, map[string]any{"allow": []string{"skill", "load_tool", "mcp:fixture:lookup"}, "lazy": lazy, "lazy_load_max": max}, steps)
@@ -350,7 +350,9 @@ func lazyHookFixture(t *testing.T, lazy []string, steps []subagentStep, match st
 			map[string]any{"name": "log", "match": match, "argv": []string{shell, "-c", "echo fired >> " + marker}},
 		}},
 	}
-	session["__profile_extra"] = map[string]any{"tools": profileTools}
+	for key, value := range profileSession(profileTools) {
+		session[key] = value
+	}
 	calls := &atomic.Int32{}
 	f := buildSubagentFixtureWithMCP(t, map[string]any{"model": "child.json", "__session": session, "__load_tool": true, "__web_search": &atomic.Int32{}}, false, nil, &mcpFixture{calls: calls})
 	f.provider.parentSteps = steps
@@ -421,9 +423,9 @@ func TestRefusedLazyMCPCallFiresItsHookOnce(t *testing.T) {
 // A lazy entry the profile does not show is a configuration error: a denied lazy tool could
 // never be loaded or called, so it is refused rather than quietly absent. The check runs on
 // the registered definitions, so it is tested on them directly.
-// A profile with tools.lazy whose deny hides load_tool could never load a lazy tool, and the profile
+// A profile with tools.native.load_tool.lazy whose deny hides load_tool could never load a lazy tool, and the profile
 // would run with the lazy tools unreachable. The profile is refused, and the error names load_tool. An
-// allow that leaves load_tool out does not hide it: tools.lazy shows load_tool.
+// allow that leaves load_tool out does not hide it: tools.native.load_tool.lazy shows load_tool.
 func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	registered := []tools.Definition{
 		{ID: "native.skill", Source: "native", Name: "skill"},
@@ -435,8 +437,8 @@ func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 		"deny names it, allow it": {Restricted: true, HasAllow: true, Allow: []string{"load_tool"}, Deny: []string{"load_tool"}, Lazy: []string{"mcp:fixture:lookup"}},
 	} {
 		err := checkLazyLoadToolShown(config, settings, registered)
-		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.lazy") || !strings.Contains(err.Error(), "tools.deny") {
-			t.Errorf("%s: err = %v, want the refusal naming tools.lazy and load_tool", name, err)
+		if err == nil || !strings.Contains(err.Error(), "load_tool") || !strings.Contains(err.Error(), "tools.native.load_tool.lazy") || !strings.Contains(err.Error(), "tools.deny") {
+			t.Errorf("%s: err = %v, want the refusal naming tools.native.load_tool.lazy and load_tool", name, err)
 		}
 	}
 	shown := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill", "load_tool"}, Lazy: []string{"mcp:fixture:lookup"}}
@@ -445,7 +447,7 @@ func TestLazyProfileWhoseDenyHidesLoadToolIsAConfigError(t *testing.T) {
 	}
 	none := sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"skill"}}
 	if err := checkLazyLoadToolShown(config, none, registered); err != nil {
-		t.Errorf("no tools.lazy: %v", err)
+		t.Errorf("no tools.native.load_tool.lazy: %v", err)
 	}
 	// A deny that names another tool, or a deny-only list, leaves load_tool shown, so the profile loads.
 	for name, valid := range map[string]sessionfs.ProfileToolSettings{
@@ -468,7 +470,7 @@ func TestLazyEntryNamingANativeToolIsAConfigError(t *testing.T) {
 	for _, name := range []string{"skill", "subagent", "load_tool", "profile_message", "exec"} {
 		settings := sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{name}}
 		err := checkLazyEntriesVisible(config, settings, []tools.Definition{{ID: "native." + name, Source: "native", Name: name}})
-		if err == nil || !strings.Contains(err.Error(), `tools.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "a native tool never is") {
+		if err == nil || !strings.Contains(err.Error(), `tools.native.load_tool.lazy[0] lists "`+name+`"`) || !strings.Contains(err.Error(), "a native tool never is") {
 			t.Errorf("%s: err = %v, want the lazy-entry refusal naming it", name, err)
 		}
 	}
@@ -493,8 +495,8 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 		settings sessionfs.ProfileToolSettings
 		want     string
 	}{
-		"denied":          {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.lazy[0] lists "web_search"`},
-		"denied, allowed": {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"web_search"}, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.lazy[0] lists "web_search"`},
+		"denied":          {sessionfs.ProfileToolSettings{Restricted: true, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.native.load_tool.lazy[0] lists "web_search"`},
+		"denied, allowed": {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"web_search"}, Lazy: []string{"web_search"}, Deny: []string{"web_search"}}, `tools.native.load_tool.lazy[0] lists "web_search"`},
 		"outside allow":   {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:fixture:lookup"}, Lazy: []string{"web_search"}}, ""},
 		"empty allow":     {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{}, Lazy: []string{"web_search"}}, ""},
 		"visible":         {sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"web_search"}, Lazy: []string{"web_search"}}, ""},
@@ -513,7 +515,7 @@ func TestLazyEntryTheProfileHidesIsAConfigError(t *testing.T) {
 	}
 }
 
-// A child of a profile with tools.lazy gates its lazy MCP tools with the owning profile's set: its
+// A child of a profile with tools.native.load_tool.lazy gates its lazy MCP tools with the owning profile's set: its
 // call before a load is refused as lazy_tool_not_loaded, and the MCP server never runs.
 func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	name := mcpToolNameFor("fixture", "lookup")
@@ -537,7 +539,7 @@ func TestChildOfAParentWithLazyToolsGatesTheLazyMCPTool(t *testing.T) {
 	}
 }
 
-// A child of a profile with no tools.lazy gets the full, ungated definition: no lazy_tool_not_loaded,
+// A child of a profile with no tools.native.load_tool.lazy gets the full, ungated definition: no lazy_tool_not_loaded,
 // and the real schema. The child's call with no "word" is rejected by the real schema as
 // validation_failed; a gate that did not check the real schema would have accepted it.
 func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
@@ -565,7 +567,7 @@ func TestChildOfAParentWithoutLazyToolsGetsTheFullMCPTool(t *testing.T) {
 }
 
 // A child whose toolset lists the MCP server the owner has as a lazy session server keeps the toolset's
-// copy: the owner's tools.lazy gates it, and the toolset's own hooks wrap the gate, so the refused
+// copy: the owner's tools.native.load_tool.lazy gates it, and the toolset's own hooks wrap the gate, so the refused
 // direct call and the load_tool run each fire the toolset's pre_tool and post_tool once, and the
 // owner's hooks never. The two copies share the server file but not the connection or the hooks; the
 // markers tell which copy ran. Before the fix, GateFor swapped in the owner's copy and the toolset's
@@ -626,16 +628,16 @@ func TestToolsetChildOfALazyOwnerServerKeepsItsOwnCopyAndHooks(t *testing.T) {
 	}
 }
 
-// tools.lazy needs no catalog layout: the lazy set keeps nothing in a state folder, so a session without one
+// The lazy list needs no catalog layout: the lazy set keeps nothing in a state folder, so a session without one
 // opens a set like any other.
 func TestOpenLazySetNeedsNoStateFolder(t *testing.T) {
-	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev", StateDir: "", ProfileTools: sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:fixture:lookup"}, Lazy: []string{"mcp:fixture:lookup"}, LazySummaryBytes: 256}}
+	config := sessionfs.SessionConfig{SettingPath: "s.json", Profile: "dev", StateDir: "", ProfileTools: sessionfs.ProfileToolSettings{Restricted: true, HasAllow: true, Allow: []string{"mcp:fixture:lookup"}, Lazy: []string{"mcp:fixture:lookup"}}, NativeLoadTool: &sessionfs.NativeLoadToolSettings{Lazy: []string{"mcp:fixture:lookup"}, SummaryBytes: 256}}
 	if set := openLazySet(config); set == nil {
 		t.Fatal("openLazySet with no state folder = nil, want a set")
 	}
 }
 
-// A profile without tools.lazy opens no set at all, so its tools array is what it was.
+// A profile without tools.native.load_tool.lazy opens no set at all, so its tools array is what it was.
 func TestOpenLazySetIsNilWithoutLazyEntries(t *testing.T) {
 	if set := openLazySet(sessionfs.SessionConfig{StateDir: t.TempDir()}); set != nil {
 		t.Fatalf("openLazySet with no lazy entries = %v; want nil", set)

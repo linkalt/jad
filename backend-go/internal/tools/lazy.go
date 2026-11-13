@@ -18,8 +18,8 @@ type LazyEntry struct {
 	Summary string
 }
 
-// LazySet is the lazy tools of one profile: the MCP and extension tools that its tools.lazy entries
-// name (a native tool is never lazy). It keeps no state outside the process: the entries and the
+// LazySet is the lazy tools of one profile: the MCP and extension tools that its lazy entries
+// (tools.native.load_tool.lazy) name (a native tool is never lazy). It keeps no state outside the process: the entries and the
 // registered tools decide it, so a session has no file for it. NewLazySet takes the config; Bind
 // attaches the registered tools that the config's entries match, once they exist.
 type LazySet struct {
@@ -31,7 +31,7 @@ type LazySet struct {
 	shown        func(Definition) bool
 }
 
-// NewLazySet builds the lazy set for the given tools.lazy entries. shown reports whether the profile
+// NewLazySet builds the lazy set for the given lazy entries (tools.native.load_tool.lazy). shown reports whether the profile
 // shows a tool; a tool it hides is never bound, so no name selects it. Nil shows every tool.
 func NewLazySet(entries []string, summaryBytes int, shown func(Definition) bool) *LazySet {
 	return &LazySet{
@@ -148,7 +148,7 @@ func (s *LazySet) Match(names []string) [][]LazyEntry {
 }
 
 // nameSelects reports whether one load_tool name selects a bound tool. The names are the ones
-// tools.lazy takes: "*" for every tool, mcp:<server>:<tool> and mcp:<server>:* as EntryMatches
+// the lazy list takes: "*" for every tool, mcp:<server>:<tool> and mcp:<server>:* as EntryMatches
 // reads them, and otherwise a tool's provider name.
 func nameSelects(name string, definition Definition) bool {
 	if name == "*" {

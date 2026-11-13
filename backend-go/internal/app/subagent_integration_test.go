@@ -484,8 +484,8 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	// __session_toolset adds keys (hooks) to the session's own toolset file.
 	sessionToolset, _ := agentSetting["__session_toolset"].(map[string]any)
 	delete(agentSetting, "__session_toolset")
-	// __load_tool enables tools.native.load_tool and its definition, which a profile with
-	// tools.lazy needs: the profile is refused at load without it.
+	// __load_tool enables tools.native.load_tool and its definition, which a load_tool lazy list
+	// needs: the session is refused at load without the definition.
 	_, withLoadTool := agentSetting["__load_tool"]
 	delete(agentSetting, "__load_tool")
 	if withLoadTool {
@@ -627,6 +627,11 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	for key, value := range sessionExtra {
 		if key == "__profile_extra" {
 			spec.ProfileExtra = value.(map[string]any)
+			continue
+		}
+		if key == "__load_tool_config" {
+			// The session toolset's tools.native.load_tool: where lazy and its tuning live.
+			spec.Native["load_tool"] = value
 			continue
 		}
 		spec.Settings[key] = value

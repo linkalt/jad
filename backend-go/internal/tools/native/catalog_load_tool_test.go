@@ -32,7 +32,7 @@ func TestCatalogBuildsLoadToolOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-// load_tool enabled with no tools.lazy is listed in the array and lists nothing: a profile that
+// load_tool enabled with no lazy list is listed in the array and lists nothing: a profile that
 // enables the tool without a lazy list is not refused, and the key alone decides whether it is listed.
 func TestLoadToolWithNoLazySetListsNothing(t *testing.T) {
 	config := sessionfs.SessionConfig{SettingPath: "setting.json", ToolDefinitionPaths: []string{sampleLoadToolManifest}, NativeLoadTool: &sessionfs.NativeLoadToolSettings{}}

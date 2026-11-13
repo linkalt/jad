@@ -22,9 +22,10 @@ import (
 )
 
 // profileLazyFixture is a session with two profiles: dev/coder, the caller, and review/reviewer,
-// the target. Each has its own toolset and its own tools.lazy. Both toolsets attach one in-process
-// MCP server with lookup, extra01 and extra02, so "mcp:fixture:*" selects lazy tools in either
-// profile. script answers each model's first request with a call, in order, from its own list.
+// the target. Each has its own toolset, and the toolset's load_tool config holds its own lazy list.
+// Both toolsets attach one in-process MCP server with lookup, extra01 and extra02, so
+// "mcp:fixture:*" selects lazy tools in either profile. script answers each model's first request
+// with a call, in order, from its own list.
 type profileLazyFixture struct {
 	layout    layouttest.Fixture
 	service   *Service
@@ -88,7 +89,7 @@ func newProfileLazyFixture(t *testing.T, callerLazy, targetLazy []string, target
 
 	toolPath := func(file string) string { return subagentSampleTool(t, file) }
 	mcpUse := map[string]any{"deny_tools": []string{}}
-	targetTools := map[string]any{"allow": []string{"load_tool", "mcp:fixture:*"}, "lazy": targetLazy}
+	targetTools := map[string]any{"allow": []string{"load_tool", "mcp:fixture:*"}}
 	if targetWithoutLazy {
 		targetTools = map[string]any{"allow": []string{"mcp:fixture:*"}}
 	}
@@ -104,20 +105,25 @@ func newProfileLazyFixture(t *testing.T, callerLazy, targetLazy []string, target
 		},
 		Profiles: map[string]map[string]any{
 			"dev/coder": {"models": []string{"openai/caller"}, "model_default": "openai/caller", "toolset": "coding/caller",
-				"tools": map[string]any{"allow": []string{"profile_message", "load_tool", "mcp:fixture:*"}, "lazy": callerLazy}},
+				"tools": map[string]any{"allow": []string{"profile_message", "load_tool", "mcp:fixture:*"}}},
 			"review/reviewer": targetProfile,
 		},
 		MCP:       map[string]map[string]any{"m/fixture": {"deny_tools": []string{}}},
 		MCPConfig: map[string]map[string]any{"m/fixture": {"schema_version": 1, "transport": map[string]any{"type": "streamable_http", "url": mcpHTTP.URL}, "timeout_ms": 10_000, "max_result_bytes": 4096}},
 	}
 	f.layout = layouttest.Write(t, spec)
-	// The target gets load_tool only with its own tools.lazy: a lazy target without the key is refused.
+	// Each profile's lazy list is its load_tool config, in the toolset the profile names. The target gets
+	// load_tool only with its own list.
+	callerLoadTool := map[string]any{}
+	if len(callerLazy) > 0 {
+		callerLoadTool["lazy"] = callerLazy
+	}
 	targetNative := map[string]any{}
 	if len(targetLazy) > 0 {
-		targetNative["load_tool"] = map[string]any{}
+		targetNative["load_tool"] = map[string]any{"lazy": targetLazy}
 	}
 	for id, file := range map[string]map[string]any{
-		"coding/caller": {"native": map[string]any{"profile_message": map[string]any{}, "load_tool": map[string]any{}}, "mcp": map[string]any{"m/fixture": mcpUse}},
+		"coding/caller": {"native": map[string]any{"profile_message": map[string]any{}, "load_tool": callerLoadTool}, "mcp": map[string]any{"m/fixture": mcpUse}},
 		"coding/target": {"native": targetNative, "mcp": map[string]any{"m/fixture": mcpUse}},
 	} {
 		body, _ := json.Marshal(file)
@@ -234,7 +240,7 @@ func TestProfileMessageRunsStayInTheirOwnProfile(t *testing.T) {
 	requireNoLazyFileAt(t, filepath.Join(f.callerDir, "lazy_tools.json"))
 }
 
-// A target without tools.lazy gets no load_tool and no lazy file. Its tools array is the same
+// A target without tools.native.load_tool.lazy gets no load_tool and no lazy file. Its tools array is the same
 // before and after a message from a caller that has lazy tools, so the caller's load changes
 // nothing the target is sent.
 func TestProfileMessageTargetWithoutLazyGetsNoLoadTool(t *testing.T) {
@@ -245,7 +251,7 @@ func TestProfileMessageTargetWithoutLazyGetsNoLoadTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if seenTool(f.seenRequests(), "target-model", "load_tool") {
-		t.Error("the target without tools.lazy was sent load_tool")
+		t.Error("the target without tools.native.load_tool.lazy was sent load_tool")
 	}
 	requireNoLazyFileAt(t, filepath.Join(f.targetDir, "lazy_tools.json"))
 	// The target's tools array in each of its requests must be the same string.

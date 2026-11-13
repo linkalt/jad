@@ -185,7 +185,7 @@ func TestOwnToolsetPassesOverNamesItsBaseDoesNotHave(t *testing.T) {
 func TestOwnToolsetTableClassifiesEveryToolKey(t *testing.T) {
 	keyLists := map[string][]string{
 		"async": nativeAsyncKeys, "exec": nativeExecKeys, "tool_smith": nativeToolSmithKeys, "code_context": nativeCodeContextKeys,
-		"lsp": nativeLSPKeys, "read_image": nativeReadImageKeys, "skill": nativeSkillKeys, "load_tool": nil, "profile": nativeProfileKeys,
+		"lsp": nativeLSPKeys, "read_image": nativeReadImageKeys, "skill": nativeSkillKeys, "load_tool": nativeLoadToolKeys, "profile": nativeProfileKeys,
 		"profile_message": nativeProfileMessageKeys, "subagent": nativeSubagentKeys, "task": nativeTaskKeys, "records": nativeRecordsKeys,
 		"request_draft": nativeRequestDraftKeys, "transcript": nativeTranscriptKeys, "transcripts": nativeTranscriptsKeys,
 		"decide_systemone": extensionDecideSystemoneKeys, "web_search": extensionWebSearchKeys,

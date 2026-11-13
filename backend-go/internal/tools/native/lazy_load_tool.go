@@ -18,7 +18,7 @@ const loadToolID = "native.load_tool"
 // loadToolInputSchema is the schema of sample/tools/native/load_tool.json. It is flat: no oneOf
 // or anyOf, which the Anthropic adapter strips from the top level. Which of the three
 // uses a call is (list, describe, run, run several) follows from the keys it sends. The batch limit
-// (tools.lazy_load_max) is enforced when the call runs, so it is not in the schema.
+// (tools.native.load_tool.lazy_load_max) is enforced when the call runs, so it is not in the schema.
 var loadToolInputSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
