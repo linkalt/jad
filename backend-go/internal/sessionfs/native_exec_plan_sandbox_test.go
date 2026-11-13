@@ -1,6 +1,7 @@
 package sessionfs
 
 import (
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -56,7 +57,7 @@ func TestExecGetsAPlanSandboxWhereNoSandboxCoversIt(t *testing.T) {
 	if config.NativeExec.Child.Sandbox != nil || fallback == nil {
 		t.Fatalf("sandbox %+v, fallback %+v", config.NativeExec.Child.Sandbox, fallback)
 	}
-	if fallback.Backend != backend || !fallback.Network || len(fallback.HidePaths) != 0 || !fallback.WholeFileSystemReadable() ||
+	if fallback.Backend != backend || !fallback.Network || len(fallback.HidePaths) != 1 || filepath.Base(fallback.HidePaths[0]) != "auth" || !fallback.WholeFileSystemReadable() ||
 		!slices.Equal(fallback.PlanWritablePaths, []string{"{tmp}"}) || !slices.Equal(fallback.ForPlanMode().WritablePaths, []string{"{tmp}"}) {
 		t.Fatalf("fallback = %+v", fallback)
 	}

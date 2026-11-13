@@ -25,7 +25,7 @@ func envSandbox(extra map[string]any) map[string]any {
 
 func loadSandboxFixture(t *testing.T, fixture layouttest.Fixture) (SessionConfig, error) {
 	t.Helper()
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		return SessionConfig{}, err
 	}
@@ -125,10 +125,10 @@ func TestSandboxTemplateOnEachLayer(t *testing.T) {
 				}
 			},
 		},
-		"name on the defaults, overridden by the profile's object": {
-			layouttest.Spec{Defaults: map[string]any{"sandbox": "writer"}, ProfileExtra: map[string]any{"settings": map[string]any{"sandbox": map[string]any{"network": true, "hide_paths": []string{}}}}},
+		"name on the defaults, overridden by the session's object": {
+			layouttest.Spec{Defaults: map[string]any{"sandbox": "writer"}, Settings: map[string]any{"sandbox": map[string]any{"network": true, "hide_paths": []string{}}}},
 			func(t *testing.T, got *SandboxSettings) {
-				if got.Template != "writer" || !got.Network || len(got.HidePaths) != 0 || !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}", "{tmp}"}) {
+				if got.Template != "writer" || !got.Network || len(withoutFixedHidden(got.HidePaths)) != 0 || !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}", "{tmp}"}) {
 					t.Fatalf("%+v", got)
 				}
 			},
@@ -136,31 +136,31 @@ func TestSandboxTemplateOnEachLayer(t *testing.T) {
 		"template with overrides on the profile": {
 			layouttest.Spec{ProfileExtra: map[string]any{"settings": map[string]any{"sandbox": map[string]any{"template": "writer", "add_hide_paths": []string{"{workspace}/secrets"}, "read": map[string]any{"add_paths": []string{"{home}/.m2"}}}}}},
 			func(t *testing.T, got *SandboxSettings) {
-				if !reflect.DeepEqual(got.HidePaths, []string{"{workspace}/.env", "{workspace}/secrets"}) || !reflect.DeepEqual(got.ReadPaths, []string{"/", "{home}/.m2"}) {
+				if !reflect.DeepEqual(withoutFixedHidden(got.HidePaths), []string{"{workspace}/.env", "{workspace}/secrets"}) || !reflect.DeepEqual(got.ReadPaths, []string{"/", "{home}/.m2"}) {
 					t.Fatalf("%+v", got)
 				}
 			},
 		},
-		"add_paths from every layer": {
+		// A profile can only tighten a sandbox the defaults or the session enable (T-028), so its
+		// layer adds no writable path here.
+		"add_paths from the defaults and the session": {
 			layouttest.Spec{
-				Defaults:     map[string]any{"sandbox": map[string]any{"template": "writer", "write": map[string]any{"add_paths": []string{"/d"}}}},
-				Settings:     map[string]any{"sandbox": map[string]any{"write": map[string]any{"add_paths": []string{"/s"}}}},
-				ProfileExtra: map[string]any{"settings": map[string]any{"sandbox": map[string]any{"write": map[string]any{"add_paths": []string{"/p"}}}}},
+				Defaults: map[string]any{"sandbox": map[string]any{"template": "writer", "write": map[string]any{"add_paths": []string{"/d"}}}},
+				Settings: map[string]any{"sandbox": map[string]any{"write": map[string]any{"add_paths": []string{"/s"}}}},
 			},
 			func(t *testing.T, got *SandboxSettings) {
-				if !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}", "{tmp}", "/d", "/s", "/p"}) {
+				if !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}", "{tmp}", "/d", "/s"}) {
 					t.Fatalf("%v", got.WritablePaths)
 				}
 			},
 		},
-		"a session's paths drop the defaults' add_paths but keep the profile's": {
+		"a session's paths drop the defaults' add_paths": {
 			layouttest.Spec{
-				Defaults:     map[string]any{"sandbox": map[string]any{"template": "writer", "write": map[string]any{"add_paths": []string{"/d"}}}},
-				Settings:     map[string]any{"sandbox": map[string]any{"write": map[string]any{"paths": []string{"{workspace}"}}}},
-				ProfileExtra: map[string]any{"settings": map[string]any{"sandbox": map[string]any{"write": map[string]any{"add_paths": []string{"/p"}}}}},
+				Defaults: map[string]any{"sandbox": map[string]any{"template": "writer", "write": map[string]any{"add_paths": []string{"/d"}}}},
+				Settings: map[string]any{"sandbox": map[string]any{"write": map[string]any{"paths": []string{"{workspace}"}}}},
 			},
 			func(t *testing.T, got *SandboxSettings) {
-				if !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}", "/p"}) {
+				if !reflect.DeepEqual(got.WritablePaths, []string{"{workspace}"}) {
 					t.Fatalf("%v", got.WritablePaths)
 				}
 			},
@@ -173,8 +173,8 @@ func TestSandboxTemplateOnEachLayer(t *testing.T) {
 				}
 			},
 		},
-		"null on the profile drops the template": {
-			layouttest.Spec{Settings: map[string]any{"sandbox": "writer"}, ProfileExtra: map[string]any{"settings": map[string]any{"sandbox": nil}}},
+		"null on the session drops the template of the defaults": {
+			layouttest.Spec{Defaults: map[string]any{"sandbox": "writer"}, Settings: map[string]any{"sandbox": nil}},
 			func(t *testing.T, got *SandboxSettings) {
 				if got != nil {
 					t.Fatalf("%+v", got)
@@ -238,13 +238,13 @@ func TestSandboxCatalogForms(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, SandboxCatalog: catalog, Settings: map[string]any{"sandbox": "box"}})
 			if catalog == "relative-boxes" {
-				put(t, filepath.Join(fixture.Root, "relative-boxes"))
+				put(t, filepath.Join(fixture.GlobalDir, "relative-boxes"))
 			}
 			config := mustLoadFixtureSession(t, fixture)
 			if config.Sandbox == nil || config.Sandbox.Template != "box" {
 				t.Fatalf("sandbox = %+v", config.Sandbox)
 			}
-			want := map[string]string{"absolute": absolute, "{cwd}": filepath.Join(cwd, "project-boxes"), "relative": filepath.Join(fixture.Root, "relative-boxes")}[name]
+			want := map[string]string{"absolute": absolute, "{cwd}": filepath.Join(cwd, "project-boxes"), "relative": filepath.Join(fixture.GlobalDir, "relative-boxes")}[name]
 			if !containsString(config.Sandbox.ReadOnlyPaths, want) || !containsString(config.Sandbox.ReadOnlyPaths, fixture.SessionFile) || !containsString(config.Sandbox.ReadOnlyPaths, fixture.StateDir) {
 				t.Fatalf("read-only paths %v lack %s, the session file or the state folder", config.Sandbox.ReadOnlyPaths, want)
 			}
@@ -261,8 +261,8 @@ func TestSandboxCatalogForms(t *testing.T) {
 // An edited template reloads the sessions that use it, like an edited toolset.
 func TestEditedSandboxTemplateChangesTheStamp(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{SandboxTemplates: map[string]map[string]any{"box": envSandbox(nil)}, Settings: map[string]any{"sandbox": "box"}})
-	backdateTree(t, fixture.Root, fixture.CWD)
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	backdateTree(t, fixture.Root, fixture.GlobalDir, fixture.CWD)
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestEditedSandboxTemplateChangesTheStamp(t *testing.T) {
 	if !stamp.Current() {
 		t.Fatal("a fresh stamp is not current")
 	}
-	path := filepath.Join(fixture.Root, ".jad", "sandbox", "box.json")
+	path := filepath.Join(fixture.SandboxDir, "box.json")
 	data, _ := json.Marshal(envSandbox(map[string]any{"network": true, "description": "edited, a longer file"}))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -432,7 +432,7 @@ func TestNarrowSandbox(t *testing.T) {
 // loader, and a delete is refused while a profile, a session or the defaults name the template.
 func TestSandboxTemplateCatalogFiles(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{SandboxTemplates: map[string]map[string]any{"box": envSandbox(nil)}, Settings: map[string]any{"sandbox": "box"}})
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,4 +488,17 @@ func TestSampleSandboxTemplates(t *testing.T) {
 			t.Errorf("%s does not follow sandbox.schema.json", name)
 		}
 	}
+}
+
+// withoutFixedHidden drops the global auth folder, which the workspace layout hides in every
+// sandbox whatever a template says.
+func withoutFixedHidden(paths []string) []string {
+	var kept []string
+	for _, path := range paths {
+		if filepath.Base(path) == "auth" && filepath.Base(filepath.Dir(path)) == "global" {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
 }

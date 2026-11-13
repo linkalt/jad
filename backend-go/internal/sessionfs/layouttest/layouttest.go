@@ -1,5 +1,5 @@
-// Package layouttest writes a catalog-layout session folder for tests. It imports no
-// production package, so the tests of sessionfs can use it too.
+// Package layouttest writes a workspace layout (workspace.json, global.json and the catalogs) for
+// tests. It imports no production package, so the tests of sessionfs can use it too.
 package layouttest
 
 import (
@@ -16,19 +16,18 @@ type Spec struct {
 	SessionID string
 	// CWD is the session's working directory; default a fresh temp dir.
 	CWD string
+	// Workspace is W, the start directory (its .jad holds the settings, sessions, profiles and
+	// state); default a fresh folder. A test sets it to CWD to have the .jad folder inside the
+	// project, as a project's own .jad is.
+	Workspace string
 	// Settings is the session's `settings` object.
 	Settings map[string]any
-	// StateDir is where transcripts and staging live; default <root>/state. A test sets it
-	// inside the working directory to check that the state folder is left out of snapshots.
-	StateDir string
-	// SessionsDir is where the session files live; default <root>/sessions.
-	SessionsDir string
-	// Server is the root setting's `server` object.
+	// Server is global.json's `server` object.
 	Server map[string]any
 	// RawSettings is Settings with values given as raw JSON, for a value that Go cannot
 	// build (null, a wrong type). It is merged over Settings.
 	RawSettings map[string]json.RawMessage
-	// Defaults is the root setting's `defaults` object.
+	// Defaults is global.json's `defaults` object.
 	Defaults map[string]any
 	// Models maps "<category>/<name>" to a model file. Default: one model, "openai/default".
 	Models map[string]map[string]any
@@ -50,7 +49,7 @@ type Spec struct {
 	ProfileModels []string
 	// ProfileExtra adds keys (tools, instructions, ...) to the default profile.
 	ProfileExtra map[string]any
-	// ToolDefinitionPaths is the root setting's libraries.tool_definition_paths.
+	// ToolDefinitionPaths is global.json's libraries.tool_definition_paths.
 	ToolDefinitionPaths []string
 	// MCPConfig maps "<category>/<name>" to the MCP server file's content; it replaces the
 	// placeholder connection MCP writes.
@@ -63,23 +62,35 @@ type Spec struct {
 	ToolsetRaw string
 	// Session adds top-level keys to session.json (scope, description, ...).
 	Session map[string]any
-	// RootID names the first session root; default "local".
+	// RootID is the id of the workspace (the first session root); default "local".
 	RootID string
-	// ExtraRoots are the IDs of more session roots, each in <root>/sessions-<id>.
+	// ExtraRoots are the IDs of more workspaces, each its own folder with its own .jad, listed in
+	// global.json together with the first (so the workspaces trust each other as listed ones do).
 	ExtraRoots []string
-	// NoSession writes the root setting and catalogs only, for a test that adds its own
-	// sessions with AddSession.
+	// NoSession writes the settings and catalogs only, for a test that adds its own sessions
+	// with AddSession.
 	NoSession bool
-	// SandboxCatalog is the root setting's catalogs.sandbox; empty leaves the default.
+	// SandboxCatalog is global.json catalogs.sandbox; empty leaves the default, G/sandbox.
 	SandboxCatalog string
-	// SandboxTemplates maps a template name to the file <root>/.jad/sandbox/<name>.json
-	// (the default catalogs.sandbox).
+	// SandboxTemplates maps a template name to the file G/sandbox/<name>.json (the default
+	// catalogs.sandbox).
 	SandboxTemplates map[string]map[string]any
 }
 
-// Fixture is where Write put everything.
+// Fixture is where Write put everything. Load it with LoadOptions{WorkingDir: Workspace,
+// GlobalDir: GlobalDir}.
 type Fixture struct {
-	Root        string
+	// Root is the workspace's .jad folder (W/.jad): sessions, profiles and state are folders of
+	// it. The models, tools, mcp servers and sandbox templates are the shared catalogs of the
+	// global folder G.
+	Root string
+	// Workspace is W, the start directory; GlobalDir is G.
+	Workspace string
+	GlobalDir string
+	// WorkspaceSetting is W/.jad/workspace.json, GlobalSetting is G/global.json.
+	WorkspaceSetting string
+	GlobalSetting    string
+	// RootSetting is the root setting.json of the retired layout v1; only WriteV1 sets it.
 	RootSetting string
 	SessionsDir string
 	// SessionFile is <sessions dir>/<id>.json; SessionStateDir is <state>/<id>.
@@ -88,24 +99,31 @@ type Fixture struct {
 	SessionID       string
 	CWD             string
 	StateDir        string
-	// ModelsDir holds the model files, <category>/<name>.json.
-	ModelsDir string
-	// RootDirs maps every session root ID to its folder.
+	// ModelsDir holds the model files, <category>/<name>.json; SandboxDir the sandbox templates.
+	ModelsDir  string
+	SandboxDir string
+	// RootDirs maps every workspace ID to its sessions folder.
 	RootDirs map[string]string
 }
 
-// Write creates the root setting, the catalogs and the session under a temp dir.
-func Write(t *testing.T, spec Spec) Fixture {
+// Write creates the global folder, the workspace (and the others of ExtraRoots), the catalogs and
+// the session under a temp dir.
+func Write(t testing.TB, spec Spec) Fixture {
 	t.Helper()
-	root := t.TempDir()
+	base := t.TempDir()
+	workspace := spec.Workspace
+	if workspace == "" {
+		workspace = filepath.Join(base, "ws")
+	}
+	root := filepath.Join(workspace, ".jad")
+	global := filepath.Join(base, "global")
 	if spec.SessionID == "" {
 		spec.SessionID = "session-1"
 	}
 	if spec.CWD == "" {
 		spec.CWD = t.TempDir()
 	}
-	put := func(rel string, value any) {
-		path := filepath.Join(root, rel)
+	write := func(path string, value any) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -117,47 +135,54 @@ func Write(t *testing.T, spec Spec) Fixture {
 			t.Fatal(err)
 		}
 	}
+	put := func(rel string, value any) { write(filepath.Join(root, rel), value) }
 
-	stateDir := spec.StateDir
-	if stateDir == "" {
-		stateDir = filepath.Join(root, "state")
-	}
+	stateDir := filepath.Join(root, "state")
 	rootID := spec.RootID
 	if rootID == "" {
 		rootID = "local"
 	}
-	rootDirs := map[string]string{rootID: sessionsPath(spec, root)}
-	sessionRoots := []any{map[string]any{"id": rootID, "path": rootDirs[rootID]}}
+	sessionsDir := filepath.Join(root, "sessions")
+	rootDirs := map[string]string{rootID: sessionsDir}
+	workspaceSetting := map[string]any{"schema_version": 2, "id": rootID}
+	write(filepath.Join(root, "workspace.json"), workspaceSetting)
+	listed := []any{}
+	if len(spec.ExtraRoots) > 0 {
+		listed = append(listed, map[string]any{"id": rootID, "path": workspace})
+	}
 	for _, id := range spec.ExtraRoots {
-		rootDirs[id] = filepath.Join(root, "sessions-"+id)
-		sessionRoots = append(sessionRoots, map[string]any{"id": id, "path": rootDirs[id]})
+		other := filepath.Join(base, "ws-"+id)
+		rootDirs[id] = filepath.Join(other, ".jad", "sessions")
+		write(filepath.Join(other, ".jad", "workspace.json"), map[string]any{"schema_version": 2, "id": id})
+		listed = append(listed, map[string]any{"id": id, "path": other})
 	}
-	rootSetting := map[string]any{
-		"schema_version": 1,
-		"session_roots":  sessionRoots,
-		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": stateDir},
-	}
+	catalogs := map[string]any{}
+	sandboxDir := filepath.Join(global, "sandbox")
 	if spec.SandboxCatalog != "" {
-		rootSetting["catalogs"].(map[string]any)["sandbox"] = spec.SandboxCatalog
+		catalogs["sandbox"] = spec.SandboxCatalog
 	}
 	for name, template := range spec.SandboxTemplates {
-		put(filepath.Join(".jad", "sandbox", name+".json"), template)
+		write(filepath.Join(sandboxDir, name+".json"), template)
+	}
+	globalSetting := map[string]any{"schema_version": 2, "catalogs": catalogs}
+	if len(listed) > 0 {
+		globalSetting["workspaces"] = listed
 	}
 	if spec.Server != nil {
-		rootSetting["server"] = spec.Server
+		globalSetting["server"] = spec.Server
 	}
 	if spec.Defaults != nil {
-		rootSetting["defaults"] = spec.Defaults
+		globalSetting["defaults"] = spec.Defaults
 	}
 	if len(spec.ToolDefinitionPaths) > 0 {
-		rootSetting["libraries"] = map[string]any{"tool_definition_paths": spec.ToolDefinitionPaths}
+		globalSetting["libraries"] = map[string]any{"tool_definition_paths": spec.ToolDefinitionPaths}
 	}
-	put("setting.json", rootSetting)
+	write(filepath.Join(global, "global.json"), globalSetting)
 
 	models := spec.Models
 	if spec.ModelRaw != "" {
 		models = map[string]map[string]any{"openai/default": nil}
-		path := filepath.Join(root, "models", "openai", "default.json")
+		path := filepath.Join(global, "models", "openai", "default.json")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +195,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 	modelIDs := make([]string, 0, len(models))
 	for id, model := range models {
 		if spec.ModelRaw == "" {
-			put("models/"+id+".json", model)
+			write(filepath.Join(global, "models", id+".json"), model)
 		}
 		modelIDs = append(modelIDs, id)
 	}
@@ -178,7 +203,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 	toolset := ""
 	if spec.ToolsetRaw != "" {
 		toolset = "coding/default"
-		path := filepath.Join(root, "tools", toolset+".json")
+		path := filepath.Join(global, "tools", toolset+".json")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -197,14 +222,14 @@ func Write(t *testing.T, spec Spec) Fixture {
 			if configured, ok := spec.MCPConfig[id]; ok {
 				server = configured
 			}
-			put("mcp/"+id+".json", server)
+			write(filepath.Join(global, "mcp", id+".json"), server)
 			use[id] = orEmpty(fields)
 		}
 		file["mcp"] = use
 		for key, value := range spec.ToolsetExtra {
 			file[key] = value
 		}
-		put("tools/"+toolset+".json", file)
+		write(filepath.Join(global, "tools", toolset+".json"), file)
 	}
 
 	profiles := spec.Profiles
@@ -225,6 +250,10 @@ func Write(t *testing.T, spec Spec) Fixture {
 	}
 	for id, profile := range profiles {
 		put("profiles/"+id+".json", profile)
+		// Profiles belong to a workspace: the other workspaces get the same ones.
+		for _, other := range spec.ExtraRoots {
+			write(filepath.Join(base, "ws-"+other, ".jad", "profiles", id+".json"), profile)
+		}
 	}
 
 	session := map[string]any{"schema_version": 1, "cwd": spec.CWD}
@@ -242,7 +271,7 @@ func Write(t *testing.T, spec Spec) Fixture {
 		session[key] = value
 	}
 	if !spec.NoSession {
-		sessionFile := filepath.Join(sessionsPath(spec, root), spec.SessionID+".json")
+		sessionFile := filepath.Join(sessionsDir, spec.SessionID+".json")
 		if err := os.MkdirAll(filepath.Dir(sessionFile), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -256,8 +285,8 @@ func Write(t *testing.T, spec Spec) Fixture {
 	}
 
 	return Fixture{
-		Root: root, RootSetting: filepath.Join(root, "setting.json"), SessionsDir: sessionsPath(spec, root),
-		SessionFile: filepath.Join(sessionsPath(spec, root), spec.SessionID+".json"), SessionStateDir: filepath.Join(stateDir, spec.SessionID), SessionID: spec.SessionID, CWD: spec.CWD, StateDir: stateDir, ModelsDir: filepath.Join(root, "models"), RootDirs: rootDirs,
+		Root: root, Workspace: workspace, GlobalDir: global, WorkspaceSetting: filepath.Join(root, "workspace.json"), GlobalSetting: filepath.Join(global, "global.json"),
+		SessionsDir: sessionsDir, SessionFile: filepath.Join(sessionsDir, spec.SessionID+".json"), SessionStateDir: filepath.Join(stateDir, spec.SessionID), SessionID: spec.SessionID, CWD: spec.CWD, StateDir: stateDir, ModelsDir: filepath.Join(global, "models"), SandboxDir: filepath.Join(global, "sandbox"), RootDirs: rootDirs,
 	}
 }
 
@@ -266,13 +295,6 @@ func orEmpty(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
-}
-
-func sessionsPath(spec Spec, root string) string {
-	if spec.SessionsDir != "" {
-		return spec.SessionsDir
-	}
-	return filepath.Join(root, "sessions")
 }
 
 // AddSession writes one more session into an existing fixture's root. It gets its own
@@ -295,7 +317,7 @@ func (f Fixture) AddSession(t *testing.T, id, cwd string, native map[string]any,
 	profile := "dev/coder"
 	if len(native) > 0 {
 		toolset := "coding/" + id
-		put(filepath.Join(f.Root, "tools", toolset+".json"), map[string]any{"native": withAsync(native), "mcp": map[string]any{}})
+		put(filepath.Join(f.GlobalDir, "tools", toolset+".json"), map[string]any{"native": withAsync(native), "mcp": map[string]any{}})
 		profile = "dev/" + id
 		put(filepath.Join(f.Root, "profiles", profile+".json"), map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": toolset})
 	}

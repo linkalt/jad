@@ -14,8 +14,8 @@ import (
 func useFixture(t *testing.T, spec layouttest.Spec) layouttest.Fixture {
 	t.Helper()
 	fixture := layouttest.Write(t, spec)
-	t.Setenv("JAD_ROOT_SETTING_PATH", fixture.RootSetting)
-	t.Setenv("JAD_SESSIONS_DIR", "")
+	t.Chdir(fixture.Workspace)
+	t.Setenv("JAD_GLOBAL_DIR", fixture.GlobalDir)
 	t.Setenv("JAD_API_TOKEN", "")
 	t.Setenv("AGENT_API_TOKEN", "")
 	return fixture
@@ -34,7 +34,7 @@ func TestCheckCommandNeedsNoTokenAndAcceptsValidFiles(t *testing.T) {
 
 func TestCheckCommandFailsWithTheSentinelWhenAFileIsInvalid(t *testing.T) {
 	fixture := useFixture(t, layouttest.Spec{})
-	model := filepath.Join(filepath.Dir(fixture.RootSetting), "models", "openai", "default.json")
+	model := filepath.Join(fixture.GlobalDir, "models", "openai", "default.json")
 	if err := os.WriteFile(model, []byte(`{"provider":"openai","model":"m","base_url":""}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

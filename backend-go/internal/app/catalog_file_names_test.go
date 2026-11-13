@@ -25,7 +25,7 @@ func TestBadCatalogFileNamesDoNotFailSessionsAndComeBackWhenRenamed(t *testing.T
 		"models/loose.json":                 `{}`,
 	}
 	for rel, text := range copies {
-		path := filepath.Join(f.root, filepath.FromSlash(rel))
+		path := f.path(rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -44,7 +44,7 @@ func TestBadCatalogFileNamesDoNotFailSessionsAndComeBackWhenRenamed(t *testing.T
 		f.listSessions(t, "")
 	}
 	for rel := range copies {
-		skipped := filepath.Join(f.root, filepath.FromSlash(rel))
+		skipped := f.path(rel)
 		if strings.HasPrefix(rel, "profiles/bad cat") {
 			skipped = filepath.Join(f.root, "profiles", "bad cat")
 		}
@@ -87,7 +87,7 @@ func TestBadCatalogFileNamesDoNotFailSessionsAndComeBackWhenRenamed(t *testing.T
 	// Renamed, the files are back at the next read: the list is not answered 304 and offers them.
 	rename := func(from, to string) {
 		t.Helper()
-		if err := os.Rename(filepath.Join(f.root, from), filepath.Join(f.root, to)); err != nil {
+		if err := os.Rename(f.path(from), f.path(to)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,14 +110,14 @@ func TestMisnamedSessionAndSandboxTemplateFilesAreReportedAndRepaired(t *testing
 	logs := &lockedBuffer{}
 	f := newLayoutFixtureWithBudget(t, nil, nil, func(c *Config) { c.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
 	copySession := filepath.Join(f.root, "sessions", "demo (1).json")
-	copyTemplate := filepath.Join(f.root, ".jad", "sandbox", "base (1).json")
+	copyTemplate := filepath.Join(f.global, "sandbox", "base (1).json")
 	for rel, text := range map[string]string{
-		"sessions/demo (1).json":     `{"schema_version":1,"cwd":"` + f.cwd + `","category":"work","scope":{"profiles":["dev"]}}`,
-		"sessions/package (2).json":  `{"name":"x","version":"1.0.0"}`,
-		"sessions/notes (1).json":    `{"name":"x","description":"y"}`,
-		".jad/sandbox/base (1).json": `{"enabled":false}`,
+		"sessions/demo (1).json":    `{"schema_version":1,"cwd":"` + f.cwd + `","category":"work","scope":{"profiles":["dev"]}}`,
+		"sessions/package (2).json": `{"name":"x","version":"1.0.0"}`,
+		"sessions/notes (1).json":   `{"name":"x","description":"y"}`,
+		"sandbox/base (1).json":     `{"enabled":false}`,
 	} {
-		path := filepath.Join(f.root, filepath.FromSlash(rel))
+		path := f.path(rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}

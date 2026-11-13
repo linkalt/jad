@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,16 +24,17 @@ const (
 	lockHelperModeEnv = "JAD_APPLOCK_HELPER_MODE"
 )
 
-// newSharedSessionRoot writes the lock tests' layout session and returns the root setting
-// file, which the helper process opens too.
+// newSharedSessionRoot writes the lock tests' layout session and returns the workspace and the
+// global folder ("<workspace>:<global>"), which the helper process opens too.
 func newSharedSessionRoot(t *testing.T) string {
 	t.Helper()
 	_, fixture := layoutConfig(t, lockSpec(), map[string]string{})
-	return fixture.RootSetting
+	return fixture.Workspace + string(os.PathListSeparator) + fixture.GlobalDir
 }
 
 func resolverForRoot(rootSetting string) (*Resolver, error) {
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: filepath.Dir(rootSetting), RootSettingPath: rootSetting, Environment: map[string]string{}})
+	workspace, global, _ := strings.Cut(rootSetting, string(os.PathListSeparator))
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, GlobalDir: global, Environment: map[string]string{}})
 	if err != nil {
 		return nil, err
 	}

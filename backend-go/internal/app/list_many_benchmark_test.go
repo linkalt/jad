@@ -34,9 +34,15 @@ func backdateTree(t testing.TB, roots ...string) {
 // use the same profile, model and toolset files, each with turnsPerSession turns.
 func newManySessionsResolver(b testing.TB, sessionCount, turnsPerSession int) *Resolver {
 	b.Helper()
-	root, cwd := b.TempDir(), b.TempDir()
+	cwd := b.TempDir()
+	root := filepath.Join(cwd, ".jad")
+	global := filepath.Join(b.TempDir(), "global")
 	write := func(rel string, value any) {
-		path := filepath.Join(root, rel)
+		base := root
+		if strings.HasPrefix(rel, "models/") || strings.HasPrefix(rel, "tools/") || rel == "global.json" {
+			base = global
+		}
+		path := filepath.Join(base, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			b.Fatal(err)
 		}
@@ -48,11 +54,8 @@ func newManySessionsResolver(b testing.TB, sessionCount, turnsPerSession int) *R
 			b.Fatal(err)
 		}
 	}
-	write("setting.json", map[string]any{
-		"schema_version": 1,
-		"session_roots":  []any{map[string]any{"id": "local", "path": "sessions"}},
-		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(cwd, ".jad", "state")},
-	})
+	write("workspace.json", map[string]any{"schema_version": 2, "id": "local"})
+	write("global.json", map[string]any{"schema_version": 2})
 	write("models/openai/small.json", map[string]any{"provider": "openai", "model": "m", "api_key_env": "FIXTURE_KEY", "base_url": "http://127.0.0.1:1/v1"})
 	write("tools/coding/none.json", map[string]any{"native": map[string]any{}, "mcp": map[string]any{}})
 	for _, category := range []string{"dev", "ops", "docs"} {
@@ -65,7 +68,7 @@ func newManySessionsResolver(b testing.TB, sessionCount, turnsPerSession int) *R
 	}
 	for index := 0; index < sessionCount; index++ {
 		id := fmt.Sprintf("session-%04d", index)
-		write("sessions/"+id+".json", map[string]any{"schema_version": 1, "cwd": cwd, "category": "work", "scope": map[string]any{"profiles": []string{"dev"}}})
+		write("sessions/"+id+".json", map[string]any{"schema_version": 1, "cwd": cwd, "scope": map[string]any{"profiles": []string{"dev"}}})
 		dir := filepath.Join(cwd, ".jad", "state", id, "dev", "main")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			b.Fatal(err)
@@ -76,9 +79,9 @@ func newManySessionsResolver(b testing.TB, sessionCount, turnsPerSession int) *R
 	}
 	// A settings stamp never trusts a file changed within the last two seconds, so the
 	// fixture is dated like a store that has been there for a while.
-	backdateTree(b, root)
+	backdateTree(b, cwd, global)
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: root, RootSettingPath: filepath.Join(root, "setting.json"),
+		WorkingDir: cwd, GlobalDir: global,
 		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k"},
 	})
 	if err != nil {

@@ -42,19 +42,19 @@ func TestPluginCommandInstallsListsAndRemoves(t *testing.T) {
 	if err != nil || !strings.HasPrefix(out, "Installed acme 1.0.0: 3 parts\n") || !strings.Contains(out, "toolset  acme/review") || !strings.Contains(out, "skill    acme-notes") || !strings.Contains(out, "commands acme") {
 		t.Fatalf("install = %q, %v", out, err)
 	}
-	// With no libraries.skill_dirs, the first skill folder is the default <root>/.agent/skills.
-	if _, err := os.Stat(filepath.Join(filepath.Dir(fixture.RootSetting), ".agent", "skills", "acme-notes", "SKILL.md")); err != nil {
+	// With no libraries.skill_dirs, the first skill folder is the default <global>/.agent/skills.
+	if _, err := os.Stat(filepath.Join(fixture.GlobalDir, ".agent", "skills", "acme-notes", "SKILL.md")); err != nil {
 		t.Fatalf("skill not in the first skill folder: %v", err)
 	}
-	// And the first command folder is the default <root>/.agent/commands.
-	if _, err := os.Stat(filepath.Join(filepath.Dir(fixture.RootSetting), ".agent", "commands", "acme", "review.md")); err != nil {
+	// And the first command folder is the default <global>/.agent/commands.
+	if _, err := os.Stat(filepath.Join(fixture.GlobalDir, ".agent", "commands", "acme", "review.md")); err != nil {
 		t.Fatalf("commands not in the first command folder: %v", err)
 	}
 	if out, err := run("plugin", "list"); err != nil || !strings.HasPrefix(out, "acme 1.0.0: 3 parts (from ") {
 		t.Fatalf("list = %q, %v", out, err)
 	}
 	// A record that cannot be read is reported on its own and the other plugins are still listed.
-	brokenRecord := filepath.Join(fixture.StateDir, ".plugins", "broken.json")
+	brokenRecord := filepath.Join(fixture.GlobalDir, "state", ".plugins", "broken.json")
 	if err := os.WriteFile(brokenRecord, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestPluginInstallTimeoutComesFromTheRootSetting(t *testing.T) {
 		t.Skip("git is not installed")
 	}
 	fixture := useFixture(t, layouttest.Spec{})
-	setting, err := os.ReadFile(fixture.RootSetting)
+	setting, err := os.ReadFile(fixture.GlobalSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestPluginInstallTimeoutComesFromTheRootSetting(t *testing.T) {
 	if setting, err = json.Marshal(fields); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fixture.RootSetting, setting, 0o644); err != nil {
+	if err := os.WriteFile(fixture.GlobalSetting, setting, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	repo := t.TempDir()

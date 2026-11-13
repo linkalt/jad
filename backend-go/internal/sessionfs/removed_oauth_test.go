@@ -79,7 +79,7 @@ func TestRemovedOpenAIOAuthSettingIsRefusedWhereverASettingCanBeGiven(t *testing
 func loadLayoutError(t *testing.T, spec layouttest.Spec) error {
 	t.Helper()
 	fixture := layouttest.Write(t, spec)
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		return err
 	}

@@ -48,7 +48,7 @@ func newRecoveryFixture(t *testing.T) recoveryFixture {
 
 func recoveryFixtureFrom(t *testing.T, workspace string, layout layouttest.Fixture) recoveryFixture {
 	t.Helper()
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: layout.Root, RootSettingPath: layout.RootSetting, Environment: map[string]string{}})
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: layout.Workspace, GlobalDir: layout.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func subagentTool(storage string, extra map[string]any) map[string]any {
 func serviceConfig(t *testing.T, f recoveryFixture, server string) Config {
 	t.Helper()
 	var root map[string]json.RawMessage
-	data, err := os.ReadFile(f.layout.RootSetting)
+	data, err := os.ReadFile(f.layout.GlobalSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +130,13 @@ func serviceConfig(t *testing.T, f recoveryFixture, server string) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(f.layout.RootSetting, data, 0o600); err != nil {
+	if err := os.WriteFile(f.layout.GlobalSetting, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:      f.layout.Root,
-		RootSettingPath: f.layout.RootSetting,
-		Environment:     map[string]string{"JAD_API_TOKEN": integrationAPIToken},
+		WorkingDir:  f.layout.Workspace,
+		GlobalDir:   f.layout.GlobalDir,
+		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -165,7 +165,7 @@ func TestLoadConfigReadsTheRecoverSubagentRunsSwitch(t *testing.T) {
 func TestLoadConfigRefusesTheRemovedRecoverProcessesSwitch(t *testing.T) {
 	f := newRecoveryFixture(t)
 	serviceConfig(t, f, `{}`)
-	data, err := os.ReadFile(f.layout.RootSetting)
+	data, err := os.ReadFile(f.layout.GlobalSetting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,10 +175,10 @@ func TestLoadConfigRefusesTheRemovedRecoverProcessesSwitch(t *testing.T) {
 	}
 	root["server"] = json.RawMessage(`{"recover_processes_at_start":false}`)
 	data, _ = json.Marshal(root)
-	if err := os.WriteFile(f.layout.RootSetting, data, 0o600); err != nil {
+	if err := os.WriteFile(f.layout.GlobalSetting, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = LoadConfig(sessionfs.LoadOptions{WorkingDir: f.layout.Root, RootSettingPath: f.layout.RootSetting, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	_, err = LoadConfig(sessionfs.LoadOptions{WorkingDir: f.layout.Workspace, GlobalDir: f.layout.GlobalDir, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err == nil || !strings.Contains(err.Error(), "recover_processes_at_start was removed") {
 		t.Fatalf("LoadConfig() error = %v, want the removed key named", err)
 	}

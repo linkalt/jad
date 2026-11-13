@@ -141,8 +141,7 @@ func newCheckpointFixture(t *testing.T, options checkpointFixtureOptions) *check
 	}
 	if options.nested {
 		// The session and state folders sit inside the workspace, as in a project's .jad.
-		spec.SessionsDir = filepath.Join(workspace, ".jad", "sessions")
-		spec.StateDir = filepath.Join(workspace, ".jad", "state")
+		spec.Workspace = workspace
 	}
 	config, layout := layoutConfig(t, spec, map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"})
 	fixture.sessionDir = layout.SessionStateDir

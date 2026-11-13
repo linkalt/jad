@@ -28,7 +28,7 @@ func TestLoadSessionConfigSelectsProfileModelAndStorage(t *testing.T) {
 		},
 		Settings: map[string]any{"persistence": map[string]any{"durability": "process", "max_item_bytes": 4096, "response_metadata": "full"}},
 	})
-	modelsDir := filepath.Join(fixture.Root, "models", "openai")
+	modelsDir := filepath.Join(fixture.GlobalDir, "models", "openai")
 	stateDir := filepath.Join(fixture.StateDir, "session-1")
 
 	active, err := LoadSessionConfig(location, "", "openai/alternate")

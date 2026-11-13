@@ -132,7 +132,7 @@ func TestSandboxToolsAreNotTiedToTheProfileTools(t *testing.T) {
 		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"},
 			"tools": []string{"read", "search", "write", "exec", "tool_smith", "hooks", "mcp", "lsp"}}},
 	})
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestSandboxLoadsFromTheSessionSettings(t *testing.T) {
 		Native:   map[string]any{"exec": map[string]any{}, "tool_smith": map[string]any{}, "async": map[string]any{}},
 		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}, "tools": []string{"exec"}}},
 	})
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestSandboxDefaultLeavesHooksOutAndListedHooksLoad(t *testing.T) {
 			Native:   map[string]any{"exec": map[string]any{}, "async": map[string]any{}},
 			Settings: map[string]any{"sandbox": sandbox, "hooks": map[string]any{"enabled": true}},
 		})
-		config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+		config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +276,7 @@ func TestCheckLayoutCollectsTheEnabledSandbox(t *testing.T) {
 		Native:   map[string]any{"exec": map[string]any{}, "async": map[string]any{}},
 		Settings: map[string]any{"sandbox": map[string]any{"enabled": true, "backend": "command", "command": []string{"env"}}},
 	})
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

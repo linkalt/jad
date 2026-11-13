@@ -121,12 +121,12 @@ func newProfileLazyFixture(t *testing.T, callerLazy, targetLazy []string, target
 		"coding/target": {"native": targetNative, "mcp": map[string]any{"m/fixture": mcpUse}},
 	} {
 		body, _ := json.Marshal(file)
-		writeFile(t, filepath.Join(f.layout.Root, "tools", filepath.FromSlash(id)+".json"), body)
+		writeFile(t, filepath.Join(f.layout.GlobalDir, "tools", filepath.FromSlash(id)+".json"), body)
 	}
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:      f.layout.Root,
-		RootSettingPath: f.layout.RootSetting,
-		Environment:     map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
+		WorkingDir:  f.layout.Workspace,
+		GlobalDir:   f.layout.GlobalDir,
+		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"},
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)

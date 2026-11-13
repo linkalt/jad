@@ -27,6 +27,7 @@ func newLockedConfigFixture(t *testing.T) (*Resolver, string) {
 	}
 	t.Cleanup(resolver.Close)
 	backdate(t, fixture.Root)
+	backdate(t, fixture.GlobalDir)
 	return resolver, fixture.Root
 }
 
@@ -156,7 +157,7 @@ func TestResolveLoadsAgainWhenAFileReadByTheLockedConfigChanged(t *testing.T) {
 			}
 		},
 		"model added": func(t *testing.T, root string) {
-			if err := os.WriteFile(filepath.Join(root, "models", "openai", "extra.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(filepath.Dir(root)), "global", "models", "openai", "extra.json"), []byte(`{"provider":"openai","model":"gpt-test"}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},

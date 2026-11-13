@@ -17,7 +17,7 @@ func layoutConfig(t *testing.T, spec layouttest.Spec, environment map[string]str
 		spec.SessionID = "demo"
 	}
 	fixture := layouttest.Write(t, spec)
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: environment})
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: environment})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}

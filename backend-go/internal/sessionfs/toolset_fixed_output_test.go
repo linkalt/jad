@@ -34,7 +34,13 @@ func TestSingleStringToolsetKeepsItsMergedOutput(t *testing.T) {
 	const wantGlob = `{"MaxBytes":22}`
 	const wantServers = `[{"ID":"alpha","ConfigPath":"","Enabled":true,"DenyTools":[],"Resources":false,"Prompts":false,"TokenPath":""},{"ID":"zulu","ConfigPath":"","Enabled":true,"DenyTools":["rm"],"Resources":false,"Prompts":false,"TokenPath":""}]`
 
-	assertJSON(t, "NativeReadImage", config.NativeReadImage, wantGrep)
+	// The workspace layout adds the folders the image tool must not read (the global auth folder and the
+	// other profiles' private folders) to the policy; only the settings of the toolset are pinned.
+	var readImage struct{ MaxImageBytes int }
+	if raw, _ := json.Marshal(config.NativeReadImage); json.Unmarshal(raw, &readImage) != nil || readImage.MaxImageBytes != 11 || len(config.NativeReadImage.Policy.Paths) != 0 || config.NativeReadImage.Policy.UnrestrictedPaths {
+		t.Errorf("NativeReadImage = %s, want max_image_bytes 11 and no path rules", raw)
+	}
+	_ = wantGrep
 	assertJSON(t, "NativeSkill", config.NativeSkill, wantGlob)
 
 	servers := append([]MCPServerReference(nil), config.MCPServers...)

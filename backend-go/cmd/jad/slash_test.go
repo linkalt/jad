@@ -48,7 +48,7 @@ func TestRunSlashCommands(t *testing.T) {
 		MCPConfig: map[string]map[string]any{"chat/greet": {"schema_version": 1, "transport": map[string]any{"type": "streamable_http", "url": greetServer(t)}}},
 	})
 	t.Setenv("FIXTURE_KEY", "k")
-	prompts := filepath.Join(fixture.Root, ".agent", "prompts")
+	prompts := filepath.Join(fixture.GlobalDir, ".agent", "prompts")
 	if err := os.MkdirAll(prompts, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRunSlashCommands(t *testing.T) {
 		t.Fatalf("the MCP prompt is not in the transcript:\n%s", transcript())
 	}
 
-	commands := filepath.Join(fixture.Root, ".agent", "commands", "code")
+	commands := filepath.Join(fixture.GlobalDir, ".agent", "commands", "code")
 	if err := os.MkdirAll(commands, 0o755); err != nil {
 		t.Fatal(err)
 	}

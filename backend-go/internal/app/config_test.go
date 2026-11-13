@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,11 +14,10 @@ import (
 func TestLoadConfigAppliesRootSettingsAndEnvironmentOverrides(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"host":"127.0.0.1","port":8789,"max_body_bytes":8192,"run_state_retention_ms":0,"tool_stream_interval_ms":17,"sse_max_buffered_bytes":4096,"allowed_origins":["https://ui.example.test"]}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	global := writeWorkspaceSetting(t, cwd, setting)
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir: cwd,
+		GlobalDir:  global,
 		Environment: map[string]string{
 			"JAD_API_TOKEN": integrationAPIToken,
 			"HOST":          "localhost",
@@ -52,13 +52,15 @@ func TestLoadConfigAppliesRootSettingsAndEnvironmentOverrides(t *testing.T) {
 
 func TestLoadConfigRejectsInvalidPortAndServiceRequiresToken(t *testing.T) {
 	cwd := t.TempDir()
+	global := writeWorkspaceSetting(t, cwd, `{}`)
 	if _, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir:  cwd,
+		GlobalDir:   global,
 		Environment: map[string]string{"PORT": "invalid"},
 	}); err == nil {
 		t.Fatal("LoadConfig(PORT=invalid) succeeded")
 	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{}})
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("LoadConfig(defaults) error = %v", err)
 	}
@@ -69,11 +71,12 @@ func TestLoadConfigRejectsInvalidPortAndServiceRequiresToken(t *testing.T) {
 
 func TestLoadConfigRejectsLegacyAPITokenName(t *testing.T) {
 	cwd := t.TempDir()
-	_, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, cwd, `{}`)
+	_, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"AGENT_API_TOKEN": integrationAPIToken}})
 	if err == nil || !strings.Contains(err.Error(), "JAD_API_TOKEN") || !strings.Contains(err.Error(), "AGENT_API_TOKEN") {
 		t.Fatalf("LoadConfig(legacy token only) error = %v, want one naming both variables", err)
 	}
-	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"AGENT_API_TOKEN": "old", "JAD_API_TOKEN": integrationAPIToken}}); err != nil {
+	if _, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"AGENT_API_TOKEN": "old", "JAD_API_TOKEN": integrationAPIToken}}); err != nil {
 		t.Fatalf("LoadConfig(both set) error = %v, want success", err)
 	}
 }
@@ -81,10 +84,8 @@ func TestLoadConfigRejectsLegacyAPITokenName(t *testing.T) {
 func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_concurrent_runs":7}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, cwd, setting)
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +97,8 @@ func TestLoadConfigPassesMaxConcurrentRunsToTheHTTPConfig(t *testing.T) {
 func TestLoadConfigPassesMaxLeafCallsToTheConfig(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_leaf_calls":9}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, cwd, setting)
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,14 +113,13 @@ func TestLoadConfigPassesMaxLeafCallsToTheConfig(t *testing.T) {
 // listen_unix set nothing answers on TCP, so any host is fine.
 func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 	cwd := t.TempDir()
+	global := ""
 	writeSetting := func(body string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		global = writeWorkspaceSetting(t, cwd, body)
 	}
 	load := func(host string) (Config, error) {
-		return LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
+		return LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "HOST": host}})
 	}
 	refused := func(host, body string) {
 		t.Helper()
@@ -166,10 +164,8 @@ func TestLoadConfigRefusesAWildcardHostForTheRemoteAPI(t *testing.T) {
 func TestNewServiceSizesTheLeafBudgetFromMaxLeafCalls(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"id":"work","path":"sessions"}],"server":{"max_leaf_calls":3}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, cwd, setting)
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,4 +195,38 @@ func TestNewServiceSizesTheLeafBudgetFromMaxLeafCalls(t *testing.T) {
 		t.Fatal("a fourth leaf call took a token of a budget of 3")
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+// writeWorkspaceSetting makes dir a workspace of the workspace layout and writes the global.json
+// for it from a root-setting-shaped JSON text: its session_roots key (the first root's id becomes the
+// workspace id) is dropped, the rest (server, libraries, defaults, cli) is global.json's. It returns
+// the global folder, which a load needs as LoadOptions.GlobalDir.
+func writeWorkspaceSetting(t *testing.T, dir, text string) string {
+	t.Helper()
+	var setting map[string]any
+	if err := json.Unmarshal([]byte(text), &setting); err != nil {
+		t.Fatal(err)
+	}
+	workspace := map[string]any{"schema_version": 2}
+	if roots, _ := setting["session_roots"].([]any); len(roots) > 0 {
+		if root, _ := roots[0].(map[string]any); root != nil && root["id"] != nil {
+			workspace["id"] = root["id"]
+		}
+	}
+	delete(setting, "session_roots")
+	setting["schema_version"] = 2
+	global := filepath.Join(t.TempDir(), "global")
+	for path, value := range map[string]any{filepath.Join(dir, ".jad", "workspace.json"): workspace, filepath.Join(global, "global.json"): setting} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return global
 }

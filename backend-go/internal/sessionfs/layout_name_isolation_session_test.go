@@ -18,7 +18,7 @@ import (
 // that name, and nothing that loaded before stops loading.
 
 func templateDir(fixture layouttest.Fixture) string {
-	return filepath.Join(fixture.Root, ".jad", "sandbox")
+	return fixture.SandboxDir
 }
 
 func plantTemplateExtras(t *testing.T, dir string) {
@@ -99,7 +99,7 @@ func TestRenamingAMisnamedTemplateChangesTheStamp(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{SandboxTemplates: map[string]map[string]any{"box": envSandbox(nil)}, Settings: map[string]any{"sandbox": "box"}})
 	dir := templateDir(fixture)
 	writeFileT(t, filepath.Join(dir, "second (1).json"), `{"enabled":false}`)
-	backdateTree(t, fixture.Root, fixture.CWD)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, fixture.CWD)
 	config, stamp, err := LoadSessionSettingsStamped(location, "", "")
 	if err != nil || !hasWarning(config, "second (1).json") {
 		t.Fatalf("load: %v warnings %q", err, config.Warnings)

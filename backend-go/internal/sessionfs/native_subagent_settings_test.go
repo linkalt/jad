@@ -241,7 +241,7 @@ func TestLoadSessionConfigAcceptsTheSubagentToolAndNeverListsItForTypeScript(t *
 	if err != nil {
 		t.Fatalf("LoadSessionConfig: %v", err)
 	}
-	fastPath := filepath.Join(fixture.Root, "models", "openai", "fast.json")
+	fastPath := filepath.Join(fixture.GlobalDir, "models", "openai", "fast.json")
 	if config.NativeSubagent == nil || len(config.NativeSubagent.Agents) != 1 || config.NativeSubagent.Agents[0].ModelPath != fastPath {
 		t.Fatalf("subagent = %+v", config.NativeSubagent)
 	}

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,11 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"jad/backend-go/internal/asyncmgr"
-	"jad/backend-go/internal/remote"
 	"jad/backend-go/internal/remoteapi"
 	"jad/backend-go/internal/sessionfs"
-	"jad/backend-go/internal/tools/native"
 )
 
 // startLoop starts p1 of a:s1 through the row "peer" and returns when its run ends.
@@ -104,47 +100,18 @@ func TestGlobalDenyRuleRefusesIncomingRemoteMessages(t *testing.T) {
 // of one workspace, with a key file, and the directory is scoped to that key.
 func bindingClient(t *testing.T, entryURL, workspace string) *remoteClient {
 	t.Helper()
-	local := newLayoutFixture(t)
-	dir, keys := t.TempDir(), t.TempDir()
-	binding := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"workspace":%q,"timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1}}`, entryURL, workspace)
-	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(binding), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	keyFile := filepath.Join(keys, "peer-key.json")
-	if err := os.WriteFile(keyFile, []byte(`{"kind":"remote_key","binding":"peer","token":"`+e2eToken+`"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	hub := remote.NewHub(nil)
-	t.Cleanup(hub.Close)
-	directory := hub.Directory(dir).Scoped(remote.Scope{Workspace: true, Keys: map[string]remote.Key{"peer": {Name: "peer-key", File: keyFile}}})
-	host, err := local.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(local.cwd, "pm")), Config: asyncmgr.DefaultConfig()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 60_000, ResultMaxBytes: 4096, MaxChain: 2, MaxQueued: 4, Remotes: []string{"peer"}}
-	messenger := remoteClientMessenger{profileMessenger: profileMessenger{resolver: local.service.resolver}, hub: hub}
-	message, err := native.NewProfileMessageToolWithRemotes(settings, []string{"review/reviewer"}, messenger, host, directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reference, err := local.service.resolver.CanonicalSessionReference("local:demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &remoteClient{t: t, message: message, owner: sessionKey(reference, "dev/coder"), hub: hub, dir: dir}
+	return newBoundClient(t, entryURL, workspace, "")
 }
 
-// A client of the workspace layout reaches a v1 server (several roots, or one) through a binding
-// whose workspace is the server's root id: the session goes out as <root>:<session>, which a v1
-// token row admits only with a glob whose session part is * or names the root (T-036). A row of
-// bare globs refuses it; that is the documented limit of a v2 client against a v1 server.
-func TestBindingClientReachesAV1ServerOnlyThroughQualifiedGlobs(t *testing.T) {
+// A client reaches a server through a binding of one workspace: the session goes out qualified to
+// that workspace, and a token row of the server (which names the workspace and holds bare globs)
+// admits it. The old forms are not binding addresses.
+func TestBindingClientReachesAServerThroughAWorkspaceRow(t *testing.T) {
 	server, _ := e2eServer(t)
 	client := bindingClient(t, server.url, "local")
 	if out := client.call("remote:peer/demo/dev/coder", 30_000); !strings.Contains(out, "answered") || strings.Contains(out, "error_code") || strings.Contains(out, e2eToken) {
 		t.Fatalf("a row with * globs:\n%s", out)
 	}
-	// The old forms are not binding addresses.
 	for _, ref := range []string{"remote:peer/dev/coder", "remote:peer/local:demo/dev/coder", "remote:peer/demo/dev/coder/extra"} {
 		if out := client.call(ref, 30_000); !strings.Contains(out, "invalid_profile_ref") {
 			t.Errorf("%s:\n%s", ref, out)
@@ -152,10 +119,13 @@ func TestBindingClientReachesAV1ServerOnlyThroughQualifiedGlobs(t *testing.T) {
 	}
 
 	f := newSubagentFixture(t, map[string]any{"model": "child.json", "description": "Finds facts."})
-	bare := startRemoteServer(t, f, tokenTable(tokenRow("client", e2eToken, `"profiles":["demo/dev/*"],"actions":["message","status","stop"]`)))
-	narrow := bindingClient(t, bare.url, "local")
-	if out := narrow.call("remote:peer/demo/dev/coder", 30_000); !strings.Contains(out, "remote_forbidden") {
-		t.Fatalf("a bare-glob row must refuse a qualified session:\n%s", out)
+	narrow := startRemoteServer(t, f, tokenTable(tokenRow("client", e2eToken, `"profiles":["demo/dev/*"],"actions":["message","status","stop"]`)))
+	allowed := bindingClient(t, narrow.url, "local")
+	if out := allowed.call("remote:peer/demo/dev/coder", 30_000); strings.Contains(out, "remote_forbidden") {
+		t.Fatalf("a bare-glob row of the workspace must admit its own session:\n%s", out)
+	}
+	if out := allowed.call("remote:peer/demo/review/reviewer", 30_000); !strings.Contains(out, "remote_forbidden") {
+		t.Fatalf("a profile outside the row's globs must be refused:\n%s", out)
 	}
 }
 

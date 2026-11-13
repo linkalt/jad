@@ -27,8 +27,8 @@ func samplingFixture(t *testing.T) *layoutFixture {
 		file["transport"].(map[string]any)["env"] = map[string]string{appStdioMCPEnvironment: "1", appStdioMCPAskEnvironment: "1"}
 		file["sampling"] = map[string]any{"enabled": true, "max_requests": 50}
 	}))
-	writeFile(t, filepath.Join(f.root, "mcp", "m", "stdio.json"), body)
-	writeFile(t, filepath.Join(f.root, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"subagent":{"background_writers":true,"max_background_writers":2,`+
+	writeFile(t, filepath.Join(f.global, "mcp", "m", "stdio.json"), body)
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"subagent":{"background_writers":true,"max_background_writers":2,`+
 		`"agents":{"finder":{"description":"Uses the server."}}}},"mcp":{"m/stdio":{}}}`))
 	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large","openai/small"],"model_default":"openai/large","toolset":"review/stdio"}`)
 	return f
@@ -240,7 +240,7 @@ func TestProfileMessageModelChoiceSamplesOnlyForItsOwnRunAndItsChildren(t *testi
 // while the user's own read of the same resource (no run) is refused and samples nothing.
 func TestMCPResourceReadSamplesForTheRunThatReadsAndNotForTheUser(t *testing.T) {
 	f := samplingFixture(t)
-	writeFile(t, filepath.Join(f.root, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{}},"mcp":{"m/stdio":{"resources":true}}}`))
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{}},"mcp":{"m/stdio":{"resources":true}}}`))
 	readTool := strings.Replace(mcpToolNameFor("stdio", "resources/read"), "resources/read", "resources_read", 1)
 	outputs := make(chan string, 4)
 	f.script = func(_ string, body string) string {

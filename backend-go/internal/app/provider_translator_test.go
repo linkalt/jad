@@ -24,11 +24,11 @@ func translatorFixture(t *testing.T, model map[string]any) *layoutFixture {
 	f := newLayoutFixture(t)
 	for rel, value := range map[string]any{"models/openai/small.json": model, "tools/coding/none.json": map[string]any{"native": map[string]any{"skill": map[string]any{}}, "mcp": map[string]any{}}} {
 		data, _ := json.Marshal(value)
-		if err := os.WriteFile(filepath.Join(f.root, rel), data, 0o600); err != nil {
+		if err := os.WriteFile(f.path(rel), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeSkill(t, f.root, "hello", "file body 42")
+	writeSkill(t, f.global, "hello", "file body 42")
 	return f
 }
 

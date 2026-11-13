@@ -22,7 +22,7 @@ func toolsetSpec(agent map[string]any) layouttest.Spec {
 
 func writeToolsetFile(t *testing.T, fixture layouttest.Fixture, id, text string) {
 	t.Helper()
-	path := filepath.Join(fixture.Root, "tools", filepath.FromSlash(id)+".json")
+	path := filepath.Join(fixture.GlobalDir, "tools", filepath.FromSlash(id)+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func loadToolsetSession(t *testing.T, spec layouttest.Spec, extra map[string]str
 	for id, text := range extra {
 		writeToolsetFile(t, fixture, id, text)
 	}
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

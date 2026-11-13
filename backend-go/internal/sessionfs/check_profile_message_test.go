@@ -20,7 +20,7 @@ func checkProfileMessageSession(t *testing.T, profiles []string, deny []any) Che
 	for _, id := range profiles {
 		files[id] = map[string]any{"models": []string{"openai/default"}, "model_default": "openai/default", "toolset": "coding/default"}
 	}
-	fixture := layouttest.Write(t, layouttest.Spec{
+	fixture := layouttest.WriteV1(t, layouttest.Spec{
 		Profiles: files,
 		Native:   map[string]any{"profile_message": map[string]any{"deny_profiles": deny}},
 	})

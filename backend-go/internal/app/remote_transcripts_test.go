@@ -67,7 +67,7 @@ type remoteReaders struct {
 func startRemoteReaders(t *testing.T, server *remoteServer, allow bool, names ...string) remoteReaders {
 	t.Helper()
 	client := startRemoteClient(t, server.url, "")
-	directory := client.hub.Directory(client.dir)
+	directory := client.directory
 	transcript, err := native.NewTranscriptToolWithRemotes(transcriptSettings(allow, names...), native.TranscriptFiles{}, nil, nil, directory)
 	if err != nil {
 		t.Fatal(err)
@@ -120,9 +120,10 @@ func TestRemoteTranscriptsListAndReadWithoutPathsOrTokens(t *testing.T) {
 	if !strings.Contains(detail, "the answer is forty-two") {
 		t.Fatalf("detail:\n%s", detail)
 	}
+	// A binding has no default session: the session is always written.
 	short := readers.run(t, readers.transcript, map[string]any{"path": "remote:peer/profile:dev/coder"})
-	if !strings.Contains(short, "forty-two") {
-		t.Fatalf("default_session fills the session:\n%s", short)
+	if strings.Contains(short, "forty-two") {
+		t.Fatalf("a binding must not fill in a session:\n%s", short)
 	}
 }
 

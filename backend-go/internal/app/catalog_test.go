@@ -349,7 +349,9 @@ func TestSessionListAndSnapshotCarryModelOptions(t *testing.T) {
 		Profiles: map[string]map[string]any{"dev/options": {"models": []string{"m/a", "m/b", "m/c"}, "model_default": "m/a"}},
 		Session:  map[string]any{"scope": map[string]any{"profiles": []string{"dev/options"}}},
 	}, map[string]string{"FIXTURE_KEY": "key"})
-	modelFile := func(id string) string { return filepath.Join(fixture.Root, "models", filepath.FromSlash(id)+".json") }
+	modelFile := func(id string) string {
+		return filepath.Join(fixture.GlobalDir, "models", filepath.FromSlash(id)+".json")
+	}
 	if err := os.WriteFile(modelFile("m/c"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +419,9 @@ func TestListingModelOptionsLeaveOutModelFilesThatFailTheModelRules(t *testing.T
 		Profiles: map[string]map[string]any{"dev/lenient": {"models": []string{"m/gone", "m/request", "m/efforts", "m/plain"}, "model_default": "m/plain"}},
 		Session:  map[string]any{"scope": map[string]any{"profiles": []string{"dev/lenient"}}},
 	}, map[string]string{"FIXTURE_KEY": "key"})
-	modelFile := func(id string) string { return filepath.Join(fixture.Root, "models", filepath.FromSlash(id)+".json") }
+	modelFile := func(id string) string {
+		return filepath.Join(fixture.GlobalDir, "models", filepath.FromSlash(id)+".json")
+	}
 	if err := os.WriteFile(modelFile("m/gone"), []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}

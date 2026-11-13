@@ -40,7 +40,7 @@ func writeFileT(t *testing.T, path, text string) {
 // so a later "not current" can only come from the change a test makes.
 func stampedLoad(t *testing.T, fixture layouttest.Fixture) (SessionConfig, SettingsStamp) {
 	t.Helper()
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestSettingsStampSeesAPromptDocumentEditAndDelete(t *testing.T) {
 	document := filepath.Join(cwd, "rules.md")
 	writeFileT(t, document, "one")
 	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, ProfileExtra: map[string]any{"prompt_documents": []string{document}}})
-	backdateTree(t, fixture.Root, cwd)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 
 	config, stamp := stampedLoad(t, fixture)
 	if config.Model.PromptText != "one" || len(config.PromptDocuments) != 1 || config.PromptDocuments[0] != document {
@@ -88,7 +88,7 @@ func TestSettingsStampSeesAPromptDocumentEditAndDelete(t *testing.T) {
 func TestSettingsStampSeesTheWorkingDirectoryGoAway(t *testing.T) {
 	cwd := t.TempDir()
 	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd})
-	backdateTree(t, fixture.Root)
+	backdateTree(t, fixture.Root, fixture.GlobalDir)
 
 	_, stamp := stampedLoad(t, fixture)
 	writeFileT(t, filepath.Join(cwd, "new.txt"), "x")
@@ -120,7 +120,7 @@ func TestSettingsStampSeesAnEnvFileEdit(t *testing.T) {
 	envFile := filepath.Join(cwd, "tool.env")
 	writeFileT(t, envFile, "A=1\n")
 	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"exec": map[string]any{"env_file": envFile}}})
-	backdateTree(t, fixture.Root, cwd)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 
 	config, stamp := stampedLoad(t, fixture)
 	if config.NativeExec == nil || config.NativeExec.Child.EnvFile != envFile {
@@ -143,7 +143,7 @@ func TestSettingsStampSeesAStateContextDocumentEdit(t *testing.T) {
 			"compaction": map[string]any{"tools": []string{"task"}, "prompt_documents": []string{document}},
 		}}},
 	})
-	backdateTree(t, fixture.Root, cwd)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 
 	config, stamp := stampedLoad(t, fixture)
 	if got := config.StateContext.Triggers["compaction"].PromptDocuments; len(got) != 1 || got[0] != document {
@@ -160,7 +160,7 @@ func TestSettingsStampSeesAnAgentFolderChange(t *testing.T) {
 	agents := filepath.Join(cwd, "agents")
 	writeFileT(t, filepath.Join(agents, "helper", "prompt.md"), "be brief")
 	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, Native: map[string]any{"subagent": map[string]any{"agents_dir": []string{agents}}}})
-	backdateTree(t, fixture.Root, cwd)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 
 	config, stamp := stampedLoad(t, fixture)
 	if config.NativeSubagent == nil || len(config.NativeSubagent.Agents) != 1 {
@@ -195,7 +195,7 @@ func TestSettingsStampStaysCurrentWhenNothingChanged(t *testing.T) {
 	document := filepath.Join(cwd, "rules.md")
 	writeFileT(t, document, "one")
 	fixture := layouttest.Write(t, layouttest.Spec{CWD: cwd, ProfileExtra: map[string]any{"prompt_documents": []string{document}}})
-	backdateTree(t, fixture.Root, cwd)
+	backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 
 	_, stamp := stampedLoad(t, fixture)
 	for i := 0; i < 3; i++ {

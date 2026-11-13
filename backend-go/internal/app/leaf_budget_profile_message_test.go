@@ -83,7 +83,7 @@ func targetReadsThenAnswers(f *layoutFixture, message map[string]any) {
 func TestDeadlockProfileMessageNotHandledFinishesWithBudgetOne(t *testing.T) {
 	f := profileMessageDeadlockFixture(t, `{"native":{"profile_message":{},"skill":{}},"mcp":{}}`)
 	targetReadsThenAnswers(f, map[string]any{"profile": "review/reviewer", "message": "first", "block_ms": 0})
-	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "Profile review/reviewer answered")
+	requireParentReceivedProfileMessageOutput(t, f, postRunWithDeadlockTimeout(t, f.api.URL), "Profile local:local/demo/review/reviewer answered")
 	requireTargetReadTheNotes(t, f)
 }
 

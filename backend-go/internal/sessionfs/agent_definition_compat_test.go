@@ -66,7 +66,7 @@ func TestAgentDefinitionsLoadUnchanged(t *testing.T) {
 		`{"schema_version":1,"description":"folder sandbox","tools":["exec"],"isolation":"worktree","sandbox":{"enabled":true,"backend":"command","command":["env"],"write":{"paths":["{tmp}"]},"isolation":{"base":"working"}}}`)
 	writeAgentFile(t, filepath.Join(folders, "folded_box", "prompt.md"), "boxed folder\n")
 
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAgentDefinitionsLoadUnchanged(t *testing.T) {
 	sort.Strings(keys)
 	out.WriteString("== agent toolsets\n" + strings.Join(keys, "\n") + "\n")
 
-	got := strings.NewReplacer(sample, "<sample>", fixture.CWD, "<cwd>", fixture.Root, "<root>").Replace(out.String())
+	got := strings.NewReplacer(sample, "<sample>", fixture.CWD, "<cwd>", fixture.Root, "<root>", fixture.GlobalDir, "<global>").Replace(out.String())
 	if os.Getenv("JAD_UPDATE_RUN_BASELINE") == "1" {
 		if err := os.WriteFile(agentDefinitionsGolden, []byte(got), 0o644); err != nil {
 			t.Fatal(err)

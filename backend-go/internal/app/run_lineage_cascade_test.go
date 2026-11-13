@@ -65,14 +65,11 @@ func newLineageChain(t *testing.T, options lineageOptions) *lineageChain {
 	t.Helper()
 	f := newLayoutFixture(t)
 	// max_depth 3 leaves room for the target's child, which runs at depth 3 (R6).
-	profileMessage, subagent := "", `"max_depth":3,`
-	if strings.HasPrefix(options.target, "other/") {
-		profileMessage = `"sessions":["*"]`
-	}
+	subagent := `"max_depth":3,`
 	if options.coderStopsExplore {
 		subagent += `"background_writers":true,"max_background_writers":2,`
 	}
-	f.overwrite(t, "tools/coding/none.json", mixedChainToolset(profileMessage, subagent))
+	f.overwrite(t, "tools/coding/none.json", mixedChainToolset("", subagent))
 	if strings.HasPrefix(options.target, "other/") {
 		addOtherSession(t, f, "other", "review")
 	}

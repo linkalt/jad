@@ -221,7 +221,7 @@ func TestModelFallbackAnswersAHeadlessRun(t *testing.T) {
 	}
 	for rel, value := range files {
 		data, _ := json.Marshal(value)
-		path := filepath.Join(f.root, rel)
+		path := f.path(rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +254,7 @@ func TestModelFallbackLeftOutIsReportedOncePerRunner(t *testing.T) {
 	}
 	for rel, value := range files {
 		data, _ := json.Marshal(value)
-		path := filepath.Join(f.root, rel)
+		path := f.path(rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -263,7 +263,7 @@ func TestModelFallbackLeftOutIsReportedOncePerRunner(t *testing.T) {
 		}
 	}
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
+		WorkingDir: f.cwd, GlobalDir: f.global,
 		Environment: map[string]string{"FIXTURE_KEY": "k"},
 	})
 	if err != nil {

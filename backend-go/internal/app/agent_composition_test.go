@@ -28,14 +28,14 @@ func TestAgentRunConfigLayersTheAgentOverTheCallersSelection(t *testing.T) {
 			"own":    map[string]any{"model": "openai/default"},
 		}}},
 	})
-	toolset := filepath.Join(fixture.Root, "tools", "extra", "search.json")
+	toolset := filepath.Join(fixture.GlobalDir, "tools", "extra", "search.json")
 	if err := os.MkdirAll(filepath.Dir(toolset), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(toolset, []byte(`{"native":{"read_image":{}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

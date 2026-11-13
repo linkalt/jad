@@ -54,7 +54,7 @@ type mixedRunManifest struct {
 func mixedRunManifests(t *testing.T, f *layoutFixture) []mixedRunManifest {
 	t.Helper()
 	var runs []mixedRunManifest
-	for _, root := range []string{f.cwd, f.root} {
+	for _, root := range []string{f.cwd} { // f.root is inside it
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || filepath.Base(filepath.Dir(path)) != ".runs" || filepath.Ext(path) != ".json" {
 				return err

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -18,8 +17,7 @@ import (
 func TestRunBaselineMixedChainThroughARemoteSubagent(t *testing.T) {
 	server, serverFixture := e2eServer(t)
 	f := newLayoutFixture(t)
-	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"}}`, server.url)
-	writeFile(t, filepath.Join(f.root, ".jad", "remotes", "peer.json"), []byte(entry))
+	f.bindRemote(t, "peer", server.url)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"async":{},"subagent":{"agents":{"explore":{"description":"Finds facts.","tools":["subagent"]}},"remotes":["peer"]}},"mcp":{}}`)
 	f.captureBodies = true
 	f.script = func(_, body string) string {

@@ -57,22 +57,42 @@
       "{home}/.pypirc",
       "{home}/.cargo/credentials",
       "{home}/.docker/config.json",
-      "{home}/.jad/auth"
+      "{home}/.jad/auth",
+      "<global>/auth"
     ],
     "Command": [
       "env"
     ],
     "CheckTimeoutMs": 10000,
     "ReadOnlyPaths": [
-      "<root>/setting.json",
+      "<global>/global.json",
       "<root>/sessions/session-1.json",
       "<root>/profiles",
+      "<global>/models",
+      "<global>/tools",
+      "<global>/mcp",
+      "<global>/remotes",
+      "<root>/state",
+      "<global>/sandbox",
+      "<root>/workspace.json",
       "<root>/models",
       "<root>/tools",
-      "<root>/mcp",
-      "<root>/.jad/remotes",
-      "<root>/state",
-      "<root>/.jad/sandbox"
+      "<root>/sessions"
+    ],
+    "SealedPaths": [
+      "<global>",
+      "<root>"
+    ],
+    "SealedInner": [
+      "<root>/exec"
+    ],
+    "ProfileHidden": [
+      "<root>/profile-own",
+      "<root>/data/profiles"
+    ],
+    "ProfileShown": [
+      "<root>/profile-own/dev/coder",
+      "<root>/data/profiles/dev/coder"
     ],
     "Isolation": {
       "Mode": "none"
@@ -143,22 +163,42 @@
       "{home}/.pypirc",
       "{home}/.cargo/credentials",
       "{home}/.docker/config.json",
-      "{home}/.jad/auth"
+      "{home}/.jad/auth",
+      "<global>/auth"
     ],
     "Command": [
       "env"
     ],
     "CheckTimeoutMs": 10000,
     "ReadOnlyPaths": [
-      "<root>/setting.json",
+      "<global>/global.json",
       "<root>/sessions/session-1.json",
       "<root>/profiles",
+      "<global>/models",
+      "<global>/tools",
+      "<global>/mcp",
+      "<global>/remotes",
+      "<root>/state",
+      "<global>/sandbox",
+      "<root>/workspace.json",
       "<root>/models",
       "<root>/tools",
-      "<root>/mcp",
-      "<root>/.jad/remotes",
-      "<root>/state",
-      "<root>/.jad/sandbox"
+      "<root>/sessions"
+    ],
+    "SealedPaths": [
+      "<global>",
+      "<root>"
+    ],
+    "SealedInner": [
+      "<root>/exec"
+    ],
+    "ProfileHidden": [
+      "<root>/profile-own",
+      "<root>/data/profiles"
+    ],
+    "ProfileShown": [
+      "<root>/profile-own/dev/coder",
+      "<root>/data/profiles/dev/coder"
     ],
     "Isolation": {
       "Mode": "worktree",
@@ -174,7 +214,7 @@
 {
   "Name": "finder",
   "Description": "",
-  "ModelPath": "<root>/models/openai/default.json",
+  "ModelPath": "<global>/models/openai/default.json",
   "ReasoningEffort": "",
   "Model": "openai/default",
   "Instructions": "",
@@ -383,22 +423,43 @@
       "{home}/.pypirc",
       "{home}/.cargo/credentials",
       "{home}/.docker/config.json",
-      "{home}/.jad/auth"
+      "{home}/.jad/auth",
+      "<global>/auth"
     ],
     "Command": [
       "env"
     ],
     "CheckTimeoutMs": 10000,
     "ReadOnlyPaths": [
-      "<root>/setting.json",
+      "<global>/global.json",
       "<root>/sessions/session-1.json",
       "<root>/profiles",
+      "<global>/models",
+      "<global>/tools",
+      "<global>/mcp",
+      "<global>/remotes",
+      "<root>/state",
+      "<global>/sandbox",
+      "<root>/workspace.json",
       "<root>/models",
       "<root>/tools",
-      "<root>/mcp",
-      "<root>/.jad/remotes",
-      "<root>/state",
-      "<root>/.jad/sandbox"
+      "<root>/sessions"
+    ],
+    "SealedPaths": [
+      "<global>",
+      "<root>"
+    ],
+    "SealedInner": [
+      "<root>/exec",
+      "<root>/functions"
+    ],
+    "ProfileHidden": [
+      "<root>/profile-own",
+      "<root>/data/profiles"
+    ],
+    "ProfileShown": [
+      "<root>/profile-own/dev/coder",
+      "<root>/data/profiles/dev/coder"
     ],
     "Isolation": {
       "Base": "working"

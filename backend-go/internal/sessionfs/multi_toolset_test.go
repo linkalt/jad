@@ -16,7 +16,7 @@ func imageToolset(maxResults string, more string) string {
 
 func loadFixtureSession(t *testing.T, fixture layouttest.Fixture) SessionConfig {
 	t.Helper()
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

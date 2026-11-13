@@ -140,8 +140,8 @@ func TestANarrowedRunDoesNotTakeTheResourceChangesOfTheTargetsOwnServers(t *test
 		file["transport"].(map[string]any)["env"] = map[string]string{appStdioMCPEnvironment: "1", appStdioMCPTouchEnvironment: "1"}
 		file["changes_note"] = true
 	}))
-	writeFile(t, filepath.Join(f.root, "mcp", "m", "stdio.json"), body)
-	writeFile(t, filepath.Join(f.root, "tools", "review", "stdio.json"), []byte(`{"native":{},"mcp":{"m/stdio":{}}}`))
+	writeFile(t, filepath.Join(f.global, "mcp", "m", "stdio.json"), body)
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{},"mcp":{"m/stdio":{}}}`))
 	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"review/stdio"}`)
 	f.captureBodies = true
 	ownRun := func() string {

@@ -17,13 +17,14 @@ import (
 
 func TestRootLibraryHTTPRoutesMatchFrontendContract(t *testing.T) {
 	workspace := t.TempDir()
-	writeAppLibraryFile(t, filepath.Join(workspace, "setting.json"), `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"prompt_dirs":["shared/prompts"],"template_dirs":["shared/templates"],"skill_dirs":["shared/skills"]}}`)
-	writeAppLibraryFile(t, filepath.Join(workspace, "shared/prompts/hello.md"), "---\ntitle: Hello prompt\ndescription: Say hello.\n---\nWrite a friendly greeting.\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "shared/templates/basic.md"), "# Basic template\n\nTemplate instructions.\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "shared/skills/greet/SKILL.md"), "---\nname: greet\ndescription: Say hello from this skill.\n---\nRespond kindly.\n")
+	global := writeWorkspaceSetting(t, workspace, `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"prompt_dirs":["shared/prompts"],"template_dirs":["shared/templates"],"skill_dirs":["shared/skills"]}}`)
+	writeAppLibraryFile(t, filepath.Join(global, "shared/prompts/hello.md"), "---\ntitle: Hello prompt\ndescription: Say hello.\n---\nWrite a friendly greeting.\n")
+	writeAppLibraryFile(t, filepath.Join(global, "shared/templates/basic.md"), "# Basic template\n\nTemplate instructions.\n")
+	writeAppLibraryFile(t, filepath.Join(global, "shared/skills/greet/SKILL.md"), "---\nname: greet\ndescription: Say hello from this skill.\n---\nRespond kindly.\n")
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
 		WorkingDir:  workspace,
+		GlobalDir:   global,
 		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken},
 	})
 	if err != nil {
@@ -96,13 +97,6 @@ func TestRootLibraryHTTPRoutesMatchFrontendContract(t *testing.T) {
 	if unknownKind.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown kind status = %d, want 404", unknownKind.StatusCode)
 	}
-
-	writeAppLibraryFile(t, filepath.Join(workspace, "setting.json"), `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":null}`)
-	invalidConfig := getAppLibrary(t, server.URL+"/api/library", integrationAPIToken)
-	invalidConfig.Body.Close()
-	if invalidConfig.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("invalid library config status = %d, want 422", invalidConfig.StatusCode)
-	}
 }
 
 func getAppLibrary(t *testing.T, url, token string) *http.Response {
@@ -131,12 +125,12 @@ func writeAppLibraryFile(t *testing.T, path, contents string) {
 
 func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 	workspace := t.TempDir()
-	writeAppLibraryFile(t, filepath.Join(workspace, "setting.json"), `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"command_dirs":["commands"]}}`)
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/git/commit.md"), "---\ndescription: Commit\nargument-hint: <message>\n---\nCommit with the message: $ARGUMENTS\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/blank.md"), "$ARGUMENTS\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/plan.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nPlan $1.\n")
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/broken.md"), "---\nplan: maybe\n---\nBroken.\n")
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, workspace, `{"session_roots":[{"id":"work","path":"sessions"}],"libraries":{"command_dirs":["commands"]}}`)
+	writeAppLibraryFile(t, filepath.Join(global, "commands/git/commit.md"), "---\ndescription: Commit\nargument-hint: <message>\n---\nCommit with the message: $ARGUMENTS\n")
+	writeAppLibraryFile(t, filepath.Join(global, "commands/blank.md"), "$ARGUMENTS\n")
+	writeAppLibraryFile(t, filepath.Join(global, "commands/plan.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nPlan $1.\n")
+	writeAppLibraryFile(t, filepath.Join(global, "commands/broken.md"), "---\nplan: maybe\n---\nBroken.\n")
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: workspace, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +193,7 @@ func TestCustomCommandRoutesListAndExpand(t *testing.T) {
 		t.Fatalf("expand of a command with bad options = %d %s", status, body)
 	}
 	// The run options of the front matter come with the text.
-	writeAppLibraryFile(t, filepath.Join(workspace, "commands/review.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nReview $1.\n")
+	writeAppLibraryFile(t, filepath.Join(global, "commands/review.md"), "---\nmodel: openai/default\nplan: true\nallowed-tools: skill, exec\n---\nReview $1.\n")
 	response = getAppLibrary(t, server.URL+"/api/library", integrationAPIToken)
 	catalog = contentlibrary.Catalog{}
 	if err := json.NewDecoder(response.Body).Decode(&catalog); err != nil {

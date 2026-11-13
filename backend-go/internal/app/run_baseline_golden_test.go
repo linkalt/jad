@@ -369,8 +369,7 @@ func TestRunBaselineLocalSubagentResume(t *testing.T) {
 func TestRunBaselineRemoteSubagentFromTheCaller(t *testing.T) {
 	server, serverFixture := e2eServer(t)
 	f := newLayoutFixture(t)
-	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"}}`, server.url)
-	writeFile(t, filepath.Join(f.root, ".jad", "remotes", "peer.json"), []byte(entry))
+	f.bindRemote(t, "peer", server.url)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"async":{},"subagent":{"agents":{"explore":{"description":"Finds facts."}},"remotes":["peer"]}},"mcp":{}}`)
 	f.captureBodies = true
 	f.script = func(_, body string) string {
@@ -483,7 +482,7 @@ func TestRunBaselineSampleAgentDefinitions(t *testing.T) {
 		Models: map[string]map[string]any{"openai/parent": {
 			"provider": "openai", "model": "parent-model", "api_key_env": "FIXTURE_OPENAI_KEY", "base_url": provider.URL + "/v1"}},
 	})
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: layout.Root, RootSettingPath: layout.RootSetting,
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: layout.Workspace, GlobalDir: layout.GlobalDir,
 		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_OPENAI_KEY": "local-provider-key"}})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)

@@ -3,8 +3,6 @@ package app
 import (
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -94,10 +92,8 @@ func TestLoadConfigCarriesTheShutdownTimeout(t *testing.T) {
 	load := func(server string) Config {
 		cwd := t.TempDir()
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		global := writeWorkspaceSetting(t, cwd, setting)
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 		if err != nil {
 			t.Fatal(err)
 		}

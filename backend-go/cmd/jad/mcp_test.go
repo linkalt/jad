@@ -74,7 +74,7 @@ func TestMCPCommandIgnoresMCPFilesWithBadNames(t *testing.T) {
 		MCPConfig: map[string]map[string]any{"remote/docs": {"transport": map[string]any{"type": "streamable_http", "url": "https://mcp.example/mcp", "oauth": map[string]any{}}}},
 	})
 	for _, name := range []string{"remote/docs (1).json", "loose.json"} {
-		path := filepath.Join(fixture.Root, "mcp", filepath.FromSlash(name))
+		path := filepath.Join(fixture.GlobalDir, "mcp", filepath.FromSlash(name))
 		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
 			t.Fatal(err)
 		}

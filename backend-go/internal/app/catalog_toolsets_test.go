@@ -42,14 +42,14 @@ func TestCatalogToolsetsListReadAndCreate(t *testing.T) {
 
 func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 	f := newLayoutFixture(t)
-	serverFile := filepath.Join(f.root, "mcp", "ext", "one.json")
+	serverFile := filepath.Join(f.global, "mcp", "ext", "one.json")
 	if err := os.MkdirAll(filepath.Dir(serverFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(serverFile, []byte(`{"transport":{"type":"streamable_http","url":"http://127.0.0.1:1/mcp"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(f.root, "mcp", "more", "one.json")
+	other := filepath.Join(f.global, "mcp", "more", "one.json")
 	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCatalogToolsetWriteIsCheckedByTheLoader(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := "/api/catalog/toolsets/coding/none"
-	target := filepath.Join(f.root, "tools", "coding", "none.json")
+	target := filepath.Join(f.global, "tools", "coding", "none.json")
 	before := f.catalogCall(t, "GET", path, "", nil)
 	cases := map[string]struct{ body, want string }{
 		"empty":                  {"", "expected a JSON object"},
@@ -105,7 +105,7 @@ func TestCatalogToolsetDeleteIsRefusedWhileAProfileNeedsIt(t *testing.T) {
 	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "dev/coder") || !strings.Contains(reply.body, "review/reviewer") {
 		t.Fatalf("delete of a used toolset = %d %s", reply.status, reply.body)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "tools", "coding", "none.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.global, "tools", "coding", "none.json")); err != nil {
 		t.Fatalf("toolset removed although refused: %v", err)
 	}
 

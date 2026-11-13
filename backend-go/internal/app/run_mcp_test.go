@@ -287,7 +287,7 @@ func delegatedMCPFixture(t *testing.T, isolation, serverCWD string) *layoutFixtu
 	t.Helper()
 	f := isolatedTargetFixture(t, isolation)
 	body, _ := json.Marshal(appStdioMCPServerFile(t, serverCWD))
-	writeFile(t, filepath.Join(f.root, "mcp", "m", "stdio.json"), body)
+	writeFile(t, filepath.Join(f.global, "mcp", "m", "stdio.json"), body)
 	f.overwrite(t, "tools/coding/exec.json", `{"native":{"exec":{"spill":{"enabled":false}}},"mcp":{"m/stdio":{"deny_tools":[]}}}`)
 	f.script = scriptFunctionCall(mcpToolNameFor("stdio", "lookup"), map[string]any{"word": "by the server"})
 	return f

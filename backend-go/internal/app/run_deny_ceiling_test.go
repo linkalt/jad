@@ -69,7 +69,7 @@ func TestDenyCeilingCrossesEphemeralAndPersistentHops(t *testing.T) {
 		pm      string
 	}{
 		"same session":  {newLayoutFixture, "demo", mixedChainScript, ""},
-		"other session": {crossSessionFixture, "other", crossSessionScript, `"sessions":["*"]`},
+		"other session": {crossSessionFixture, "other", crossSessionScript, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := tc.fixture(t)

@@ -61,7 +61,7 @@ func TestNormalizeNativeSkillSettingsRejectsInvalidSettings(t *testing.T) {
 
 func TestLoadSessionConfigAcceptsTheSkillToolAndKeepsTheGlobalRoot(t *testing.T) {
 	location, fixture := layoutLocation(t, layouttest.Spec{Native: map[string]any{"skill": map[string]any{"max_bytes": 4096}}})
-	rootDir := fixture.Root
+	rootDir := fixture.GlobalDir
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig: %v", err)

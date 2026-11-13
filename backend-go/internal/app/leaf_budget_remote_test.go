@@ -1,9 +1,6 @@
 package app
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"jad/backend-go/internal/tools"
@@ -17,17 +14,10 @@ func remoteDeadlockFixture(t *testing.T) *layoutFixture {
 	t.Helper()
 	server, _ := e2eServer(t)
 	f := newLayoutFixtureWithBudget(t, nil, tools.NewLeafBudget(1))
-	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"}}`, server.url)
-	dir := filepath.Join(f.root, ".jad", "remotes")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	f.bindRemote(t, "peer", server.url)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{"remotes":["peer"]}},"mcp":{}}`)
 	f.captureBodies = true
-	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "remote:peer/dev/coder", "message": "what is the answer", "block_ms": 0})
+	f.script = scriptFunctionCall("profile_message", map[string]any{"profile": "remote:peer/demo/dev/coder", "message": "what is the answer", "block_ms": 0})
 	return f
 }
 

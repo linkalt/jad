@@ -667,14 +667,14 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		environment[name] = value
 	}
 	layout := layouttest.Write(t, spec)
-	writeNotesSkill(t, layout.Root, "the secret is 42\n")
+	writeNotesSkill(t, layout.GlobalDir, "the secret is 42\n")
 	if mcpServerFile != nil {
 		body, _ := json.Marshal(mcpServerFile)
-		writeFile(t, filepath.Join(layout.Root, "mcp", "m", "fixture.json"), body)
+		writeFile(t, filepath.Join(layout.GlobalDir, "mcp", "m", "fixture.json"), body)
 	}
 	for id, content := range extraToolsets {
 		body, _ := json.Marshal(content)
-		writeFile(t, filepath.Join(layout.Root, "tools", filepath.FromSlash(id)+".json"), body)
+		writeFile(t, filepath.Join(layout.GlobalDir, "tools", filepath.FromSlash(id)+".json"), body)
 	}
 	if dir, ok := agentSetting["__agents_dir"].(string); ok {
 		// An agent folder names its model relative to itself.
@@ -683,9 +683,9 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 	}
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir:      layout.Root,
-		RootSettingPath: layout.RootSetting,
-		Environment:     environment,
+		WorkingDir:  layout.Workspace,
+		GlobalDir:   layout.GlobalDir,
+		Environment: environment,
 	})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -728,7 +728,7 @@ func buildSubagentFixtureWithMCP(t *testing.T, agentSetting map[string]any, spli
 		searchCalls: searchCalls,
 		workspace:   workspace, sessionFile: layout.SessionFile, sessionDir: layout.SessionStateDir, apiURL: apiURL, provider: provider, childProvider: childProvider, restart: restart,
 		stateDir: profileState, toolDir: filepath.Join(workspace, ".jad", "state", "demo", "dev", "coder", "tools"),
-		modelsDir: filepath.Join(layout.Root, "models", "openai"), config: config,
+		modelsDir: filepath.Join(layout.GlobalDir, "models", "openai"), config: config,
 	}
 }
 

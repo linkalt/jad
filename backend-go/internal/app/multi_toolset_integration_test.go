@@ -29,9 +29,9 @@ func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
 	})
 	for _, id := range []string{"extra/first", "extra/second"} {
 		body, _ := json.Marshal(map[string]any{"native": map[string]any{"skill": map[string]any{}}})
-		writeFile(t, filepath.Join(fixture.Root, "tools", filepath.FromSlash(id)+".json"), body)
+		writeFile(t, filepath.Join(fixture.GlobalDir, "tools", filepath.FromSlash(id)+".json"), body)
 	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -42,6 +42,7 @@ func TestLockSessionThenResolveLogsAToolsetClashWarningOnce(t *testing.T) {
 	}
 	t.Cleanup(resolver.Close)
 	backdate(t, fixture.Root)
+	backdate(t, fixture.GlobalDir)
 
 	release, err := resolver.LockSession(context.Background(), "one", "dev/coder", "")
 	if err != nil {

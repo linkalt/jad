@@ -36,7 +36,7 @@ func TestRemovedOAuthModelKeysStopTheRunBeforeAnyProviderRequest(t *testing.T) {
 			logs := &lockedBuffer{}
 			f := newLayoutFixtureWithBudget(t, nil, nil, func(c *Config) { c.HTTP.Logger = slog.New(slog.NewTextHandler(logs, nil)) })
 			data, _ := json.Marshal(test.model)
-			if err := os.WriteFile(filepath.Join(f.root, "models", "openai", "small.json"), data, 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(f.global, "models", "openai", "small.json"), data, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"hi"}`)

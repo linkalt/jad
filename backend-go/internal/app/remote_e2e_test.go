@@ -41,30 +41,40 @@ type remoteClient struct {
 	owner   string
 	hub     *remote.Hub
 	dir     string
+	// directory is the binding directory scoped to the key the client holds.
+	directory *remote.Directory
 }
 
+// startRemoteClient is a client of the workspace layout whose binding "peer" reaches the workspace
+// "local" of the server at entryURL with a key (the token of JAD_REMOTE_E2E); extra is more JSON
+// keys of the binding's remote object.
 func startRemoteClient(t *testing.T, entryURL, extra string) *remoteClient {
 	t.Helper()
+	return newBoundClient(t, entryURL, "local", extra)
+}
+
+func newBoundClient(t *testing.T, entryURL, workspace, extra string) *remoteClient {
+	t.Helper()
 	local := newLayoutFixture(t)
-	dir := t.TempDir()
-	entry := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"token_env":"JAD_REMOTE_E2E","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1,"default_session":"demo"%s}}`, entryURL, extra)
-	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(entry), 0o600); err != nil {
+	dir, keys := t.TempDir(), t.TempDir()
+	binding := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"workspace":%q,"timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1%s}}`, entryURL, workspace, extra)
+	if err := os.WriteFile(filepath.Join(dir, "peer.json"), []byte(binding), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	hub := remote.NewHub(func(name string) string {
-		if name == "JAD_REMOTE_E2E" {
-			return e2eToken
-		}
-		return ""
-	})
+	keyFile := filepath.Join(keys, "peer-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"kind":"remote_key","binding":"peer","token":"`+e2eToken+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hub := remote.NewHub(nil)
 	t.Cleanup(hub.Close)
+	directory := hub.Directory(dir).Scoped(remote.Scope{Workspace: true, Keys: map[string]remote.Key{"peer": {Name: "peer-key", File: keyFile}}})
 	host, err := local.service.resolver.AsyncHost(native.AsyncHostConfig{Dir: native.AsyncDir(filepath.Join(local.cwd, "pm")), Config: asyncmgr.DefaultConfig()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	settings := sessionfs.NativeProfileMessageSettings{TimeoutMs: 60_000, ResultMaxBytes: 4096, MaxChain: 2, MaxQueued: 4, Remotes: []string{"peer"}}
 	messenger := remoteClientMessenger{profileMessenger: profileMessenger{resolver: local.service.resolver}, hub: hub}
-	message, err := native.NewProfileMessageToolWithRemotes(settings, []string{"review/reviewer"}, messenger, host, hub.Directory(dir))
+	message, err := native.NewProfileMessageToolWithRemotes(settings, []string{"review/reviewer"}, messenger, host, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +86,7 @@ func startRemoteClient(t *testing.T, entryURL, extra string) *remoteClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &remoteClient{t: t, message: message, async: async, owner: sessionKey(reference, "dev/coder"), hub: hub, dir: dir}
+	return &remoteClient{t: t, message: message, async: async, owner: sessionKey(reference, "dev/coder"), hub: hub, dir: dir, directory: directory}
 }
 
 func (c *remoteClient) call(target string, block int64) string {
@@ -106,7 +116,7 @@ func e2eServer(t *testing.T) (*remoteServer, subagentFixture) {
 func TestRemoteE2EProfileMessageOverTCP(t *testing.T) {
 	server, f := e2eServer(t)
 	client := startRemoteClient(t, server.url, "")
-	out := client.call("remote:peer/dev/coder", 30_000)
+	out := client.call("remote:peer/demo/dev/coder", 30_000)
 	if !strings.Contains(out, "answered") || !strings.Contains(out, "parent saw") {
 		t.Fatalf("result:\n%s", out)
 	}
@@ -156,7 +166,7 @@ func TestRemoteE2EHandleWaitAndStopActOnTheRemoteRun(t *testing.T) {
 	f.provider.childRelease = make(chan struct{})
 	t.Cleanup(func() { close(f.provider.childRelease) })
 	client := startRemoteClient(t, server.url, "")
-	out := client.call("remote:peer/dev/coder", 0)
+	out := client.call("remote:peer/demo/dev/coder", 0)
 	id := regexpHandle.FindString(out)
 	if id == "" {
 		t.Fatalf("expected a handle:\n%s", out)
@@ -191,7 +201,7 @@ func TestRemoteE2EConnectionDropBecomesLostAndTheRemoteKeepsItsRun(t *testing.T)
 	f.provider.childRelease = make(chan struct{})
 	t.Cleanup(func() { close(f.provider.childRelease) })
 	client := startRemoteClient(t, server.url, "")
-	out := client.call("remote:peer/dev/coder", 0)
+	out := client.call("remote:peer/demo/dev/coder", 0)
 	id := regexpHandle.FindString(out)
 	select {
 	case <-f.provider.childEntered:
@@ -213,19 +223,19 @@ func TestRemoteE2ERefusalsFromTheServerReachTheModelWithoutLeaks(t *testing.T) {
 	f := newSubagentFixture(t, map[string]any{"model": "child.json"})
 	server := startRemoteServer(t, f, tokenTable(tokenRow("client", e2eToken, `"profiles":["demo/other/*"],"actions":["message","status","stop"]`)))
 	client := startRemoteClient(t, server.url, "")
-	out := client.call("remote:peer/dev/coder", 5000)
+	out := client.call("remote:peer/demo/dev/coder", 5000)
 	if !strings.Contains(out, "remote_forbidden") || strings.Contains(out, e2eToken) {
 		t.Fatalf("scope refusal:\n%s", out)
 	}
 	if len(f.provider.forModel("parent-model")) != 0 {
 		t.Fatal("a refused message ran the profile")
 	}
-	// A remote file still written for the https era is refused by the loader, and the refusal
-	// the model sees names the url, never the token.
+	// A binding written for the https era is refused by the loader (jad check names it): the model
+	// is refused and never sees the token.
 	https := "https://" + strings.TrimPrefix(server.url, "http://")
 	client = startRemoteClient(t, https, "")
-	out = client.call("remote:peer/dev/coder", 5000)
-	if !strings.Contains(out, "https was removed") || strings.Contains(out, e2eToken) {
+	out = client.call("remote:peer/demo/dev/coder", 5000)
+	if !strings.Contains(out, "error_code") || strings.Contains(out, e2eToken) {
 		t.Fatalf("an https remote must be refused:\n%s", out)
 	}
 }

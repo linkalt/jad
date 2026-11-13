@@ -30,8 +30,8 @@ func TestSettingsStampSeesEveryTemplateInputButMCPServerFiles(t *testing.T) {
 		Native: map[string]any{"subagent": map[string]any{"agents_dir": []string{agents},
 			"agents": map[string]any{"finder": map[string]any{"toolset": "extra/search"}}}},
 	})
-	toolset := filepath.Join(fixture.Root, "tools", "extra", "search.json")
-	server := filepath.Join(fixture.Root, "mcp", "srv", "agent.json")
+	toolset := filepath.Join(fixture.GlobalDir, "tools", "extra", "search.json")
+	server := filepath.Join(fixture.GlobalDir, "mcp", "srv", "agent.json")
 	writeFileT(t, server, `{"schema_version":1,"transport":{"type":"stdio","command":"x"}}`)
 	writeFileT(t, toolset, `{"native":{"read_image":{}},"mcp":{"srv/agent":{}}}`)
 	edits := map[string]struct {
@@ -39,14 +39,14 @@ func TestSettingsStampSeesEveryTemplateInputButMCPServerFiles(t *testing.T) {
 		live       bool
 	}{
 		"agent toolset":    {toolset, `{"native":{"read_image":{},"skill":{}},"mcp":{"srv/agent":{}}}`, false},
-		"own MCP server":   {filepath.Join(fixture.Root, "mcp", "srv", "own.json"), `{"schema_version":1,"transport":{"type":"stdio","command":"z"}}`, true},
+		"own MCP server":   {filepath.Join(fixture.GlobalDir, "mcp", "srv", "own.json"), `{"schema_version":1,"transport":{"type":"stdio","command":"z"}}`, true},
 		"agent MCP server": {server, `{"schema_version":1,"transport":{"type":"stdio","command":"y"}}`, true},
 		"agent.json":       {filepath.Join(agents, "helper", "agent.json"), `{"schema_version":1,"description":"two"}`, false},
 		"another profile":  {filepath.Join(fixture.Root, "profiles", "review", "target.json"), `{"models":["openai/default"],"instructions":"x"}`, false},
 	}
 	for name, edit := range edits {
 		t.Run(name, func(t *testing.T) {
-			backdateTree(t, fixture.Root, cwd)
+			backdateTree(t, fixture.Root, fixture.GlobalDir, cwd)
 			config, stamp := stampedLoad(t, fixture)
 			if _, ok := config.AgentToolsets["extra/search"]; !ok {
 				t.Fatalf("the agent toolset was not loaded: %v", config.AgentToolsets)

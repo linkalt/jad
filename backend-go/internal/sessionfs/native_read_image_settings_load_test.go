@@ -20,7 +20,7 @@ func TestLoadSessionConfigReadImageHasItsOwnPathsAndNotTheFilePolicy(t *testing.
 	if config.NativeReadImage == nil || config.NativeReadImage.MaxImageBytes != 777 {
 		t.Fatalf("native.read_image = %+v", config.NativeReadImage)
 	}
-	want := []NativePathRule{{Action: "allow", Path: filepath.Join(fixture.Root, "pictures")}, {Action: "deny", Path: filepath.Join(fixture.Root, "private")}}
+	want := []NativePathRule{{Action: "allow", Path: filepath.Join(fixture.GlobalDir, "pictures")}, {Action: "deny", Path: filepath.Join(fixture.GlobalDir, "private")}}
 	if !reflect.DeepEqual(config.NativeReadImage.Policy.Paths, want) {
 		t.Fatalf("read_image policy %+v, want its own %+v", config.NativeReadImage.Policy.Paths, want)
 	}

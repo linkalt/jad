@@ -51,7 +51,7 @@ func TestTranscriptProfilesReportTheSubagentStorageOfTheProfile(t *testing.T) {
 	}
 	// The profile files are read again on every lookup, so the toolset can change after the start.
 	subagent := []byte(`{"native":{"async":{},"subagent":{"agents":{"explore":{}}}},"mcp":{}}`)
-	if err := os.WriteFile(filepath.Join(f.root, "tools", "coding", "none.json"), subagent, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.global, "tools", "coding", "none.json"), subagent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	other, err := messenger.Profile(context.Background(), profileMessageOwner, "", "review/reviewer")

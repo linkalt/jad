@@ -65,7 +65,7 @@ func TestModelFallbackResolvesCatalogModels(t *testing.T) {
 		Models: models, ProfileModels: []string{"openai/small"},
 		Settings: map[string]any{"model_fallback": map[string]any{"models": []string{"openai/large@low"}}},
 	})
-	config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestModelFallbackResolvesCatalogModels(t *testing.T) {
 			Models: models, ProfileModels: []string{"openai/small"},
 			Settings: map[string]any{"model_fallback": map[string]any{"models": []string{fallback}}},
 		})
-		config, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+		config, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 		if err != nil {
 			t.Fatal(err)
 		}

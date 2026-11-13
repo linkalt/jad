@@ -384,6 +384,7 @@ func shareCoderTranscript(t *testing.T, f *layoutFixture) (boundRunner, func()) 
 	t.Helper()
 	coder := boundRunnerOf(t, f, "dev/coder")
 	backdate(t, f.root)
+	backdate(t, f.global)
 	location, err := sessionfs.Resolve(f.service.resolver.roots, "local:demo")
 	if err != nil {
 		t.Fatal(err)
@@ -463,56 +464,15 @@ func TestProfileMessageTargetsFollowTheSessionScope(t *testing.T) {
 	}
 }
 
-func TestProfileMessageWithNoOtherProfileFailsWhenTheToolsAreBuilt(t *testing.T) {
-	cases := map[string]struct{ toolset, session string }{
-		"one profile in scope": {`{"native":{"profile_message":{}},"mcp":{}}`, `"scope":{"profiles":["dev"]}`},
-		"every other denied":   {`{"native":{"profile_message":{"deny_profiles":["review/reviewer"]}},"mcp":{}}`, `"scope":{"profiles":["dev","review"]}`},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newLayoutFixture(t)
-			f.overwrite(t, "tools/coding/none.json", tc.toolset)
-			f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","category":"work",`+tc.session+`}`)
-
-			status, body := f.do(t, http.MethodGet, "/api/sessions/local:demo/tools?profile="+url.QueryEscape("dev/coder"), "")
-			text := errorText([]byte(body))
-			if status != http.StatusUnprocessableEntity || !strings.Contains(text, "no profile to message") || !strings.Contains(text, "dev/coder") {
-				t.Fatalf("tools: %d %s, want 422 naming the profile", status, body)
-			}
-			_, body = f.do(t, http.MethodPost, "/api/sessions/local:demo/run", `{"input":"go"}`)
-			if strings.Contains(body, "event: completed") {
-				t.Fatalf("the run completed: %s", body)
-			}
-			f.mu.Lock()
-			reached := len(f.models)
-			f.mu.Unlock()
-			if reached != 0 {
-				t.Fatalf("the provider got %d requests, want none", reached)
-			}
-		})
-	}
-}
-
-func TestProfileMessageRefusesNestedCallsAndTheCallerItself(t *testing.T) {
+// In the workspace layout a profile always has somebody to message (the profiles of other sessions
+// and workspaces are reachable by address), so a session with one profile still builds the tool.
+func TestProfileMessageWithOneProfileInScopeStillBuildsTheTool(t *testing.T) {
 	f := newLayoutFixture(t)
-	messenger := profileMessenger{resolver: f.service.resolver}
-
-	done := startHeldProfileMessage(t, f, context.Background())
-	reviewerPath := boundRunnerOf(t, f, "review/reviewer").config.MessagesPath
-	nested := context.WithValue(context.Background(), callerMessagesPathKey{}, reviewerPath)
-	if _, err := messenger.Message(nested, "local:demo\x00review/reviewer", "dev/coder", "hi", 0, false); !errors.Is(err, native.ErrProfileCycle) {
-		t.Fatalf("nested call error = %v, want ErrProfileCycle", err)
-	}
-	f.mu.Lock()
-	f.hold = false
-	f.mu.Unlock()
-	status, body := f.do(t, http.MethodPost, "/api/sessions/local:demo/run/stop?profile="+url.QueryEscape("review/reviewer"), "")
-	if status != http.StatusOK {
-		t.Fatalf("stop: %d %s", status, body)
-	}
-	awaitMessageEnd(t, done)
-	if _, err := messenger.Message(context.Background(), profileMessageOwner, "dev/coder", "hi", 0, false); !errors.Is(err, native.ErrProfileCycle) {
-		t.Fatalf("self call error = %v, want ErrProfileCycle", err)
+	f.overwrite(t, "tools/coding/none.json", `{"native":{"profile_message":{}},"mcp":{}}`)
+	f.overwrite(t, "sessions/demo.json", `{"schema_version":1,"cwd":"`+f.cwd+`","scope":{"profiles":["dev"]}}`)
+	status, body := f.do(t, http.MethodGet, "/api/sessions/local:demo/tools?profile="+url.QueryEscape("dev/coder"), "")
+	if status != http.StatusOK || !strings.Contains(body, "native.profile_message") {
+		t.Fatalf("tools: %d %s, want the tool built", status, body)
 	}
 }
 

@@ -100,7 +100,7 @@ func TestAHiddenModelDefaultKeepsTheSessionReadableAndIsNeverSubstituted(t *test
 		t.Fatalf("setup run: %d %s", status, body)
 	}
 	f.overwrite(t, "models/openai/small.json", "{")
-	small := filepath.Join(f.root, "models", "openai", "small.json")
+	small := filepath.Join(f.global, "models", "openai", "small.json")
 	calls := len(f.models)
 
 	// Listed, with the model nowhere in it.
@@ -290,7 +290,7 @@ func TestListSettingsFollowRepairedAndBrokenProfileAndModelFiles(t *testing.T) {
 	defer resolver.Close()
 
 	profile := filepath.Join(fixture.Root, "profiles", "dev", "bbb.json")
-	model := filepath.Join(fixture.Root, "models", "m", "b.json")
+	model := filepath.Join(fixture.GlobalDir, "models", "m", "b.json")
 	goodProfile := `{"models":["m/a"]}`
 	goodModel := `{"provider":"beta","model":"beta-model","api_key_env":"FIXTURE_KEY"}`
 	// Every file is dated well before the list, so a list can keep what it read; a change then

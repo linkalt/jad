@@ -18,10 +18,10 @@ func TestRunBaselineProfileMessageSandboxChoice(t *testing.T) {
 	f := newLayoutFixture(t)
 	reader := `{"schema_version":1,"description":"Reader: writes nothing but scratch","enabled":true,"backend":"command","command":["env"],` +
 		`"tools":["exec"],"write":{"paths":["{tmp}"],"plan_paths":["{tmp}"]}}`
-	if err := os.MkdirAll(filepath.Join(f.root, ".jad", "sandbox"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(f.global, "sandbox"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	f.overwrite(t, filepath.Join(".jad", "sandbox", "reader.json"), reader)
+	f.overwrite(t, "sandbox/reader.json", reader)
 	f.overwrite(t, "tools/coding/none.json", `{"native":{"exec":{"spill":{"enabled":false}},"profile_message":{"sandbox_choice":["reader"]}},"mcp":{}}`)
 	f.captureBodies = true
 	f.script = func(model, body string) string {

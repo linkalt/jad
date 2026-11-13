@@ -126,7 +126,7 @@ func TestListSessionsLoadsAgainAfterAPromptDocumentChanges(t *testing.T) {
 	if err := os.WriteFile(profile, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	backdateTree(t, resolver.roots[0].GlobalJadRoot, filepath.Dir(document))
+	backdateTree(t, resolver.roots[0].GlobalJadRoot, filepath.Dir(resolver.roots[0].Layout.Profiles), filepath.Dir(document))
 
 	if response, err := resolver.ListSessions(ctx, "", nil); err != nil || !strings.Contains(string(response.Body), "session_name") {
 		t.Fatalf("list with the document: %v", err)

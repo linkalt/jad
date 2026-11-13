@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -104,10 +102,8 @@ func TestServiceCarriesTheSessionStoreIdle(t *testing.T) {
 	service := func(server string) *Service {
 		cwd := t.TempDir()
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		global := writeWorkspaceSetting(t, cwd, setting)
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,10 +129,8 @@ func TestLoadConfigCarriesTheSessionDeleteStopWait(t *testing.T) {
 	load := func(server string) Config {
 		cwd := t.TempDir()
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		global := writeWorkspaceSetting(t, cwd, setting)
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,10 +150,8 @@ func TestLoadConfigCarriesTheSessionDeleteStopWait(t *testing.T) {
 func TestLoadConfigCarriesTimeoutsFromRootSettings(t *testing.T) {
 	cwd := t.TempDir()
 	setting := `{"session_roots":[{"path":"sessions"}],"server":{"read_header_timeout_ms":2000,"idle_timeout_ms":900}}`
-	if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	global := writeWorkspaceSetting(t, cwd, setting)
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,10 +164,8 @@ func TestLoadConfigCarriesTheSSEWriteTimeoutAndFallbackCap(t *testing.T) {
 	load := func(server string) Config {
 		cwd := t.TempDir()
 		setting := `{"session_roots":[{"path":"sessions"}],"server":` + server + `}`
-		if err := os.WriteFile(filepath.Join(cwd, "setting.json"), []byte(setting), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+		global := writeWorkspaceSetting(t, cwd, setting)
+		config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: cwd, GlobalDir: global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 		if err != nil {
 			t.Fatal(err)
 		}

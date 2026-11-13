@@ -166,7 +166,7 @@ func TestRemoteKeysNamesAreValidated(t *testing.T) {
 // remote_keys is a key of the workspace layout: the v1 layout refuses it in a session or
 // profile file (its remote files carry their own token source), and a toolset never has it.
 func TestRemoteKeysAreRefusedInV1AndInToolsets(t *testing.T) {
-	location, fixture := layoutLocation(t, layouttest.Spec{})
+	location, fixture := layoutLocationV1(t, layouttest.Spec{})
 	data, err := os.ReadFile(fixture.SessionFile)
 	if err != nil {
 		t.Fatal(err)

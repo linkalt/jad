@@ -10,7 +10,7 @@ import (
 )
 
 func (f *layoutFixture) modelBody(name string) string {
-	existing, err := os.ReadFile(filepath.Join(f.root, "models", "openai", "small.json"))
+	existing, err := os.ReadFile(filepath.Join(f.global, "models", "openai", "small.json"))
 	if err != nil {
 		panic(err)
 	}
@@ -49,7 +49,7 @@ func TestCatalogModelsListReadAndCreate(t *testing.T) {
 func TestCatalogModelWriteIsCheckedByTheLoader(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := "/api/catalog/models/openai/small"
-	target := filepath.Join(f.root, "models", "openai", "small.json")
+	target := filepath.Join(f.global, "models", "openai", "small.json")
 	before := f.catalogCall(t, "GET", path, "", nil)
 	cases := map[string]struct{ body, want string }{
 		"empty":            {``, "file is empty"},
@@ -138,11 +138,11 @@ func TestCatalogModelDeleteIsRefusedWhileAProfileNeedsIt(t *testing.T) {
 		t.Fatalf("delete of a model nothing needs = %d %s", reply.status, reply.body)
 	}
 	for _, id := range []string{"openai/large", "solo/only"} {
-		if _, err := os.Stat(filepath.Join(f.root, "models", filepath.FromSlash(id)+".json")); err != nil {
+		if _, err := os.Stat(filepath.Join(f.global, "models", filepath.FromSlash(id)+".json")); err != nil {
 			t.Fatalf("%s removed although refused: %v", id, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "models", "openai", "spare.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(f.global, "models", "openai", "spare.json")); err == nil {
 		t.Fatal("spare model still there after delete")
 	}
 	if status, body := f.do(t, "GET", "/api/sessions/local:demo", ""); status != http.StatusOK {
@@ -165,7 +165,7 @@ func TestCatalogDeleteRemovesAnEmptyCategoryDirectoryOnly(t *testing.T) {
 			t.Fatalf("delete %s = %d %s", id, reply.status, reply.body)
 		}
 	}
-	directory := filepath.Join(f.root, "models", "scratch")
+	directory := filepath.Join(f.global, "models", "scratch")
 	exists := func() bool {
 		_, err := os.Stat(directory)
 		return err == nil
@@ -188,7 +188,7 @@ func TestCatalogDeleteRemovesAnEmptyCategoryDirectoryOnly(t *testing.T) {
 	if reply := f.catalogCall(t, "DELETE", "/api/catalog/models/openai/large", "", map[string]string{"If-Match": current.etag}); reply.status != http.StatusConflict {
 		t.Fatalf("refused delete = %d", reply.status)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "models", "openai")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.global, "models", "openai")); err != nil {
 		t.Fatalf("a refused delete touched the directory: %v", err)
 	}
 }

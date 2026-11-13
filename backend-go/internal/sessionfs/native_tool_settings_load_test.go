@@ -14,7 +14,7 @@ func TestLoadSessionConfigNormalizesProfileToolStorageAndExecPaths(t *testing.T)
 		"exec": map[string]any{"paths": map[string]any{"allow": []any{"allowed"}}},
 	}})
 	// relative paths.allow resolve against the global root, not the session cwd
-	allowedRoot := fixture.Root
+	allowedRoot := fixture.GlobalDir // a relative path in a session or profile setting resolves from the global folder
 	config, err := LoadSessionConfig(location, "", "")
 	if err != nil {
 		t.Fatalf("LoadSessionConfig() error = %v", err)

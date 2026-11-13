@@ -37,7 +37,7 @@ func crossSessionFixture(t *testing.T) *layoutFixture {
 	t.Helper()
 	f := newLayoutFixture(t)
 	// max_depth 3 leaves room for the other session's child, which runs at depth 3 (R6).
-	f.overwrite(t, "tools/coding/none.json", mixedChainToolset(`"sessions":["*"]`, `"max_depth":3,`))
+	f.overwrite(t, "tools/coding/none.json", mixedChainToolset(``, `"max_depth":3,`))
 	addOtherSession(t, f, "other", "review")
 	return f
 }

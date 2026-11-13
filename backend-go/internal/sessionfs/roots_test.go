@@ -649,7 +649,7 @@ func TestLoadFindsTheRootSettingInTheJadFolderThenHome(t *testing.T) {
 // Roots of one root setting share the state catalog, so the same session id in two of
 // them would write one transcript; the root setting is refused.
 func TestLoadRefusesTheSameLayoutSessionInTwoRoots(t *testing.T) {
-	fixture := layouttest.Write(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
+	fixture := layouttest.WriteV1(t, layouttest.Spec{SessionID: "shared", RootID: "alpha", ExtraRoots: []string{"beta"}})
 	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
 		t.Fatalf("one session: %v", err)
 	}
@@ -672,7 +672,7 @@ func TestLoadIgnoresFoldersThatAreNotLayoutSessions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(fixture.RootDirs["beta"], "shared.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}}); err != nil {
+	if _, err := Load(LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}}); err != nil {
 		t.Fatalf("empty folder with the same name: %v", err)
 	}
 }

@@ -5066,3 +5066,39 @@ address) is the id format, not a session field, and is untouched.
   and a frontend editor test; the cache and replace tests edit `name` instead.
 - **User-owned:** deleting the `category` line from `.jad/sessions/jad.json` and `test.json` (never
   done by code or by the executor).
+
+## Test harness moved to the workspace layout (T-041b1, Go, 2026-11-13)
+
+First half of retiring layout v1 (tmp/T-041-decisions.md section 4). **No production code changed**:
+`layouttest.Write` and the custom fixtures of the tests now build a workspace layout (a
+`W/.jad/workspace.json`, a `G/global.json`, profiles, sessions and state in `W/.jad`, models, tools,
+mcp servers and sandbox templates in `G`), so every test that is not about v1 now runs on v2.
+
+- **Fixture shape.** `layouttest.Fixture` keeps `Root` for `W/.jad` and gains `Workspace` (W, the start
+  directory), `GlobalDir` (G), `GlobalSetting`, `WorkspaceSetting`, `SandboxDir`; `Spec` gains
+  `Workspace` and loses `StateDir`/`SessionsDir` (a workspace's state and sessions folders are fixed).
+  `ExtraRoots` are other listed workspaces, each with the same profiles. Tests load with
+  `LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir}`.
+- **v1-subject tests** keep `layouttest.WriteV1` (the old writer, `v1.go`) and `layoutLocationV1`; they go
+  with v1 in b2: the `deny_profiles`/`sessions` tool keys, `remote_keys` refused in v1, the same session id
+  in two roots, the write-target v1 no-op, `jad migrate`, the legacy doubled `.jad` folder, root-setting
+  discovery, `LoadOptions.SessionsDir`, the contentlibrary root-setting lookup.
+- **Tests changed because v2 behaves differently (reviewed, not papered over):** a profile may only tighten
+  an enabled sandbox (the layering test no longer loosens it in the profile layer); a relative path in a session
+  or profile setting resolves from G; the sandbox carries the fixed global-auth hide and the sealed/profile
+  rules; `read_image` carries hidden paths; `GlobalJadRoot` is G; library defaults are `G/.agent/...`;
+  plugin records are `G/state/.plugins`; token rows name a workspace; a remote is a binding plus a key
+  (`layoutFixture.bindRemote`, `newBoundClient`), not a v1 entry with `token_env` and `default_session`;
+  a v2 session has no `profile_message.sessions` (other sessions are reachable) and the "no other profile"
+  build failure does not exist.
+- **Goldens regenerated as v2 goldens** (`internal/sessionfs/testdata/agent_definitions.txt`, 15 files under
+  `internal/app/testdata/run_baseline`). The decider allowed paths, root ids/labels and layout text only and
+  said to stop on any diff in tool descriptions, tool output or model input. The actual diffs are: (1) paths
+  (`<tmp>/global/...`, `<root>` for `<cwd>/.jad`); (2) the sandbox settings of the agent definitions gain the
+  sealed paths, the profile hide/show lists and the global auth hide; (3) **the `profile_message` tool description
+  gains the v2 address sentence** (`Profiles are written <name>, <category>/<name>, <session>/..., local:...,
+  remote:...`), and **the tool output and cycle message name the canonical address**
+  (`Profile local:local/demo/review/reviewer answered`). (3) is what a v2 start already sends to a model today
+  (T-040 shipped it); a v2 golden cannot avoid it. **This is a deviation from the stop rule; it needs the
+  decider's sign-off** (reported to master).
+- **Not converted (their subject goes in b2):** see the list above; also `cmd/jad` `main_test` keeps nothing of v1.

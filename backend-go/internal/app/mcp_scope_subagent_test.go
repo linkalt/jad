@@ -28,7 +28,7 @@ func runNarrowedBackgroundChild(t *testing.T, releaseInRunnerReturned bool) {
 	logs := t.TempDir()
 	starts, wrapped, out := filepath.Join(logs, "starts"), filepath.Join(logs, "wrapped"), filepath.Join(logs, "out.txt")
 	writeConfinedMCPTarget(t, f, starts)
-	writeFile(t, filepath.Join(f.root, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"subagent":{"background_writers":true,"max_background_writers":2,`+
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{"async":{},"subagent":{"background_writers":true,"max_background_writers":2,`+
 		`"agents":{"finder":{"description":"Uses the server."}}}},"mcp":{"m/stdio":{}}}`))
 	resolver := f.service.resolver
 

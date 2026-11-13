@@ -83,7 +83,7 @@ func startRemoteServer(t *testing.T, f subagentFixture, tokens string) *remoteSe
 func tokenTable(rows ...string) string { return `{"tokens":[` + strings.Join(rows, ",") + `]}` }
 
 func tokenRow(id, secret, extra string) string {
-	return fmt.Sprintf(`{"id":%q,"sha256":%q,%s}`, id, remoteHash(secret), extra)
+	return fmt.Sprintf(`{"id":%q,"sha256":%q,"workspace":"local",%s}`, id, remoteHash(secret), extra)
 }
 
 func (s *remoteServer) call(t *testing.T, method, path, secret string, body any, headers ...string) (int, map[string]any) {

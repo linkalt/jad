@@ -43,10 +43,11 @@ var badNameFiles = map[string][]string{
 	"mcp":      {"srv/one (1).json", "loose.json", "bad cat/x.json"},
 }
 
-func plantBadNames(t *testing.T, root string, kinds ...string) []string {
+func plantBadNames(t *testing.T, fixture layouttest.Fixture, kinds ...string) []string {
 	t.Helper()
 	var paths []string
 	for _, kind := range kinds {
+		root := catalogBase(fixture, kind)
 		for _, name := range badNameFiles[kind] {
 			path := filepath.Join(root, kind, filepath.FromSlash(name))
 			// A valid-looking body: only the name is wrong, so a skip cannot be a content failure.
@@ -60,9 +61,19 @@ func plantBadNames(t *testing.T, root string, kinds ...string) []string {
 	return paths
 }
 
-func plantIgnoredFiles(t *testing.T, root string) {
+// catalogBase is the folder that holds the catalog kind's folder: the workspace's .jad for the
+// profiles, the global folder for the shared catalogs.
+func catalogBase(fixture layouttest.Fixture, kind string) string {
+	if kind == "profiles" {
+		return fixture.Root
+	}
+	return fixture.GlobalDir
+}
+
+func plantIgnoredFiles(t *testing.T, fixture layouttest.Fixture) {
 	t.Helper()
 	for _, kind := range []string{"profiles", "models", "tools", "mcp"} {
+		root := catalogBase(fixture, kind)
 		writeFileT(t, filepath.Join(root, kind, "README.md"), "notes")
 		writeFileT(t, filepath.Join(root, kind, "dev", "notes.txt"), "notes")
 		writeFileT(t, filepath.Join(root, kind, ".hidden", "x.json"), "{")
@@ -86,8 +97,8 @@ func TestBadFileNamesInEveryKindDoNotFailTheSession(t *testing.T) {
 	for _, kind := range []string{"profiles", "models", "tools", "mcp"} {
 		t.Run(kind, func(t *testing.T) {
 			location, fixture := nameFixture(t, layouttest.Spec{})
-			paths := plantBadNames(t, fixture.Root, kind)
-			plantIgnoredFiles(t, fixture.Root)
+			paths := plantBadNames(t, fixture, kind)
+			plantIgnoredFiles(t, fixture)
 
 			config, err := LoadSessionConfig(location, "", "")
 			if err != nil {
@@ -154,7 +165,7 @@ func TestASkippedProfileIsNeverSubstitutedOrRun(t *testing.T) {
 // as for any malformed reference, and never answered with another file.
 func TestExplicitReferencesToABadNameAreStillRefused(t *testing.T) {
 	location, fixture := nameFixture(t, layouttest.Spec{})
-	plantBadNames(t, fixture.Root, "profiles", "models", "tools", "mcp")
+	plantBadNames(t, fixture, "profiles", "models", "tools", "mcp")
 
 	if _, err := LoadSessionConfig(location, "dev/file (1)", ""); err == nil || !strings.Contains(err.Error(), "must be written <category>/<name>") {
 		t.Errorf("requested profile: err = %v", err)
@@ -187,7 +198,7 @@ func TestExplicitReferencesToABadNameAreStillRefused(t *testing.T) {
 		}
 	}
 	// The toolset file of the selected profile that names an MCP server by a bad name.
-	editJSON(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), func(m map[string]any) {
+	editJSON(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), func(m map[string]any) {
 		m["mcp"] = map[string]any{"srv/one (1)": map[string]any{}}
 	})
 	if _, err := LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "srv/one (1)") {
@@ -213,7 +224,7 @@ func TestARenamedFileComesBack(t *testing.T) {
 	location, fixture := nameFixture(t, layouttest.Spec{})
 	copyOf := filepath.Join(fixture.Root, "profiles", "review", "other (1).json")
 	writeFileT(t, copyOf, `{"models":["openai/default"]}`)
-	modelCopy := filepath.Join(fixture.Root, "models", "openai", "second (1).json")
+	modelCopy := filepath.Join(fixture.GlobalDir, "models", "openai", "second (1).json")
 	writeFileT(t, modelCopy, `{"provider":"openai","model":"gpt-second","api_key_env":"FIXTURE_KEY"}`)
 
 	config, err := LoadSessionConfig(location, "", "")
@@ -228,7 +239,7 @@ func TestARenamedFileComesBack(t *testing.T) {
 		t.Fatalf("models listed before the rename: %+v", listed)
 	}
 
-	if err := os.Rename(modelCopy, filepath.Join(fixture.Root, "models", "openai", "second.json")); err != nil {
+	if err := os.Rename(modelCopy, filepath.Join(fixture.GlobalDir, "models", "openai", "second.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(copyOf, filepath.Join(fixture.Root, "profiles", "review", "third.json")); err != nil {
@@ -267,7 +278,7 @@ func slicesContains(list []string, item string) bool {
 // and the other rows of the kind are still listed.
 func TestCatalogListingLeavesOutBadNamesAndKeepsTheRest(t *testing.T) {
 	location, fixture := nameFixture(t, layouttest.Spec{})
-	plantBadNames(t, fixture.Root, "profiles", "models", "tools", "mcp")
+	plantBadNames(t, fixture, "profiles", "models", "tools", "mcp")
 	layout := *location.Root.Layout
 	want := map[CatalogKind][]string{
 		CatalogProfiles: {"dev/coder", "review/other"},
@@ -321,8 +332,8 @@ func TestCheckNamesEachBadFileAndStillChecksTheRest(t *testing.T) {
 	if err != nil || len(clean.Problems) != 0 {
 		t.Fatalf("clean layout: %+v, %v", clean.Problems, err)
 	}
-	paths := plantBadNames(t, fixture.Root, "profiles", "models", "tools", "mcp")
-	plantIgnoredFiles(t, fixture.Root)
+	paths := plantBadNames(t, fixture, "profiles", "models", "tools", "mcp")
+	plantIgnoredFiles(t, fixture)
 	// A real fault in a valid file is reported next to the names, so the names do not hide it.
 	corrupt(t, profileFileOf(fixture, "review/other"))
 
@@ -374,7 +385,7 @@ func TestDeleteGuardsSeeRealUsersWhenAFolderHasBadNames(t *testing.T) {
 		},
 		SandboxTemplates: map[string]map[string]any{"box": envSandbox(nil), "spare": envSandbox(nil)},
 	})
-	plantBadNames(t, fixture.Root, "profiles", "models", "tools", "mcp")
+	plantBadNames(t, fixture, "profiles", "models", "tools", "mcp")
 	layout := *location.Root.Layout
 	roots := []Root{location.Root}
 	inUse := func(kind CatalogKind, id string) {
@@ -414,7 +425,7 @@ func TestDeleteGuardsSeeRealUsersWhenAFolderHasBadNames(t *testing.T) {
 // files that can be named, so one stray copy does not block every edit.
 func TestSavingAProfileIgnoresBadNamesInTheFoldersItReads(t *testing.T) {
 	location, fixture := nameFixture(t, layouttest.Spec{})
-	plantBadNames(t, fixture.Root, "models", "tools")
+	plantBadNames(t, fixture, "models", "tools")
 	layout := *location.Root.Layout
 	body := []byte(`{"models":["openai/default"],"toolset":["coding/default"]}`)
 	if _, _, err := WriteCatalogFile(layout, []Root{location.Root}, CatalogProfiles, "dev/new", body, WriteCondition{IfNoneMatch: "*"}, false, nil); err != nil {

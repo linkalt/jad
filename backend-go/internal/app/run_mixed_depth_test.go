@@ -61,7 +61,7 @@ func TestMixedDepthAdmitsTheTargetsChildBelowMaxDepth(t *testing.T) {
 // The depth crosses a session hop as it crosses a profile hop.
 func TestMixedDepthIsCountedAcrossSessions(t *testing.T) {
 	f := crossSessionFixture(t)
-	f.overwrite(t, "tools/coding/none.json", mixedChainToolset(`"sessions":["*"]`, ""))
+	f.overwrite(t, "tools/coding/none.json", mixedChainToolset(``, ""))
 	transcripts, finder, runs := mixedDepthRun(t, f, crossSessionScript)
 	if finder != 0 || !strings.Contains(transcripts, "subagent_depth_exceeded") || !strings.Contains(transcripts, "=== other/review/reviewer") {
 		t.Fatalf("the other session's child sent %d requests; want it refused subagent_depth_exceeded:\n%s", finder, transcripts)

@@ -210,7 +210,7 @@ func TestProfileMessageDepthCountsTheSubagentLevelsBeforeIt(t *testing.T) {
 // Across sessions the depth counts on: demo's dev/coder (0) -> other's reviewer (1) -> other's
 // helper (2), whose message to other's fourth is refused at the default max_depth.
 func TestProfileMessageDepthIsCountedAcrossSessions(t *testing.T) {
-	f := profileDepthFixture(t, `{"native":{"profile_message":{"max_chain":8,"sessions":["*"]}},"mcp":{}}`, "")
+	f := profileDepthFixture(t, `{"native":{"profile_message":{"max_chain":8}},"mcp":{}}`, "")
 	addOtherSession(t, f, "other", "review")
 	f.captureBodies = true
 	f.script = profileHopScript(map[string]profileHop{

@@ -26,6 +26,7 @@ func TestResolveLoadsAgainWhenAPromptDocumentChangedAfterLockSession(t *testing.
 	}
 	t.Cleanup(resolver.Close)
 	backdate(t, fixture.Root)
+	backdate(t, fixture.GlobalDir)
 	backdate(t, cwd)
 
 	release, err := resolver.LockSession(context.Background(), "session-1", "dev/green", "")

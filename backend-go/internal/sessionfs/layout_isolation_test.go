@@ -23,7 +23,7 @@ func isolationModels() map[string]map[string]any {
 }
 
 func modelFileOf(fixture layouttest.Fixture, id string) string {
-	return filepath.Join(fixture.Root, "models", filepath.FromSlash(id)+".json")
+	return filepath.Join(fixture.GlobalDir, "models", filepath.FromSlash(id)+".json")
 }
 
 func profileFileOf(fixture layouttest.Fixture, id string) string {
@@ -351,7 +351,7 @@ func TestAProfileWithABrokenToolsetIsLeftOut(t *testing.T) {
 		Native:   map[string]any{},
 		Profiles: map[string]map[string]any{"dev/aaa": {"models": []string{"m/a"}, "toolset": "coding/default"}, "dev/bbb": {"models": []string{"m/b"}}},
 	})
-	writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), `{"bogus":1}`)
+	writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), `{"bogus":1}`)
 	config, err := LoadSessionSettings(location, "", "")
 	if err != nil {
 		t.Fatalf("settings: %v", err)
@@ -387,7 +387,7 @@ func TestAProfileWhoseToolsetFailsWhenAppliedIsLeftOut(t *testing.T) {
 				Native:   map[string]any{},
 				Profiles: map[string]map[string]any{"dev/aaa": profile, "dev/bbb": {"models": []string{"m/b"}}},
 			})
-			toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+			toolsetFile := filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json")
 			writeFileT(t, toolsetFile, test.toolset)
 
 			config, err := LoadSessionSettings(location, "", "")
@@ -431,7 +431,7 @@ func TestAToolsetNativeSettingErrorLeavesTheProfileOut(t *testing.T) {
 		Native:   map[string]any{},
 		Profiles: map[string]map[string]any{"dev/aaa": {"models": []string{"m/a"}, "toolset": "coding/default"}, "dev/bbb": {"models": []string{"m/b"}}},
 	})
-	toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+	toolsetFile := filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json")
 	writeFileT(t, toolsetFile, `{"native":{"exec":{"no_such_setting":1}}}`)
 
 	config, err := LoadSessionSettings(location, "", "")
@@ -479,7 +479,7 @@ func TestToolsetNativeSettingErrorsAreJudgedForTheDefaultChainOnly(t *testing.T)
 	}
 	t.Run("a profile that is not the default stays offered", func(t *testing.T) {
 		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile(""), "dev/bbb": profile("coding/default")}})
-		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), bad)
 		config, err := LoadSessionSettings(location, "", "")
 		if err != nil || config.Profile != "dev/aaa" || !reflect.DeepEqual(config.Profiles, []string{"dev/aaa", "dev/bbb"}) {
 			t.Fatalf("default load: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
@@ -490,7 +490,7 @@ func TestToolsetNativeSettingErrorsAreJudgedForTheDefaultChainOnly(t *testing.T)
 	})
 	t.Run("the default moves past every profile the toolset fails", func(t *testing.T) {
 		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile("coding/default"), "dev/bbb": profile("coding/default"), "dev/ccc": profile("")}})
-		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), bad)
 		config, err := LoadSessionSettings(location, "", "")
 		if err != nil || config.Profile != "dev/ccc" || !reflect.DeepEqual(config.Profiles, []string{"dev/ccc"}) {
 			t.Fatalf("load: %v Profile %q Profiles %v", err, config.Profile, config.Profiles)
@@ -501,7 +501,7 @@ func TestToolsetNativeSettingErrorsAreJudgedForTheDefaultChainOnly(t *testing.T)
 	})
 	t.Run("every profile failing fails the load", func(t *testing.T) {
 		location, fixture := layoutLocation(t, layouttest.Spec{Models: isolationModels(), Native: map[string]any{}, Profiles: map[string]map[string]any{"dev/aaa": profile("coding/default"), "dev/bbb": profile("coding/default")}})
-		writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), bad)
+		writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), bad)
 		if _, err := LoadSessionSettings(location, "", ""); err == nil || !strings.Contains(err.Error(), "no_such_setting") {
 			t.Fatalf("error = %v", err)
 		}
@@ -538,8 +538,8 @@ func TestASettingThatIsNotTheToolsetsStillFailsTheLoad(t *testing.T) {
 				spec.Settings = test.session
 			}
 			location, fixture := layoutLocation(t, spec)
-			writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "default.json"), `{"native":{"exec":{"no_such_setting":1}}}`)
-			writeFileT(t, filepath.Join(fixture.Root, "tools", "coding", "good.json"), `{"native":{}}`)
+			writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json"), `{"native":{"exec":{"no_such_setting":1}}}`)
+			writeFileT(t, filepath.Join(fixture.GlobalDir, "tools", "coding", "good.json"), `{"native":{}}`)
 			config, err := LoadSessionSettings(location, "", "")
 			if err == nil || !strings.Contains(err.Error(), "max_tool_rounds") {
 				t.Fatalf("the load = Profile %q, %v; want the setting's error", config.Profile, err)
@@ -556,7 +556,7 @@ func TestEveryProfileToolsetFailingToApplyFailsTheLoad(t *testing.T) {
 		Native:   map[string]any{},
 		Profiles: map[string]map[string]any{"dev/aaa": {"models": []string{"m/a"}, "toolset": "coding/default"}, "dev/bbb": {"models": []string{"m/b"}, "toolset": "coding/default"}},
 	})
-	toolsetFile := filepath.Join(fixture.Root, "tools", "coding", "default.json")
+	toolsetFile := filepath.Join(fixture.GlobalDir, "tools", "coding", "default.json")
 	writeFileT(t, toolsetFile, `{"mcp":{"nope/missing":{}}}`)
 	if _, err := LoadSessionSettings(location, "", ""); err == nil || !strings.Contains(err.Error(), toolsetFile) {
 		t.Fatalf("error = %v, want the toolset's file", err)
@@ -602,7 +602,7 @@ func TestTheStampSeesTheModelFilesJudgedAtLoad(t *testing.T) {
 				},
 				Session: map[string]any{"scope": map[string]any{"profiles": []string{"dev"}}},
 			})
-			backdateTree(t, fixture.Root)
+			backdateTree(t, fixture.Root, fixture.GlobalDir)
 			_, stamp := stampedLoad(t, fixture)
 			path := edit(fixture)
 			writeFileT(t, path, `{"models":["m/a"]}`)
@@ -616,7 +616,7 @@ func TestTheStampSeesTheModelFilesJudgedAtLoad(t *testing.T) {
 // One file that cannot be read does not hide the others in the listing of its kind.
 func TestListCatalogFilesKeepsTheOtherRowsWhenOneFileCannotBeRead(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{Models: isolationModels()})
-	layout := Layout{Models: filepath.Join(fixture.Root, "models")}
+	layout := Layout{Models: filepath.Join(fixture.GlobalDir, "models")}
 	replaceWith(t, modelFileOf(fixture, "m/b"), "fifo", 0)
 	files, err := ListCatalogFiles(layout, CatalogModels)
 	if err != nil {

@@ -43,7 +43,7 @@ func callerKeyFixture(t *testing.T, settings map[string]any) *layoutFixture {
 		config.Environment["CALLER_PROVIDER_KEY"] = "caller-provider-key"
 	})
 	var large map[string]any
-	data, err := os.ReadFile(filepath.Join(f.root, "models", "openai", "large.json"))
+	data, err := os.ReadFile(filepath.Join(f.global, "models", "openai", "large.json"))
 	if err != nil || json.Unmarshal(data, &large) != nil {
 		t.Fatalf("read the large model: %v", err)
 	}
@@ -67,7 +67,7 @@ func callerKeyFixture(t *testing.T, settings map[string]any) *layoutFixture {
 	}
 	for rel, value := range files {
 		body, _ := json.Marshal(value)
-		writeFile(t, filepath.Join(f.root, rel), body)
+		writeFile(t, f.path(rel), body)
 	}
 	return f
 }

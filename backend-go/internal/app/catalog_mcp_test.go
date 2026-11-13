@@ -47,7 +47,7 @@ func TestCatalogMCPWriteIsCheckedByTheLoader(t *testing.T) {
 	f := newLayoutFixture(t)
 	path := "/api/catalog/mcp/ext/one"
 	created := f.catalogCall(t, "PUT", path, catalogMCPBody, map[string]string{"If-None-Match": "*"})
-	target := filepath.Join(f.root, "mcp", "ext", "one.json")
+	target := filepath.Join(f.global, "mcp", "ext", "one.json")
 	cases := map[string]struct{ body, want string }{
 		"empty":                 {"", "expected a JSON object"},
 		"not an object":         {`[]`, "expected a JSON object"},
@@ -112,7 +112,7 @@ func TestCatalogMCPDeleteIsRefusedWhileAToolsetNeedsIt(t *testing.T) {
 	if reply.status != http.StatusConflict || !strings.Contains(reply.body, "coding/uses-one") {
 		t.Fatalf("delete of a used server = %d %s", reply.status, reply.body)
 	}
-	if _, err := os.Stat(filepath.Join(f.root, "mcp", "ext", "one.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.global, "mcp", "ext", "one.json")); err != nil {
 		t.Fatalf("server removed although refused: %v", err)
 	}
 	if reply := f.catalogCall(t, "DELETE", toolset, "", map[string]string{"If-Match": made.etag}); reply.status != http.StatusNoContent {

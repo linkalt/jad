@@ -17,7 +17,7 @@ import (
 func builtinExecSettings(t *testing.T, root string) sessionfs.NativeExecSettings {
 	t.Helper()
 	fixture := layouttest.Write(t, layouttest.Spec{Native: map[string]any{"exec": map[string]any{}}})
-	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

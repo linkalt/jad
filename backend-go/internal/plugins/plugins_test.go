@@ -19,7 +19,7 @@ import (
 func testTarget(t *testing.T) (Target, layouttest.Fixture) {
 	t.Helper()
 	fixture := layouttest.Write(t, layouttest.Spec{})
-	loaded, err := sessionfs.Load(sessionfs.LoadOptions{RootSettingPath: fixture.RootSetting})
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: fixture.Workspace, GlobalDir: fixture.GlobalDir, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}

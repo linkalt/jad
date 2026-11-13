@@ -37,10 +37,10 @@ func TestTracingRecordsARunWithItsRoundsAndToolCalls(t *testing.T) {
 		item, _ := json.Marshal(map[string]string{"type": "function_call", "call_id": "call-read-1", "name": "skill", "arguments": string(arguments)})
 		return string(item)
 	}
-	if err := os.WriteFile(filepath.Join(f.root, "tools", "coding", "none.json"), []byte(`{"native":{"skill":{}},"mcp":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.global, "tools", "coding", "none.json"), []byte(`{"native":{"skill":{}},"mcp":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeSkill(t, f.root, "hello", "top secret file body")
+	writeSkill(t, f.global, "hello", "top secret file body")
 	runner := headlessFor(t, f)
 	result, err := runner.Run(context.Background(), headless.Request{Session: "local:demo", Profile: "dev/coder", Input: "read hello.txt"})
 	if err != nil || result.Status != headless.StatusCompleted {

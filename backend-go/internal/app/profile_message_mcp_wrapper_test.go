@@ -117,8 +117,8 @@ func writeConfinedMCPTarget(t *testing.T, f *layoutFixture, starts string) {
 		transport := file["transport"].(map[string]any)
 		transport["env"] = map[string]string{appStdioMCPEnvironment: "1", appStdioMCPStartLogEnvironment: starts}
 	}))
-	writeFile(t, filepath.Join(f.root, "mcp", "m", "stdio.json"), body)
-	writeFile(t, filepath.Join(f.root, "tools", "review", "stdio.json"), []byte(`{"native":{},"mcp":{"m/stdio":{}}}`))
+	writeFile(t, filepath.Join(f.global, "mcp", "m", "stdio.json"), body)
+	writeFile(t, filepath.Join(f.global, "tools", "review", "stdio.json"), []byte(`{"native":{},"mcp":{"m/stdio":{}}}`))
 	f.overwrite(t, "profiles/review/reviewer.json", `{"models":["openai/large"],"toolset":"review/stdio"}`)
 }
 

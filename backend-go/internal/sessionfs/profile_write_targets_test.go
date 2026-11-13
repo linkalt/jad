@@ -104,9 +104,20 @@ func TestProfileEditRefusesWriteTargetsInAProfileOwnFolder(t *testing.T) {
 func TestWriteTargetsOfV1AreNotJudged(t *testing.T) {
 	spec := profileSpec("a/one")
 	spec.Settings = map[string]any{"tool_storage_dir": "profile-own/dev/coder/documents"}
-	fixture := layouttest.Write(t, spec)
+	fixture := layouttest.WriteV1(t, spec)
 	writeToolsetFile(t, fixture, "a/one", grepToolsetText)
-	config := loadFixtureSession(t, fixture)
+	loaded, err := Load(LoadOptions{WorkingDir: fixture.Root, RootSettingPath: fixture.RootSetting, Environment: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, err := Resolve(loaded.Roots, fixture.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadSessionSettings(location, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(config.StoragePaths.ToolStorage, filepath.Join("profile-own", "dev", "coder", "documents")) {
 		t.Fatalf("tool storage = %s", config.StoragePaths.ToolStorage)
 	}

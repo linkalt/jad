@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -106,7 +107,7 @@ func TestShareProblemsTryEachExecutableOnce(t *testing.T) {
 
 func (f *layoutFixture) checkFiles(t *testing.T) (bool, string) {
 	t.Helper()
-	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"), Environment: map[string]string{}})
+	loaded, err := sessionfs.Load(sessionfs.LoadOptions{WorkingDir: f.cwd, GlobalDir: f.global, Environment: map[string]string{}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -120,7 +121,7 @@ func (f *layoutFixture) checkFiles(t *testing.T) (bool, string) {
 
 func (f *layoutFixture) overwrite(t *testing.T, rel, text string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(f.root, rel), []byte(text), 0o600); err != nil {
+	if err := os.WriteFile(f.path(rel), []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -322,5 +323,56 @@ func TestCheckFilesStartsTheEnabledSandbox(t *testing.T) {
 		if !test.valid && !strings.Contains(out, "session demo: sandbox: a trial start in the sandbox failed, so every sandboxed call would fail: bwrap: No permissions to create new namespace") {
 			t.Fatalf("output %q", out)
 		}
+	}
+}
+
+// path is where a fixture file lives: the shared catalogs and global.json in the global folder, the
+// rest (profiles, sessions, state) in the workspace's .jad.
+func (f *layoutFixture) path(rel string) string {
+	for _, shared := range []string{"models/", "tools/", "mcp/", "remotes/", "sandbox/"} {
+		if strings.HasPrefix(rel, shared) {
+			return filepath.Join(f.global, rel)
+		}
+	}
+	if rel == "global.json" {
+		return filepath.Join(f.global, rel)
+	}
+	return filepath.Join(f.root, rel)
+}
+
+// bindRemote gives the fixture's session "demo" a binding to the workspace "local" of the server at
+// url and a key for it that reads the token from JAD_REMOTE_E2E: the binding file in G/remotes,
+// the key file in G/auth/keys, and the key in the session's remote_keys.
+func (f *layoutFixture) bindRemote(t *testing.T, name, url string) {
+	t.Helper()
+	binding := fmt.Sprintf(`{"kind":"remote","remote":{"url":%q,"workspace":"local","timeout_ms":5000,"poll_ms":300,"lost_after_ms":1500,"retries":1}}`, url)
+	key := `{"kind":"remote_key","binding":"` + name + `","token_env":"JAD_REMOTE_E2E"}`
+	for path, text := range map[string]string{
+		filepath.Join(f.global, "remotes", name+".json"):      binding,
+		filepath.Join(f.global, "auth", "keys", name+".json"): key,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := f.path("sessions/demo.json")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session map[string]any
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := session["remote_keys"].([]any)
+	session["remote_keys"] = append(keys, name)
+	if data, err = json.Marshal(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

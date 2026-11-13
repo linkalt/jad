@@ -118,7 +118,7 @@ func TestSubagentToolsetRefusesABadList(t *testing.T) {
 func TestValidateProfileFileChecksEveryToolsetOfTheList(t *testing.T) {
 	fixture := layouttest.Write(t, layouttest.Spec{})
 	writeToolsetFile(t, fixture, "a/one", grepToolsetText)
-	layout := Layout{Models: fixture.ModelsDir, Tools: filepath.Join(fixture.Root, "tools")}
+	layout := Layout{Models: fixture.ModelsDir, Tools: filepath.Join(fixture.GlobalDir, "tools")}
 	path := filepath.Join(fixture.Root, "profiles", "dev", "coder.json")
 	body := func(toolset string) []byte {
 		return []byte(`{"models":["openai/default"],"model_default":"openai/default","toolset":` + toolset + `}`)

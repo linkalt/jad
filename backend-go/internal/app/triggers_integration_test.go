@@ -80,7 +80,7 @@ func TestTriggerWebhookRunsTheSession(t *testing.T) {
 
 func TestTriggerWebhookWithoutItsSecretStopsTheServerStart(t *testing.T) {
 	f := newLayoutFixture(t)
-	path := filepath.Join(f.root, "setting.json")
+	path := filepath.Join(f.global, "global.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +93,8 @@ func TestTriggerWebhookWithoutItsSecretStopsTheServerStart(t *testing.T) {
 		"ci": map[string]any{"session": "local:demo", "prompt": "p", "webhook": map[string]any{"secret_env": "JAD_NO_SUCH_SECRET"}},
 	}}}
 	data, _ = json.Marshal(root)
-	f.overwrite(t, "setting.json", string(data))
-	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: f.root, RootSettingPath: path, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
+	f.overwrite(t, "global.json", string(data))
+	config, err := LoadConfig(sessionfs.LoadOptions{WorkingDir: f.cwd, GlobalDir: f.global, Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken}})
 	if err != nil {
 		t.Fatal(err)
 	}

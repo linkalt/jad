@@ -121,7 +121,7 @@ func TestNormalizeNativeProfileMessageSettingsRejectsInvalidSettings(t *testing.
 }
 
 func TestLoadSessionConfigProfileMessage(t *testing.T) {
-	location, _ := layoutLocation(t, layouttest.Spec{Native: map[string]any{
+	location, _ := layoutLocationV1(t, layouttest.Spec{Native: map[string]any{
 		"profile_message": map[string]any{"deny_profiles": []any{"exec/fast"}, "timeout_ms": 1000},
 	}})
 	config, err := LoadSessionConfig(location, "", "")
@@ -133,19 +133,19 @@ func TestLoadSessionConfigProfileMessage(t *testing.T) {
 		t.Fatalf("native.profile_message = %+v, want %+v", config.NativeProfileMessage, want)
 	}
 
-	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"read_image": map[string]any{}}})
+	location, _ = layoutLocationV1(t, layouttest.Spec{Native: map[string]any{"read_image": map[string]any{}}})
 	config, err = LoadSessionConfig(location, "", "")
 	if err != nil || config.NativeProfileMessage != nil {
 		t.Fatalf("profile_message = %+v, err=%v; want off", config.NativeProfileMessage, err)
 	}
 
-	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{}}})
+	location, _ = layoutLocationV1(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{}}})
 	config, err = LoadSessionConfig(location, "", "")
 	if err != nil || config.NativeProfileMessage == nil {
 		t.Fatalf("empty profile_message = %+v, err=%v; want non-nil settings", config.NativeProfileMessage, err)
 	}
 
-	location, _ = layoutLocation(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{"deny_profiles": []any{"a", "a"}}}})
+	location, _ = layoutLocationV1(t, layouttest.Spec{Native: map[string]any{"profile_message": map[string]any{"deny_profiles": []any{"a", "a"}}}})
 	if _, err = LoadSessionConfig(location, "", ""); err == nil || !strings.Contains(err.Error(), "tools.native.profile_message.deny_profiles") {
 		t.Fatalf("duplicate deny_profiles error = %v", err)
 	}

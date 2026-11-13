@@ -19,7 +19,7 @@ import (
 func headlessFor(t *testing.T, f *layoutFixture) *headless.Runner {
 	t.Helper()
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
+		WorkingDir: f.cwd, GlobalDir: f.global,
 		Environment: map[string]string{"FIXTURE_KEY": "k"},
 	})
 	if err != nil {

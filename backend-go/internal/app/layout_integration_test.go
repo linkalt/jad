@@ -17,15 +17,16 @@ import (
 	"jad/backend-go/internal/tools"
 )
 
-// layoutFixture is a session in the catalog layout (setting.json with catalogs, a
-// session.json, profile/model/toolset files) behind a fake Responses endpoint that
-// records which model each request asked for.
+// layoutFixture is a session in the workspace layout (global.json and workspace.json, a
+// session file, profile/model/toolset files) behind a fake Responses endpoint that records
+// which model each request asked for. The workspace is cwd, root is its .jad folder (sessions,
+// profiles, state) and global is the global folder (models, tools, mcp, remotes, sandbox).
 type layoutFixture struct {
-	root, cwd string
-	api       *httptest.Server
-	service   *Service
-	mu        sync.Mutex
-	models    []string
+	root, cwd, global string
+	api               *httptest.Server
+	service           *Service
+	mu                sync.Mutex
+	models            []string
 	// captureBodies records each request body in bodies, for a test that reads the prompt.
 	captureBodies bool
 	bodies        []string
@@ -39,7 +40,7 @@ type layoutFixture struct {
 	script func(model, body string) string
 	// usage, when set, is the JSON usage object every completed response carries.
 	usage string
-	// server is merged into the root setting's server object before the config is loaded.
+	// server is merged into global.json's server object before the config is loaded.
 	server map[string]any
 }
 
@@ -59,7 +60,8 @@ func newLayoutFixtureWithServer(t *testing.T, server map[string]any) *layoutFixt
 // configure, when given, changes the loaded config before the service is built.
 func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *tools.LeafBudget, configure ...func(*Config)) *layoutFixture {
 	t.Helper()
-	f := &layoutFixture{root: t.TempDir(), cwd: t.TempDir(), server: server}
+	f := &layoutFixture{cwd: t.TempDir(), global: filepath.Join(t.TempDir(), "global"), server: server}
+	f.root = filepath.Join(f.cwd, ".jad")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var request struct {
@@ -109,7 +111,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 	t.Cleanup(provider.Close)
 
 	write := func(rel string, value any) {
-		path := filepath.Join(f.root, rel)
+		path := f.path(rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -124,11 +126,8 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 	model := func(name string) map[string]any {
 		return map[string]any{"provider": "openai", "model": name, "api_key_env": "FIXTURE_KEY", "base_url": provider.URL + "/v1"}
 	}
-	rootSetting := map[string]any{
-		"schema_version": 1,
-		"session_roots":  []any{map[string]any{"id": "local", "path": "sessions"}},
-		"catalogs":       map[string]any{"profiles": "profiles", "models": "models", "tools": "tools", "mcp": "mcp", "state": filepath.Join(f.cwd, ".jad", "state")},
-	}
+	write("workspace.json", map[string]any{"schema_version": 2, "id": "local"})
+	rootSetting := map[string]any{"schema_version": 2}
 	toolDefinitions := make([]string, 0, 2)
 	for _, name := range []string{"exec", "profile_message", "async", "skill", "subagent"} {
 		definition, err := filepath.Abs(filepath.Join("..", "..", "..", "sample", "tools", "native", name+".json"))
@@ -141,7 +140,7 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 	if len(server) > 0 {
 		rootSetting["server"] = server
 	}
-	write("setting.json", rootSetting)
+	write("global.json", rootSetting)
 	write("models/openai/small.json", model("model-small"))
 	write("models/openai/large.json", model("model-large"))
 	write("tools/coding/none.json", map[string]any{"native": map[string]any{}, "mcp": map[string]any{}})
@@ -151,10 +150,10 @@ func newLayoutFixtureWithBudget(t *testing.T, server map[string]any, budget *too
 		"schema_version": 1, "cwd": f.cwd,
 		"scope": map[string]any{"profiles": []string{"dev", "review"}},
 	})
-	writeNotesSkill(t, f.root, "the secret is 42\n")
+	writeNotesSkill(t, f.global, "the secret is 42\n")
 
 	config, err := LoadConfig(sessionfs.LoadOptions{
-		WorkingDir: f.root, RootSettingPath: filepath.Join(f.root, "setting.json"),
+		WorkingDir: f.cwd, GlobalDir: f.global,
 		Environment: map[string]string{"JAD_API_TOKEN": integrationAPIToken, "FIXTURE_KEY": "k", "JAD_REMOTE_E2E": e2eToken},
 	})
 	if err != nil {

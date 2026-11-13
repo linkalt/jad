@@ -26,7 +26,7 @@ func costFixture(t *testing.T, pricing, settings map[string]any) *layoutFixture 
 		}
 		return `{"type":"function_call","call_id":"call_r","name":"skill","arguments":"{\"name\":\"notes\"}"}`
 	}
-	modelPath := filepath.Join(f.root, "models", "openai", "small.json")
+	modelPath := filepath.Join(f.global, "models", "openai", "small.json")
 	var model map[string]any
 	data, err := os.ReadFile(modelPath)
 	if err != nil || json.Unmarshal(data, &model) != nil {
@@ -42,7 +42,7 @@ func costFixture(t *testing.T, pricing, settings map[string]any) *layoutFixture 
 	}
 	for rel, value := range files {
 		data, _ := json.Marshal(value)
-		if err := os.WriteFile(filepath.Join(f.root, rel), data, 0o600); err != nil {
+		if err := os.WriteFile(f.path(rel), data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
