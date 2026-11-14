@@ -304,14 +304,9 @@ func globalLayout(setting map[string]json.RawMessage, where, global string) (Lay
 		layout.Libraries.MaxAssetBytes = value
 	}
 	if rawValue, exists := libraries["tool_definition_paths"]; exists {
-		if err := json.Unmarshal(rawValue, &layout.ToolDefinitionPaths); err != nil {
-			return Layout{}, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
-		}
-		// From G, the folder of this file: a session reads its settings from W/.jad.
-		for index, path := range layout.ToolDefinitionPaths {
-			if trimmed := strings.TrimSpace(path); trimmed != "" {
-				layout.ToolDefinitionPaths[index] = resolveFrom(global, trimmed)
-			}
+		layout.ToolDefinitionPaths, err = parseLibraryDefinitionPaths(rawValue, where, global)
+		if err != nil {
+			return Layout{}, err
 		}
 	}
 	return layout, nil

@@ -93,17 +93,9 @@ func workspaceLibraries(setting map[string]json.RawMessage, where, jad string) (
 	if !exists {
 		return folders, nil, nil
 	}
-	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
-		return LibraryFolders{}, nil, configError("%s: libraries.tool_definition_paths must be an array of strings", where)
-	}
-	paths := make([]string, 0, len(values))
-	for position, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return LibraryFolders{}, nil, configError("%s: libraries.tool_definition_paths[%d] must be a non-empty string", where, position)
-		}
-		paths = appendNewStrings(paths, resolveFrom(jad, value))
+	paths, err := parseLibraryDefinitionPaths(raw, where, jad)
+	if err != nil {
+		return LibraryFolders{}, nil, err
 	}
 	return folders, paths, nil
 }

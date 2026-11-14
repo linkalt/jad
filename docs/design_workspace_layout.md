@@ -1317,6 +1317,59 @@ global list.
   above is what keeps that read away from the hidden folders. Sandboxed tool calls are the
   sandbox's business.
 
+### Tool-definition library globs (T-003)
+
+Both `global.json` and `workspace.json` accept literal paths and host-native Go
+`filepath.Glob` patterns in `libraries.tool_definition_paths`. For example, with
+`G/definitions/native/async.json` and `G/definitions/native/skill.json` present:
+
+```json
+{"libraries":{"tool_definition_paths":["definitions/native/*.json"]}}
+```
+
+A workspace with `W/shared/definitions/local.json` can use this `W/.jad/workspace.json`:
+
+```json
+{"libraries":{"tool_definition_paths":["../shared/definitions/*.json","../shared/definitions/local.json"]}}
+```
+
+Relative entries resolve from G for global.json and from W/.jad for workspace.json; absolute entries
+are allowed. Those base directories are literal even when their names contain glob
+metacharacters.
+
+- Syntax is standard-library `*`, `?`, and bracket classes, with host-native path
+  separators and escaping. Repeated stars are ordinary stars, **not recursive
+  globstar**; use explicit directory levels such as `*/*.json`. No shell, environment
+  variable or tilde expansion occurs. On Unix backslash escapes a metacharacter
+  (a literal star is `\\*` in JSON); on Windows backslash is a separator and escaping
+  is disabled by Go. This is not a new platform-support guarantee.
+- Keep configured entry order; each pattern contributes its lexically sorted matches.
+  Global entries precede workspace entries. Cleaned absolute path strings are
+  deduplicated, keeping the first occurrence, including literal/pattern overlap.
+  Symlink identity is not deduplicated. Distinct files defining the same tool ID
+  still fail, naming both files; no override exists.
+- Empty arrays are valid. Null/non-array lists and null, non-string or blank items
+  fail startup (item errors name source and index). Both sources now enforce this
+  consistently, tightening earlier global validation. Malformed patterns and
+  patterns matching nothing fail startup, even under absent ancestors. Plain missing
+  literal paths still fail later when tools are built. Directories and invalid
+  documents are not filtered from matches: the strict tool-definition reader fails
+  the build rather than silently omitting them.
+- Compatibility: formerly literal paths containing unescaped `*`, `?`, `[` or Unix
+  escape syntax are now interpreted as patterns. Escape metacharacters using the
+  host's Go glob syntax when they are literal filename characters. Concrete results
+  are never expanded again by session normalization or the native reader.
+- Discovery happens once at root/layout load, normally process startup. A new file
+  matching a pattern requires a fresh process/layout load; there is no watcher or
+  automatic re-expansion. Contents of already discovered files are re-read when
+  tools are constructed for a run, as before.
+- Expansion precedes the existing lexical and resolved-symlink forbidden-place
+  guards. Every workspace match remains read-only in its sandbox, even outside
+  W/.jad or when also listed globally. Global files under G remain sealed; a global
+  file outside G gets no additional workspace read-only marking unless listed by
+  the workspace too. This preserves existing policy, not new sandbox hardening;
+  the existing post-start link-swap limitation remains.
+
 **Migration.** `splitToolDefinitions` sorts the v1 list: a path that names a place in W (lexically
 or after links) goes to `workspace.json`: as written when it was relative (v1 and v2 both resolve it
 from `W/.jad`, since the v1 setting must be in `W/.jad`), relative to `W/.jad` when it was an absolute

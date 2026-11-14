@@ -51,7 +51,7 @@
             "type": "string",
             "pattern": "\\S"
           },
-          "description": "Native tool definition files of this workspace, read after the ones in G/global.json. A relative path is relative to this file's folder (W/.jad); a path may also be absolute. The same tool ID in two files is an error naming both. A file in the folders a profile writes (W/.jad/profile-own, W/.jad/data, W/.jad/profiles), in G/auth or in another workspace's .jad is refused. Every file is read-only in a sandbox of this workspace."
+          "description": "Native tool definition files of this workspace, read after the ones in G/global.json. Entries are non-empty literal paths or host-native Go filepath.Glob patterns (*, ?, bracket classes; no recursive **, shell, tilde or environment expansion). Patterns expand once at process startup, in entry order with sorted matches, and cleaned absolute paths are deduplicated keeping the first occurrence. Runtime rejects malformed patterns and patterns with no matches; missing literal paths retain deferred validation. Unescaped metacharacters now mean patterns; platform escaping follows Go filepath semantics. Matched directories and invalid documents are not skipped. A relative path is relative to this file's folder (W/.jad); a path may also be absolute. The same tool ID in two files is an error naming both. A file in the folders a profile writes (W/.jad/profile-own, W/.jad/data, W/.jad/profiles), in G/auth or in another workspace's .jad is refused. Every file is read-only in a sandbox of this workspace."
         }
       },
       "additionalProperties": false

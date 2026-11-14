@@ -420,9 +420,10 @@
         "tool_definition_paths": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "pattern": "\\S"
           },
-          "description": "Native tool definition files. Replaces the per-session tool_definition_paths."
+          "description": "Native tool definition files, relative to G or absolute. Replaces the per-session tool_definition_paths. Entries are non-empty literal paths or host-native Go filepath.Glob patterns (*, ?, bracket classes; no recursive **, shell, tilde or environment expansion). Patterns expand once at process startup, in entry order with sorted matches, and cleaned absolute paths are deduplicated keeping the first occurrence. Runtime rejects malformed patterns and patterns with no matches; missing literal paths retain deferred validation. Unescaped metacharacters now mean patterns; platform escaping follows Go filepath semantics. Matched directories and invalid documents are not skipped."
         },
         "max_asset_bytes": {
           "type": "integer",

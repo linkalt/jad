@@ -136,6 +136,15 @@ func TestWorkspaceSandboxSealsTheGlobalAndWorkspaceConfiguration(t *testing.T) {
 // workspace, also outside W/.jad and even when a writable path covers them; a file of the
 // project next to them stays writable. A global.json one outside G is not on this list.
 func TestWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t *testing.T) {
+	testWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t, false)
+}
+
+func TestWorkspaceToolDefinitionGlobsAreReadOnlyInTheSandbox(t *testing.T) {
+	testWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t, true)
+}
+
+func testWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t *testing.T, globs bool) {
+	t.Helper()
 	requireBwrap(t)
 	base := t.TempDir()
 	home := filepath.Join(base, "home")
@@ -150,6 +159,11 @@ func TestWorkspaceToolDefinitionFilesAreReadOnlyInTheSandbox(t *testing.T) {
 	writeWorkspaceFile(t, filepath.Join(a, "defs", "other.txt"), "plain")
 	writeWorkspaceFile(t, filepath.Join(home, ".jad", "models", "openai", "default.json"), `{"provider":"openai","model":"gpt-test","api_key_env":"FIXTURE_KEY"}`)
 	writeWorkspaceFile(t, filepath.Join(a, ".jad", "workspace.json"), `{"libraries":{"tool_definition_paths":["../defs/native.json","tools_defintion/native.json","`+elsewhere+`"]}}`)
+	if globs {
+		// The project match overlaps globally; the external match is workspace-only.
+		writeWorkspaceFile(t, filepath.Join(home, ".jad", "global.json"), `{"libraries":{"tool_definition_paths":["`+filepath.Join(a, "defs", "*.json")+`"]}}`)
+		writeWorkspaceFile(t, filepath.Join(a, ".jad", "workspace.json"), `{"libraries":{"tool_definition_paths":["../defs/*.json","tools_defintion/*.json","`+filepath.Join(outside, "*.json")+`"]}}`)
+	}
 	writeWorkspaceFile(t, filepath.Join(a, ".jad", "sessions", "s1.json"), `{"schema_version":1}`)
 	writeWorkspaceFile(t, filepath.Join(a, ".jad", "profiles", "dev", "coder.json"), `{"models":["openai/default"],"settings":{"sandbox":{"enabled":true,"backend":"bwrap","executable":"bwrap",`+
 		`"writable_paths":["{workspace}","{tmp}","`+outside+`"]}}}`)
