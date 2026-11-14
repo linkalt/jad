@@ -13,32 +13,32 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@astryxdesign/core": "^0.7.0",
-    "@astryxdesign/theme-neutral": "^0.7.0",
+    "@astryxdesign/core": "^0.7.16",
+    "@astryxdesign/theme-neutral": "^0.7.16",
     "@codemirror/commands": "6.11.1",
     "@codemirror/lang-json": "6.0.2",
     "@codemirror/language": "6.13.1",
-    "@codemirror/lint": "6.9.7",
+    "@codemirror/lint": "6.9.8",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.14",
+    "@codemirror/view": "6.43.15",
     "@lezer/highlight": "1.2.5",
     "@lezer/json": "1.0.3",
-    "@stylexjs/stylex": "0.19.1",
+    "@stylexjs/stylex": "0.19.2",
     "ajv": "8.20.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@astryxdesign/cli": "^0.7.0",
-    "@lezer/common": "1.5.3",
-    "@stylexjs/unplugin": "0.19.1",
-    "@types/node": "^26.6.4",
+    "@astryxdesign/cli": "^0.7.16",
+    "@lezer/common": "1.5.5",
+    "@stylexjs/unplugin": "0.19.2",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@vitejs/plugin-react": "6.1.2",
-    "jsdom": "^31.0.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "jsdom": "^31.0.1",
     "typescript": "^7.0.2",
-    "vite": "8.3.4"
+    "vite": "8.3.8"
   },
   "browserslist": [
     "last 1 Chrome version"
