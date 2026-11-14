@@ -154,7 +154,7 @@ function ReadOnlyMessageView({message, rowWidthPx}: {message: ReadOnlyMessage; r
     return text.trim() === '' ? null : (
       <ChatMessage sender="user">
         <ChatMessageBubble>
-          <MarkdownText density="compact" contentWidth="100%" headingLevelStart={4}>
+          <MarkdownText density="compact" contentWidth="100%" headingLevelStart={4} isStreaming={false}>
             {text}
           </MarkdownText>
         </ChatMessageBubble>

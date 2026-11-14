@@ -268,6 +268,71 @@ export function slashTrigger(
   };
 }
 
+const INACTIVE_SLASH_SOURCE: SearchSource = {
+  search: () => [],
+  bootstrap: () => [],
+};
+
+const INACTIVE_SLASH_TRIGGER: ChatComposerTrigger = {
+  character: '',
+  searchSource: INACTIVE_SLASH_SOURCE,
+  onSelect: () => '',
+};
+
+/**
+ * Inert placeholder for `/` when the slash menu is enabled in config but `/`
+ * is not currently the leading character of the draft. Keeping a non-matching
+ * (`''`) trigger in the array ensures `useTriggerMenu` does not return early
+ * on an empty `triggers` list when `mention_files_enabled` is false, so an
+ * open slash menu closes cleanly instead of staying stuck.
+ */
+export function inactiveSlashTrigger(): ChatComposerTrigger {
+  return INACTIVE_SLASH_TRIGGER;
+}
+
+const BLOCK_BREAK_SELECTOR = 'div, p, li, blockquote, pre';
+const FORBIDDEN_BEFORE_SLASH_SELECTOR = '[data-astryx-token], [data-astryx-dictation-interim], br';
+
+/**
+ * Whether the caret sits inside a leading `/query` at index 0 of `editable`.
+ *
+ * Astryx's `useTriggerMenu` inspects only the caret's own text node and opens
+ * `/` after any space or at the start of any text node (for example after a
+ * token chip or `<br>`). Requiring index 0 of the whole draft keeps `/` from
+ * popping up mid-message, after spaces/newlines, or after token chips while
+ * preserving `/command` editing at the start of the composer.
+ */
+export function isLeadingSlashAtCaret(editable: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (selection === null || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  if (!range.collapsed || !editable.contains(range.startContainer)) return false;
+  if (range.startContainer.nodeType !== range.startContainer.TEXT_NODE) return false;
+
+  let parent: HTMLElement | null = range.startContainer.parentElement;
+  while (parent !== null && parent !== editable) {
+    if (
+      parent.hasAttribute('data-astryx-token') ||
+      parent.hasAttribute('data-astryx-dictation-interim')
+    ) {
+      return false;
+    }
+    parent = parent.parentElement;
+  }
+
+  const before = document.createRange();
+  before.selectNodeContents(editable);
+  before.setEnd(range.startContainer, range.startOffset);
+  const head = before.cloneContents();
+
+  if (head.querySelector(FORBIDDEN_BEFORE_SLASH_SELECTOR) !== null) return false;
+  const blocks = head.querySelectorAll(BLOCK_BREAK_SELECTOR);
+  if (blocks.length > 1) return false;
+  if (blocks.length === 1 && blocks[0].previousElementSibling !== null) return false;
+
+  return /^\/[^\s]*$/.test(head.textContent ?? '');
+}
+
 export type ComposerTriggerOptions = {
   files: readonly string[];
   /** Cap on menu entries, from `mention_max_results`. */
@@ -279,6 +344,11 @@ export type ComposerTriggerOptions = {
   sessionFiles?: SessionFilesLoader;
   /** The `/` menu. Left out, the composer has no slash trigger. */
   slash?: {source: SearchSource; onPick: (selection: SlashSelection) => void};
+  /**
+   * Whether `/` may currently activate. Defaults to `true` when `slash` is
+   * given; pass `false` to substitute `inactiveSlashTrigger()`.
+   */
+  slashActive?: boolean;
 };
 
 /** Every trigger the composer should carry, in menu-character order. */
@@ -287,13 +357,14 @@ export function createComposerTriggers({
   maxResults,
   sessionFiles,
   slash,
+  slashActive = true,
 }: ComposerTriggerOptions): ChatComposerTrigger[] {
   const mentionSource = sessionFiles
     ? createSessionFileSource({loadFiles: sessionFiles, fallbackFiles: files, maxResults})
     : createFileMentionSource(files, maxResults);
   const triggers = [fileMentionTrigger(mentionSource)];
   if (slash !== undefined) {
-    triggers.push(slashTrigger(slash.source, slash.onPick));
+    triggers.push(slashActive ? slashTrigger(slash.source, slash.onPick) : inactiveSlashTrigger());
   }
   return triggers;
 }

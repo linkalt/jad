@@ -82,7 +82,7 @@ export function ComposerPreview({value}: {value: string}) {
               Nothing to preview yet.
             </Text>
           ) : (
-            <MarkdownText density="compact" contentWidth="100%" headingLevelStart={3} xstyle={styles.content}>
+            <MarkdownText density="compact" contentWidth="100%" headingLevelStart={3} isStreaming={false} xstyle={styles.content}>
               {value}
             </MarkdownText>
           )}

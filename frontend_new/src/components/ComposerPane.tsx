@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {KeyboardEvent, ReactNode, SVGProps} from 'react';
+import {flushSync} from 'react-dom';
 import {
   Badge,
   Button,
@@ -53,7 +54,13 @@ import {MCPPromptDialog} from './MCPPromptDialog';
 import {CommandArgumentsDialog} from './CommandArgumentsDialog';
 import {ResourceVariablesDialog} from './ResourceVariablesDialog';
 import {useFileDrop} from './FileDrop';
-import {createComposerTriggers, resolveMentionFiles, slashTrigger} from '../composer-triggers';
+import {
+  createComposerTriggers,
+  inactiveSlashTrigger,
+  isLeadingSlashAtCaret,
+  resolveMentionFiles,
+  slashTrigger,
+} from '../composer-triggers';
 import {loadDrafts, saveDrafts} from '../draftStore';
 import {carriesReactInternals, noteComposerOperation} from '../desync-watch';
 import {
@@ -583,13 +590,16 @@ export function ComposerPane({
     [draftKey, isPlanModeEnabled],
   );
 
+  const [isLeadingSlashAllowed, setIsLeadingSlashAllowed] = useState(false);
+  const isLeadingSlashRef = useRef(false);
+
   /**
-   * The trigger menus. Rebuilt only when the session changes: the `@` menu now
-   * lists the active session's files, and handing the composer a fresh array on
-   * every render would restart its trigger search while the user is typing.
+   * The trigger menus. Base triggers are rebuilt only when the session/profile
+   * or library changes so the `@` trigger object identity stays stable even
+   * when `/` toggles between active and inert.
    */
   const slashPickRef = useRef<(selection: SlashSelection) => void>(() => undefined);
-  const composerTriggers = useMemo(() => {
+  const baseTriggers = useMemo(() => {
     const slash = appConfig.slash_menu_enabled
       ? {
           source: createSlashSource({
@@ -608,19 +618,29 @@ export function ComposerPane({
           onPick: (selection: SlashSelection) => slashPickRef.current(selection),
         }
       : undefined;
+    const slashActive = slash ? slashTrigger(slash.source, slash.onPick) : undefined;
+    const slashInactive = slash ? inactiveSlashTrigger() : undefined;
     if (!appConfig.mention_files_enabled) {
-      return slash ? [slashTrigger(slash.source, slash.onPick)] : [];
+      return {mention: undefined, slashActive, slashInactive};
     }
-    return createComposerTriggers({
+    const [mention] = createComposerTriggers({
       files: resolveMentionFiles(appConfig.mention_files),
       maxResults: appConfig.mention_max_results,
       sessionFiles:
         appConfig.mention_source === 'cwd'
           ? signal => fetchSessionFiles(activeSessionId, signal).then(listing => listing.files)
           : undefined,
-      slash,
     });
+    return {mention, slashActive, slashInactive};
   }, [activeSessionId, activeProfile, slashCommands, libraryWorkspace]);
+
+  const composerTriggers = useMemo(() => {
+    const triggers = baseTriggers.mention ? [baseTriggers.mention] : [];
+    if (baseTriggers.slashActive !== undefined && baseTriggers.slashInactive !== undefined) {
+      triggers.push(isLeadingSlashAllowed ? baseTriggers.slashActive : baseTriggers.slashInactive);
+    }
+    return triggers;
+  }, [baseTriggers, isLeadingSlashAllowed]);
 
   const imageLimits = useMemo(
     () => ({
@@ -686,6 +706,35 @@ export function ComposerPane({
     },
     [draftKey, setDraft],
   );
+
+  // Update leading-slash eligibility synchronously in capture phase before
+  // React's bubble-phase onInput runs Astryx triggerMenu.handleInput().
+  useEffect(() => {
+    if (!appConfig.slash_menu_enabled) return;
+    const root = inputRootRef.current;
+    if (root === null) return;
+    const handleCaptureInput = () => {
+      const editable = findEditable(root);
+      const nextAllowed = editable !== null ? isLeadingSlashAtCaret(editable) : false;
+      if (nextAllowed !== isLeadingSlashRef.current) {
+        isLeadingSlashRef.current = nextAllowed;
+        flushSync(() => setIsLeadingSlashAllowed(nextAllowed));
+      }
+    };
+    root.addEventListener('input', handleCaptureInput, true);
+    return () => root.removeEventListener('input', handleCaptureInput, true);
+  }, []);
+
+  useEffect(() => {
+    if (!appConfig.slash_menu_enabled) return;
+    const editable = findEditable(inputRootRef.current);
+    const nextAllowed =
+      editable !== null && value !== '' ? isLeadingSlashAtCaret(editable) : false;
+    if (nextAllowed !== isLeadingSlashRef.current) {
+      isLeadingSlashRef.current = nextAllowed;
+      setIsLeadingSlashAllowed(nextAllowed);
+    }
+  }, [draftKey, value]);
 
   const historyCursorRef = useRef<HistoryCursor>(IDLE_HISTORY);
   useEffect(() => {

@@ -6,9 +6,12 @@ import {
   BUILTIN_MENTION_FILES,
   createComposerTriggers,
   createSessionFileSource,
+  inactiveSlashTrigger,
+  isLeadingSlashAtCaret,
   mentionItems,
   rankMentionFiles,
   resolveMentionFiles,
+  slashTrigger,
 } from './composer-triggers.ts';
 
 const FILES = [
@@ -243,4 +246,344 @@ test('without a session loader the trigger stays on the static list', async () =
   const triggers = createComposerTriggers({files: FILES, maxResults: 10});
   const mention = triggers.find(trigger => trigger.character === '@');
   assert.deepEqual((await mention.searchSource.bootstrap()).map(item => item.id), FILES);
+});
+
+test('inactiveSlashTrigger provides a stable non-matching placeholder trigger', () => {
+  const first = inactiveSlashTrigger();
+  const second = inactiveSlashTrigger();
+  assert.equal(first, second);
+  assert.equal(first.character, '');
+  assert.deepEqual(first.searchSource.search('plan'), []);
+  assert.deepEqual(first.searchSource.bootstrap(), []);
+  assert.equal(first.onSelect({id: 'plan', label: '/plan'}), '');
+
+  const source = {search: () => [], bootstrap: () => []};
+  const triggers = createComposerTriggers({
+    files: FILES,
+    maxResults: 5,
+    slash: {source, onPick: () => {}},
+    slashActive: false,
+  });
+  assert.equal(triggers.length, 2);
+  assert.equal(triggers[0].character, '@');
+  assert.equal(triggers[1], first);
+});
+
+test('isLeadingSlashAtCaret allows / only at index 0 of the composer draft', async () => {
+  const {JSDOM} = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body><div id="ed" contenteditable="true"></div></body></html>', {
+    url: 'http://localhost/',
+  });
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  try {
+    const editable = document.getElementById('ed');
+    const setCaret = (node, offset) => {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    };
+
+    // Positive cases: "/" at index 0, leading "/pl", "/mcp:foo/bar", "/hello" (caret at 1), single leading block
+    editable.textContent = '/';
+    setCaret(editable.firstChild, 1);
+    assert.equal(isLeadingSlashAtCaret(editable), true);
+
+    editable.textContent = '/pl';
+    setCaret(editable.firstChild, 3);
+    assert.equal(isLeadingSlashAtCaret(editable), true);
+
+    editable.textContent = '/mcp:server/tool';
+    setCaret(editable.firstChild, editable.firstChild.textContent.length);
+    assert.equal(isLeadingSlashAtCaret(editable), true);
+
+    editable.textContent = '/hello';
+    setCaret(editable.firstChild, 1);
+    assert.equal(isLeadingSlashAtCaret(editable), true, 'typing / at offset 0 of existing text');
+
+    editable.innerHTML = '<div>/plan</div>';
+    setCaret(editable.firstChild.firstChild, 5);
+    assert.equal(isLeadingSlashAtCaret(editable), true, 'single wrapped leading block');
+
+    // Negative cases: leading space, mid-draft, newline (<br> or block), token chip, after space in /cmd, prepended char
+    for (const [label, setup] of [
+      ['leading space', () => {
+        editable.textContent = ' /';
+        setCaret(editable.firstChild, 2);
+      }],
+      ['mid-draft after word', () => {
+        editable.textContent = 'hello /';
+        setCaret(editable.firstChild, 7);
+      }],
+      ['after <br>', () => {
+        editable.innerHTML = 'hello<br>/';
+        setCaret(editable.lastChild, 1);
+      }],
+      ['after leading <br>', () => {
+        editable.innerHTML = '<br>/';
+        setCaret(editable.lastChild, 1);
+      }],
+      ['second block after text', () => {
+        editable.innerHTML = '<div>hello</div><div>/</div>';
+        setCaret(editable.lastChild.firstChild, 1);
+      }],
+      ['second block after <br>', () => {
+        editable.innerHTML = '<div><br></div><div>/</div>';
+        setCaret(editable.lastChild.firstChild, 1);
+      }],
+      ['second block after empty div', () => {
+        editable.innerHTML = '<div></div><div>/</div>';
+        setCaret(editable.lastChild.firstChild, 1);
+      }],
+      ['immediately after token chip', () => {
+        editable.innerHTML = '<span data-astryx-token="" data-astryx-token-value="@src/App.tsx">App.tsx</span>/';
+        setCaret(editable.lastChild, 1);
+      }],
+      ['after token chip and nbsp', () => {
+        editable.innerHTML = '<span data-astryx-token="" data-astryx-token-value="@src/App.tsx">App.tsx</span>\u00A0/';
+        setCaret(editable.lastChild, 2);
+      }],
+      ['after space inside /cmd', () => {
+        editable.textContent = '/cmd /';
+        setCaret(editable.firstChild, 6);
+      }],
+      ['prepended char before /pl', () => {
+        editable.textContent = 'a/pl';
+        setCaret(editable.firstChild, 1);
+      }],
+      ['caret inside token chip', () => {
+        editable.innerHTML = '<span data-astryx-token="" data-astryx-token-value="/plan">/plan</span>';
+        setCaret(editable.firstChild.firstChild, 5);
+      }],
+      ['caret inside dictation interim', () => {
+        editable.innerHTML = '<span data-astryx-dictation-interim="">/plan</span>';
+        setCaret(editable.firstChild.firstChild, 5);
+      }],
+      ['non-collapsed selection', () => {
+        editable.textContent = '/plan';
+        const range = document.createRange();
+        range.setStart(editable.firstChild, 0);
+        range.setEnd(editable.firstChild, 5);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }],
+      ['selection outside editable', () => {
+        const outside = document.createElement('div');
+        outside.textContent = '/plan';
+        document.body.appendChild(outside);
+        setCaret(outside.firstChild, 5);
+        outside.remove();
+      }],
+    ]) {
+      setup();
+      assert.equal(isLeadingSlashAtCaret(editable), false, label);
+    }
+  } finally {
+    globalThis.window = prevWindow;
+    globalThis.document = prevDocument;
+  }
+});
+
+test('ChatComposerInput capture-phase gating opens / only at index 0 and closes cleanly with and without @', async () => {
+  const {JSDOM} = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    url: 'http://localhost/',
+  });
+  const savedGlobals = {
+    window: globalThis.window,
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    InputEvent: globalThis.InputEvent,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame,
+    IS_REACT_ACT_ENVIRONMENT: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  };
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.Node = dom.window.Node;
+  globalThis.InputEvent = dom.window.InputEvent;
+  globalThis.requestAnimationFrame = cb => setTimeout(cb, 0);
+  globalThis.cancelAnimationFrame = id => clearTimeout(id);
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+  try {
+    const React = await import('react');
+    const {useEffect, useMemo, useRef, useState, act} = React;
+    const {createRoot} = await import('react-dom/client');
+    const {flushSync} = await import('react-dom');
+    const {ChatComposerInput} = await import('@astryxdesign/core');
+
+    const slashSource = {
+      search: query =>
+        [{id: 'plan', label: '/plan', auxiliaryData: {type: 'command', name: 'plan'}}].filter(item =>
+          item.label.includes(query),
+        ),
+      bootstrap: () => [{id: 'plan', label: '/plan', auxiliaryData: {type: 'command', name: 'plan'}}],
+    };
+
+    const seenMentionTriggers = new Set();
+
+    function Harness({mentionEnabled}) {
+      const rootRef = useRef(null);
+      const [leadingSlash, setLeadingSlash] = useState(false);
+      const leadingSlashRef = useRef(false);
+      const [value, setValue] = useState('');
+
+      const base = useMemo(() => {
+        const activeSlash = slashTrigger(slashSource, () => {});
+        const inertSlash = inactiveSlashTrigger();
+        const [mention] = mentionEnabled
+          ? createComposerTriggers({files: FILES, maxResults: 5})
+          : [undefined];
+        return {mention, activeSlash, inertSlash};
+      }, [mentionEnabled]);
+
+      const triggers = useMemo(() => {
+        const list = base.mention ? [base.mention] : [];
+        if (base.mention) seenMentionTriggers.add(base.mention);
+        list.push(leadingSlash ? base.activeSlash : base.inertSlash);
+        return list;
+      }, [base, leadingSlash]);
+
+      useEffect(() => {
+        const root = rootRef.current;
+        if (root === null) return;
+        const onCaptureInput = () => {
+          const editable = root.querySelector('[contenteditable="true"]');
+          const next = editable !== null ? isLeadingSlashAtCaret(editable) : false;
+          if (next !== leadingSlashRef.current) {
+            leadingSlashRef.current = next;
+            flushSync(() => setLeadingSlash(next));
+          }
+        };
+        root.addEventListener('input', onCaptureInput, true);
+        return () => root.removeEventListener('input', onCaptureInput, true);
+      }, []);
+
+      return React.createElement(ChatComposerInput, {
+        ref: rootRef,
+        value,
+        onChange: setValue,
+        triggers,
+      });
+    }
+
+    const setCaret = (node, offset) => {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    };
+    const fireInput = editable =>
+      act(async () => {
+        editable.dispatchEvent(new window.InputEvent('input', {bubbles: true}));
+        await Promise.resolve();
+      });
+    const isMenuOpen = editable => editable.getAttribute('aria-expanded') === 'true';
+
+    for (const mentionEnabled of [true, false]) {
+      seenMentionTriggers.clear();
+      const container = document.getElementById('root');
+      const root = createRoot(container);
+      try {
+        await act(() => root.render(React.createElement(Harness, {mentionEnabled})));
+        const editable = container.querySelector('[contenteditable="true"]');
+
+        // 1. Leading "/" opens slash listbox
+        editable.textContent = '/pl';
+        setCaret(editable.firstChild, 3);
+        await fireInput(editable);
+        assert.equal(isMenuOpen(editable), true, `slash menu must open for /pl (mention=${mentionEnabled})`);
+        let listbox = document.querySelector('[role="listbox"]');
+        assert.ok(listbox);
+        assert.match(listbox.textContent, /\/plan/);
+
+        // 2. Typing space ("/pl ") closes the open slash listbox cleanly (even without @)
+        editable.textContent = '/pl ';
+        setCaret(editable.firstChild, 4);
+        await fireInput(editable);
+        assert.equal(isMenuOpen(editable), false, `slash menu must close after space (mention=${mentionEnabled})`);
+
+        // 3. Invalid positions must not open slash listbox (including emptySearchText)
+        for (const [label, setup] of [
+          ['leading space', () => {
+            editable.textContent = ' /';
+            setCaret(editable.firstChild, 2);
+          }],
+          ['mid-draft after word', () => {
+            editable.textContent = 'hello /';
+            setCaret(editable.firstChild, 7);
+          }],
+          ['after <br>', () => {
+            editable.innerHTML = 'hello<br>/';
+            setCaret(editable.lastChild, 1);
+          }],
+          ['after token chip', () => {
+            editable.innerHTML = '<span data-astryx-token="" data-astryx-token-value="@src/App.tsx">App.tsx</span>/';
+            setCaret(editable.lastChild, 1);
+          }],
+          ['after space in /cmd', () => {
+            editable.textContent = '/cmd /';
+            setCaret(editable.firstChild, 6);
+          }],
+        ]) {
+          setup();
+          await fireInput(editable);
+          assert.equal(
+            isMenuOpen(editable),
+            false,
+            `slash menu must stay closed for ${label} (mention=${mentionEnabled})`,
+          );
+          assert.equal(
+            document.body.textContent.includes('No matching command or library item'),
+            false,
+            `emptySearchText must not render for ${label} (mention=${mentionEnabled})`,
+          );
+        }
+
+        // 4. Typing "/" at offset 0 of existing text opens the menu
+        editable.textContent = '/hello';
+        setCaret(editable.firstChild, 1);
+        await fireInput(editable);
+        assert.equal(isMenuOpen(editable), true, `slash menu must open at index 0 of existing text (mention=${mentionEnabled})`);
+
+        // 5. Prepending "a" before "/hello" ("a/hello") closes the menu cleanly
+        editable.textContent = 'a/hello';
+        setCaret(editable.firstChild, 1);
+        await fireInput(editable);
+        assert.equal(
+          isMenuOpen(editable),
+          false,
+          `slash menu must close when text is inserted before / (mention=${mentionEnabled})`,
+        );
+
+        // 6. @ mention still opens after space and keeps its object identity across / toggles
+        if (mentionEnabled) {
+          assert.equal(seenMentionTriggers.size, 1, '@ trigger object identity must remain stable');
+          editable.textContent = 'hello @App';
+          setCaret(editable.firstChild, 10);
+          await fireInput(editable);
+          assert.equal(isMenuOpen(editable), true, '@ menu must still open after space');
+          listbox = document.querySelector('[role="listbox"]');
+          assert.ok(listbox);
+          assert.match(listbox.textContent, /App\.tsx/);
+        }
+      } finally {
+        await act(() => root.unmount());
+      }
+    }
+  } finally {
+    dom.window.close();
+    Object.assign(globalThis, savedGlobals);
+  }
 });

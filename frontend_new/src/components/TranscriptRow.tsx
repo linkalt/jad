@@ -146,7 +146,7 @@ export const TranscriptRow = memo(
               {userImages.files.length > 0 && <SentFiles names={userImages.files} />}
               {userImages.text !== '' && (
                 <ChatMessageBubble style={userBubbleStyle}>
-                  <MarkdownText density="compact" contentWidth="100%">{userImages.text}</MarkdownText>
+                  <MarkdownText density="compact" contentWidth="100%" isStreaming={false}>{userImages.text}</MarkdownText>
                 </ChatMessageBubble>
               )}
               <ChatMessageMetadata
